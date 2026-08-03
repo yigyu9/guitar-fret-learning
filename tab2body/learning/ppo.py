@@ -10,7 +10,6 @@ import time
 import torch
 
 from .checkpoint_contract import (
-    SCALAR_ADVANTAGE_VERSION,
     copy_validated_contract,
     verify_checkpoint_contract,
 )

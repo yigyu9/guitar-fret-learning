@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from tab2body.cfg import FRET
+from tab2body.env.config import configured_kwargs
 from tab2body.env.tasks import FretTask
 from tab2body.learning import ActorCritic
 
@@ -30,12 +31,20 @@ def main(argv=None):
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
 
-    env = FretTask(
-        args.goal, args.hand_targets, num_envs=args.num_envs,
-        device=FRET["device"], headless=True, seed=FRET["seed"],
-        reset_noise=0.0, random_start=False,
-        action_alpha=FRET["action_alpha"], action_scale=FRET["action_scale"],
-        reset_soft_limit_fraction=FRET["reset_soft_limit_fraction"])
+    env = FretTask(**configured_kwargs(
+              FretTask, FRET,
+              goal_path=args.goal,
+              hand_targets_path=args.hand_targets,
+              num_envs=args.num_envs,
+              device=FRET["device"],
+              headless=True,
+              seed=FRET["seed"],
+              reset_noise=0.0,
+              random_start=False,
+              action_alpha=FRET["action_alpha"],
+              action_scale=FRET["action_scale"],
+              reset_soft_limit_fraction=FRET["reset_soft_limit_fraction"]
+          ))
     init_action = ((env.init_pose[env.ctrl_idx] - env.ctrl_mid[0]) /
                    (env.action_scale * env.ctrl_half[0]).clamp_min(1e-6))
     model = ActorCritic(

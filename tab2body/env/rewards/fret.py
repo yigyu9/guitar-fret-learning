@@ -1202,36 +1202,26 @@ class FretReward:
     def reset(self, env_ids):
         if env_ids.numel() == 0:
             return
-        self._have_previous[env_ids] = False
-        self._press_distal[env_ids] = False
-        self._press_anyseg[env_ids] = False
-        self._had_successful_press[env_ids] = False
-        self._previous_hover_gap[env_ids] = 0.0
-        self._previous_hover_valid[env_ids] = False
-        self._release_arch_anchor[env_ids] = 0.0
-        self._release_arch_valid[env_ids] = False
-        self._release_age[env_ids] = 0.0
-        self._previous_approach_distance[env_ids] = 0.0
-        self._previous_approach_valid[env_ids] = False
-        self._previous_next_goal_potential[env_ids] = 0.0
-        self._previous_next_goal_valid[env_ids] = False
-        self._previous_next_goal_fret[env_ids] = 0
-        self._previous_next_goal_string_mask[env_ids] = False
-        self._curriculum_success_streak[env_ids] = 0
-        self._curriculum_episode_success[env_ids] = False
-        self._press_hold_streak[env_ids] = 0
-        self._press_hold_acquired[env_ids] = False
-        self._press_dropout_streak[env_ids] = 0
-        self._press_hold_previous_fret[env_ids] = 0
-        self._press_hold_previous_finger[env_ids] = 0
-        self._thumb_support_streak[env_ids] = 0
-        self._slip_streak[env_ids] = 0
-        self._slip_anchor_xy[env_ids] = 0.0
-        self._slip_anchor_valid[env_ids] = False
-        self._slip_previous_xy[env_ids] = 0.0
-        self._slip_previous_valid[env_ids] = False
-        self._slip_previous_mask[env_ids] = False
-        self._slip_previous_fret[env_ids] = 0
+        reset_tensors = (
+            self._have_previous, self._press_distal, self._press_anyseg,
+            self._had_successful_press, self._previous_hover_gap,
+            self._previous_hover_valid, self._release_arch_anchor,
+            self._release_arch_valid, self._release_age,
+            self._previous_approach_distance, self._previous_approach_valid,
+            self._previous_next_goal_potential,
+            self._previous_next_goal_valid, self._previous_next_goal_fret,
+            self._previous_next_goal_string_mask,
+            self._curriculum_success_streak,
+            self._curriculum_episode_success, self._press_hold_streak,
+            self._press_hold_acquired, self._press_dropout_streak,
+            self._press_hold_previous_fret, self._press_hold_previous_finger,
+            self._thumb_support_streak, self._slip_streak,
+            self._slip_anchor_xy, self._slip_anchor_valid,
+            self._slip_previous_xy, self._slip_previous_valid,
+            self._slip_previous_mask, self._slip_previous_fret,
+        )
+        for tensor in reset_tensors:
+            tensor[env_ids] = 0
         self.thumb_reward.reset(env_ids)
         self.pressed_drag_monitor.reset(env_ids)
 
@@ -1701,9 +1691,6 @@ class FretReward:
             prepress_clearance=self.next_goal_prepress_clearance,
             time_gate_floor=next_goal_time_gate_floor)
 
-        imminent_move = (
-            relation_move
-            & (time_to_next_s <= self.hover_move_release_time))
         all_active_press_held = (
             (~current_finger_active | successful_finger_press).all(dim=1))
         coupling_protected = (
@@ -1828,7 +1815,7 @@ class FretReward:
             stable_press, tip_local_xy,
             self._press_anyseg.permute(0, 2, 1, 3))
 
-        thumb_reward, thumb_metrics = self.thumb_reward.compute()
+        _, thumb_metrics = self.thumb_reward.compute()
         self._thumb_support_streak.copy_(torch.where(
             thumb_metrics["thumb_support"],
             self._thumb_support_streak + 1,
@@ -2054,9 +2041,6 @@ class FretReward:
             reward = torch.where(
                 next_goal_active[:, None], next_goal_shaped,
                 balanced_reward)
-            next_goal_reward_delta = (
-                reward[:, 0]
-                - class_balance_metrics["class_balanced_reward"])
         else:
             next_goal_reward_delta = torch.zeros_like(next_goal_reward)
         weighted_next_progress = (
@@ -2123,14 +2107,6 @@ class FretReward:
             "distance_reward": distance_reward,
             "linear_distance_reward": linear_distance_reward,
             "fine_distance_reward": fine_distance_reward,
-            "fine_alignment_quality":
-                fine_metrics["fine_alignment_quality"],
-            "fine_longitudinal_quality":
-                fine_metrics["fine_longitudinal_quality"],
-            "fine_lateral_quality":
-                fine_metrics["fine_lateral_quality"],
-            "fine_normal_quality":
-                fine_metrics["fine_normal_quality"],
             "approach_progress": approach_progress,
             "press_success": press_success,
             "press_depth": press_depth,

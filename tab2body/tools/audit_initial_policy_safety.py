@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from cfg import FRET
+from env.config import configured_kwargs
 from env.tasks import FretTask
 from learning import ActorCritic
 
@@ -40,12 +41,19 @@ def main(argv=None):
     args = parser().parse_args(argv)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
-    env = FretTask(
-        FRET["goal_path"], FRET["hand_targets_path"],
-        num_envs=args.num_envs, device=FRET["device"], headless=True,
-        seed=args.seed, reset_noise=FRET["reset_noise"], random_start=True,
-        reset_soft_limit_fraction=FRET["reset_soft_limit_fraction"],
-        preparation_frames=FRET["preparation_frames"])
+    env = FretTask(**configured_kwargs(
+              FretTask, FRET,
+              goal_path=FRET["goal_path"],
+              hand_targets_path=FRET["hand_targets_path"],
+              num_envs=args.num_envs,
+              device=FRET["device"],
+              headless=True,
+              seed=args.seed,
+              reset_noise=FRET["reset_noise"],
+              random_start=True,
+              reset_soft_limit_fraction=FRET["reset_soft_limit_fraction"],
+              preparation_frames=FRET["preparation_frames"]
+          ))
     try:
         # Runtime overrides make parameter sweeps possible without changing the
         # training configuration.  They are applied before the first reset so

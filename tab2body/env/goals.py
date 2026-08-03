@@ -582,7 +582,6 @@ class FretGoalSequence:
             event_groups_by_finger.append(tuple(
                 torch.tensor(group_rows, dtype=torch.long, device=self.device)
                 for _, group_rows in sorted(groups.items())))
-        self.practice_events_by_finger = tuple(events_by_finger)
         self.practice_event_groups_by_finger = tuple(event_groups_by_finger)
         self.practice_available_fingers = tuple(
             index for index, rows in enumerate(events_by_finger) if rows.numel())
@@ -596,21 +595,6 @@ class FretGoalSequence:
                        or not torch.equal(self.barre[frame_idx], self.barre[frame_idx - 1]))
             if changed:
                 run_starts.append(frame_idx)
-        chord_frames = {size: [] for size in range(1, 5)}
-        for frame_idx in run_starts:
-            active = self.finger[frame_idx][self.fret[frame_idx] > 0]
-            size = int(torch.unique(active[active > 0]).numel())
-            if 1 <= size <= 4:
-                chord_frames[size].append(frame_idx)
-        preferred_sizes = tuple(
-            size for size in range(2, 5) if chord_frames[size])
-        self.practice_available_chord_sizes = (
-            preferred_sizes or tuple(
-                size for size in range(1, 5) if chord_frames[size]))
-        self.practice_chord_frames_by_size = {
-            size: torch.tensor(rows, dtype=torch.long, device=self.device)
-            for size, rows in chord_frames.items() if rows
-        }
         chord_frames_by_finger_set = {}
         for frame_idx in run_starts:
             active = tuple(sorted({
@@ -1575,9 +1559,7 @@ class FretGoalSequence:
                  | self.goal_pair_sequence_mask)[:, None, None],
                 self.finger_events[i],
                 pair_event)
-        elif self.curriculum_stage == "frozen_context":
-            finger_event = self._static_finger_events(fret, finger)
-        elif static_stage:
+        elif self.curriculum_stage == "frozen_context" or static_stage:
             finger_event = self._static_finger_events(fret, finger)
         else:
             finger_event = self.finger_events[i]

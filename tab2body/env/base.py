@@ -26,21 +26,6 @@ def quat_rotate_inverse(q, v):
     return a - b + c
 
 
-def quat_conjugate(q):
-    """conjugate (inverse for unit quats) of q (N,4 xyzw)."""
-    return torch.cat([-q[:, 0:3], q[:, 3:4]], dim=-1)
-
-
-def quat_mul(a, b):
-    """Hamilton product a*b for quats (N,4 xyzw)."""
-    ax, ay, az, aw = a[:, 0], a[:, 1], a[:, 2], a[:, 3]
-    bx, by, bz, bw = b[:, 0], b[:, 1], b[:, 2], b[:, 3]
-    return torch.stack([aw * bx + ax * bw + ay * bz - az * by,
-                        aw * by - ax * bz + ay * bw + az * bx,
-                        aw * bz + ax * by - ay * bx + az * bw,
-                        aw * bw - ax * bx - ay * by - az * bz], dim=-1)
-
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.abspath(os.path.join(HERE, '..', 'assets'))
 GEN = os.path.abspath(os.path.join(HERE, '..', '_gen'))
@@ -376,7 +361,6 @@ class GuitarEnvBase:
             torch.minimum(controlled_init, reset_soft_hi_1d[self.ctrl_idx]),
             reset_soft_lo_1d[self.ctrl_idx])
         self.init_pose[self.ctrl_idx] = controlled_init
-        self.init_pose_soft_limit_adjustment = self.init_pose - hard_clamped_init
         self.dof_lower = lower_1d.repeat(self.num_envs)
         self.dof_upper = upper_1d.repeat(self.num_envs)
         self.reset_ctrl_lo = reset_soft_lo_1d[self.ctrl_idx].repeat(
@@ -387,7 +371,6 @@ class GuitarEnvBase:
 
         # humanoid body-state slice: actors per env = humanoid, guitar, chair (in order)
         self.n_hbody = len(self.body_names)
-        self.n_gbody = len(self.gbody_names)
         bodies_per_env = self.body_state.shape[0] // self.num_envs
         self._bpe = bodies_per_env
         self.hbody_index = {n: i for i, n in enumerate(self.body_names)}

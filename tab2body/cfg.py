@@ -8,7 +8,6 @@ from tab2body.song_bundles import (
 )
 
 HERE = Path(__file__).resolve().parent
-BUNDLE = fret_goal_path(DEFAULT_SONG_ID).parent
 
 FRET = {
     "song_id": DEFAULT_SONG_ID,

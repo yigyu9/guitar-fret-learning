@@ -46,6 +46,38 @@ FRET_THUMB_OBS_BODIES = ("LH:thumb3", "LH:thumb_top")
 FRET_THUMB_RAW_OBS_DIM = 3 * len(FRET_THUMB_OBS_BODIES)
 FRET_THUMB_OBS_DIM = FRET_THUMB_RAW_OBS_DIM + THUMB_GEOMETRY_OBS_DIM
 
+DIRECT_INFO_METRIC_KEYS = (
+    "chord_ready", "target_min_separation", "curriculum_frame_success",
+    "curriculum_success", "curriculum_episode_success", "thumb_reward",
+    "thumb_distance", "thumb_gap", "thumb_contact_force",
+    "thumb_in_back_region", "thumb_geometric_support_quality", "thumb_footprint_quality",
+    "thumb_gap_quality", "thumb_support", "thumb_wrong_contact",
+    "thumb_penetration", "thumb_compression", "thumb_force_quality",
+    "thumb_compression_quality", "thumb_solver_force_quality", "thumb_overforce",
+    "thumb_solver_overforce", "thumb_goal_gate", "thumb_geometry_ready",
+    "thumb_support_ready", "thumb_press_readiness", "thumb_press_factor",
+    "thumb_support_streak", "thumb_support_stable_6", "thumb_support_stable_12",
+    "thumb_base_saturation_penalty", "proximal_reward", "proximal_gate",
+    "finger_motion", "wrist_motion", "elbow_motion",
+    "shoulder_motion", "proximal_target_distance", "hover_reward",
+    "hover_gap", "hover_gate", "hover_position_reward",
+    "hover_velocity_reward", "hover_outward_speed", "hover_velocity_gate",
+    "release_pose_reward", "finger_coupling_reward", "finger_coupling_press_protected",
+    "next_goal_approach_reward", "next_goal_progress_reward", "next_goal_current_press_preserved",
+    "next_goal_current_press_preservation_quality", "next_goal_current_press_preservation_gate", "next_goal_joint_preservation_quality",
+    "press_class_reward", "press_class_mean_reward", "press_class_min_reward",
+    "no_press_class_reward", "press_class_completion", "no_press_class_completion",
+    "effective_press_class_weight", "effective_no_press_class_weight", "class_balanced_reward",
+    "chord_joint_quality", "chord_bridge_bottleneck_reward", "chord_bridge_mean_reward",
+    "chord_bridge_min_reward", "class_balance_enabled", "slip_reward",
+    "slip_distance", "slip_instant", "slip_gate",
+    "slip_streak", "r28_move_active", "r28_move_started",
+    "r28_move_completed", "r28_pressed_endpoint_candidate", "r28_same_cell_drag",
+    "r28_candidate_step_distance", "r28_confirmed_step_distance", "r28_candidate_cumulative_distance",
+    "r28_confirmed_cumulative_distance", "r28_confirmed_drag_frames", "r28_drag_violation_started",
+    "wrist_distance", "all_correct",
+)
+
 
 def goal_pair_phase_diagnostics(
         stage, metrics_enabled, rehearsal_mask, before_remaining,
@@ -580,20 +612,19 @@ class FretTask(GuitarEnvBase):
         if hasattr(self, "finger_synergy_induced_deg"):
             self.finger_synergy_induced_deg[env_ids] = 0.0
             self.finger_synergy_gate[env_ids] = False
-        for name in ("metric_tp", "metric_fp", "metric_fn", "metric_correct", "metric_total",
-                     "metric_no_press_correct", "metric_no_press_total",
-                     "metric_wrong_press", "metric_supervised_total",
-                     "metric_finger_success", "metric_finger_target",
-                     "metric_chord_ready", "metric_chord_hold_quality",
-                     "metric_chord_total", "metric_press_dropout",
-                     "metric_press_target_total",
-                     "metric_current_press_dropout_streak",
-                     "metric_max_press_dropout_streak"):
-            if hasattr(self, name):
-                getattr(self, name)[env_ids] = 0.0
-        for name in ("palm_down_streak", "palm_world_z", "palm_normal_valid",
-                     "palm_down_termination", "thumb_overforce_streak",
-                     "thumb_overforce_termination"):
+        reset_names = (
+            "metric_tp", "metric_fp", "metric_fn", "metric_correct",
+            "metric_total", "metric_no_press_correct", "metric_no_press_total",
+            "metric_wrong_press", "metric_supervised_total",
+            "metric_finger_success", "metric_finger_target",
+            "metric_chord_ready", "metric_chord_hold_quality",
+            "metric_chord_total", "metric_press_dropout",
+            "metric_press_target_total", "metric_current_press_dropout_streak",
+            "metric_max_press_dropout_streak", "palm_down_streak",
+            "palm_world_z", "palm_normal_valid", "palm_down_termination",
+            "thumb_overforce_streak", "thumb_overforce_termination",
+        )
+        for name in reset_names:
             if hasattr(self, name):
                 getattr(self, name)[env_ids] = 0
         if hasattr(self, "penetration_monitor"):
@@ -999,14 +1030,12 @@ class FretTask(GuitarEnvBase):
                 metrics["press_dropout"].float()),
             "max_press_dropout_streak":
                 metrics["press_dropout_streak"].amax(dim=1),
-            "chord_ready": metrics["chord_ready"],
             "frame_chord_hold_quality": metrics["chord_hold_quality"],
             "mean_position_quality": active_mean(metrics["position_quality"]),
             "mean_ergonomic_position_quality": active_mean(
                 metrics["ergonomic_position_quality"]),
             "mean_target_fraction": active_mean(
                 metrics["target_fraction"]),
-            "target_min_separation": metrics["target_min_separation"],
             "target_clearance_rate": metrics["target_clearance_ok"].float(),
             "mean_dense_position_quality": active_mean(
                 metrics["dense_position_quality"]),
@@ -1034,42 +1063,11 @@ class FretTask(GuitarEnvBase):
                 metrics["fine_normal_quality"]),
             "mean_approach_progress": active_mean(metrics["approach_progress"]),
             "cell_alignment_rate": active_mean(metrics["cell_aligned"].float()),
-            "curriculum_frame_success": metrics["curriculum_frame_success"],
-            "curriculum_success": metrics["curriculum_success"],
-            "curriculum_episode_success": metrics["curriculum_episode_success"],
             "curriculum_diagnostic_enabled": curriculum_diagnostic_enabled,
             "press_success_rate": active_mean(metrics["press_success"].float()),
             "wrong_press_count": metrics["wrong_press"].sum(dim=1),
             "supervised_count": metrics["supervised"].sum(dim=1),
-            "thumb_reward": metrics["thumb_reward"],
-            "thumb_distance": metrics["thumb_distance"],
-            "thumb_gap": metrics["thumb_gap"],
-            "thumb_contact_force": metrics["thumb_contact_force"],
             "thumb_contact": metrics["thumb_contact"].clone(),
-            "thumb_in_back_region": metrics["thumb_in_back_region"],
-            "thumb_geometric_support_quality":
-                metrics["thumb_geometric_support_quality"],
-            "thumb_footprint_quality": metrics["thumb_footprint_quality"],
-            "thumb_gap_quality": metrics["thumb_gap_quality"],
-            "thumb_support": metrics["thumb_support"],
-            "thumb_wrong_contact": metrics["thumb_wrong_contact"],
-            "thumb_penetration": metrics["thumb_penetration"],
-            "thumb_compression": metrics["thumb_compression"],
-            "thumb_force_quality": metrics["thumb_force_quality"],
-            "thumb_compression_quality":
-                metrics["thumb_compression_quality"],
-            "thumb_solver_force_quality":
-                metrics["thumb_solver_force_quality"],
-            "thumb_overforce": metrics["thumb_overforce"],
-            "thumb_solver_overforce": metrics["thumb_solver_overforce"],
-            "thumb_goal_gate": metrics["thumb_goal_gate"],
-            "thumb_geometry_ready": metrics["thumb_geometry_ready"],
-            "thumb_support_ready": metrics["thumb_support_ready"],
-            "thumb_press_readiness": metrics["thumb_press_readiness"],
-            "thumb_press_factor": metrics["thumb_press_factor"],
-            "thumb_support_streak": metrics["thumb_support_streak"],
-            "thumb_support_stable_6": metrics["thumb_support_stable_6"],
-            "thumb_support_stable_12": metrics["thumb_support_stable_12"],
             "thumb_base_action_saturation":
                 (self.prev_action[:, self._thumb_base_action_indices].abs()
                  > 0.95).float().mean(dim=1),
@@ -1091,20 +1089,11 @@ class FretTask(GuitarEnvBase):
                 (self.prev_action[
                     :, self._thumb_base_action_indices[2]].abs()
                  > 0.95),
-            "thumb_base_saturation_penalty":
-                metrics["thumb_base_saturation_penalty"],
             "thumb_overforce_streak": self.thumb_overforce_streak.clone(),
             "thumb_force_violation": thumb_force_violation,
             "thumb_compression_violation": thumb_compression_violation,
             "thumb_overforce_termination":
                 self.thumb_overforce_termination.clone(),
-            "proximal_reward": metrics["proximal_reward"],
-            "proximal_gate": metrics["proximal_gate"],
-            "finger_motion": metrics["finger_motion"],
-            "wrist_motion": metrics["wrist_motion"],
-            "elbow_motion": metrics["elbow_motion"],
-            "shoulder_motion": metrics["shoulder_motion"],
-            "proximal_target_distance": metrics["proximal_target_distance"],
             "isolated_press_active": (
                 (self.curriculum_stage == "isolated_press")
                 & (self.progress_buf
@@ -1113,100 +1102,32 @@ class FretTask(GuitarEnvBase):
                 (self.curriculum_stage == "isolated_press")
                 & (self.progress_buf
                    >= self.isolated_press_lock_after_frames)),
-            "hover_reward": metrics["hover_reward"],
-            "hover_gap": metrics["hover_gap"],
-            "hover_gate": metrics["hover_gate"],
-            "hover_position_reward": metrics["hover_position_reward"],
-            "hover_velocity_reward": metrics["hover_velocity_reward"],
-            "hover_outward_speed": metrics["hover_outward_speed"],
-            "hover_velocity_gate": metrics["hover_velocity_gate"],
-            "release_pose_reward": metrics["release_pose_reward"],
             "release_pose_error_deg": (
                 metrics["release_pose_error_deg"]
                 * metrics["release_pose_gate"].float()).sum(dim=1)
                 / metrics["release_pose_gate"].sum(dim=1).clamp_min(1),
             "release_pose_active_rate":
                 metrics["release_pose_gate"].float().mean(dim=1),
-            "finger_coupling_reward": metrics["finger_coupling_reward"],
             "finger_coupling_active_rate":
                 metrics["finger_coupling_gate"].float().mean(dim=1),
             "finger_coupling_target_speed_deg": (
                 metrics["finger_coupling_target_speed_deg"]
                 * metrics["finger_coupling_gate"].float()).sum(dim=1)
                 / metrics["finger_coupling_gate"].sum(dim=1).clamp_min(1),
-            "finger_coupling_press_protected":
-                metrics["finger_coupling_press_protected"],
             "finger_synergy_active_rate":
                 self.finger_synergy_gate.float().mean(dim=1),
             "finger_synergy_induced_deg": (
                 self.finger_synergy_induced_deg
                 * self.finger_synergy_gate.float()).sum(dim=1)
                 / self.finger_synergy_gate.sum(dim=1).clamp_min(1),
-            "next_goal_approach_reward":
-                metrics["next_goal_approach_reward"],
             "next_goal_approach_active_rate":
                 metrics["next_goal_approach_gate"].float().mean(dim=1),
             "next_goal_approach_distance": (
                 metrics["next_goal_approach_distance"]
                 * metrics["next_goal_approach_gate"].float()).sum(dim=1)
                 / metrics["next_goal_approach_gate"].sum(dim=1).clamp_min(1),
-            "next_goal_progress_reward":
-                metrics["next_goal_progress_reward"],
             "next_goal_progress_active_rate":
                 metrics["next_goal_progress_gate"].float().mean(dim=1),
-            "next_goal_current_press_preserved":
-                metrics["next_goal_current_press_preserved"],
-            "next_goal_current_press_preservation_quality":
-                metrics["next_goal_current_press_preservation_quality"],
-            "next_goal_current_press_preservation_gate":
-                metrics["next_goal_current_press_preservation_gate"],
-            "next_goal_joint_preservation_quality":
-                metrics["next_goal_joint_preservation_quality"],
-            "press_class_reward": metrics["press_class_reward"],
-            "press_class_mean_reward":
-                metrics["press_class_mean_reward"],
-            "press_class_min_reward":
-                metrics["press_class_min_reward"],
-            "no_press_class_reward": metrics["no_press_class_reward"],
-            "press_class_completion": metrics["press_class_completion"],
-            "no_press_class_completion":
-                metrics["no_press_class_completion"],
-            "effective_press_class_weight":
-                metrics["effective_press_class_weight"],
-            "effective_no_press_class_weight":
-                metrics["effective_no_press_class_weight"],
-            "class_balanced_reward": metrics["class_balanced_reward"],
-            "chord_joint_quality": metrics["chord_joint_quality"],
-            "chord_bridge_bottleneck_reward":
-                metrics["chord_bridge_bottleneck_reward"],
-            "chord_bridge_mean_reward":
-                metrics["chord_bridge_mean_reward"],
-            "chord_bridge_min_reward":
-                metrics["chord_bridge_min_reward"],
-            "class_balance_enabled": metrics["class_balance_enabled"],
-            "slip_reward": metrics["slip_reward"],
-            "slip_distance": metrics["slip_distance"],
-            "slip_instant": metrics["slip_instant"],
-            "slip_gate": metrics["slip_gate"],
-            "slip_streak": metrics["slip_streak"],
-            "r28_move_active": metrics["r28_move_active"],
-            "r28_move_started": metrics["r28_move_started"],
-            "r28_move_completed": metrics["r28_move_completed"],
-            "r28_pressed_endpoint_candidate":
-                metrics["r28_pressed_endpoint_candidate"],
-            "r28_same_cell_drag": metrics["r28_same_cell_drag"],
-            "r28_candidate_step_distance":
-                metrics["r28_candidate_step_distance"],
-            "r28_confirmed_step_distance":
-                metrics["r28_confirmed_step_distance"],
-            "r28_candidate_cumulative_distance":
-                metrics["r28_candidate_cumulative_distance"],
-            "r28_confirmed_cumulative_distance":
-                metrics["r28_confirmed_cumulative_distance"],
-            "r28_confirmed_drag_frames": metrics["r28_confirmed_drag_frames"],
-            "r28_drag_violation_started":
-                metrics["r28_drag_violation_started"],
-            "wrist_distance": metrics["wrist_distance"],
             "palm_world_z": self.palm_world_z.clone(),
             "palm_normal_valid": self.palm_normal_valid.clone(),
             "palm_down_streak": self.palm_down_streak.clone(),
@@ -1221,11 +1142,11 @@ class FretTask(GuitarEnvBase):
             "failure_termination": failure_termination.clone(),
             "normal_termination": normal_termination.clone(),
             "successful_termination": episode_success.clone(),
-            "all_correct": metrics["all_correct"],
             "preparing": preparing.clone(),
             "goal_metrics_enabled": metrics_enabled.clone(),
             "preparation_remaining_frames": self.preparation_remaining.clone(),
         }
+        info.update({name: metrics[name] for name in DIRECT_INFO_METRIC_KEYS})
         if self.curriculum_stage == "goal_pair":
             sequence_active = (
                 metrics_enabled & self.goals.goal_pair_sequence_mask)

@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from cfg import FRET
+from env.config import configured_kwargs
 from env.tasks import FretTask
 from learning import ActorCritic
 
@@ -26,10 +27,17 @@ def main(argv=None):
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)
 
-    env = FretTask(
-        FRET["goal_path"], FRET["hand_targets_path"], num_envs=args.num_envs,
-        device=FRET["device"], headless=True, reset_noise=0.0,
-        random_start=False, pressed_drag_threshold=FRET["pressed_drag_threshold"])
+    env = FretTask(**configured_kwargs(
+              FretTask, FRET,
+              goal_path=FRET["goal_path"],
+              hand_targets_path=FRET["hand_targets_path"],
+              num_envs=args.num_envs,
+              device=FRET["device"],
+              headless=True,
+              reset_noise=0.0,
+              random_start=False,
+              pressed_drag_threshold=FRET["pressed_drag_threshold"]
+          ))
     init_action = ((env.init_pose[env.ctrl_idx] - env.ctrl_mid[0]) /
                    (env.action_scale * env.ctrl_half[0]).clamp_min(1e-6)).clamp(-1.0, 1.0)
     model = None

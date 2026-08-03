@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from cfg import FRET
+from env.config import configured_kwargs
 from env.tasks import FretTask
 from tools.fretboard_visualization import (
     camera_for_wrist_safety_box,
@@ -49,14 +50,23 @@ def parser():
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    env = FretTask(goal_path=args.goal, hand_targets_path=args.hand_targets or None,
-                   num_envs=1, device=args.device, headless=True, seed=FRET["seed"],
-                   reset_noise=0.0, random_start=False,
-                   wrist_weight=FRET["wrist_weight"], smooth_weight=FRET["smooth_weight"],
-                   proximal_weight=FRET["proximal_weight"],
-                   proximal_transition=FRET["proximal_transition"],
-                   wrist_safety_bounds_min=FRET["wrist_safety_bounds_min"],
-                   wrist_safety_bounds_max=FRET["wrist_safety_bounds_max"])
+    env = FretTask(**configured_kwargs(
+              FretTask, FRET,
+              goal_path=args.goal,
+              hand_targets_path=args.hand_targets or None,
+              num_envs=1,
+              device=args.device,
+              headless=True,
+              seed=FRET["seed"],
+              reset_noise=0.0,
+              random_start=False,
+              wrist_weight=FRET["wrist_weight"],
+              smooth_weight=FRET["smooth_weight"],
+              proximal_weight=FRET["proximal_weight"],
+              proximal_transition=FRET["proximal_transition"],
+              wrist_safety_bounds_min=FRET["wrist_safety_bounds_min"],
+              wrist_safety_bounds_max=FRET["wrist_safety_bounds_max"]
+          ))
     try:
         env.reset()
         spec = (camera_for_wrist_safety_box(env, args.width, args.height, args.fov)
