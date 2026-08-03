@@ -1563,6 +1563,7 @@ def main(argv=None):
                 iteration_callback=callback,
                 iteration_result_callback=result_callback,
                 post_iteration_callback=periodic_video_callback,
+                history_limit=0,
             )
             if not args.smoke and not args.no_auto_video:
                 auto_video_checkpoint = (
@@ -1570,7 +1571,7 @@ def main(argv=None):
     finally:
         env.close()
 
-    if auto_video_checkpoint is not None:
+    if not args.eval:
         artifact_results = {}
         try:
             artifact_results.update(generate_training_plots(run_layout))
@@ -1578,6 +1579,7 @@ def main(argv=None):
             artifact_results["plot_error"] = str(exc)
             print(f"warning: automatic training plots failed: {exc}",
                   file=sys.stderr, flush=True)
+    if auto_video_checkpoint is not None:
         queued = [
             item for item in periodic_video_checkpoints
             if item[1] != auto_video_checkpoint]
@@ -1607,15 +1609,7 @@ def main(argv=None):
             print(f"warning: automatic rollout video failed: {exc}",
                   file=sys.stderr, flush=True)
             artifact_results["video_error"] = str(exc)
-        record_artifact_result(run_layout, artifact_results)
-    elif not args.eval:
-        artifact_results = {}
-        try:
-            artifact_results.update(generate_training_plots(run_layout))
-        except (OSError, subprocess.CalledProcessError) as exc:
-            artifact_results["plot_error"] = str(exc)
-            print(f"warning: automatic training plots failed: {exc}",
-                  file=sys.stderr, flush=True)
+    if not args.eval:
         record_artifact_result(run_layout, artifact_results)
 
 

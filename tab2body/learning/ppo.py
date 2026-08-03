@@ -803,17 +803,8 @@ class PPOTrainer:
     def set_checkpoint_contract(self, contract):
         self.checkpoint_contract = copy_validated_contract(contract)
 
-    def resume(self, checkpoint, purpose="resume"):
-        """Verify compatibility, then restore model, optimizer and counters."""
-        if self.checkpoint_contract is None:
-            raise RuntimeError(
-                "set_checkpoint_contract() is required before loading a checkpoint")
-        # Verification deliberately precedes load_state_dict: a same-shaped but
-        # semantically incompatible policy must never partially mutate this run.
-        verify_checkpoint_contract(
-            checkpoint, self.checkpoint_contract, purpose=purpose)
-        verify_checkpoint_curriculum_alignment(checkpoint)
-        self.model.load_state_dict(checkpoint["model"])
+    def _restore_checkpoint_state(self, checkpoint, model_state):
+        self.model.load_state_dict(model_state, strict=True)
         if "optimizer" in checkpoint:
             self.optimizer.load_state_dict(checkpoint["optimizer"])
         self.iteration = int(checkpoint.get("iteration", 0))
@@ -827,6 +818,18 @@ class PPOTrainer:
                 environment_state)
             if reset_observation is not None:
                 self.obs = reset_observation
+
+    def resume(self, checkpoint, purpose="resume"):
+        """Verify compatibility, then restore model, optimizer and counters."""
+        if self.checkpoint_contract is None:
+            raise RuntimeError(
+                "set_checkpoint_contract() is required before loading a checkpoint")
+        # Verification deliberately precedes load_state_dict: a same-shaped but
+        # semantically incompatible policy must never partially mutate this run.
+        verify_checkpoint_contract(
+            checkpoint, self.checkpoint_contract, purpose=purpose)
+        verify_checkpoint_curriculum_alignment(checkpoint)
+        self._restore_checkpoint_state(checkpoint, checkpoint["model"])
 
     def resume_migrated(self, checkpoint):
         """Restore a checkpoint after an explicit, user-requested contract migration.
@@ -851,23 +854,15 @@ class PPOTrainer:
                 raise ValueError(
                     f"migrated checkpoint tensor shape mismatch for {key}: "
                     f"{tuple(source.shape)} != {tuple(target.shape)}")
-        self.model.load_state_dict(source_model, strict=True)
-        if "optimizer" in checkpoint:
-            self.optimizer.load_state_dict(checkpoint["optimizer"])
-        self.iteration = int(checkpoint.get("iteration", 0))
-        self.global_step = int(checkpoint.get("global_step", 0))
-        self.training_context = dict(checkpoint.get("training_context", {}))
-        environment_state = checkpoint.get("environment_state")
-        environment = getattr(self, "env", None)
-        if (environment_state is not None
-                and hasattr(environment, "load_curriculum_state_dict")):
-            reset_observation = environment.load_curriculum_state_dict(
-                environment_state)
-            if reset_observation is not None:
-                self.obs = reset_observation
+        self._restore_checkpoint_state(checkpoint, source_model)
 
     def learn(self, iterations, iteration_callback=None,
-              iteration_result_callback=None, post_iteration_callback=None):
+              iteration_result_callback=None, post_iteration_callback=None,
+              history_limit=None):
+        if history_limit is not None:
+            history_limit = int(history_limit)
+            if history_limit < 0:
+                raise ValueError("history_limit must be non-negative or None")
         started = time.time()
         history = []
         first = self.iteration + 1
@@ -901,7 +896,11 @@ class PPOTrainer:
                         stats[f"next_{key}"] = value
                     else:
                         stats[key] = value
-            history.append(stats)
+            if history_limit is None or history_limit > 0:
+                history.append(stats)
+                if (history_limit is not None
+                        and len(history) > history_limit):
+                    del history[:-history_limit]
             if self.metrics_path:
                 with self.metrics_path.open("a") as f:
                     f.write(json.dumps(stats, sort_keys=True) + "\n")

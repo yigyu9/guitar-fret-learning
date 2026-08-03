@@ -1,11 +1,41 @@
 """Plot fingertip curriculum metrics from a training JSONL log."""
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+from training_metrics import load_metric_rows
+
+
+STAGE_NAMES = (
+    "fine_reach", "isolated_press", "integrated_press",
+    "chord_reach", "chord_fine_reach", "static_chord",
+    "frozen_context", "goal_pair", "transition_window",
+    "coverage", "integration", "full_song",
+)
+SERIES = (
+    ("curriculum_mean_target_distance", "Mean target distance", 1000.0),
+    ("curriculum_p90_target_distance", "P90 target distance", 1000.0),
+    ("curriculum_cell_alignment_rate", "Fret-cell alignment rate", 1.0),
+    ("curriculum_press_success_rate", "Instant press success", 1.0),
+    ("curriculum_mean_position_quality", "Strict fret-position quality", 1.0),
+    ("curriculum_mean_dense_position_quality", "Dense fret-position quality", 1.0),
+    ("curriculum_mean_arch_quality", "Active-finger arch quality", 1.0),
+    ("curriculum_press_hold_acquired_rate", "Stable press acquired", 1.0),
+    ("curriculum_frame_press_dropout_rate", "Press dropout rate", 1.0),
+    ("curriculum_chord_ready", "Chord-ready rate", 1.0),
+    ("curriculum_frame_chord_hold_quality", "Chord hold quality", 1.0),
+    ("curriculum_chord_joint_quality", "Joint chord quality", 1.0),
+    ("curriculum_thumb_distance", "Thumb distance", 1000.0),
+    ("curriculum_thumb_support", "Thumb support rate", 1.0),
+)
+BRIDGE_SERIES = (
+    ("curriculum_chord_bridge_mean_reward", "bridge mean"),
+    ("curriculum_chord_bridge_min_reward", "bridge minimum"),
+    ("curriculum_chord_bridge_bottleneck_reward", "bridge aggregate"),
+)
 
 
 def main():
@@ -14,39 +44,21 @@ def main():
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
     source = Path(args.metrics).resolve()
-    rows = [json.loads(line) for line in source.read_text().splitlines() if line.strip()]
+    keys = (
+        "steps", "curriculum_stage",
+        *(key for key, _, _ in SERIES),
+        *(key for key, _ in BRIDGE_SERIES),
+    )
+    rows = load_metric_rows(source, keys)
+    if not rows:
+        raise SystemExit("metrics file is empty")
     x = [row["steps"] for row in rows]
-    stage_names = (
-        "fine_reach", "isolated_press", "integrated_press",
-        "chord_reach", "chord_fine_reach",
-        "static_chord", "frozen_context", "goal_pair",
-        "transition_window",
-        "coverage", "integration", "full_song")
     transitions = [(stage, next((row["steps"] for row in rows
                                  if row.get("curriculum_stage") == stage), None))
-                   for stage in stage_names]
+                   for stage in STAGE_NAMES]
 
     fig, axes = plt.subplots(7, 2, figsize=(14, 23), constrained_layout=True)
-    series = (
-        ("curriculum_mean_target_distance", "Mean target distance", 1000.0),
-        ("curriculum_p90_target_distance", "P90 target distance", 1000.0),
-        ("curriculum_cell_alignment_rate", "Fret-cell alignment rate", 1.0),
-        ("curriculum_press_success_rate", "Instant press success", 1.0),
-        ("curriculum_mean_position_quality",
-         "Strict fret-position quality", 1.0),
-        ("curriculum_mean_dense_position_quality",
-         "Dense fret-position quality", 1.0),
-        ("curriculum_mean_arch_quality", "Active-finger arch quality", 1.0),
-        ("curriculum_press_hold_acquired_rate",
-         "Stable press acquired", 1.0),
-        ("curriculum_frame_press_dropout_rate", "Press dropout rate", 1.0),
-        ("curriculum_chord_ready", "Chord-ready rate", 1.0),
-        ("curriculum_frame_chord_hold_quality", "Chord hold quality", 1.0),
-        ("curriculum_chord_joint_quality", "Joint chord quality", 1.0),
-        ("curriculum_thumb_distance", "Thumb distance", 1000.0),
-        ("curriculum_thumb_support", "Thumb support rate", 1.0),
-    )
-    for axis, (key, title, scale) in zip(axes.flat, series):
+    for axis, (key, title, scale) in zip(axes.flat, SERIES):
         y = [row.get(key, float("nan")) * scale for row in rows]
         axis.plot(x, y, linewidth=1.0)
         for stage, transition in transitions:
@@ -59,11 +71,7 @@ def main():
         axis.set_xlabel("environment samples")
         axis.grid(alpha=0.3)
     bridge_axis = axes[5, 1]
-    for key, label in (
-            ("curriculum_chord_bridge_mean_reward", "bridge mean"),
-            ("curriculum_chord_bridge_min_reward", "bridge minimum"),
-            ("curriculum_chord_bridge_bottleneck_reward",
-             "bridge aggregate")):
+    for key, label in BRIDGE_SERIES:
         bridge_axis.plot(
             x, [row.get(key, float("nan")) for row in rows],
             linewidth=1.0, label=label)

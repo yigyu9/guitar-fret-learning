@@ -4,7 +4,6 @@
       ../fret/training/runs/jazz1_pilot/logs/metrics.jsonl
 """
 import argparse
-import json
 from pathlib import Path
 import sys
 
@@ -17,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from learning.run_layout import default_plot_path
+from tools.training_metrics import load_metric_rows
 
 
 def main(argv=None):
@@ -25,17 +25,17 @@ def main(argv=None):
     parser.add_argument("--out", type=Path, default=None,
                         help="기본값: 해당 run의 plots/training_curves.png")
     args = parser.parse_args(argv)
-    rows = [json.loads(line) for line in args.metrics.read_text().splitlines() if line.strip()]
-    if not rows:
-        raise SystemExit("metrics file is empty")
-    x = [r["steps"] for r in rows]
-    fig, axes = plt.subplots(2, 2, figsize=(12, 7), dpi=140)
     series = [
         ("reward", "Mean reward"),
         ("value_loss", "Value loss"),
         ("kl", "Approx. KL"),
         ("f1_l", "Completed-episode left-hand F1"),
     ]
+    rows = load_metric_rows(
+        args.metrics, ("steps", *(key for key, _ in series)))
+    if not rows:
+        raise SystemExit("metrics file is empty")
+    fig, axes = plt.subplots(2, 2, figsize=(12, 7), dpi=140)
     for ax, (key, title) in zip(axes.flat, series):
         xx, yy = zip(*[(r["steps"], r[key]) for r in rows if key in r]) \
             if any(key in r for r in rows) else ([], [])
