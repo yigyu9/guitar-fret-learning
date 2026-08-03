@@ -1,0 +1,178 @@
+GUITAR 연구 기반 오른손 피크 그립 자세
+
+새 strike 환경의 첫 학습 목표는 "타현"이 아니라 "피크를 쥔 듯한 오른손 손 모양 유지"로 둔다.
+피크 단현 연주에 가까운 related_work/guitar의 scale reference motion에서 대표 손 자세를
+추출해 grip reference로 사용한다.
+
+선택한 reference:
+- 파일: related_work/guitar/assets/motions/scale.json
+- sampling rate: 120 Hz
+- 전체 frame: 4,749
+- 선택 frame: 2,227
+- 선택 시각: 18.558333 s
+- 선택 방식: 각 frame의 오른손 21-DOF 축 자세를 구하고, 전체 frame의 축별 median/MAD에
+  가장 가까운 실제 frame을 medoid로 선택
+
+scale motion을 선택한 이유:
+- scale.json은 오른손 단현 pick 동작에 사용된 reference다.
+- 기존 right-hand 학습 설정의 기본 motion_file도 scale.json이다.
+- strum.json의 대표 자세는 index2 약 89도, middle2 약 89도 등 자유 손가락이 더 강하게
+  말려 있다. 첫 pick-single 자세에는 scale 자세가 더 중립적이다.
+- scale 자세는 엄지와 검지가 피크를 집는 모양을 만들면서 중지·약지·소지는 완전히 펴지지
+  않고 자연스럽게 굽혀져 있다.
+
+중요한 한계:
+- 기존 guitar 연구에는 손에서 분리된 실제 물리 피크가 없다.
+- RH:pick은 RH:index2 아래 (0.007, -0.048, -0.005)m에 붙은 geometry·질량·관절 없는 marker다.
+- 따라서 아래 자세는 실제 피크 접촉력으로 확인된 grasp가 아니라 reference motion에서 관찰된
+  "피크를 쥔 듯한 자세"다.
+- 이 자세 보상만으로 실제 피크 고정, slip 방지, attack angle을 보장한다고 주장하지 않는다.
+
+
+2. 원본 reference local quaternion
+
+형식:
+body_name = [x, y, z, w]
+
+RH:thumb1 = [ 0.061825447,  0.153047130, -0.369418770, 0.914485693]
+RH:thumb2 = [-0.000000004,  0.000000007, -0.314592093, 0.949226975]
+RH:thumb3 = [-0.000000004, -0.000000007, -0.175125733, 0.984546125]
+
+RH:index1 = [0.316347271, 0.000000002,  0.014037380, 0.948539615]
+RH:index2 = [0.661602020, 0.000000005,  0.000000004, 0.749855161]
+RH:index3 = [0.628658354, 0.000000007, -0.000000011, 0.777681649]
+
+RH:middle1 = [-0.049975537, -0.000000005,  0.018260285, 0.998583496]
+RH:middle2 = [ 0.575989127, -0.000000002,  0.000000008, 0.817457378]
+RH:middle3 = [ 0.488553047,  0.000000005, -0.000000004, 0.872534215]
+
+RH:ring1 = [-0.012851359, -0.000000006, -0.006767300, 0.999894500]
+RH:ring2 = [ 0.494995624,  0.000000005, -0.000000001, 0.868895471]
+RH:ring3 = [ 0.406828314,  0.000000001,  0.000000007, 0.913504660]
+
+RH:pinky1 = [0.020548332, -0.000000005, -0.043384049, 0.998847127]
+RH:pinky2 = [0.400131762,  0.000000003,  0.000000008, 0.916457653]
+RH:pinky3 = [0.325641185,  0.000000001, -0.000000004, 0.945493460]
+
+위 quaternion을 reference의 가장 직접적인 정본으로 사용한다. 각 link의 현재 local orientation과
+reference quaternion 사이 geodesic angle을 계산하면 다축 관절의 Euler/hinge 분해 순서에 덜
+민감한 hand-shape 보상을 만들 수 있다.
+
+
+3. 21개 손 관절 축 환산값
+
+환산 방법:
+- 원본 local quaternion [x,y,z,w]을 rotation vector로 변환한다.
+- MJCF에서 해당 hinge가 사용하는 축 성분을 취한다.
+- 단축 관절에는 직접적인 초기 target으로 사용할 수 있다.
+- thumb1, index1~pinky1 같은 다축 body에서는 정확한 stacked-hinge 역해가 아니라 축 투영값이다.
+  최종 qpos target으로 봉인하기 전에 Isaac Gym FK로 quaternion reference와 일치하는지 확인한다.
+
+관절 이름                 rad         degree
+------------------------------------------------
+RH:thumb1_x              0.127301       7.2938
+RH:thumb1_y              0.315130      18.0556
+RH:thumb1_z             -0.760646     -43.5818
+RH:thumb2               -0.640054     -36.6724
+RH:thumb3               -0.352066     -20.1719
+
+RH:index1_x              0.643775      36.8856
+RH:index1_z              0.028566       1.6367
+RH:index2                1.445906      82.8443
+RH:index3                1.359653      77.9024
+
+RH:middle1_x            -0.099999      -5.7295
+RH:middle1_z             0.036538       2.0935
+RH:middle2               1.227628      70.3379
+RH:middle3               1.020861      58.4910
+
+RH:ring1_x              -0.025703      -1.4727
+RH:ring1_z              -0.013535      -0.7755
+RH:ring2                 1.035659      59.3389
+RH:ring3                 0.837959      48.0115
+
+RH:pinky1_x              0.041113       2.3556
+RH:pinky1_z             -0.086802      -4.9734
+RH:pinky2                0.823321      47.1728
+RH:pinky3                0.663379      38.0088
+
+자세 해석:
+- 엄지: 벌림·맞섬과 두 마디 굽힘으로 검지 쪽을 향한다.
+- 검지: index2/index3가 약 83/78도로 강하게 굽혀져 피크를 지지하는 모양이다.
+- 중지: 약 70/58도로 자연스럽게 굽혀져 있다.
+- 약지: 약 59/48도로 중간 정도 굽혀져 있다.
+- 소지: 약 47/38도로 가장 느슨하게 굽혀져 있다.
+- 자유 손가락은 완전 신전도 주먹 모양도 아니며, 검지에서 소지로 갈수록 굽힘이 완만해진다.
+
+
+4. 첫 strike 보상 계약 제안
+
+stage 이름 후보:
+A0_PICK_GRIP
+
+목표:
+- 엄지와 검지가 reference의 pinch-like pose를 만든다.
+- 중지·약지·소지가 reference의 자연스러운 굽힘을 유지한다.
+- 이 단계에서는 줄 접근, 타현 시각, RELEASE, 속도, 방향을 보상하지 않는다.
+- 어깨·팔꿈치·손목의 특정 절대 자세도 보상하지 않는다. legacy floating-hand wrist pose는
+  현재 좌식 full-body rig에 그대로 이식할 수 없기 때문이다.
+
+권장 오차:
+- 각 손 link의 현재 local quaternion q와 reference q_ref의 geodesic angle을 사용한다.
+- quaternion 부호 q와 -q는 같은 회전이므로 abs(dot(q, q_ref))를 사용한다.
+
+각 link 오차:
+theta_i = 2 * acos(clamp(abs(dot(q_i, q_ref_i)), 0, 1))
+
+그룹 오차:
+E_pinch = thumb1~3와 index1~3의 theta_i^2 평균
+E_free  = middle1~3, ring1~3, pinky1~3의 theta_i^2 평균
+
+첫 reward 형태:
+r_grip = 0.65 * exp(-k_pinch * E_pinch)
+       + 0.35 * exp(-k_free  * E_free)
+
+초기 의미:
+- 엄지·검지는 피크 그립의 핵심이라 65% 비중을 둔다.
+- 나머지 손가락은 자연스러운 손 모양을 위해 35% 비중을 둔다.
+- k_pinch, k_free와 성공 각도는 Isaac Gym에서 reference pose를 실제로 재현하고 reset noise를
+  넣은 분포를 본 뒤 확정한다. 근거 없이 임계값을 먼저 hard-code하지 않는다.
+
+추가 권장 사항:
+- joint qpos 차이보다 local-link quaternion 차이를 첫 정본으로 사용한다.
+- 보상은 [0,1] 범위로 유지한다.
+- 모든 손가락을 무조건 한 점에 고정하지 말고 reference 주변 허용 폭을 둔다.
+- 엄지·검지 상대 거리와 RH:pick marker 위치는 먼저 diagnostic으로 기록한다.
+- 실제 피크 geometry를 추가하기 전에는 thumb-index contact force를 grip 성공 조건으로 쓰지 않는다.
+- A0_PICK_GRIP을 통과한 뒤에만 피크 끝을 목표 줄의 ready 위치로 옮기는 A1_TIP_READY를 사용한다.
+
+
+5. 새 환경에서 반드시 검증할 항목
+
+1) 현재 full-body asset에서 21개 target이 모두 joint limit 안인지 검사한다.
+2) qpos 축 환산값을 적용했을 때 각 local-link quaternion이 reference와 가까운지 FK로 검사한다.
+3) 손가락 mesh끼리 또는 손바닥과 손가락이 관통하지 않는지 확인한다.
+4) 엄지와 검지가 피크를 쥔 것처럼 보이는지 두 카메라 이미지로 사람이 검수한다.
+5) reset noise를 넣어도 r_grip gradient가 사라지지 않는지 검사한다.
+6) 손 모양을 맞추기 위해 손목·팔이 비정상적으로 움직이는 편법이 없는지 확인한다.
+7) A0 성공 뒤 grip reward를 작게 유지한 채 A1_TIP_READY를 학습할 때 손 모양이 무너지지 않는지 확인한다.
+
+
+6. 연구 코드에서 확인한 사실
+
+- related_work/guitar/cfg/right.py:
+  right-hand 기본 motion_file은 assets/motions/scale.json이다.
+  discriminator는 wrist와 thumb/index/middle/ring/pinky 각 1~3 link를 사용한다.
+
+- related_work/guitar/assets/right_hand_motions.yaml:
+  scale.json과 strum.json을 오른손 reference로 묶는다.
+
+- related_work/guitar/assets/right_hand_guitar.xml:
+  오른손은 thumb 5 DOF + index/middle/ring/pinky 각 4 DOF, 총 21 hand DOF다.
+  RH:pick은 RH:index2의 자식 marker다.
+
+- related_work/guitar/env.py:
+  기존 reward는 thumb3와 index2/index3의 접촉을 grip proxy로 0.05만큼 보상한다.
+  그러나 marker-only pick이고 현재 새 환경의 self-contact 설정도 확정되지 않았으므로 이 접촉
+  항을 첫 보상으로 그대로 복사하지 않는다.
+

@@ -1,0 +1,138 @@
+<!--
+  guitar_asset.xml - standalone guitar for the full-body pipeline (2026-07-07)
+  Source: guitar subtree of smpl_mpl_hands_guitar_o4.xml (upstream Pei Xu guitar
+  + O4 string visual capsules + winding-fixed neck meshes).
+  Loaded as a SEPARATE Isaac Gym actor (G0: fix_base_link=True, G1/G2: free + strap).
+  Canonical O4 anchor pose (set via env config, NOT baked here):
+    pos  = 0 0 0.89
+    quat = 0.5573 -0.18685 0.57969 0.56433   (neck 26.5deg up, bridge z=0.71)
+  NOTE(P7): G:string1-6 / *_end are geometry-less marker bodies (massless).
+  Before G1 (free actor), add inertial to guitar root and verify massless bodies load.
+-->
+<mujoco model="guitar_asset">
+  <compiler angle="degree" meshdir="mesh"/>
+  <asset>
+    <mesh name="guitar_neck1" file="guitar_neck1.obj"/>
+    <mesh name="guitar_neck2" file="guitar_neck2.obj"/>
+  </asset>
+  <default>
+    <default class="hand">
+      <geom contype="1" conaffinity="1" condim="1" margin="0" friction="1.0 0.05 0.05" solimp=".9 .99 .003" solref=".015 1" rgba="0.8 0.6 0.4 1"/>
+    </default>
+  </default>
+  <worldbody>
+    <body name="guitar" childclass="hand" pos="0 0 0" quat="1 0 0 0">
+      <geom type="mesh" mesh="guitar_neck1" />
+      <geom type="mesh" mesh="guitar_neck2" />
+      <body name="G:thumb_support_proxy" pos="0 -0.012303 0">
+        <geom type="box" pos="0 0 -0.019277" size="0.0202 0.2395 0.0025" density="1" rgba="0 0 0 0" />
+      </body>
+      <body name="G:nut" pos="0 0.2165 0.0113">
+        <geom type="box" pos="0 0 0" size="0.0205 0.000955 0.002" />
+      </body>
+      <body name="G:fret1" pos="0 0.18162 0.01028">
+        <geom type="box" pos="0 0 0" size="0.02 0.0007 0.00095" />
+      </body>
+      <body name="G:fret2" pos="0 0.14871 0.01028">
+        <geom type="box" pos="0 0 0" size="0.0205 0.0007 0.00095" />
+      </body>
+      <body name="G:fret3" pos="0 0.11764 0.01028">
+        <geom type="box" pos="0 0 0" size="0.021 0.0007 0.00095" />
+      </body>
+      <body name="G:fret4" pos="0 0.088313 0.01028">
+        <geom type="box" pos="0 0 0" size="0.0214 0.0007 0.00095" />
+      </body>
+      <body name="G:fret5" pos="0 0.060633 0.01028">
+        <geom type="box" pos="0 0 0" size="0.022 0.0007 0.00095" />
+      </body>
+      <body name="G:fret6" pos="0 0.034506 0.01028">
+        <geom type="box" pos="0 0 0" size="0.0225 0.0007 0.00095" />
+      </body>
+      <body name="G:fret7" pos="0 0.009846 0.01028">
+        <geom type="box" pos="0 0 0" size="0.023 0.0007 0.00095" />
+      </body>
+      <body name="G:fret8" pos="0 -0.01343 0.01028">
+        <geom type="box" pos="0 0 0" size="0.0233 0.0007 0.00095" />
+      </body>
+      <body name="G:fret9" pos="0 -0.035399 0.01028">
+        <geom type="box" pos="0 0 0" size="0.0235 0.0007 0.00095" />
+      </body>
+      <body name="G:fret10" pos="0 -0.056136 0.01028">
+        <geom type="box" pos="0 0 0" size="0.024 0.0007 0.00095" />
+      </body>
+      <body name="G:fret11" pos="0 -0.075708 0.01028">
+        <geom type="box" pos="0 0 0" size="0.0244 0.0007 0.00095" />
+      </body>
+      <body name="G:fret12" pos="0 -0.094182 0.01028">
+        <geom type="box" pos="0 0 0" size="0.0246 0.0007 0.00095" />
+      </body>
+      <body name="G:fret13" pos="0 -0.11162 0.01028">
+        <geom type="box" pos="0 0 0" size="0.0249 0.0007 0.00095" />
+      </body>
+      <body name="G:fret14" pos="0 -0.12808 0.01028">
+        <geom type="box" pos="0 0 0" size="0.025 0.0007 0.00095" />
+      </body>
+      <body name="G:fret15" pos="0 -0.14361 0.01028">
+        <geom type="box" pos="0 0 0" size="0.02525 0.0007 0.00095" />
+      </body>
+      <body name="G:fret16" pos="0 -0.15828 0.01028">
+        <geom type="box" pos="0 0 0" size="0.0255 0.0007 0.00095" />
+      </body>
+      <body name="G:fret17" pos="0 -0.17212 0.01028">
+        <geom type="box" pos="0 0 0" size="0.02575 0.0007 0.00095" />
+      </body>
+      <body name="G:fret18" pos="0 -0.18518 0.01028">
+        <geom type="box" pos="0 0 0" size="0.026 0.0007 0.00095" />
+      </body>
+      <body name="G:fret19" pos="0 -0.19751 0.01028">
+        <geom type="box" pos="0 0 0" size="0.02615 0.0007 0.00095" />
+      </body>
+      <body name="G:fret20" pos="0 -0.20915 0.01028">
+        <geom type="box" pos="0 0 0" size="0.02635 0.0007 0.00095" />
+      </body>
+      <body name="G:fret21" pos="0 -0.22013 0.01028">
+        <geom type="box" pos="0 0 0" size="0.0265 0.0007 0.00095" />
+      </body>
+      <body name="G:fret22" pos="0 -0.2305 0.01028">
+        <geom type="box" pos="0 0 0" size="0.0266 0.0007 0.00095" />
+      </body>
+      <body name="G:string1" pos="0.01765 0.2165 0.01230">
+            </body>
+      <body name="G:string2" pos="0.01050 0.2165 0.01230">
+            </body>
+      <body name="G:string3" pos="0.00360 0.2165 0.01230">
+            </body>
+      <body name="G:string4" pos="-0.00360 0.2165 0.01230">
+            </body>
+      <body name="G:string5" pos="-0.01050 0.2165 0.01230">
+            </body>
+      <body name="G:string6" pos="-0.01765 0.2165 0.01230">
+            </body>
+      <body name="G:string1_end" pos="0.02544 -0.40345 0.01230">
+            </body>
+      <body name="G:string2_end" pos="0.01527 -0.405 0.01230">
+            </body>
+      <body name="G:string3_end" pos="0.00523 -0.4067 0.01230">
+            </body>
+      <body name="G:string4_end" pos="-0.005223 -0.4035 0.01230">
+            </body>
+      <body name="G:string5_end" pos="-0.01529 -0.40748 0.01230">
+            </body>
+      <body name="G:string6_end" pos="-0.0255 -0.40905 0.01230">
+            </body>
+      <body name="G:body" pos="0 -0.4 -0.0217">
+        <geom type="box" pos="0 0 0" size="0.15 0.17 0.02" />
+      </body>
+      <body name="G:pluck_range" pos="0 -0.328 0.0063">
+        <geom type="box" pos="0 0 0" size="0.028 0.086 0.0075" />
+      </body>
+      <geom type="capsule" pos="0.021545 -0.093475 0.012300" quat="0.707107 0.707051 0.008884 -0.000000" size="0.0009 0.309999" contype="0" conaffinity="0" rgba="0.85 0.85 0.9 1" />
+      <geom type="capsule" pos="0.012885 -0.094250 0.012300" quat="0.707107 0.707086 0.005427 -0.000000" size="0.0009 0.310759" contype="0" conaffinity="0" rgba="0.85 0.85 0.9 1" />
+      <geom type="capsule" pos="0.004415 -0.095100 0.012300" quat="0.707107 0.707104 0.001849 -0.000000" size="0.0009 0.311601" contype="0" conaffinity="0" rgba="0.85 0.85 0.9 1" />
+      <geom type="capsule" pos="-0.004412 -0.093500 0.012300" quat="0.707107 0.707104 -0.001851 0.000000" size="0.0009 0.310001" contype="0" conaffinity="0" rgba="0.85 0.85 0.9 1" />
+      <geom type="capsule" pos="-0.012895 -0.095490 0.012300" quat="0.707107 0.707086 -0.005428 0.000000" size="0.0009 0.311999" contype="0" conaffinity="0" rgba="0.85 0.85 0.9 1" />
+      <geom type="capsule" pos="-0.021575 -0.096275 0.012300" quat="0.707107 0.707051 -0.008873 0.000000" size="0.0009 0.312800" contype="0" conaffinity="0" rgba="0.85 0.85 0.9 1" />
+    </body>
+  
+  </worldbody>
+</mujoco>

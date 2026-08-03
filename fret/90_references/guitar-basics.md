@@ -1,0 +1,1 @@
+../../docs/guitar-basics-notes.md
