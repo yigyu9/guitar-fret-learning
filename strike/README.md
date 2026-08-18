@@ -1,6 +1,6 @@
 # strike — 오른손 타현 연구 안내서
 
-> **최종 갱신 — 2026-08-03:** 2026-07-27 재설계 실행 기록을 기준으로 정리한 문서다. 기존 실패 환경은 복원하지 않고
+> **최종 갱신 — 2026-08-04:** 2026-07-27 재설계 실행 기록을 기준으로 정리한 문서다. 기존 실패 환경은 복원하지 않고
 > `[time, frame, string]` pick-only 입력과 A0→A4 성능 curriculum으로 새로 구현했다.
 > 과거 smoke 산출물은 현재 계약과의 혼동을 막기 위해 제거했으며, 배관 검증은 현재 코드의
 > `python -m tab2body.train --task strike --smoke`로 재실행한다. 장시간 학습 성능과 사람다운
@@ -38,30 +38,34 @@ notes.t_on (sound-onset candidate)
 ## 읽는 순서
 
 1. [사람이 먼저 읽는 짧은 규칙](QUICK_RULES.md)
-2. [goal과 이벤트 계약](01_goal_contract/README.md)
-3. [SourceNote → StrikeIntent → StrikePlan 입력 아키텍처](01_goal_contract/GOAL_ARCHITECTURE.md)
-4. [구절 단위 StrikeMapper 결정 규칙 C1~C48](01_goal_contract/MAPPER_RULES.md)
-5. [물리 타현 규칙](02_physical_control/README.md)
-6. [사람다운 상세 운동 규칙 N1~N90](02_physical_control/NATURAL_MOTION_RULES.md)
-7. [Strike 영역 정의와 시각화](02_physical_control/strike-zone.md)
-8. [전체 규칙 정본 S1~S60](02_physical_control/rules.md)
-9. [규칙별 구현·통합·진단·보류 판정표](IMPLEMENTATION_CHECKLIST.md)
-10. [기존 guitar 연구의 pick 구현 분석](90_references/LEGACY_GUITAR_PICK_ANALYSIS.md)
-11. [학습·평가 계획](03_training/README.md)
-12. [보류 항목](04_deferred/README.md)
+2. [현재 오른손 구현 규칙 정본](RIGHT_HAND_RULES.md)
+3. [Strum·양손 동기화 확장 규칙](RIGHT_HAND_EXTENSIONS.md)
+4. [제공 규칙 R1~R28 반영표](RULE_TRACEABILITY.md)
+5. [goal과 이벤트 계약](01_goal_contract/README.md)
+6. [SourceNote → StrikeIntent → StrikePlan 입력 아키텍처](01_goal_contract/GOAL_ARCHITECTURE.md)
+7. [구절 단위 StrikeMapper 결정 규칙 C1~C48](01_goal_contract/MAPPER_RULES.md)
+8. [물리 타현 규칙](02_physical_control/README.md)
+9. [사람다운 상세 운동 규칙 N1~N90](02_physical_control/NATURAL_MOTION_RULES.md)
+10. [Strike 영역 정의와 시각화](02_physical_control/strike-zone.md)
+11. [하위 상세 규칙 S1~S60](02_physical_control/rules.md)
+12. [규칙별 구현·통합·진단·보류 판정표](IMPLEMENTATION_CHECKLIST.md)
+13. [2026-08-03 코드 정리·검증 보고서](CODE_AUDIT_2026-08-03.md)
+14. [기존 guitar 연구의 pick 구현 분석](90_references/LEGACY_GUITAR_PICK_ANALYSIS.md)
+15. [학습·평가 계획](03_training/README.md)
+16. [보류 항목](04_deferred/README.md)
 
 ## 현재 상태
 
 | 항목 | 상태 | 의미 |
 |---|---|---|
 | 규칙·연구 문서 | 갱신 | 현재 v1과 후속 확장을 구분 |
-| 실행 환경 | 구현·GPU PASS | 30 action, 263 observation, scalar reward/value |
+| 실행 환경 | 구현·CPU 회귀 PASS | 30 action, 263 observation, scalar reward/value; 최신 변경 GPU 재검증 대기 |
 | 학습 진입점 | 구현 | `python -m tab2body.train --task strike` |
 | checkpoint | 새 schema 구현 | 과거 checkpoint와 호환하지 않음 |
 | 과거 결과 | 로그·영상만 보존 | 500회 pilot 실패 원인 비교용 |
 | 새 입력 계약 | 구현·CPU PASS | 42-event `[time,frame,string]` |
-| detector | CPU/CUDA PASS | 유한 crossing, RELEASE, re-arm, zone |
-| A0~A4 runtime | GPU PASS | 모든 단계 finite, 실패 종료 0 hold probe |
+| detector | CPU PASS·과거 CUDA PASS | 유한 crossing, RELEASE, re-arm, zone |
+| A0~A4 runtime | CPU 계약 PASS·과거 GPU PASS | 최신 상태기 변경은 CUDA 환경에서 smoke 재검증 필요 |
 | 학습·복원·산출물 배관 | historical PASS | 현재 코드는 smoke로 재검증 |
 | 장시간 PPO | 재검증 필요 | 과거 5,000회 기록은 비교용 historical record |
 
@@ -97,7 +101,7 @@ notes.t_on (sound-onset candidate)
 - 현재 공개 운동 phase는 `READY→APPROACH→RELEASE_RECOVER` 세 개다. detector 내부 중복 방지는
   별도의 `ARMED→RELEASE pulse→WAIT_REARM→ARMED` 상태로 관리한다. CONTACT/LOAD는 pick S0의 필수
   phase가 아니며 fingerstyle 또는 물리 pick의 후속 진단으로만 남긴다.
-- 정상 곡 종료와 실패 종료를 구분한다. `−25`는 안전 실패에만 적용한다.
+- 정상 곡 종료와 실패 종료를 구분한다. 현재 `−10`은 안전·비유한·미완료 회복 실패에만 적용한다.
 
 ## 구현 산출물
 
@@ -110,6 +114,7 @@ notes.t_on (sound-onset candidate)
   `run_manifest.json`·로그·평가 JSON을 기준으로 한다.
 - CPU/CUDA 검사: `tab2body/tests/test_strike_*.py`
 - 전 단계 GPU 진단: `tab2body/tools/audit_strike_runtime.py`
+- 학습 정책 운동·안전 진단: `tab2body/tools/audit_strike_motion.py`
 - 학습 진입점: `tab2body/train.py --task strike`
 - 태스크 실행기: `tab2body/train_fret.py`, `tab2body/train_strike.py`
   (동일 `build_parser()`·`main()` 인터페이스)
@@ -119,6 +124,7 @@ notes.t_on (sound-onset candidate)
 
 ## 문서 판단 우선순위
 
-충돌 시 `PROJECT_CONTEXT.md → 이 디렉터리 rules.md/status.md → 실제 구현·검사 →
-docs/plans/task_strike_design.md(Xu 이식 초안)` 순서로 판단한다. 초안의 수치나 접촉 기반 항목은
-이 디렉터리에서 명시적으로 확정한 경우에만 구현 계약이다.
+충돌 시 `PROJECT_CONTEXT.md → RIGHT_HAND_RULES.md → status.md → 실제 구현·검사 →
+하위 S/N 규칙 → 과거 설계 초안` 순서로 판단한다. `RIGHT_HAND_EXTENSIONS.md`는 다음 단계의 설계
+정본이지만 현재 구현 완료를 뜻하지 않는다. 접촉력·물리 pick 항목은 명시적으로 승격되기 전까지
+현재 실행 계약이 아니다.

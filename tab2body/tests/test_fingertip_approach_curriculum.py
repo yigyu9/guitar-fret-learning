@@ -25,6 +25,8 @@ class FakeGoals:
         self.focus_index = None
         self.focus_probability = 1.0
         self.frozen_context_real_probability = 1.0
+        self.goal_pair_transition_focus_finger = None
+        self.goal_pair_transition_focus_probability = 1.0
 
     def set_random_start_probability(self, value):
         self.probability = value
@@ -40,6 +42,16 @@ class FakeGoals:
     def set_frozen_context_real_probability(self, value):
         changed = value != self.frozen_context_real_probability
         self.frozen_context_real_probability = value
+        return changed
+
+    def set_goal_pair_transition_focus(
+            self, finger, focus_probability=1.0):
+        changed = (
+            finger != self.goal_pair_transition_focus_finger
+            or focus_probability
+                != self.goal_pair_transition_focus_probability)
+        self.goal_pair_transition_focus_finger = finger
+        self.goal_pair_transition_focus_probability = focus_probability
         return changed
 
 
@@ -115,6 +127,7 @@ def main():
         goal_pair_mixed_min_iterations=1,
         goal_pair_full_min_iterations=1,
         goal_pair_phase_min_evidence=1,
+        goal_pair_full_song_focus_min_evidence=1,
         transition_min_iterations=1, transition_max_iterations=4,
         transition_window_seconds=(1.0,),
         transition_max_changes=(1,),
@@ -140,6 +153,15 @@ def main():
     state = curriculum.apply(env)
     assert state["curriculum_stage"] == "coarse_reach"
     assert "_reset_observation" in state and env.duration_frames == 120
+
+    focused = FingertipApproachCurriculum(
+        cfg, forced_stage="goal_pair")
+    focused.goal_pair_focus_finger = 2
+    focused_env = FakeEnv()
+    focused_env.curriculum_stage = "goal_pair"
+    focused_state = focused.apply(focused_env)
+    assert focused_env.reset_count == 0
+    assert "_reset_observation" not in focused_state
     for _ in range(3):
         curriculum.after_iteration({
             "curriculum_success_rate": 0.9,
@@ -257,6 +279,17 @@ def main():
         goal_pair_stats[f"{rehearsal}_target_active_count"] = 10.0
         goal_pair_stats[f"{rehearsal}_press_success"] = 0.90
         goal_pair_stats[f"{rehearsal}_target_distance"] = 0.005
+        goal_pair_stats[f"{rehearsal}_hold_quality"] = 0.90
+        goal_pair_stats[f"{rehearsal}_dropout_rate"] = 0.02
+        goal_pair_stats[f"{rehearsal}_wrong_press"] = 0.01
+        full_song = (
+            f"curriculum_goal_pair_full_song_finger_{finger}")
+        goal_pair_stats[f"{full_song}_target_active_count"] = 10.0
+        goal_pair_stats[f"{full_song}_press_success"] = 0.90
+        goal_pair_stats[f"{full_song}_target_distance"] = 0.005
+        goal_pair_stats[f"{full_song}_hold_quality"] = 0.90
+        goal_pair_stats[f"{full_song}_dropout_rate"] = 0.02
+        goal_pair_stats[f"{full_song}_wrong_press"] = 0.01
         transition = (
             f"curriculum_goal_pair_transition_finger_{finger}")
         goal_pair_stats[f"{transition}_target_active_count"] = 10.0
@@ -264,6 +297,9 @@ def main():
         goal_pair_stats[f"{transition}_next_active_count"] = 10.0
         goal_pair_stats[f"{transition}_next_distance"] = 0.015
         goal_pair_stats[f"{transition}_next_progress"] = 0.001
+        incoming = f"curriculum_goal_pair_incoming_finger_{finger}"
+        goal_pair_stats[f"{incoming}_active_count"] = 10.0
+        goal_pair_stats[f"{incoming}_wrong_press"] = 0.01
     for _ in range(3):
         curriculum.after_iteration(static_stats)
     assert curriculum.stage == "frozen_context"
@@ -333,6 +369,7 @@ def main():
         chord_fine_min_iterations=1, chord_fine_max_iterations=2,
         chord_fine_focus_min_iterations=1,
         chord_fine_focus_max_iterations=2,
+        chord_fine_max_cycles=2,
         promotion_windows=2)
     focused = FingertipApproachCurriculum(focus_cfg)
     focused.stage = "chord_fine_reach"
@@ -372,7 +409,7 @@ def main():
     restored = FingertipApproachCurriculum(focus_cfg)
     restored.load_context({
         **state,
-        "curriculum_schema_version": 3,
+        "curriculum_schema_version": 42,
     })
     restored_state = restored.apply(env)
     assert restored_state["curriculum_chord_focus_index"] == 0
@@ -381,7 +418,7 @@ def main():
         focus_cfg, forced_stage="chord_fine_reach")
     forced_restored.load_context({
         **state,
-        "curriculum_schema_version": 3,
+        "curriculum_schema_version": 42,
     })
     assert forced_restored.chord_focus_index == 0
     assert forced_restored.chord_focus_cycle == 1

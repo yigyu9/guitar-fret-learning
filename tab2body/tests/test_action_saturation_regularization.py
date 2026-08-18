@@ -17,6 +17,7 @@ from learning.ppo import (
     PPOConfig,
     PPOTrainer,
     action_saturation_regularization,
+    masked_action_teacher_loss,
 )
 from strike_cfg import STRIKE
 
@@ -111,11 +112,39 @@ def main():
         lambda: action_saturation_regularization(
             torch.zeros(2, 3), (3,), 0.90))
 
+    teacher_mean = torch.zeros(2, 3, requires_grad=True)
+    teacher_target = torch.tensor(
+        [[0.5, -0.5, 0.0], [0.0, 0.0, 0.8]])
+    teacher_mask = torch.tensor(
+        [[True, False, False], [False, False, True]])
+    teacher_loss = masked_action_teacher_loss(
+        teacher_mean, teacher_target, teacher_mask)
+    assert torch.isclose(teacher_loss, torch.tensor(0.445))
+    teacher_loss.backward()
+    assert teacher_mean.grad[0, 0] < 0.0
+    assert teacher_mean.grad[1, 2] < 0.0
+    assert teacher_mean.grad[0, 1] == 0.0
+
+    # 자주 등장하는 action이 희귀 action의 교사 기울기를 희석하지 않는다.
+    imbalanced_mean = torch.zeros(4, 2, requires_grad=True)
+    imbalanced_target = torch.tensor(
+        [[0.1, 1.0], [0.1, 0.0], [0.1, 0.0], [0.1, 0.0]])
+    imbalanced_mask = torch.tensor(
+        [[True, True], [True, False], [True, False], [True, False]])
+    imbalanced_loss = masked_action_teacher_loss(
+        imbalanced_mean, imbalanced_target, imbalanced_mask)
+    assert torch.isclose(imbalanced_loss, torch.tensor(0.505))
+    imbalanced_loss.backward()
+    assert imbalanced_mean.grad[0, 1].abs() > (
+        imbalanced_mean.grad[:, 0].abs().sum())
+
     assert PPOConfig().action_saturation_regularization_weight == 0.0
+    assert PPOConfig().action_teacher_weight == 0.0
     strike_ppo = PPOConfig(**STRIKE["ppo"])
     assert strike_ppo.action_saturation_regularization_weight == 0.0
     assert FRET["ppo"]["action_saturation_regularization_weight"] == 0.01
     assert FRET["ppo"]["action_saturation_regularization_threshold"] == 0.80
+    assert FRET["ppo"]["action_teacher_weight"] == 0.05
 
     # Weight 0은 환경 index를 요구하거나 actor mean을 추가 평가하지 않는다.
     legacy_env = _EnvStub(expose_indices=False)
@@ -153,6 +182,30 @@ def main():
     assert regularized_stats["action_saturation_loss"] > 0.0
     assert after[0].abs() < before[0].abs()
     assert after[2].abs() < before[2].abs()
+
+    teacher_env = _EnvStub(expose_indices=False)
+    teacher_model = ActorCritic(
+        5, 3, value_dim=6, init_std=0.2,
+        init_mean=torch.zeros(3))
+    teacher_trainer = PPOTrainer(
+        teacher_env, teacher_model,
+        PPOConfig(
+            horizon=1, epochs=1, minibatch_size=4,
+            entropy_coef=0.0, actor_learning_rate=1e-2,
+            target_kl=1.0, action_teacher_weight=0.10))
+    teacher_rollout = _rollout(teacher_trainer)
+    teacher_rollout["teacher_actions"] = torch.zeros(1, 4, 3)
+    teacher_rollout["teacher_actions"][..., 1] = 0.8
+    teacher_rollout["teacher_masks"] = torch.zeros(
+        1, 4, 3, dtype=torch.bool)
+    teacher_rollout["teacher_masks"][..., 1] = True
+    before_teacher = torch.tanh(
+        teacher_model.distribution(teacher_trainer.obs).mean)[0, 1]
+    teacher_stats = teacher_trainer.update(teacher_rollout)
+    after_teacher = torch.tanh(
+        teacher_model.distribution(teacher_trainer.obs).mean)[0, 1]
+    assert teacher_stats["action_teacher_loss"] > 0.0
+    assert after_teacher > before_teacher
 
     print("PASS: PPO action saturation regularization")
 

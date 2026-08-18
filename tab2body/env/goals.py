@@ -1,9 +1,4 @@
-"""왼손 fret 학습 goal 로더.
 
-`build_fret_training_data.py`가 만든 60 Hz JSON을 GPU 텐서로 올리고, 환경별 재생
-인덱스·룩어헤드 관측·손가락별 13-D next-goal·정규화된 곡 진행률·기타 로컬 손목 soft target을 제공한다.
-줄 축은 파일에 저장된 Isaac 순서(index 0=high-e, 5=low-E)를 그대로 쓴다.
-"""
 from __future__ import annotations
 
 import json
@@ -14,19 +9,13 @@ import torch
 
 
 FINGER_EVENT_DIM = 13
-FINGER_EVENT_TIME_SCALE_S = 1.0
+# 다음 목표 보상은 1.5초 앞까지 사용한다. 표현 범위가 이보다 짧으면
+# 먼 이벤트도 lookahead 안에 있는 것으로 오인되므로 2초까지 구분한다.
+FINGER_EVENT_TIME_SCALE_S = 2.0
 N_GUITAR_STRINGS = 6
 MAX_ASSET_FRET = 22
-# Gross-corruption bounds, deliberately much wider than the current G0 workspace.
-# They catch unit/frame mistakes without constraining later guitar-placement stages.
 MAX_WRIST_TARGET_ABS_COORD_M = 2.0
 MAX_WRIST_TARGET_RADIUS_M = 1.0
-FINGER_EVENT_FIELDS = (
-    "next_string_mask_0", "next_string_mask_1", "next_string_mask_2",
-    "next_string_mask_3", "next_string_mask_4", "next_string_mask_5",
-    "next_fret", "time_to_next_goal", "next_valid",
-    "time_to_current_change", "relation_keep", "relation_move", "relation_rest",
-)
 
 
 def _is_integer(value):
@@ -37,6 +26,23 @@ def _is_finite_number(value):
     return (isinstance(value, (int, float, np.integer, np.floating))
             and not isinstance(value, (bool, np.bool_))
             and math.isfinite(float(value)))
+
+
+def _frame_state_key(fret, finger, barre, frame_idx):
+    return (
+        tuple(int(value) for value in fret[frame_idx].tolist()),
+        tuple(int(value) for value in finger[frame_idx].tolist()),
+        tuple(bool(value) for value in barre[frame_idx].tolist()),
+    )
+
+
+def _active_finger_set(fret, finger, frame_idx):
+    return tuple(sorted({
+        int(finger_number)
+        for fret_number, finger_number in zip(
+            fret[frame_idx].tolist(), finger[frame_idx].tolist())
+        if fret_number > 0 and finger_number > 0
+    }))
 
 
 def _validate_hand_position_fields(
@@ -459,12 +465,46 @@ def build_finger_next_goal_vectors(frames, fps,
     }
 
 
+def goal_pair_finger_action_routing(
+        current_active, finger_event, release_active,
+        preparation_remaining=None, fps=60, lookahead_s=1.5):
+    """현재·임박 목표와 해제 중인 손가락만 정책 action에 연결한다."""
+    if (current_active.ndim != 2 or current_active.shape[1] != 4
+            or finger_event.shape != (*current_active.shape, FINGER_EVENT_DIM)
+            or release_active.shape != current_active.shape):
+        raise ValueError(
+            "goal-pair action routing expects [N,4] finger tensors")
+    if fps <= 0 or not 0.0 < float(lookahead_s) < FINGER_EVENT_TIME_SCALE_S:
+        raise ValueError("goal-pair action routing timing is invalid")
+    batch = current_active.shape[0]
+    if preparation_remaining is None:
+        preparation_s = torch.zeros(
+            batch, dtype=finger_event.dtype, device=finger_event.device)
+    else:
+        preparation = torch.as_tensor(
+            preparation_remaining, dtype=finger_event.dtype,
+            device=finger_event.device).reshape(-1)
+        if preparation.shape != (batch,):
+            raise ValueError(
+                "preparation countdown must have one value per environment")
+        preparation_s = preparation.clamp_min(0.0) / float(fps)
+    time_to_next = (
+        finger_event[..., 7] * FINGER_EVENT_TIME_SCALE_S
+        + preparation_s[:, None])
+    imminent_move = (
+        (finger_event[..., 8] > 0.5)
+        & (finger_event[..., 11] > 0.5)
+        & (time_to_next < float(lookahead_s)))
+    return current_active.bool() | imminent_move | release_active.bool()
+
+
 class FretGoalSequence:
     """한 곡의 고정 60 Hz goal을 병렬 반복 연습 환경에 공급한다."""
 
     def __init__(self, path, num_envs, device="cuda:0", hand_targets_path=None,
                  lookahead=(0, 6, 15), random_start=False, seed=0,
-                 sustain_boundary_grace_frames=3, allow_barre=False):
+                 sustain_boundary_grace_frames=3, allow_barre=False,
+                 static_chord_min_duration_seconds=0.20):
         data = json.loads(Path(path).read_text())
         if data.get("schema") != "tab2body.fret_training.v1":
             raise ValueError(f"unsupported fret goal schema: {data.get('schema')}")
@@ -481,14 +521,21 @@ class FretGoalSequence:
         self.validation_metadata = validate_fret_goal_frames(
             frames, fps=fps, allow_barre=self.allow_barre, require_timeline=True)
 
-        self.path = str(Path(path).resolve())
         self.num_envs = int(num_envs)
         self.device = torch.device(device)
         self.fps = fps
+        self.static_chord_min_duration_seconds = float(
+            static_chord_min_duration_seconds)
+        if (not math.isfinite(self.static_chord_min_duration_seconds)
+                or self.static_chord_min_duration_seconds <= 0.0):
+            raise ValueError(
+                "static chord minimum duration must be finite and positive")
+        self.static_chord_min_duration_frames = max(
+            1, int(math.ceil(
+                self.static_chord_min_duration_seconds * fps)))
         self.n_frames = len(frames)
         self.lookahead = tuple(int(x) for x in lookahead)
-        self.random_start = bool(random_start)
-        self.random_start_probability = 1.0 if self.random_start else 0.0
+        self.random_start_probability = 1.0 if bool(random_start) else 0.0
         self.generator = torch.Generator(device=self.device)
         self.generator.manual_seed(seed)
 
@@ -504,7 +551,7 @@ class FretGoalSequence:
                                     dtype=torch.float32, device=self.device)
         self.wrist, self.wrist_radius, self.has_wrist_target = self._load_wrist_targets(
             frames, hand_targets_path)
-        finger_events, self.finger_event_metadata = build_finger_next_goal_vectors(
+        finger_events, _ = build_finger_next_goal_vectors(
             frames, self.fps, allow_barre=self.allow_barre)
         self.finger_events = torch.tensor(
             finger_events, dtype=torch.float32, device=self.device)
@@ -515,8 +562,6 @@ class FretGoalSequence:
         self.sustain_eligible = torch.tensor(
             sustain_eligible, dtype=torch.bool, device=self.device)
         self.sustain_n_events = len(self.sustain_events)
-        self.finger_event_fields = FINGER_EVENT_FIELDS
-        self.string_mask_supports_barre = True
         self.barre_enabled = self.allow_barre
         self.frame_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
@@ -529,12 +574,12 @@ class FretGoalSequence:
         self.practice_string = torch.full(
             (self.num_envs,), -1, dtype=torch.long, device=self.device)
         self.frozen_context_real_probability = 1.0
-        self.frozen_context_real_mask = torch.ones(
-            self.num_envs, dtype=torch.bool, device=self.device)
         self.frozen_context_context_blend = torch.ones(
             self.num_envs, dtype=torch.float32, device=self.device)
         self.frozen_context_group_index = torch.full(
             (self.num_envs,), -1, dtype=torch.long, device=self.device)
+        self.frozen_context_focus_finger = None
+        self.frozen_context_focus_probability = 1.0
         self.goal_pair_previous_frame = torch.zeros(
             self.num_envs, dtype=torch.long, device=self.device)
         self.goal_pair_next_frame = torch.zeros(
@@ -545,19 +590,28 @@ class FretGoalSequence:
             (self.num_envs,), -1, dtype=torch.long, device=self.device)
         self.goal_pair_incoming_finger = torch.zeros(
             self.num_envs, dtype=torch.long, device=self.device)
+        self.goal_pair_previous_finger_mask = torch.zeros(
+            self.num_envs, 4, dtype=torch.bool, device=self.device)
         self.goal_pair_rehearsal_mask = torch.zeros(
             self.num_envs, dtype=torch.bool, device=self.device)
+        self.goal_pair_rehearsal_anchor_finger = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device)
         self.goal_pair_sequence_mask = torch.zeros(
             self.num_envs, dtype=torch.bool, device=self.device)
         self.goal_pair_full_song_mask = torch.zeros(
             self.num_envs, dtype=torch.bool, device=self.device)
+        self.goal_pair_sequence_event_count = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device)
         self.goal_pair_preview_mask = torch.zeros(
             self.num_envs, dtype=torch.bool, device=self.device)
         self.goal_pair_rehearsal_probability = 0.0
         self.goal_pair_rehearsal_duration_frames = 150
         self.goal_pair_sequence_probability = 0.0
         self.goal_pair_sequence_duration_frames = 240
+        self.goal_pair_sequence_max_events = 2
         self.goal_pair_sequence_full_song_fraction = 0.0
+        self.goal_pair_uncovered_pose_probability = 0.0
+        self.goal_pair_success_pose_valid = None
         self.goal_pair_preview_only = False
         self.goal_pair_transition_focus_finger = None
         self.goal_pair_transition_focus_probability = 1.0
@@ -595,31 +649,100 @@ class FretGoalSequence:
                        or not torch.equal(self.barre[frame_idx], self.barre[frame_idx - 1]))
             if changed:
                 run_starts.append(frame_idx)
+        run_ends = run_starts[1:] + [self.n_frames]
+        self.practice_run_starts = torch.tensor(
+            run_starts, dtype=torch.long, device=self.device)
+        self.practice_run_ends = torch.tensor(
+            run_ends, dtype=torch.long, device=self.device)
+        self.frame_run_index = torch.empty(
+            self.n_frames, dtype=torch.long, device=self.device)
+        for run_index, (start, end) in enumerate(zip(run_starts, run_ends)):
+            self.frame_run_index[start:end] = run_index
+
+        pose_slot_by_state = {}
+        frame_pose_slot = torch.full(
+            (self.n_frames,), -1, dtype=torch.long, device=self.device)
+        pose_slot_frames = []
+        for start, end in zip(run_starts, run_ends):
+            if not bool((self.fret[start] > 0).any()):
+                continue
+            state = _frame_state_key(
+                self.fret, self.finger, self.barre, start)
+            slot = pose_slot_by_state.get(state)
+            if slot is None:
+                slot = len(pose_slot_frames)
+                pose_slot_by_state[state] = slot
+                pose_slot_frames.append(start)
+            frame_pose_slot[start:end] = slot
+        self.frame_pose_slot = frame_pose_slot
+        self.pose_slot_frames = torch.tensor(
+            pose_slot_frames, dtype=torch.long, device=self.device)
+        self.pose_slot_count = len(pose_slot_frames)
+
+        finger_slot_by_target = {}
+        next_finger_slots = [-1] * 4
+        finger_pose_slots = [[-1] * 4 for _ in range(self.n_frames)]
+        for frame_idx in range(self.n_frames - 1, -1, -1):
+            frame = frames[frame_idx]
+            for finger_number in range(1, 5):
+                string_frets = tuple(
+                    (string_number, int(fret))
+                    for string_number, (fret, finger) in enumerate(zip(
+                        frame["fret_goal"], frame["finger_goal"]), start=1)
+                    if fret > 0 and finger == finger_number)
+                if string_frets:
+                    target = (finger_number, string_frets)
+                    slot = finger_slot_by_target.get(target)
+                    if slot is None:
+                        slot = len(finger_slot_by_target)
+                        finger_slot_by_target[target] = slot
+                    next_finger_slots[finger_number - 1] = slot
+                finger_pose_slots[frame_idx][finger_number - 1] = (
+                    next_finger_slots[finger_number - 1])
+        self.finger_pose_slot = torch.tensor(
+            finger_pose_slots, dtype=torch.long, device=self.device)
+        self.finger_pose_slot_count = len(finger_slot_by_target)
         chord_frames_by_finger_set = {}
-        for frame_idx in run_starts:
-            active = tuple(sorted({
-                int(finger)
-                for fret, finger in zip(
-                    self.fret[frame_idx].tolist(),
-                    self.finger[frame_idx].tolist())
-                if fret > 0 and finger > 0
-            }))
-            if active:
-                chord_frames_by_finger_set.setdefault(active, []).append(
-                    frame_idx)
-        preferred_sets = tuple(
-            finger_set for finger_set in sorted(
-                chord_frames_by_finger_set, key=lambda value: (len(value), value))
-            if len(finger_set) >= 2)
-        self.practice_available_chord_finger_sets = (
-            preferred_sets or tuple(sorted(
-                chord_frames_by_finger_set,
-                key=lambda value: (len(value), value))))
+        chord_durations_by_finger_set = {}
+        transient_chord_frames_by_finger_set = {}
+        transient_chord_frames = set()
+        for frame_idx, run_end in zip(run_starts, run_ends):
+            active = _active_finger_set(
+                self.fret, self.finger, frame_idx)
+            if len(active) < 2:
+                continue
+            duration = run_end - frame_idx
+            if duration < self.static_chord_min_duration_frames:
+                transient_chord_frames.update(range(frame_idx, run_end))
+                transient_chord_frames_by_finger_set.setdefault(
+                    active, []).append(frame_idx)
+                continue
+            chord_frames_by_finger_set.setdefault(active, []).append(
+                frame_idx)
+            chord_durations_by_finger_set.setdefault(active, []).append(
+                duration)
+        self.practice_available_chord_finger_sets = tuple(sorted(
+            chord_frames_by_finger_set,
+            key=lambda value: (len(value), value)))
         self.practice_chord_frames_by_finger_set = {
             finger_set: torch.tensor(
                 rows, dtype=torch.long, device=self.device)
             for finger_set, rows in chord_frames_by_finger_set.items()
         }
+        self.practice_chord_weights_by_finger_set = {
+            finger_set: torch.tensor(
+                chord_durations_by_finger_set[finger_set],
+                dtype=torch.float32, device=self.device)
+            for finger_set in chord_frames_by_finger_set
+        }
+        self.practice_transient_chord_finger_sets = tuple(sorted(
+            transient_chord_frames_by_finger_set,
+            key=lambda value: (len(value), value)))
+        self.practice_static_chord_run_count = sum(
+            len(rows) for rows in chord_frames_by_finger_set.values())
+        self.practice_transient_chord_run_count = sum(
+            len(rows)
+            for rows in transient_chord_frames_by_finger_set.values())
         self.practice_transition_frames = torch.tensor(
             [frame for frame in run_starts[1:]
              if bool((self.fret[frame] > 0).any()
@@ -635,13 +758,12 @@ class FretGoalSequence:
 
         unique_states = {}
         for frame_idx in run_starts:
+            if frame_idx in transient_chord_frames:
+                continue
             if not bool((self.fret[frame_idx] > 0).any()):
                 continue
-            state = (
-                tuple(int(value) for value in self.fret[frame_idx].tolist()),
-                tuple(int(value) for value in self.finger[frame_idx].tolist()),
-                tuple(bool(value) for value in self.barre[frame_idx].tolist()),
-            )
+            state = _frame_state_key(
+                self.fret, self.finger, self.barre, frame_idx)
             unique_states.setdefault(state, frame_idx)
         context_anchors = list(unique_states.values())
         context_anchors.extend(self.practice_transition_frames.tolist())
@@ -649,18 +771,14 @@ class FretGoalSequence:
             frame - 1 for frame in self.practice_transition_frames.tolist())
         context_anchors = sorted(dict.fromkeys(
             frame for frame in context_anchors
-            if bool((self.fret[frame] > 0).any())))
+            if (bool((self.fret[frame] > 0).any())
+                and frame not in transient_chord_frames)))
         self.practice_frozen_context_frames = torch.tensor(
             context_anchors, dtype=torch.long, device=self.device)
         frozen_groups = {}
         for frame_idx in self.practice_frozen_context_frames.tolist():
-            finger_set = tuple(sorted({
-                int(finger)
-                for fret, finger in zip(
-                    self.fret[frame_idx].tolist(),
-                    self.finger[frame_idx].tolist())
-                if fret > 0 and finger > 0
-            }))
+            finger_set = _active_finger_set(
+                self.fret, self.finger, frame_idx)
             frozen_groups.setdefault(finger_set, []).append(frame_idx)
         self.practice_frozen_context_group_keys = tuple(
             sorted(frozen_groups, key=lambda value: (len(value), value)))
@@ -668,6 +786,10 @@ class FretGoalSequence:
             torch.tensor(
                 frozen_groups[key], dtype=torch.long, device=self.device)
             for key in self.practice_frozen_context_group_keys)
+        self.frozen_context_group_slot_by_frame = torch.full(
+            (self.n_frames,), -1, dtype=torch.long, device=self.device)
+        for slot, catalog in enumerate(self.practice_frozen_context_groups):
+            self.frozen_context_group_slot_by_frame[catalog] = slot
 
         def finger_targets(frame_idx):
             targets = {}
@@ -779,30 +901,79 @@ class FretGoalSequence:
         return (torch.tensor(wrist, dtype=torch.float32, device=self.device),
                 torch.tensor(radius, dtype=torch.float32, device=self.device), True)
 
+    def _stratified_choices(self, options, count):
+        options = torch.as_tensor(
+            options, dtype=torch.long, device=self.device).reshape(-1)
+        count = int(count)
+        if count <= 0:
+            return torch.empty(0, dtype=torch.long, device=self.device)
+        if options.numel() == 0:
+            raise ValueError("stratified sampling requires an option")
+        repeats, remainder = divmod(count, options.numel())
+        values = options.repeat(repeats)
+        if remainder:
+            remainder_order = torch.randperm(
+                options.numel(), generator=self.generator,
+                device=self.device)[:remainder]
+            values = torch.cat((values, options[remainder_order]))
+        return values[torch.randperm(
+            count, generator=self.generator, device=self.device)]
+
+    def _stratified_focus_choices(
+            self, options, count, focus_options=(), focus_probability=0.0):
+        options = tuple(int(value) for value in options)
+        focus_options = tuple(
+            int(value) for value in focus_options if int(value) in options)
+        if not focus_options or focus_probability <= 0.0:
+            return self._stratified_choices(options, count)
+        alternatives = tuple(
+            value for value in options if value not in focus_options)
+        if not alternatives:
+            return self._stratified_choices(focus_options, count)
+        focus_count = min(
+            int(count), max(0, int(round(
+                int(count) * float(focus_probability)))))
+        values = torch.cat((
+            self._stratified_choices(focus_options, focus_count),
+            self._stratified_choices(
+                alternatives, int(count) - focus_count),
+        ))
+        return values[torch.randperm(
+            int(count), generator=self.generator, device=self.device)]
+
     def _sample_frozen_context_frames(
-            self, count, focus_finger=None, focus_probability=0.0):
+            self, count, focus_finger=None, focus_probability=0.0,
+            balance_fingers=False, uncovered_probability=0.0):
         if not self.practice_frozen_context_groups:
             raise RuntimeError(
                 "frozen-context replay requires at least one source state")
-        group_slot = torch.randint(
-            len(self.practice_frozen_context_groups), (int(count),),
-            generator=self.generator, device=self.device)
-        if focus_finger is not None and focus_probability > 0.0:
+        slots = tuple(range(len(self.practice_frozen_context_groups)))
+        if balance_fingers:
+            available = tuple(sorted({
+                finger for finger_set in self.practice_frozen_context_group_keys
+                for finger in finger_set
+            }))
+            focus = (
+                () if focus_finger is None else (int(focus_finger),))
+            chosen_finger = self._stratified_focus_choices(
+                available, count, focus, focus_probability)
+            group_slot = torch.zeros(
+                int(count), dtype=torch.long, device=self.device)
+            for finger in available:
+                selected = chosen_finger == finger
+                containing = tuple(
+                    slot for slot, finger_set in enumerate(
+                        self.practice_frozen_context_group_keys)
+                    if finger in finger_set)
+                group_slot[selected] = self._stratified_choices(
+                    containing, int(selected.sum()))
+        else:
             focus_slots = tuple(
                 slot for slot, finger_set in enumerate(
                     self.practice_frozen_context_group_keys)
-                if int(focus_finger) in finger_set)
-            if focus_slots:
-                focused = torch.rand(
-                    int(count), generator=self.generator,
-                    device=self.device) < float(focus_probability)
-                focus_count = int(focused.sum())
-                if focus_count:
-                    options = torch.tensor(
-                        focus_slots, dtype=torch.long, device=self.device)
-                    group_slot[focused] = options[torch.randint(
-                        len(focus_slots), (focus_count,),
-                        generator=self.generator, device=self.device)]
+                if focus_finger is not None and int(focus_finger) in finger_set)
+            group_slot = self._stratified_focus_choices(
+                slots, count, focus_slots, focus_probability)
         selected_frames = torch.zeros(
             int(count), dtype=torch.long, device=self.device)
         for slot, catalog in enumerate(self.practice_frozen_context_groups):
@@ -814,13 +985,41 @@ class FretGoalSequence:
                 catalog.numel(), (selected_count,),
                 generator=self.generator, device=self.device)
             selected_frames[selected] = catalog[frame_slot]
-        return selected_frames, group_slot
+        valid_pose = self.goal_pair_success_pose_valid
+        if (balance_fingers and valid_pose is not None
+                and uncovered_probability > 0.0):
+            prefer_uncovered = torch.rand(
+                int(count), generator=self.generator,
+                device=self.device) < float(uncovered_probability)
+            anchors = self.practice_frozen_context_frames
+            pose_slots = self.frame_pose_slot[anchors]
+            uncovered = (pose_slots >= 0) & ~valid_pose[pose_slots.clamp_min(0)]
+            for finger in available:
+                rows = torch.nonzero(
+                    prefer_uncovered & (chosen_finger == finger),
+                    as_tuple=False).squeeze(-1)
+                if rows.numel() == 0:
+                    continue
+                contains = (
+                    (self.fret[anchors] > 0)
+                    & (self.finger[anchors] == finger)).any(dim=1)
+                candidates = anchors[uncovered & contains]
+                if candidates.numel() == 0:
+                    continue
+                choices = self._stratified_choices(candidates, rows.numel())
+                selected_frames[rows] = choices
+                group_slot[rows] = (
+                    self.frozen_context_group_slot_by_frame[choices])
+        anchor_finger = (
+            chosen_finger if balance_fingers
+            else torch.zeros(
+                int(count), dtype=torch.long, device=self.device))
+        return selected_frames, group_slot, anchor_finger
 
     def reset(self, env_ids):
         if env_ids.numel() == 0:
             return
         self.frame_idx[env_ids] = 0
-        self.frozen_context_real_mask[env_ids] = True
         self.frozen_context_context_blend[env_ids] = 1.0
         self.frozen_context_group_index[env_ids] = -1
         self.goal_pair_previous_frame[env_ids] = 0
@@ -828,9 +1027,12 @@ class FretGoalSequence:
         self.goal_pair_before_remaining[env_ids] = 0
         self.goal_pair_group_index[env_ids] = -1
         self.goal_pair_incoming_finger[env_ids] = 0
+        self.goal_pair_previous_finger_mask[env_ids] = False
         self.goal_pair_rehearsal_mask[env_ids] = False
+        self.goal_pair_rehearsal_anchor_finger[env_ids] = 0
         self.goal_pair_sequence_mask[env_ids] = False
         self.goal_pair_full_song_mask[env_ids] = False
+        self.goal_pair_sequence_event_count[env_ids] = 0
         self.goal_pair_preview_mask[env_ids] = False
         self.practice_transition_count[env_ids] = 0
         if self.curriculum_stage in (
@@ -893,22 +1095,25 @@ class FretGoalSequence:
                 if selected.numel() == 0:
                     continue
                 catalog = self.practice_chord_frames_by_finger_set[finger_set]
-                frame_slot = torch.randint(
-                    catalog.numel(), (selected.numel(),),
-                    generator=self.generator, device=self.device)
+                frame_slot = torch.multinomial(
+                    self.practice_chord_weights_by_finger_set[finger_set],
+                    selected.numel(), replacement=True,
+                    generator=self.generator)
                 self.frame_idx[selected] = catalog[frame_slot]
             self.practice_remaining[env_ids] = self.practice_duration_frames
             self.practice_string[env_ids] = -1
             return
         if self.curriculum_stage == "frozen_context":
-            selected_frames, group_slot = (
-                self._sample_frozen_context_frames(len(env_ids)))
+            selected_frames, group_slot, _ = (
+                self._sample_frozen_context_frames(
+                    len(env_ids),
+                    focus_finger=self.frozen_context_focus_finger,
+                    focus_probability=
+                        self.frozen_context_focus_probability))
             self.frame_idx[env_ids] = selected_frames
             self.frozen_context_group_index[env_ids] = group_slot
             self.frozen_context_context_blend[env_ids] = (
                 self.frozen_context_real_probability)
-            self.frozen_context_real_mask[env_ids] = (
-                self.frozen_context_real_probability >= 1.0)
             self.practice_remaining[env_ids] = self.practice_duration_frames
             self.practice_string[env_ids] = -1
             return
@@ -941,11 +1146,8 @@ class FretGoalSequence:
             def sample_group_rows(rows, slots):
                 if rows.numel() == 0:
                     return
-                slot_options = torch.tensor(
-                    slots, dtype=torch.long, device=self.device)
-                selected_slots = slot_options[torch.randint(
-                    len(slots), (rows.numel(),),
-                    generator=self.generator, device=self.device)]
+                selected_slots = self._stratified_choices(
+                    slots, rows.numel())
                 group_slot[rows] = selected_slots
                 for slot in slots:
                     selected_rows = rows[selected_slots == slot]
@@ -963,68 +1165,70 @@ class FretGoalSequence:
                 self.practice_goal_pair_available_incoming_fingers)
             has_no_incoming = bool(
                 self.practice_goal_pair_no_incoming_group_slots)
-            if transition_rows.numel() > 0:
+
+            def sample_transition_rows(rows):
+                if rows.numel() == 0:
+                    return
                 if has_incoming and has_no_incoming:
                     choose_incoming = torch.rand(
-                        transition_rows.numel(),
+                        rows.numel(),
                         generator=self.generator, device=self.device
                     ) < self.practice_goal_pair_incoming_group_fraction
                 else:
                     choose_incoming = torch.full(
-                        (transition_rows.numel(),), has_incoming,
+                        (rows.numel(),), has_incoming,
                         dtype=torch.bool, device=self.device)
-                incoming_rows = transition_rows[choose_incoming]
+                incoming_rows = rows[choose_incoming]
                 if incoming_rows.numel() > 0:
-                    available = torch.tensor(
-                        self.practice_goal_pair_available_incoming_fingers,
-                        dtype=torch.long, device=self.device)
+                    available = (
+                        self.practice_goal_pair_available_incoming_fingers)
                     focus_finger = self.goal_pair_transition_focus_finger
-                    if focus_finger is None:
-                        chosen_finger = available[torch.randint(
-                            available.numel(), (incoming_rows.numel(),),
-                            generator=self.generator, device=self.device)]
-                    else:
-                        focus = torch.rand(
-                            incoming_rows.numel(), generator=self.generator,
-                            device=self.device
-                        ) < self.goal_pair_transition_focus_probability
-                        chosen_finger = torch.full(
-                            (incoming_rows.numel(),), focus_finger,
-                            dtype=torch.long, device=self.device)
-                        alternatives = available[available != focus_finger]
-                        nonfocus_count = int((~focus).sum())
-                        if alternatives.numel() and nonfocus_count:
-                            alternative_slot = torch.randint(
-                                alternatives.numel(), (nonfocus_count,),
-                                generator=self.generator, device=self.device)
-                            chosen_finger[~focus] = alternatives[
-                                alternative_slot]
+                    chosen_finger = self._stratified_focus_choices(
+                        available, incoming_rows.numel(),
+                        (() if focus_finger is None else (focus_finger,)),
+                        self.goal_pair_transition_focus_probability)
                     incoming_finger[incoming_rows] = chosen_finger
                     for finger in (
                             self.practice_goal_pair_available_incoming_fingers):
-                        rows = incoming_rows[chosen_finger == finger]
+                        finger_rows = incoming_rows[chosen_finger == finger]
                         sample_group_rows(
-                            rows,
+                            finger_rows,
                             self.practice_goal_pair_groups_by_incoming[finger])
                 sample_group_rows(
-                    transition_rows[~choose_incoming],
+                    rows[~choose_incoming],
                     self.practice_goal_pair_no_incoming_group_slots)
 
+            sample_transition_rows(transition_rows)
+
             previous = (transitions - 1).clamp_min(0)
+            context_anchor_finger = incoming_finger.clone()
             rehearsal_rows = torch.nonzero(
                 rehearsal, as_tuple=False).squeeze(-1)
             if rehearsal_rows.numel() > 0:
-                replay_frames, replay_groups = (
+                replay_frames, replay_groups, replay_anchor_fingers = (
                     self._sample_frozen_context_frames(
                         rehearsal_rows.numel(),
-                        focus_finger=self.goal_pair_transition_focus_finger,
-                        focus_probability=
-                            self.goal_pair_transition_focus_probability))
-                previous[rehearsal_rows] = replay_frames
-                transitions[rehearsal_rows] = replay_frames
+                        focus_finger=(
+                            self.goal_pair_transition_focus_finger),
+                        focus_probability=(
+                            self.goal_pair_transition_focus_probability),
+                        balance_fingers=True,
+                        uncovered_probability=(
+                            self.goal_pair_uncovered_pose_probability)))
+                replay_runs = self.frame_run_index[replay_frames]
+                starts = self.practice_run_starts[replay_runs]
+                end_runs = (replay_runs + 1).clamp(
+                    max=self.practice_run_ends.numel() - 1)
+                ends = self.practice_run_ends[end_runs]
+                duration = (ends - starts).clamp(
+                    min=1, max=self.goal_pair_rehearsal_duration_frames)
+                previous[rehearsal_rows] = starts
+                transitions[rehearsal_rows] = starts
                 group_slot[rehearsal_rows] = -1
                 self.frozen_context_group_index[
                     env_ids[rehearsal_rows]] = replay_groups
+                context_anchor_finger[rehearsal_rows] = (
+                    replay_anchor_fingers)
 
             pair_transition = ~rehearsal & ~sequence
             if bool((group_slot[pair_transition] < 0).any()):
@@ -1043,6 +1247,9 @@ class FretGoalSequence:
                 total, self.goal_pair_rehearsal_duration_frames)
             total = torch.where(rehearsal, rehearsal_duration, total)
             before = torch.where(rehearsal, rehearsal_duration, before)
+            if rehearsal_rows.numel() > 0:
+                total[rehearsal_rows] = duration
+                before[rehearsal_rows] = duration
             preview = ~rehearsal & ~sequence & self.goal_pair_preview_only
             total = torch.where(preview, before, total)
             sequence_rows = torch.nonzero(
@@ -1055,26 +1262,46 @@ class FretGoalSequence:
                 ) < self.goal_pair_sequence_full_song_fraction
                 window_rows = sequence_rows[~full_song[sequence_rows]]
                 if window_rows.numel() > 0:
-                    duration = min(
+                    # Pair transitions and short sequences share the same
+                    # stratified transition catalog.  This prevents frequent
+                    # notes or one focused finger from dominating sequence
+                    # exposure while still drawing only source-song contexts.
+                    sample_transition_rows(window_rows)
+                    centers = transitions[window_rows]
+                    center_runs = self.frame_run_index[centers]
+                    max_events = min(
+                        self.goal_pair_sequence_max_events,
+                        self.practice_run_starts.numel())
+                    event_counts = self._stratified_choices(
+                        tuple(range(2, max_events + 1))
+                        if max_events >= 2 else (1,),
+                        window_rows.numel())
+                    starts_run = (
+                        center_runs - event_counts + 1).clamp_min(0)
+                    ends_run = torch.minimum(
+                        center_runs + 1,
+                        torch.full_like(
+                            starts_run,
+                            self.practice_run_starts.numel()))
+                    catalog_starts = self.practice_run_starts[starts_run]
+                    ends = torch.where(
+                        ends_run < self.practice_run_starts.numel(),
+                        self.practice_run_starts[
+                            ends_run.clamp(
+                                max=self.practice_run_starts.numel() - 1)],
+                        torch.full_like(ends_run, self.n_frames))
+                    maximum_duration = min(
                         self.goal_pair_sequence_duration_frames,
                         self.n_frames)
-                    if self.practice_transition_frames.numel() > 0:
-                        slots = torch.randint(
-                            self.practice_transition_frames.numel(),
-                            (window_rows.numel(),), generator=self.generator,
-                            device=self.device)
-                        centers = self.practice_transition_frames[slots]
-                    else:
-                        centers = torch.randint(
-                            self.n_frames, (window_rows.numel(),),
-                            generator=self.generator, device=self.device)
-                    latest = max(0, self.n_frames - duration)
-                    starts = (centers - duration // 2).clamp(
-                        min=0, max=latest)
+                    starts = torch.maximum(
+                        catalog_starts, ends - maximum_duration)
+                    duration = (ends - starts).clamp(min=1)
                     previous[window_rows] = starts
                     transitions[window_rows] = starts
                     before[window_rows] = duration
                     total[window_rows] = duration
+                    self.goal_pair_sequence_event_count[
+                        env_ids[window_rows]] = event_counts
                 full_rows = torch.nonzero(
                     full_song, as_tuple=False).squeeze(-1)
                 if full_rows.numel() > 0:
@@ -1082,11 +1309,21 @@ class FretGoalSequence:
                     transitions[full_rows] = 0
                     before[full_rows] = self.n_frames
                     total[full_rows] = self.n_frames
+                    self.goal_pair_sequence_event_count[
+                        env_ids[full_rows]] = self.practice_run_starts.numel()
+                    if self.goal_pair_transition_focus_finger is not None:
+                        context_anchor_finger[full_rows] = (
+                            self.goal_pair_transition_focus_finger)
             self.goal_pair_previous_frame[env_ids] = previous
             self.goal_pair_next_frame[env_ids] = transitions
             self.goal_pair_before_remaining[env_ids] = before
             self.goal_pair_group_index[env_ids] = group_slot
             self.goal_pair_incoming_finger[env_ids] = incoming_finger
+            previous_finger_mask, _ = self._finger_targets_at(previous)
+            self.goal_pair_previous_finger_mask[env_ids] = (
+                previous_finger_mask.any(dim=-1))
+            self.goal_pair_rehearsal_anchor_finger[env_ids] = (
+                context_anchor_finger)
             self.goal_pair_rehearsal_mask[env_ids] = rehearsal
             self.goal_pair_sequence_mask[env_ids] = sequence
             self.goal_pair_full_song_mask[env_ids] = full_song
@@ -1176,7 +1413,6 @@ class FretGoalSequence:
         if not 0.0 <= probability <= 1.0:
             raise ValueError("random start probability must be in [0, 1]")
         self.random_start_probability = probability
-        self.random_start = probability > 0.0
 
     def set_transition_max_changes(self, maximum):
         if maximum is None:
@@ -1197,6 +1433,30 @@ class FretGoalSequence:
                 "frozen-context real probability must be in [0, 1]")
         changed = probability != self.frozen_context_real_probability
         self.frozen_context_real_probability = probability
+        return changed
+
+    def set_frozen_context_focus(self, finger, focus_probability=1.0):
+        focus_probability = float(focus_probability)
+        if not 0.0 < focus_probability <= 1.0:
+            raise ValueError(
+                "frozen-context focus probability must be in (0, 1]")
+        if finger is None:
+            normalized = None
+        else:
+            if not _is_integer(finger) or not 1 <= int(finger) <= 4:
+                raise ValueError(
+                    "frozen-context focus finger must be one of 1..4")
+            normalized = int(finger)
+            if not any(
+                    normalized in finger_set
+                    for finger_set in self.practice_frozen_context_group_keys):
+                raise ValueError(
+                    "frozen-context focus finger has no replay state")
+        changed = (
+            normalized != self.frozen_context_focus_finger
+            or focus_probability != self.frozen_context_focus_probability)
+        self.frozen_context_focus_finger = normalized
+        self.frozen_context_focus_probability = focus_probability
         return changed
 
     def set_goal_pair_rehearsal_probability(self, probability):
@@ -1221,7 +1481,7 @@ class FretGoalSequence:
 
     def set_goal_pair_sequence_sampling(
             self, probability, duration_frames=240,
-            full_song_fraction=0.0):
+            full_song_fraction=0.0, max_events=2):
         probability = float(probability)
         full_song_fraction = float(full_song_fraction)
         if (not 0.0 <= probability <= 1.0
@@ -1234,15 +1494,40 @@ class FretGoalSequence:
             raise ValueError(
                 "goal-pair sequence duration must be a positive integer")
         duration_frames = int(duration_frames)
+        if (isinstance(max_events, bool)
+                or int(max_events) != max_events
+                or int(max_events) < 1):
+            raise ValueError(
+                "goal-pair sequence max events must be a positive integer")
+        max_events = int(max_events)
         changed = (
             probability != self.goal_pair_sequence_probability
             or duration_frames != self.goal_pair_sequence_duration_frames
+            or max_events != self.goal_pair_sequence_max_events
             or full_song_fraction
                 != self.goal_pair_sequence_full_song_fraction)
         self.goal_pair_sequence_probability = probability
         self.goal_pair_sequence_duration_frames = duration_frames
+        self.goal_pair_sequence_max_events = max_events
         self.goal_pair_sequence_full_song_fraction = full_song_fraction
         return changed
+
+    def set_goal_pair_uncovered_pose_probability(self, probability):
+        probability = float(probability)
+        if not 0.0 <= probability <= 1.0:
+            raise ValueError(
+                "goal-pair uncovered-pose probability must be in [0, 1]")
+        changed = probability != self.goal_pair_uncovered_pose_probability
+        self.goal_pair_uncovered_pose_probability = probability
+        return changed
+
+    def set_goal_pair_success_pose_valid(self, valid):
+        valid = torch.as_tensor(
+            valid, dtype=torch.bool, device=self.device).reshape(-1)
+        if valid.numel() != self.pose_slot_count:
+            raise ValueError(
+                "goal-pair success-pose mask does not match pose slots")
+        self.goal_pair_success_pose_valid = valid
 
     def set_goal_pair_preview_only(self, enabled):
         normalized = bool(enabled)
@@ -1358,13 +1643,17 @@ class FretGoalSequence:
             active = env_mask & (self.practice_remaining > 0)
             if self.curriculum_stage == "goal_pair":
                 before_active = (
-                    active & ~self.goal_pair_sequence_mask
+                    active
+                    & ~self.goal_pair_rehearsal_mask
+                    & ~self.goal_pair_sequence_mask
                     & (self.goal_pair_before_remaining > 0))
                 switch = (
                     before_active & (self.goal_pair_before_remaining == 1))
                 self.goal_pair_before_remaining[before_active] -= 1
                 self.frame_idx[switch] = self.goal_pair_next_frame[switch]
-                sequence_active = active & self.goal_pair_sequence_mask
+                sequence_active = active & (
+                    self.goal_pair_rehearsal_mask
+                    | self.goal_pair_sequence_mask)
                 self.frame_idx[sequence_active] = (
                     self.frame_idx[sequence_active] + 1
                 ).clamp(max=self.n_frames - 1)
@@ -1546,7 +1835,8 @@ class FretGoalSequence:
             sustain_eligible = fret > 0
             if self.curriculum_stage == "goal_pair":
                 sustain_eligible = torch.where(
-                    self.goal_pair_sequence_mask[:, None],
+                    (self.goal_pair_rehearsal_mask
+                     | self.goal_pair_sequence_mask)[:, None],
                     self.sustain_eligible[i], sustain_eligible)
         static_stage = self.curriculum_stage in (
             "coarse_reach", "fine_reach",
@@ -1554,10 +1844,11 @@ class FretGoalSequence:
             "chord_reach", "chord_fine_reach", "static_chord")
         if self.curriculum_stage == "goal_pair":
             pair_event = self._goal_pair_finger_events()
+            replay_event = self.finger_events[i]
             finger_event = torch.where(
                 (self.goal_pair_rehearsal_mask
                  | self.goal_pair_sequence_mask)[:, None, None],
-                self.finger_events[i],
+                replay_event,
                 pair_event)
         elif self.curriculum_stage == "frozen_context" or static_stage:
             finger_event = self._static_finger_events(fret, finger)
@@ -1573,43 +1864,39 @@ class FretGoalSequence:
             "wrist_radius": self.wrist_radius[i],
             "sustain_event_id": sustain_event_id,
             "sustain_eligible": sustain_eligible,
+            "finger_pose_slot": self.finger_pose_slot[i],
             # Runtime diagnostics may need the structured per-finger relation
             # without changing the flattened policy observation contract.
             "finger_event": finger_event,
         }
 
-    def observe(self, clock_delay_frames=None):
-        """Return the policy goal, optionally accounting for a frozen song clock.
-
-        During the preparation window the selected frame does not advance.  Adding
-        that remaining delay to the lookahead and per-finger time channels keeps
-        their physical meaning truthful and makes preparation observable without
-        growing the 128-D goal contract.
-        """
+    def _observation_delay_seconds(self, clock_delay_frames):
         if clock_delay_frames is None:
-            delay_s = torch.zeros(
+            return torch.zeros(
                 self.num_envs, 1, dtype=torch.float32, device=self.device)
-        else:
-            delay = torch.as_tensor(
-                clock_delay_frames, dtype=torch.float32, device=self.device).reshape(-1)
-            if delay.numel() != self.num_envs:
-                raise ValueError(
-                    f"clock delay must have {self.num_envs} rows, got {delay.numel()}")
-            if delay.device.type == "cpu" and (
-                    not torch.isfinite(delay).all() or (delay < 0).any()):
-                raise ValueError("clock delay frames must be finite and non-negative")
-            delay_s = (delay / float(self.fps)).unsqueeze(-1)
-        practice_static = self.curriculum_stage in (
-            "coarse_reach", "fine_reach",
-            "isolated_press", "integrated_press",
-            "chord_reach", "chord_fine_reach", "static_chord")
+        delay = torch.as_tensor(
+            clock_delay_frames, dtype=torch.float32,
+            device=self.device).reshape(-1)
+        if delay.numel() != self.num_envs:
+            raise ValueError(
+                f"clock delay must have {self.num_envs} rows, got {delay.numel()}")
+        if delay.device.type == "cpu" and (
+                not torch.isfinite(delay).all() or (delay < 0).any()):
+            raise ValueError(
+                "clock delay frames must be finite and non-negative")
+        return (delay / float(self.fps)).unsqueeze(-1)
+
+    def _normalized_lookahead_chunks(
+            self, offsets, delay_s, practice_static):
         chunks = []
-        for offset in self.lookahead:
+        for offset in offsets:
             idx = self._lookahead_indices(offset, practice_static)
-            # 목표 범위를 대략 [-1,1] 안에 둔다. fret의 -1(NO_PRESS: open/release)은 음수 신호다.
-            fret = self._masked_practice_goal(self.fret[idx], 0.0) / 22.0
-            finger = self._masked_practice_goal(self.finger[idx], 0).float() / 4.0
-            barre = self._masked_practice_goal(self.barre[idx], False).float()
+            fret = self._masked_practice_goal(
+                self.fret[idx], 0.0) / 22.0
+            finger = self._masked_practice_goal(
+                self.finger[idx], 0).float() / 4.0
+            barre = self._masked_practice_goal(
+                self.barre[idx], False).float()
             anchor = ((self.anchor[idx] - 1.0) / 21.0).unsqueeze(-1)
             allowed = (self.allowed[idx] - 1.0) / 21.0
             wrist = self.wrist[idx] / 0.25
@@ -1632,7 +1919,33 @@ class FretGoalSequence:
                 wrist = torch.lerp(
                     self.wrist[base_idx] / 0.25, wrist, blend)
             dt = delay_s + offset / float(self.fps)
-            chunks.append(torch.cat([fret, finger, barre, anchor, allowed, wrist, dt], dim=-1))
+            chunks.append(torch.cat(
+                [fret, finger, barre, anchor, allowed, wrist, dt],
+                dim=-1))
+        return chunks
+
+    def observe_future_context(self, offsets, clock_delay_frames=None):
+        offsets = tuple(int(offset) for offset in offsets)
+        if not offsets or any(offset < 0 for offset in offsets):
+            raise ValueError(
+                "future context offsets must be non-empty and non-negative")
+        delay_s = self._observation_delay_seconds(clock_delay_frames)
+        practice_static = self.curriculum_stage in (
+            "coarse_reach", "fine_reach",
+            "isolated_press", "integrated_press",
+            "chord_reach", "chord_fine_reach", "static_chord")
+        return torch.cat(self._normalized_lookahead_chunks(
+            offsets, delay_s, practice_static), dim=-1)
+
+    def observe(self, clock_delay_frames=None):
+        """Return the policy goal, optionally accounting for a frozen song clock."""
+        delay_s = self._observation_delay_seconds(clock_delay_frames)
+        practice_static = self.curriculum_stage in (
+            "coarse_reach", "fine_reach",
+            "isolated_press", "integrated_press",
+            "chord_reach", "chord_fine_reach", "static_chord")
+        chunks = self._normalized_lookahead_chunks(
+            self.lookahead, delay_s, practice_static)
         current = self.current()
         finger_events = current["finger_event"].clone()
         if self.curriculum_stage == "frozen_context":

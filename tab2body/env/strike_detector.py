@@ -20,10 +20,10 @@ from typing import Any
 import torch
 
 
-# Guitar-local direction convention.  The across-string normal constructed
-# below is always oriented toward +x_g:
-#   down: low-E -> high-e == +x_g
-#   up:   high-e -> low-E == -x_g
+
+
+
+
 DIRECTION_UP = -1
 DIRECTION_NONE = 0
 DIRECTION_DOWN = 1
@@ -391,9 +391,9 @@ def swept_point_string_segments(
     string_u_raw = (
         _cross2(start_from_pick, pick_delta_xy) / safe_denominator)
 
-    # The previous endpoint belongs to the previous control interval, so t=0
-    # is excluded.  The fresh current endpoint t=1 and both finite string
-    # endpoints are included.
+
+
+
     within_pick = (subframe_t_raw > 0.0) & (subframe_t_raw <= 1.0)
     within_string = (string_u_raw >= 0.0) & (string_u_raw <= 1.0)
     intersects = (
@@ -419,8 +419,8 @@ def swept_point_string_segments(
         segment_epsilon)[..., None]
     across_normal_xy = torch.stack(
         [-unit_tangent_xy[..., 1], unit_tangent_xy[..., 0]], dim=-1)
-    # Orient every local across normal toward +x_g so its velocity sign has a
-    # single musical meaning even though the authored string endpoints slope.
+
+
     normal_sign = torch.where(
         across_normal_xy[..., 0] < 0.0,
         -torch.ones_like(across_normal_xy[..., 0]),
@@ -452,9 +452,9 @@ def swept_point_string_segments(
         & (crossing_pos[..., 1] >= preferred_lo)
         & (crossing_pos[..., 1] <= preferred_hi))
 
-    # Keep diagnostic tensors finite so a malformed environment cannot poison
-    # a vectorized reward or observation.  ``finite_input`` remains the
-    # authoritative error mask.
+
+
+
     safe_t = torch.where(torch.isfinite(safe_t), safe_t, torch.zeros_like(safe_t))
     safe_u = torch.where(torch.isfinite(safe_u), safe_u, torch.zeros_like(safe_u))
     depth = torch.where(torch.isfinite(depth), depth, torch.zeros_like(depth))
@@ -536,7 +536,7 @@ class PickStrikeDetector:
             "parallel_epsilon", parallel_epsilon, allow_zero=False)
         self.segment_epsilon = _positive_scalar(
             "segment_epsilon", segment_epsilon, allow_zero=False)
-        # Validate zone ordering immediately, not on the first training step.
+
         strike_zone_quality(
             torch.zeros((), device=self.device),
             allowed_y=allowed_y, preferred_y=preferred_y)
@@ -609,8 +609,8 @@ class PickStrikeDetector:
         separation = separation_result["distance"]
         separation_finite = separation_result["finite"]
 
-        # Count only frames that began in WAIT_REARM.  A release frame starts
-        # at zero regardless of how far the endpoint travelled past the line.
+
+
         self.wait_frames = torch.where(
             waiting_before, self.wait_frames + 1, self.wait_frames)
         self.state = torch.where(

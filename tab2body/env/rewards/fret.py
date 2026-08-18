@@ -9,6 +9,7 @@ from ..goals import FINGER_EVENT_TIME_SCALE_S
 from ..metrics import PressedDragMonitor
 from .common import smoothstep01
 from .motion import ProximalMotionReward
+from .reference_posture import ReferenceHandPosturePrior
 from .thumb import (
     ThumbSupportReward,
     thumb_base_action_saturation_penalty,
@@ -301,6 +302,96 @@ def balance_press_no_press_channels(
     }
 
 
+def blend_goal_pair_rehearsal_anchor_reward(
+        balanced_reward, channel_reward, anchor_mask, weight=0.20):
+    if (balanced_reward.shape != channel_reward.shape
+            or anchor_mask.shape != channel_reward.shape):
+        raise ValueError(
+            "goal-pair anchor tensors must share shape [N,S]")
+    weight = float(weight)
+    if not 0.0 <= weight < 1.0:
+        raise ValueError("goal-pair anchor weight must be in [0, 1)")
+    count = anchor_mask.sum(dim=-1)
+    anchor_reward = (
+        channel_reward.masked_fill(~anchor_mask, 0.0).sum(dim=-1)
+        / count.clamp_min(1))
+    active = count > 0
+    shaped = (
+        (1.0 - weight) * balanced_reward
+        + weight * anchor_reward[:, None])
+    return torch.where(active[:, None], shaped, balanced_reward), anchor_reward, active
+
+
+def blend_anchor_finger_reward(
+        mean_reward, per_finger_reward, active_mask, anchor_finger,
+        weight=0.20):
+    if (mean_reward.ndim != 1
+            or per_finger_reward.shape != (mean_reward.shape[0], 4)
+            or active_mask.shape != per_finger_reward.shape
+            or anchor_finger.shape != mean_reward.shape):
+        raise ValueError(
+            "anchor-finger reward tensors must have shapes [N] and [N,4]")
+    weight = float(weight)
+    if not 0.0 <= weight < 1.0:
+        raise ValueError("anchor-finger reward weight must be in [0, 1)")
+    index = (anchor_finger.long() - 1).clamp(0, 3)
+    selected_reward = per_finger_reward.gather(
+        1, index[:, None]).squeeze(1)
+    selected_active = active_mask.gather(
+        1, index[:, None]).squeeze(1)
+    selected_active &= anchor_finger > 0
+    shaped = (1.0 - weight) * mean_reward + weight * selected_reward
+    return torch.where(selected_active, shaped, mean_reward), (
+        selected_reward), selected_active
+
+
+def cached_finger_pose_guide(
+        current_q, target_q, scale, valid, gate):
+    """리허설 성공 자세를 실제 곡의 같은 손가락 목표에 전달한다."""
+    if (current_q.ndim != 3 or current_q.shape[1] != 4
+            or target_q.shape != current_q.shape
+            or scale.shape != current_q.shape[1:]
+            or valid.shape != current_q.shape[:2]
+            or gate.shape != current_q.shape[:2]):
+        raise ValueError("finger pose guide tensors have incompatible shapes")
+    if (not torch.isfinite(current_q).all()
+            or not torch.isfinite(target_q).all()
+            or not torch.isfinite(scale).all()
+            or (scale <= 0.0).any()):
+        raise ValueError("finger pose guide inputs must be finite and scaled")
+    active = valid.bool() & gate.bool()
+    normalized_error = (current_q - target_q) / scale
+    per_finger = torch.exp(
+        -0.5 * normalized_error.square().mean(dim=-1))
+    per_finger = per_finger.masked_fill(~active, 0.0)
+    count = active.sum(dim=-1)
+    reward = per_finger.sum(dim=-1) / count.clamp_min(1)
+    reward = torch.where(count > 0, reward, torch.zeros_like(reward))
+    return reward, per_finger, active
+
+
+def cached_finger_action_teacher(
+        target_action, valid, guide_active, guide_quality,
+        minimum_quality=0.0):
+    """유효한 성공 캐시만 손가락별 action teacher로 선택한다."""
+    if target_action.ndim != 3:
+        raise ValueError("finger action targets must have shape [N,F,A]")
+    expected = target_action.shape[:2]
+    if (valid.shape != expected or guide_active.shape != expected
+            or guide_quality.shape != expected):
+        raise ValueError(
+            "finger action teacher gates must have shape [N,F]")
+    minimum_quality = float(minimum_quality)
+    if not 0.0 <= minimum_quality <= 1.0:
+        raise ValueError("finger action teacher quality must be in [0, 1]")
+    selected = (
+        valid.bool() & guide_active.bool()
+        & (guide_quality >= minimum_quality))
+    mask = selected[..., None].expand_as(target_action)
+    teacher = torch.where(mask, target_action, torch.zeros_like(target_action))
+    return teacher, mask
+
+
 def aggregate_active_channel_bottleneck(
         channel_reward, active_mask, bottleneck_weight=0.50):
     if channel_reward.ndim != 2 or active_mask.shape != channel_reward.shape:
@@ -321,6 +412,36 @@ def aggregate_active_channel_bottleneck(
     expanded = torch.where(
         active_mask, aggregate[:, None], channel_reward)
     return expanded, aggregate, mean, minimum
+
+
+def chord_fine_conjunctive_reward(
+        fine_distance, longitudinal_quality, lateral_quality,
+        normal_quality, broad_depth_progress, press_success, active_mask,
+        bottleneck_weight=1.0):
+    """넓은 좌표 기울기와 실제 접촉을 최약 압현 기준으로 결합한다."""
+    tensors = (
+        fine_distance, longitudinal_quality, lateral_quality,
+        normal_quality, broad_depth_progress, press_success, active_mask)
+    if any(value.shape != fine_distance.shape for value in tensors):
+        raise ValueError("chord-fine tensors must share shape [N,S]")
+    if fine_distance.ndim != 2:
+        raise ValueError("chord-fine tensors must have shape [N,S]")
+    broad_axes = torch.stack((
+        longitudinal_quality.clamp(0.0, 1.0).pow(0.25),
+        lateral_quality.clamp(0.0, 1.0).pow(0.25),
+        normal_quality.clamp(0.0, 1.0).pow(0.25),
+        broad_depth_progress.clamp(0.0, 1.0),
+    ), dim=-1)
+    axis_minimum = broad_axes.amin(dim=-1)
+    channel = (
+        0.35 * fine_distance.clamp(0.0, 1.0)
+        + 0.45 * axis_minimum
+        + 0.20 * press_success.float())
+    expanded, aggregate, mean, minimum = (
+        aggregate_active_channel_bottleneck(
+            channel, active_mask,
+            bottleneck_weight=bottleneck_weight))
+    return expanded, aggregate, mean, minimum, axis_minimum
 
 
 def next_goal_approach_reward(
@@ -542,6 +663,22 @@ def wrong_press_mask(pressed_by_fret, no_press_required):
     return (pressed_by_fret & no_press_required).any(dim=-1)
 
 
+def wrong_press_finger_mask(pressed_by_finger_fret, no_press_required):
+    """금지 프렛을 실제로 누른 손가락을 분리한다."""
+    if (pressed_by_finger_fret.ndim != 4
+            or no_press_required.shape
+                != (pressed_by_finger_fret.shape[0],
+                    pressed_by_finger_fret.shape[1],
+                    pressed_by_finger_fret.shape[3])):
+        raise ValueError(
+            "finger wrong-press tensors must be [N,S,Finger,Fret] and "
+            "[N,S,Fret]")
+    forbidden = (
+        pressed_by_finger_fret
+        & no_press_required[:, :, None, :])
+    return forbidden.any(dim=1).any(dim=-1)
+
+
 def wrong_press_avoidance_reward(max_forbidden_depth, on_depth=0.0010,
                                  margin=0.0020):
     """금지 프렛 압현 직전의 선택적 회피 점수다."""
@@ -573,21 +710,36 @@ def apply_binary_penalty(value, mask, penalty):
     return value - penalty * mask.to(value.dtype)
 
 
+def press_near_miss_mask(active, success, target_distance, max_distance):
+    if not (active.shape == success.shape == target_distance.shape):
+        raise ValueError("near-miss tensors must share shape")
+    max_distance = float(max_distance)
+    if not math.isfinite(max_distance) or max_distance <= 0.0:
+        raise ValueError("near-miss distance must be finite and positive")
+    return active.bool() & ~success.bool() & (target_distance <= max_distance)
+
+
 def bound_fret_reward(
-        reward, stage, wrong_press_penalty, press_dropout_penalty):
+        reward, stage, wrong_press_penalty, press_dropout_penalty,
+        press_near_miss_penalty=0.0):
     """일반 보상을 유한한 학습 범위에 두되 활성 실패 비용은 보존한다."""
     wrong_press_penalty = float(wrong_press_penalty)
     press_dropout_penalty = float(press_dropout_penalty)
+    press_near_miss_penalty = float(press_near_miss_penalty)
     if (not math.isfinite(wrong_press_penalty)
             or not math.isfinite(press_dropout_penalty)
             or wrong_press_penalty < 0.0
             or press_dropout_penalty < 0.0):
         raise ValueError("fret penalties must be finite and non-negative")
+    if (not math.isfinite(press_near_miss_penalty)
+            or press_near_miss_penalty < 0.0):
+        raise ValueError("near-miss penalty must be finite and non-negative")
     early_stage = stage in (
         "coarse_reach", "fine_reach",
         "chord_reach", "chord_fine_reach")
     lower = -1.0 if early_stage else -min(
-        wrong_press_penalty + press_dropout_penalty, 1.0)
+        wrong_press_penalty + press_dropout_penalty
+        + press_near_miss_penalty, 1.0)
     return reward.clamp(lower, 1.0)
 
 
@@ -598,6 +750,23 @@ def suppress_positive_reward_on_penetration(reward, penetration):
             "penetration reward gate requires [N,C] reward and [N] mask")
     return torch.where(
         penetration.bool()[:, None], reward.clamp_max(0.0), reward)
+
+
+def guitar_penetration_soft_cost(
+        depth, soft_threshold=0.0025, hard_threshold=0.005,
+        max_cost=0.05):
+    """심각한 관통 종료 전에 깊이에 비례한 연속 회피 신호를 만든다."""
+    if (not math.isfinite(soft_threshold)
+            or not math.isfinite(hard_threshold)
+            or not math.isfinite(max_cost)
+            or soft_threshold < 0.0
+            or hard_threshold <= soft_threshold
+            or max_cost < 0.0):
+        raise ValueError("penetration soft-cost bounds are invalid")
+    fraction = (
+        (depth - soft_threshold) / (hard_threshold - soft_threshold)
+    ).clamp(0.0, 1.0)
+    return float(max_cost) * fraction.square()
 
 
 def released_finger_hover_reward(tips, string_start, string_end, gate,
@@ -858,6 +1027,8 @@ class FretReward:
 
     def __init__(self, env, wrist_weight=0.15, smooth_weight=0.0,
                  wrong_press_penalty=0.25, wrong_press_avoidance_weight=0.10,
+                 press_near_miss_penalty=0.15,
+                 press_near_miss_distance=0.015,
                  finger_arch_reward_weight=0.10,
                  thumb_weight=0.15,
                  thumb_pad_radius=0.010,
@@ -890,6 +1061,10 @@ class FretReward:
                  finger_coupling_min_speed_deg=4.0,
                  finger_coupling_full_speed_deg=25.0,
                  finger_coupling_tolerance_deg_s=15.0,
+                 reference_motion_prior_path=None,
+                 reference_motion_prior_weight=0.0,
+                 reference_motion_prior_finger_fraction=0.67,
+                 reference_motion_prior_exemplars=64,
                  slip_weight=0.005, slip_stable_frames=3,
                  slip_free_distance=0.002, slip_decay_scale=0.003,
                  pressed_drag_threshold=0.003,
@@ -898,7 +1073,14 @@ class FretReward:
                  no_press_failure_credit=0.10,
                  static_chord_bottleneck_weight=0.50,
                  chord_bridge_bottleneck_weight=0.50,
+                 chord_fine_joint_weight=0.40,
+                 chord_fine_depth_start=-0.025,
                  static_chord_joint_weight=0.30,
+                 goal_pair_rehearsal_anchor_weight=0.20,
+                 chord_fine_success_pose_guide_weight=0.15,
+                 goal_pair_success_pose_guide_weight=0.20,
+                 goal_pair_success_pose_focus_weight=0.60,
+                 goal_pair_success_pose_proximal_fraction=0.20,
                  static_chord_no_press_failure_credit=0.0,
                  static_chord_no_press_completion_power=2.0,
                  press_hold_min_frames=6,
@@ -908,6 +1090,7 @@ class FretReward:
                  press_precision_gate_floor=0.40,
                  next_goal_weight=0.15,
                  goal_pair_transition_next_goal_weight=0.50,
+                 goal_pair_context_next_goal_weight=0.35,
                  next_goal_lookahead_s=1.00,
                  next_goal_progress_weight=2.0,
                  next_goal_progress_near=0.010,
@@ -954,6 +1137,10 @@ class FretReward:
             finger_coupling_full_speed_deg)
         self.finger_coupling_tolerance_deg_s = float(
             finger_coupling_tolerance_deg_s)
+        self.reference_motion_prior_weight = float(
+            reference_motion_prior_weight)
+        self.reference_motion_prior_finger_fraction = float(
+            reference_motion_prior_finger_fraction)
         self.slip_weight = float(slip_weight)
         self.slip_stable_frames = int(slip_stable_frames)
         self.slip_free_distance = float(slip_free_distance)
@@ -965,7 +1152,19 @@ class FretReward:
             static_chord_bottleneck_weight)
         self.chord_bridge_bottleneck_weight = float(
             chord_bridge_bottleneck_weight)
+        self.chord_fine_joint_weight = float(chord_fine_joint_weight)
+        self.chord_fine_depth_start = float(chord_fine_depth_start)
         self.static_chord_joint_weight = float(static_chord_joint_weight)
+        self.goal_pair_rehearsal_anchor_weight = float(
+            goal_pair_rehearsal_anchor_weight)
+        self.chord_fine_success_pose_guide_weight = float(
+            chord_fine_success_pose_guide_weight)
+        self.goal_pair_success_pose_guide_weight = float(
+            goal_pair_success_pose_guide_weight)
+        self.goal_pair_success_pose_focus_weight = float(
+            goal_pair_success_pose_focus_weight)
+        self.goal_pair_success_pose_proximal_fraction = float(
+            goal_pair_success_pose_proximal_fraction)
         self.static_chord_no_press_failure_credit = float(
             static_chord_no_press_failure_credit)
         self.static_chord_no_press_completion_power = float(
@@ -973,11 +1172,15 @@ class FretReward:
         self.press_hold_min_frames = int(press_hold_min_frames)
         self.press_hold_full_frames = int(press_hold_full_frames)
         self.press_dropout_penalty = float(press_dropout_penalty)
+        self.press_near_miss_penalty = float(press_near_miss_penalty)
+        self.press_near_miss_distance = float(press_near_miss_distance)
         self.press_position_dense_scale = float(press_position_dense_scale)
         self.press_precision_gate_floor = float(press_precision_gate_floor)
         self.next_goal_weight = float(next_goal_weight)
         self.goal_pair_transition_next_goal_weight = float(
             goal_pair_transition_next_goal_weight)
+        self.goal_pair_context_next_goal_weight = float(
+            goal_pair_context_next_goal_weight)
         self.next_goal_lookahead_s = float(next_goal_lookahead_s)
         self.next_goal_progress_weight = float(next_goal_progress_weight)
         self.next_goal_progress_near = float(next_goal_progress_near)
@@ -1029,6 +1232,20 @@ class FretReward:
             raise ValueError("hover speed/time parameters are invalid")
         if not 0.0 <= self.finger_coupling_weight < 1.0:
             raise ValueError("finger coupling weight must be in [0, 1)")
+        if not 0.0 <= self.reference_motion_prior_weight < 1.0:
+            raise ValueError("reference motion prior weight must be in [0, 1)")
+        if not 0.0 <= self.reference_motion_prior_finger_fraction <= 1.0:
+            raise ValueError(
+                "reference motion finger fraction must be in [0, 1]")
+        if self.reference_motion_prior_weight > 0.0:
+            if reference_motion_prior_path is None:
+                raise ValueError(
+                    "reference motion path is required when its prior is enabled")
+            self.reference_posture_prior = ReferenceHandPosturePrior(
+                env, reference_motion_prior_path,
+                max_exemplars=reference_motion_prior_exemplars)
+        else:
+            self.reference_posture_prior = None
         if self.slip_weight < 0.0 or self.slip_stable_frames < 1:
             raise ValueError("slip weight must be non-negative and stable frames >= 1")
         if self.slip_free_distance < 0.0 or self.slip_decay_scale <= 0.0:
@@ -1044,8 +1261,29 @@ class FretReward:
             raise ValueError("static chord bottleneck weight must be in [0, 1]")
         if not 0.0 <= self.chord_bridge_bottleneck_weight <= 1.0:
             raise ValueError("chord bridge bottleneck weight must be in [0, 1]")
+        if not 0.0 <= self.chord_fine_joint_weight < 1.0:
+            raise ValueError("chord-fine joint weight must be in [0, 1)")
+        if (not math.isfinite(self.chord_fine_depth_start)
+                or self.chord_fine_depth_start >= self.PRESS_ON_DEPTH):
+            raise ValueError(
+                "chord-fine depth start must precede press depth")
         if not 0.0 <= self.static_chord_joint_weight < 1.0:
             raise ValueError("static chord joint weight must be in [0, 1)")
+        if not 0.0 <= self.goal_pair_rehearsal_anchor_weight < 1.0:
+            raise ValueError(
+                "goal-pair rehearsal anchor weight must be in [0, 1)")
+        if not 0.0 <= self.chord_fine_success_pose_guide_weight < 1.0:
+            raise ValueError(
+                "chord-fine success-pose guide weight must be in [0, 1)")
+        if not 0.0 <= self.goal_pair_success_pose_guide_weight < 1.0:
+            raise ValueError(
+                "goal-pair success-pose guide weight must be in [0, 1)")
+        if not 0.0 <= self.goal_pair_success_pose_focus_weight < 1.0:
+            raise ValueError(
+                "goal-pair success-pose focus weight must be in [0, 1)")
+        if not 0.0 <= self.goal_pair_success_pose_proximal_fraction <= 1.0:
+            raise ValueError(
+                "goal-pair success-pose proximal fraction must be in [0, 1]")
         if not (0.0 <= self.static_chord_no_press_failure_credit
                 <= self.no_press_class_weight):
             raise ValueError(
@@ -1060,22 +1298,32 @@ class FretReward:
                 or self.press_dropout_penalty < 0.0):
             raise ValueError(
                 "press dropout penalty must be finite and non-negative")
+        if (not math.isfinite(self.press_near_miss_penalty)
+                or self.press_near_miss_penalty < 0.0
+                or not math.isfinite(self.press_near_miss_distance)
+                or self.press_near_miss_distance <= 0.0):
+            raise ValueError(
+                "near-miss penalty/distance must be finite and valid")
         if self.press_position_dense_scale <= 0.0:
             raise ValueError("press position dense scale must be positive")
         if not 0.0 <= self.press_precision_gate_floor <= 1.0:
             raise ValueError("press precision gate floor must be in [0, 1]")
         if (self.next_goal_weight < 0.0
                 or self.next_goal_lookahead_s <= 0.0
+                or self.next_goal_lookahead_s
+                    >= FINGER_EVENT_TIME_SCALE_S
                 or self.next_goal_progress_weight < 0.0
                 or not 0.0 <= self.next_goal_progress_near
                     < self.next_goal_progress_far
                 or self.next_goal_prepress_clearance < 0.0):
             raise ValueError(
-                "next-goal weights/geometry/timing parameters are invalid")
+                "next-goal lookahead must be shorter than the encoded "
+                "time range and all shaping parameters must be valid")
         if not 0.0 <= self.next_goal_preservation_weight < 1.0:
             raise ValueError(
                 "next-goal preservation weight must be in [0, 1)")
         if (not 0.0 <= self.goal_pair_transition_next_goal_weight < 1.0
+                or not 0.0 <= self.goal_pair_context_next_goal_weight < 1.0
                 or not 0.0
                     <= self.next_goal_unprotected_progress_scale <= 1.0
                 or not 0.0
@@ -1184,7 +1432,6 @@ class FretReward:
         self._press_anyseg = torch.zeros(shape, dtype=torch.bool, device=env.device)
         self._sample_alpha = torch.linspace(0.0, 1.0, self.N_SEGMENT_SAMPLES,
                                             device=env.device).view(1, 1, 1, -1, 1)
-        self._fret_numbers = torch.arange(1, 23, device=env.device).view(1, 1, 22)
         self.thumb_reward = ThumbSupportReward(
             env, pad_radius=thumb_pad_radius, approach_scale=thumb_approach_scale,
             reach_scale=thumb_reach_scale,
@@ -1235,10 +1482,6 @@ class FretReward:
                 self.env.hbody_pos(f"LH:{finger}_top"),
             ], dim=1))
         return torch.stack(points, dim=1)
-
-    def _finger_segment_samples(self, points):
-        starts, ends = points[:, :, :-1], points[:, :, 1:]
-        return starts[:, :, :, None] + self._sample_alpha * (ends - starts)[:, :, :, None]
 
     @staticmethod
     def _select_finger_samples(values, finger_index):
@@ -1312,12 +1555,6 @@ class FretReward:
             torch.isfinite(max_depth_by_fret), max_depth_by_fret,
             torch.full_like(max_depth_by_fret, -self.PAD_RADIUS))
         return along, depth, lateral_ok, max_depth_by_fret
-
-    @staticmethod
-    def _goal_indexing(n, device):
-        env_index = torch.arange(n, device=device)[:, None].expand(n, 6)
-        string_index = torch.arange(6, device=device)[None].expand(n, 6)
-        return env_index, string_index
 
     def _approach_distance(self, samples, target, outward, finger_index, barre):
         delta = samples[:, None] - target[:, :, None, None, None]
@@ -1427,7 +1664,10 @@ class FretReward:
         p0, p1, direction, cell_lo, cell_hi, all_approach, outward = \
             self._string_and_fret_geometry()
         points = self._finger_points()
-        samples = self._finger_segment_samples(points)
+        starts, ends = points[:, :, :-1], points[:, :, 1:]
+        samples = (
+            starts[:, :, :, None]
+            + self._sample_alpha * (ends - starts)[:, :, :, None])
         along, depth, lateral_ok, max_depth_by_fret = self._actual_press_states(
             samples, p0, direction, cell_lo, cell_hi, outward)
 
@@ -1446,6 +1686,16 @@ class FretReward:
             fingertip_clearance=self.FINGERTIP_TARGET_CLEARANCE)
         target_along = goal_hi - target_fraction * goal_usable
         target = p0 + direction * target_along[..., None]
+        finger_chain_length = (
+            points[:, :, 1:] - points[:, :, :-1]).norm(dim=-1).sum(dim=-1)
+        designated_mcp = torch.gather(
+            points[:, :, 0], 1,
+            finger_index[..., None].expand(-1, -1, 3))
+        designated_chain_length = torch.gather(
+            finger_chain_length, 1, finger_index)
+        local_reach_margin = (
+            designated_chain_length
+            - (target - designated_mcp).norm(dim=-1))
         target_min_separation = minimum_active_target_separation(
             target, press_mask)
         target_clearance_ok = (
@@ -1471,7 +1721,10 @@ class FretReward:
         self._previous_approach_distance.copy_(curriculum_distance)
         self._previous_approach_valid.copy_(press_mask)
 
-        env_index, string_index = self._goal_indexing(n, self.env.device)
+        env_index = torch.arange(
+            n, device=self.env.device)[:, None].expand(n, 6)
+        string_index = torch.arange(
+            6, device=self.env.device)[None].expand(n, 6)
         designated_distal = self._press_distal[
             env_index, string_index, finger_index, fret_index]
         designated_anyseg = self._press_anyseg[
@@ -1481,8 +1734,20 @@ class FretReward:
         pressed_by_fret = self._press_anyseg.any(dim=2)
         _, no_press_required, _ = fret_requirement_masks(fret, max_fret=22)
         wrong_press = wrong_press_mask(pressed_by_fret, no_press_required)
-        actual_fret = (pressed_by_fret.long() * self._fret_numbers).max(dim=-1).values
+        wrong_press_per_finger = wrong_press_finger_mask(
+            self._press_anyseg, no_press_required)
         press_success = designated_pressed & ~wrong_press & press_mask
+        miss_penalty_stages = (
+            "chord_fine_reach", "isolated_press", "integrated_press",
+            "static_chord", "frozen_context", "goal_pair",
+            "transition_window", "coverage", "integration", "full_song")
+        press_near_miss = (
+            press_near_miss_mask(
+                press_mask, press_success,
+                fine_metrics["fine_center_distance"],
+                self.press_near_miss_distance)
+            if stage in miss_penalty_stages
+            else torch.zeros_like(press_mask))
         finger_numbers = torch.arange(
             1, 5, device=self.env.device).view(1, 1, 4)
         finger_assignment = finger.long()[..., None] == finger_numbers
@@ -1512,6 +1777,9 @@ class FretReward:
         cell_aligned = press_depth > (-self.PAD_RADIUS + 1e-6)
         depth_progress = press_depth_progress(
             press_depth, start_depth=-0.005,
+            success_depth=self.PRESS_ON_DEPTH)
+        chord_fine_depth_progress = press_depth_progress(
+            press_depth, start_depth=self.chord_fine_depth_start,
             success_depth=self.PRESS_ON_DEPTH)
         press_acquisition = 0.40 * depth_progress + 0.60 * press_success.float()
         (press_hold_streak, press_hold_acquired, press_hold_quality,
@@ -1601,7 +1869,7 @@ class FretReward:
                == required_finger_press_count))
         self._had_successful_press |= successful_finger_press
         hover_gate = ~current_finger_active
-        hover_position_reward, hover_gap, hover_position_per_finger = (
+        hover_position_reward, hover_gap, _ = (
             released_finger_hover_reward(
                 tips, p0, p1, hover_gate, pad_radius=self.PAD_RADIUS,
                 free_gap=self.hover_free_gap, decay_scale=self.hover_decay_scale))
@@ -1616,7 +1884,7 @@ class FretReward:
             self._had_successful_press, current_finger_active,
             self._previous_hover_valid, relation_rest, relation_move,
             time_to_next_s, self.next_goal_lookahead_s)
-        hover_velocity_reward, hover_velocity_per_finger = (
+        hover_velocity_reward, _ = (
             released_finger_outward_velocity_reward(
                 hover_outward_speed, hover_velocity_gate,
                 free_speed=self.hover_free_outward_speed,
@@ -1643,7 +1911,7 @@ class FretReward:
             release_pose_gate,
             self._release_age + 1.0 / float(self.env.SIM_HZ),
             torch.zeros_like(self._release_age)))
-        release_pose_reward, release_pose_per_finger, release_pose_error_deg = (
+        release_pose_reward, _, release_pose_error_deg = (
             released_finger_pose_reward(
                 arch_angles, self._release_arch_anchor, self._release_age,
                 release_pose_gate,
@@ -1658,10 +1926,6 @@ class FretReward:
             self.hover_position_weight * hover_position_reward
             + self.hover_release_pose_weight * release_pose_reward
             + hover_velocity_weight * hover_velocity_reward)
-        hover_per_finger = (
-            self.hover_position_weight * hover_position_per_finger
-            + self.hover_release_pose_weight * release_pose_per_finger
-            + hover_velocity_weight * hover_velocity_per_finger)
         self._previous_hover_gap.copy_(hover_gap)
         self._previous_hover_valid[:] = True
         transition_sample = torch.ones(
@@ -1690,6 +1954,28 @@ class FretReward:
             release_window_s=self.hover_move_release_time,
             prepress_clearance=self.next_goal_prepress_clearance,
             time_gate_floor=next_goal_time_gate_floor)
+        context_anchor = getattr(
+            self.env.goals, "goal_pair_rehearsal_anchor_finger", None)
+        if context_anchor is None:
+            context_anchor = torch.zeros(
+                n, dtype=torch.long, device=self.env.device)
+        (next_goal_reward, anchor_next_reward,
+         anchor_next_active) = blend_anchor_finger_reward(
+            next_goal_reward,
+            next_goal_metrics["next_goal_approach_per_finger"],
+            next_goal_metrics["next_goal_approach_gate"],
+            context_anchor, self.goal_pair_rehearsal_anchor_weight)
+        for gate_name, reward_name in (
+                ("next_goal_inactive_move_gate",
+                 "next_goal_inactive_move_reward"),
+                ("next_goal_active_move_gate",
+                 "next_goal_active_move_reward")):
+            next_goal_metrics[reward_name], _, _ = (
+                blend_anchor_finger_reward(
+                    next_goal_metrics[reward_name],
+                    next_goal_metrics["next_goal_approach_per_finger"],
+                    next_goal_metrics[gate_name], context_anchor,
+                    self.goal_pair_rehearsal_anchor_weight))
 
         all_active_press_held = (
             (~current_finger_active | successful_finger_press).all(dim=1))
@@ -1757,11 +2043,109 @@ class FretReward:
             "next_goal_current_press_preservation_per_finger":
                 current_finger_press_quality,
         })
+        success_pose_guide_reward = torch.zeros(
+            n, dtype=q.dtype, device=self.env.device)
+        success_pose_guide_per_finger = torch.zeros(
+            n, 4, dtype=q.dtype, device=self.env.device)
+        success_pose_guide_active = torch.zeros(
+            n, 4, dtype=torch.bool, device=self.env.device)
+        success_pose_guide_anchor_reward = torch.zeros(
+            n, dtype=q.dtype, device=self.env.device)
+        success_pose_guide_anchor_active = torch.zeros(
+            n, dtype=torch.bool, device=self.env.device)
+        success_pose_guide_proximal_reward = torch.zeros(
+            n, dtype=q.dtype, device=self.env.device)
+        success_pose_guide_proximal_active = torch.zeros(
+            n, 4, dtype=torch.bool, device=self.env.device)
+        pose_guide_weight = (
+            self.chord_fine_success_pose_guide_weight
+            if stage in ("chord_fine_reach", "static_chord")
+            else self.goal_pair_success_pose_guide_weight)
+        if (stage in ("chord_fine_reach", "static_chord", "goal_pair")
+                and pose_guide_weight > 0.0):
+            pose_slot = goal["finger_pose_slot"].long()
+            safe_pose_slot = pose_slot.clamp_min(0)
+            finger_index_4 = torch.arange(
+                4, device=self.env.device).view(1, 4)
+            pose_valid = (
+                (pose_slot >= 0)
+                & self.env._success_finger_pose_valid[
+                    safe_pose_slot, finger_index_4])
+            target_pose_q = self.env._success_finger_pose_q[
+                safe_pose_slot, finger_index_4]
+            current_pose_q = q[:, self.env._finger_pose_dof_indices]
+            pose_gate = current_finger_active
+            if stage == "goal_pair":
+                pose_gate = (
+                    pose_gate
+                    | next_goal_metrics["next_goal_approach_gate"])
+            (success_pose_guide_reward,
+             success_pose_guide_per_finger,
+             success_pose_guide_active) = cached_finger_pose_guide(
+                current_pose_q, target_pose_q,
+                self.env._finger_pose_scale, pose_valid, pose_gate)
+            if stage == "goal_pair":
+                target_proximal_q = (
+                    self.env._success_finger_pose_proximal_q[
+                        safe_pose_slot, finger_index_4])
+                current_proximal_q = q[
+                    :, self.env._finger_pose_proximal_dof_indices]
+                current_proximal_q = current_proximal_q[:, None].expand(
+                    -1, 4, -1)
+                anchor_mask = (
+                    torch.arange(
+                        1, 5, device=self.env.device).view(1, 4)
+                    == context_anchor[:, None])
+                proximal_gate = (
+                    next_goal_metrics["next_goal_inactive_move_gate"]
+                    & anchor_mask)
+                (success_pose_guide_proximal_reward,
+                 success_pose_guide_proximal_per_finger,
+                 success_pose_guide_proximal_active) = (
+                    cached_finger_pose_guide(
+                        current_proximal_q, target_proximal_q,
+                        self.env._finger_pose_proximal_scale[None].expand(
+                            4, -1),
+                        pose_valid, proximal_gate))
+                proximal_fraction = (
+                    self.goal_pair_success_pose_proximal_fraction)
+                success_pose_guide_per_finger = torch.where(
+                    success_pose_guide_proximal_active,
+                    (1.0 - proximal_fraction)
+                    * success_pose_guide_per_finger
+                    + proximal_fraction
+                    * success_pose_guide_proximal_per_finger,
+                    success_pose_guide_per_finger)
+            guide_count = success_pose_guide_active.sum(dim=-1)
+            success_pose_guide_reward = (
+                success_pose_guide_per_finger.sum(dim=-1)
+                / guide_count.clamp_min(1))
+            success_pose_guide_reward = torch.where(
+                guide_count > 0, success_pose_guide_reward,
+                torch.zeros_like(success_pose_guide_reward))
+            if stage in ("chord_fine_reach", "static_chord"):
+                guide_minimum = success_pose_guide_per_finger.masked_fill(
+                    ~success_pose_guide_active, float("inf")).amin(dim=-1)
+                guide_minimum = torch.where(
+                    guide_count > 0, guide_minimum,
+                    torch.zeros_like(guide_minimum))
+                success_pose_guide_reward = (
+                    0.25 * success_pose_guide_reward
+                    + 0.75 * guide_minimum)
+            else:
+                (success_pose_guide_reward,
+                 success_pose_guide_anchor_reward,
+                 success_pose_guide_anchor_active) = (
+                    blend_anchor_finger_reward(
+                        success_pose_guide_reward,
+                        success_pose_guide_per_finger,
+                        success_pose_guide_active, context_anchor,
+                        self.goal_pair_success_pose_focus_weight))
         coupling_follower = (
             finger_synergy_follower_mask(
                 current_finger_active, goal["finger_event"])
             & ~finger_any_press)
-        (finger_coupling_reward, finger_coupling_per_finger,
+        (finger_coupling_reward, _,
          finger_coupling_gate, finger_coupling_target_speed_deg) = (
             adjacent_finger_coupling_reward(
                 arch_velocity, coupling_follower, coupling_protected,
@@ -1802,7 +2186,7 @@ class FretReward:
         slip_instant = torch.where(
             stable_press & same_target & self._slip_previous_valid,
             slip_instant, torch.zeros_like(slip_instant))
-        slip_reward, slip_per_finger = fingertip_slip_reward(
+        slip_reward, _ = fingertip_slip_reward(
             slip_distance, slip_gate, free_distance=self.slip_free_distance,
             decay_scale=self.slip_decay_scale)
         self._slip_previous_xy.copy_(tip_local_xy)
@@ -1918,19 +2302,38 @@ class FretReward:
             n, device=self.env.device)
         chord_bridge_mean = torch.zeros_like(chord_bridge_aggregate)
         chord_bridge_min = torch.zeros_like(chord_bridge_aggregate)
+        chord_fine_joint = torch.zeros_like(chord_bridge_aggregate)
+        chord_fine_joint_mean = torch.zeros_like(chord_bridge_aggregate)
+        chord_fine_joint_min = torch.zeros_like(chord_bridge_aggregate)
+        chord_fine_axis_min = torch.zeros_like(reward)
         if stage in ("chord_reach", "chord_fine_reach"):
             (reward, chord_bridge_aggregate,
              chord_bridge_mean, chord_bridge_min) = (
                 aggregate_active_channel_bottleneck(
                     reward, press_mask,
                     self.chord_bridge_bottleneck_weight))
+        if stage == "chord_fine_reach":
+            (joint_reward, chord_fine_joint,
+             chord_fine_joint_mean, chord_fine_joint_min,
+             chord_fine_axis_min) = chord_fine_conjunctive_reward(
+                fine_distance_reward,
+                fine_metrics["fine_longitudinal_quality"],
+                fine_metrics["fine_lateral_quality"],
+                fine_metrics["fine_normal_quality"],
+                chord_fine_depth_progress, press_success, press_mask,
+                bottleneck_weight=1.0)
+            reward = torch.where(
+                press_mask,
+                (1.0 - self.chord_fine_joint_weight) * reward
+                + self.chord_fine_joint_weight * joint_reward,
+                reward)
         if stage not in (
                 "coarse_reach", "fine_reach",
                 "chord_reach", "chord_fine_reach",
                 "isolated_press"):
             reward = torch.where(
                 press_mask, reward * thumb_press_factor[:, None], reward)
-        reward, coupling_active = blend_finger_coupling_reward(
+        reward, _ = blend_finger_coupling_reward(
             reward, finger_coupling_reward, press_mask,
             finger_coupling_gate, self.finger_coupling_weight)
         # 움직임 우선순위는 손끝 거리에 따른 곱셈 비용이다.
@@ -1944,6 +2347,17 @@ class FretReward:
                           torch.zeros_like(core)))
         reward = apply_binary_penalty(
             reward, wrong_press, self.wrong_press_penalty)
+        reward = apply_binary_penalty(
+            reward, press_near_miss, self.press_near_miss_penalty)
+        rehearsal_anchor = context_anchor
+        rehearsal_anchor_mask = (
+            press_mask
+            & (finger.long() == rehearsal_anchor[:, None])
+            & (rehearsal_anchor[:, None] > 0))
+        rehearsal_anchor_reward = torch.zeros(
+            n, device=self.env.device)
+        rehearsal_anchor_active = torch.zeros(
+            n, dtype=torch.bool, device=self.env.device)
         press_bridge_stage = stage in (
             "static_chord", "frozen_context",
             "goal_pair", "transition_window")
@@ -1982,6 +2396,14 @@ class FretReward:
                 + joint_weight * chord_joint_quality[:, None])
             class_balance_metrics["class_balanced_reward"] = (
                 balanced_reward[:, 0])
+        if stage == "goal_pair" and self.goal_pair_rehearsal_anchor_weight > 0.0:
+            (balanced_reward, rehearsal_anchor_reward,
+             rehearsal_anchor_active) = (
+                blend_goal_pair_rehearsal_anchor_reward(
+                    balanced_reward, reward, rehearsal_anchor_mask,
+                    self.goal_pair_rehearsal_anchor_weight))
+            class_balance_metrics["class_balanced_reward"] = (
+                balanced_reward[:, 0])
         class_balance_enabled = stage not in (
             "coarse_reach", "fine_reach", "chord_reach",
             "chord_fine_reach", "isolated_press", "integrated_press")
@@ -2016,7 +2438,9 @@ class FretReward:
                 torch.full_like(
                     next_goal_blend_weight,
                     self.goal_pair_transition_next_goal_weight),
-                next_goal_blend_weight)
+                torch.full_like(
+                    next_goal_blend_weight,
+                    self.goal_pair_context_next_goal_weight))
         joint_inactive_next_goal_quality = conjunctive_next_goal_quality(
             next_goal_metrics["next_goal_inactive_move_reward"],
             current_press_preservation_quality)
@@ -2041,8 +2465,6 @@ class FretReward:
             reward = torch.where(
                 next_goal_active[:, None], next_goal_shaped,
                 balanced_reward)
-        else:
-            next_goal_reward_delta = torch.zeros_like(next_goal_reward)
         weighted_next_progress = (
             self.next_goal_progress_weight
             * next_goal_progress_reward)
@@ -2053,11 +2475,41 @@ class FretReward:
             + positive_next_progress[:, None]
             * (1.0 - reward.clamp(0.0, 1.0))
             - negative_next_progress[:, None])
-        if class_balance_enabled:
-            next_goal_reward_delta = (
-                reward[:, 0]
-                - class_balance_metrics["class_balanced_reward"])
+        if stage in ("chord_fine_reach", "static_chord", "goal_pair"):
+            guided_reward = (
+                reward
+                + pose_guide_weight * success_pose_guide_reward[:, None]
+                * (1.0 - reward.clamp(0.0, 1.0)))
+            reward = (
+                torch.where(press_mask, guided_reward, reward)
+                if stage in ("chord_fine_reach", "static_chord")
+                else guided_reward)
         reward = reward - thumb_base_saturation_penalty[:, None]
+        reference_finger_quality = torch.ones(
+            n, device=self.env.device)
+        reference_thumb_quality = torch.ones_like(
+            reference_finger_quality)
+        reference_prior_active = (
+            self.reference_posture_prior is not None
+            and stage in (
+                "frozen_context", "goal_pair", "transition_window",
+                "coverage", "integration", "full_song"))
+        if reference_prior_active:
+            (reference_finger_quality,
+             reference_thumb_quality) = self.reference_posture_prior.compute(
+                current_finger_active)
+        reference_quality = (
+            self.reference_motion_prior_finger_fraction
+            * reference_finger_quality
+            + (1.0 - self.reference_motion_prior_finger_fraction)
+            * reference_thumb_quality)
+        reference_penalty = (
+            self.reference_motion_prior_weight
+            * (1.0 - reference_quality))
+        if reference_prior_active:
+            reward = (
+                reward
+                - reference_penalty[:, None] * supervised_mask.float())
 
         has_active = press_mask.any(dim=1)
         if stage in ("coarse_reach", "chord_reach"):
@@ -2104,25 +2556,20 @@ class FretReward:
             "no_press_active": no_press_mask,
             "any_finger_on_target": target_press_any,
             "target_distance": curriculum_distance,
-            "distance_reward": distance_reward,
+            "local_reach_margin": local_reach_margin,
             "linear_distance_reward": linear_distance_reward,
             "fine_distance_reward": fine_distance_reward,
             "approach_progress": approach_progress,
             "press_success": press_success,
             "press_depth": press_depth,
             "press_depth_progress": depth_progress,
-            "press_acquisition": press_acquisition,
-            "press_hold_streak": press_hold_streak,
             "press_hold_acquired": press_hold_acquired,
             "press_hold_quality": press_hold_quality,
-            "press_hold_same_target": press_hold_same_target,
             "press_dropout": press_dropout,
             "press_dropout_streak": self._press_dropout_streak.clone(),
-            "press_dropout_cost": (
-                self.press_dropout_penalty * press_dropout.float()),
+            "press_near_miss": press_near_miss,
             "chord_ready": chord_ready,
             "chord_hold_quality": chord_hold_quality,
-            "position_x": position_x,
             "position_quality": position_quality,
             "ergonomic_position_quality": ergonomic_position_quality,
             "target_fraction": target_fraction,
@@ -2132,8 +2579,6 @@ class FretReward:
             "precision_gate": precision_gate,
             "good_position_quality": good_position_quality,
             "arch_quality": designated_arch,
-            "arch_per_finger": arch_per_finger,
-            "arch_angles": arch_angles,
             "designated_arch_angles": designated_arch_angles,
             "finger_assignment": finger_assignment,
             "tip_contact": designated_distal,
@@ -2142,13 +2587,10 @@ class FretReward:
                 fine_metrics["fine_alignment_quality"] >= 0.80
                 if stage in ("fine_reach", "chord_fine_reach")
                 else cell_aligned),
-            "actual_fret": actual_fret,
             "wrong_press": wrong_press,
+            "wrong_press_per_finger": wrong_press_per_finger,
             "no_press_success": no_press_success,
-            "forbidden_depth": forbidden_depth,
-            "avoidance_reward": avoidance_reward,
             "wrist_distance": (wrist - goal["wrist"]).norm(dim=-1),
-            "wrist_reward": wrist_reward,
             "all_correct": all_correct,
             "curriculum_frame_success": frame_success,
             "curriculum_success": curriculum_success,
@@ -2165,32 +2607,51 @@ class FretReward:
             "thumb_support_stable_12": self._thumb_support_streak >= 12,
             "hover_reward": hover_reward,
             "hover_gap": hover_gap,
-            "hover_per_finger": hover_per_finger,
             "hover_gate": hover_gate,
             "hover_position_reward": hover_position_reward,
             "hover_velocity_reward": hover_velocity_reward,
             "hover_outward_speed": hover_outward_speed,
             "hover_velocity_gate": hover_velocity_gate,
             "release_pose_reward": release_pose_reward,
-            "release_pose_per_finger": release_pose_per_finger,
             "release_pose_error_deg": release_pose_error_deg,
             "release_pose_gate": release_pose_gate,
             "finger_coupling_reward": finger_coupling_reward,
-            "finger_coupling_per_finger": finger_coupling_per_finger,
             "finger_coupling_gate": finger_coupling_gate,
             "finger_coupling_target_speed_deg":
                 finger_coupling_target_speed_deg,
             "finger_coupling_press_protected": coupling_protected,
-            "finger_coupling_active": coupling_active,
+            "reference_finger_posture_quality":
+                reference_finger_quality,
+            "reference_thumb_posture_quality":
+                reference_thumb_quality,
+            "reference_posture_quality": reference_quality,
+            "reference_posture_penalty": reference_penalty,
+            "reference_posture_active": torch.full(
+                (n,), reference_prior_active, dtype=torch.bool,
+                device=self.env.device),
             "slip_reward": slip_reward,
-            "slip_per_finger": slip_per_finger,
             "slip_distance": slip_distance,
             "slip_instant": slip_instant,
             "slip_gate": slip_gate,
             "slip_streak": self._slip_streak.clone(),
             "next_goal_approach_reward": next_goal_reward,
-            "next_goal_reward_active": next_goal_active,
-            "next_goal_reward_delta": next_goal_reward_delta,
+            "goal_pair_anchor_next_reward": anchor_next_reward,
+            "goal_pair_anchor_next_active": anchor_next_active,
+            "success_pose_guide_reward": success_pose_guide_reward,
+            "success_pose_guide_per_finger":
+                success_pose_guide_per_finger,
+            "success_pose_guide_active":
+                success_pose_guide_active.any(dim=-1),
+            "success_pose_guide_active_per_finger":
+                success_pose_guide_active,
+            "success_pose_guide_anchor_reward":
+                success_pose_guide_anchor_reward,
+            "success_pose_guide_anchor_active":
+                success_pose_guide_anchor_active,
+            "success_pose_guide_proximal_reward":
+                success_pose_guide_proximal_reward,
+            "success_pose_guide_proximal_active":
+                success_pose_guide_proximal_active.any(dim=-1),
             "class_balance_enabled": torch.full(
                 (n,), class_balance_enabled, dtype=torch.bool,
                 device=self.env.device),
@@ -2199,6 +2660,21 @@ class FretReward:
                 chord_bridge_aggregate,
             "chord_bridge_mean_reward": chord_bridge_mean,
             "chord_bridge_min_reward": chord_bridge_min,
+            "chord_fine_joint_reward": chord_fine_joint,
+            "chord_fine_joint_mean_reward": chord_fine_joint_mean,
+            "chord_fine_joint_min_reward": chord_fine_joint_min,
+            "chord_fine_axis_min_quality": (
+                chord_fine_axis_min.masked_fill(
+                    ~press_mask, 0.0).sum(dim=-1)
+                / press_mask.sum(dim=-1).clamp_min(1)),
+            "chord_fine_broad_depth_progress": (
+                chord_fine_depth_progress.masked_fill(
+                    ~press_mask, 0.0).sum(dim=-1)
+                / press_mask.sum(dim=-1).clamp_min(1)),
+            "goal_pair_rehearsal_anchor_reward":
+                rehearsal_anchor_reward,
+            "goal_pair_rehearsal_anchor_active":
+                rehearsal_anchor_active,
         }
         metrics.update(next_goal_metrics)
         metrics.update(class_balance_metrics)
@@ -2209,4 +2685,5 @@ class FretReward:
         metrics.update(drag_metrics)
         return bound_fret_reward(
             reward, stage, self.wrong_press_penalty,
-            self.press_dropout_penalty), metrics
+            self.press_dropout_penalty,
+            self.press_near_miss_penalty), metrics

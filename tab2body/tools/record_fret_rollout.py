@@ -29,6 +29,10 @@ import torch
 
 from tab2body.cfg import FRET
 from tab2body.env.config import configured_kwargs
+from tab2body.env.metrics import (
+    adjacent_finger_motion_correlations,
+    summarize_joint_trajectory,
+)
 from tab2body.env.tasks import FretTask
 from tab2body.learning import ActorCritic
 from tab2body.learning.run_layout import default_video_path
@@ -108,6 +112,7 @@ def main(argv=None):
 
     env = FretTask(**configured_kwargs(
         FretTask, FRET,
+        reward_config=FRET,
         goal_path=args.goal,
         hand_targets_path=args.hand_targets or None,
         num_envs=1,
@@ -179,6 +184,19 @@ def main(argv=None):
     synergy_induced_sum = 0.0
     finger_back_soft_sum = 0.0
     min_finger_local_z = float("inf")
+    controlled_joint_names = [
+        env.dof_names[index]
+        for index in env.ctrl_idx.detach().cpu().tolist()]
+    controlled_lower = env.ctrl_lo[0].detach().cpu()
+    controlled_upper = env.ctrl_hi[0].detach().cpu()
+    finger_flexion_indices = torch.tensor([
+        [env.dof_names.index(f"LH:{finger}1_x"),
+         env.dof_names.index(f"LH:{finger}2"),
+         env.dof_names.index(f"LH:{finger}3")]
+        for finger in ("index", "middle", "ring", "pinky")
+    ], dtype=torch.long, device=env.device)
+    controlled_joint_samples = []
+    finger_flexion_samples = []
 
     def sample_stability():
         dof_pos = env.dof_state.view(env.num_envs, env.n_dof, 2)[0, :, 0]
@@ -195,6 +213,13 @@ def main(argv=None):
         total_sim_frames = env.preparation_frames + env.goals.n_frames
         for sim_frame in range(total_sim_frames):
             sample_stability()
+            if int(env.preparation_remaining[0].item()) == 0:
+                dof_position = env.dof_state.view(
+                    env.num_envs, env.n_dof, 2)[0, :, 0]
+                controlled_joint_samples.append(
+                    dof_position[env.ctrl_idx].detach().cpu())
+                finger_flexion_samples.append(
+                    dof_position[finger_flexion_indices].detach().cpu())
             if sim_frame % stride == 0:
                 env.gym.step_graphics(env.sim)
                 env.gym.render_all_camera_sensors(env.sim)
@@ -242,6 +267,12 @@ def main(argv=None):
                 "-i", args.audio, "-c:a", "aac", "-shortest"]
     cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)]
     subprocess.run(cmd, check=True, capture_output=True)
+    joint_trajectory = (
+        torch.stack(controlled_joint_samples)
+        if controlled_joint_samples else None)
+    flexion_trajectory = (
+        torch.stack(finger_flexion_samples)
+        if finger_flexion_samples else None)
     stability = {
         "checkpoint": str(Path(args.checkpoint).resolve()),
         "video": str(out.resolve()),
@@ -277,7 +308,15 @@ def main(argv=None):
                 finger_back_soft_sum / max(diagnostic_frames, 1),
             "minimum_finger_local_z_m":
                 min_finger_local_z if diagnostic_frames else None,
+            "adjacent_finger_motion_correlation": (
+                adjacent_finger_motion_correlations(flexion_trajectory)
+                if flexion_trajectory is not None else {}),
         },
+        "controlled_joint_distribution": (
+            summarize_joint_trajectory(
+                joint_trajectory, controlled_lower, controlled_upper,
+                controlled_joint_names)
+            if joint_trajectory is not None else {}),
     }
     report = out.with_suffix(".stability.json")
     report.write_text(json.dumps(stability, indent=2, ensure_ascii=False))

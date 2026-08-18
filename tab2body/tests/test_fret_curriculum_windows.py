@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from env.goals import FretGoalSequence
+from env.goals import FINGER_EVENT_TIME_SCALE_S, FretGoalSequence
 from learning.curriculum import (
     FingertipApproachCurriculum,
     FingertipApproachCurriculumConfig,
@@ -62,6 +62,61 @@ def _single_transition_goal_file(directory):
             "hand_allowed_fret_range": [3.0, 7.0],
         })
     path = Path(directory) / "single_transition.json"
+    path.write_text(json.dumps({
+        "schema": "tab2body.fret_training.v1",
+        "metadata": {"fps": 60},
+        "frames": frames,
+    }))
+    return path
+
+
+def _transient_chord_goal_file(directory):
+    states = (
+        ([4, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0], 12),
+        ([4, 7, 0, 0, 0, 0], [1, 4, 0, 0, 0, 0], 2),
+        ([0, 7, 0, 0, 0, 0], [0, 4, 0, 0, 0, 0], 16),
+    )
+    frames = []
+    for fret, finger, duration in states:
+        for _ in range(duration):
+            frame_idx = len(frames)
+            frames.append({
+                "frame": frame_idx,
+                "t": frame_idx / 60.0,
+                "fret_goal": fret,
+                "finger_goal": finger,
+                "barre_goal": [False] * 6,
+                "hand_anchor_fret": 5.5,
+                "hand_allowed_fret_range": [3.0, 8.0],
+            })
+    path = Path(directory) / "transient_chord.json"
+    path.write_text(json.dumps({
+        "schema": "tab2body.fret_training.v1",
+        "metadata": {"fps": 60},
+        "frames": frames,
+    }))
+    return path
+
+
+def _duration_weighted_chord_goal_file(directory):
+    states = (
+        ([4, 5, 0, 0, 0, 0], [1, 2, 0, 0, 0, 0], 12),
+        ([6, 7, 0, 0, 0, 0], [1, 2, 0, 0, 0, 0], 48),
+    )
+    frames = []
+    for fret, finger, duration in states:
+        for _ in range(duration):
+            frame_idx = len(frames)
+            frames.append({
+                "frame": frame_idx,
+                "t": frame_idx / 60.0,
+                "fret_goal": fret,
+                "finger_goal": finger,
+                "barre_goal": [False] * 6,
+                "hand_anchor_fret": 5.5,
+                "hand_allowed_fret_range": [3.0, 8.0],
+            })
+    path = Path(directory) / "duration_weighted_chord.json"
     path.write_text(json.dumps({
         "schema": "tab2body.fret_training.v1",
         "metadata": {"fps": 60},
@@ -139,6 +194,15 @@ def _song_stats(passed):
     for finger in range(1, 5):
         stats[f"press_finger_{finger}_success"] = 10.0 * rate
         stats[f"press_finger_{finger}_count"] = 10.0
+        full_song = (
+            f"curriculum_goal_pair_full_song_finger_{finger}")
+        stats[f"{full_song}_target_active_count"] = 256.0
+        stats[f"{full_song}_press_success"] = rate
+        stats[f"{full_song}_target_distance"] = (
+            0.006 if passed else 0.040)
+        stats[f"{full_song}_hold_quality"] = rate
+        stats[f"{full_song}_dropout_rate"] = (
+            0.02 if passed else 0.20)
     return stats
 
 
@@ -240,6 +304,35 @@ def main():
             stage, source_schema=7) == stage
 
     with tempfile.TemporaryDirectory() as directory:
+        transient = FretGoalSequence(
+            _transient_chord_goal_file(directory), 32,
+            device="cpu", seed=5)
+        assert transient.static_chord_min_duration_frames == 12
+        assert not transient.practice_available_chord_finger_sets
+        assert transient.practice_transient_chord_finger_sets == ((1, 4),)
+        assert transient.practice_transient_chord_run_count == 1
+        assert 12 in transient.practice_transition_frames.tolist()
+        assert 12 not in transient.practice_frozen_context_frames.tolist()
+        assert 13 not in transient.practice_frozen_context_frames.tolist()
+
+        skip = FingertipApproachCurriculum()
+        skip.stage = "chord_reach"
+        skip._bind_chord_catalog(transient)
+        skip._skip_unavailable_chord_stages()
+        assert skip.stage == "frozen_context"
+        assert skip.skipped_stages == [
+            "chord_reach", "chord_fine_reach", "static_chord"]
+
+        weighted = FretGoalSequence(
+            _duration_weighted_chord_goal_file(directory), 4000,
+            device="cpu", seed=17)
+        assert weighted.practice_available_chord_finger_sets == ((1, 2),)
+        assert weighted.practice_static_chord_run_count == 2
+        weighted.set_curriculum_stage("static_chord", duration_frames=150)
+        weighted.reset(torch.arange(weighted.num_envs))
+        short_pose_rate = (weighted.current()["fret"][:, 0] == 4).float().mean()
+        assert 0.17 < short_pose_rate < 0.23, short_pose_rate
+
         goals = FretGoalSequence(
             _goal_file(directory), 3000, device="cpu", seed=7)
         ids = torch.arange(goals.num_envs)
@@ -405,7 +498,6 @@ def main():
 
         bridge.set_frozen_context_real_probability(0.0)
         bridge.reset(bridge_ids)
-        assert not bridge.frozen_context_real_mask.any()
         assert not bridge.frozen_context_context_blend.any()
         static_current = bridge.current()
         static_observed = bridge.observe()
@@ -421,6 +513,19 @@ def main():
         assert torch.equal(
             static_current["finger_event"][..., 10] > 0.5,
             static_active_fingers)
+
+        assert bridge.set_frozen_context_focus(
+            2, focus_probability=0.65)
+        bridge.reset(bridge_ids)
+        focus_slots = torch.tensor([
+            2 in finger_set
+            for finger_set in bridge.practice_frozen_context_group_keys],
+            dtype=torch.bool)
+        focus_rate = focus_slots[
+            bridge.frozen_context_group_index].float().mean().item()
+        assert 0.64 < focus_rate < 0.66, focus_rate
+        assert bridge.set_frozen_context_focus(None)
+        assert not bridge.set_frozen_context_focus(None)
 
         bridge.set_curriculum_stage("goal_pair", duration_frames=120)
         bridge.reset(bridge_ids)
@@ -479,7 +584,8 @@ def main():
             torch.full_like(exact.frame_idx, 150))
         event = exact.current()["finger_event"][:, 0]
         expected_time = (
-            exact.goal_pair_before_remaining.float() / 60.0).clamp(max=1.0)
+            exact.goal_pair_before_remaining.float() / 60.0
+        ).clamp(max=FINGER_EVENT_TIME_SCALE_S) / FINGER_EVENT_TIME_SCALE_S
         assert (event[:, 0] > 0.5).all()
         assert torch.allclose(
             event[:, 6], torch.full_like(event[:, 6], 6.0 / 22.0))
@@ -574,6 +680,60 @@ def main():
     missing_finger["press_finger_4_success"] = 0.0
     missing_finger["press_finger_4_count"] = 0.0
     assert curriculum._song_performance_sample(missing_finger) == -1.0
+    curriculum.stage = "static_chord"
+    curriculum.chord_available_sets = ((1, 2), (1, 3))
+    assert curriculum._song_performance_sample(missing_finger) == 1.0
+    curriculum.stage = "frozen_context"
+    assert curriculum._song_performance_sample(missing_finger) == -1.0
+    curriculum.stage = "coarse_reach"
+    curriculum.chord_available_sets = ()
+
+    recovery_config = replace(
+        config,
+        frozen_context_focus_min_evidence=1,
+        frozen_context_max_iterations=10)
+    recovery = FingertipApproachCurriculum(
+        recovery_config, forced_stage="frozen_context")
+    recovery.required_song_fingers = (1, 2, 3, 4)
+    weak_middle = _song_stats(True)
+    for finger in range(1, 5):
+        weak_middle[f"curriculum_finger_{finger}_target_active_count"] = 10.0
+        weak_middle[f"curriculum_finger_{finger}_target_distance"] = 0.005
+    weak_middle["press_finger_2_success"] = 1.0
+    weak_middle["curriculum_finger_2_target_distance"] = 0.100
+    state = recovery.after_iteration(weak_middle)
+    assert state["curriculum_frozen_context_focus_finger"] == 2
+    assert state["curriculum_frozen_context_focus_probability"] == 0.65
+    restored_recovery = FingertipApproachCurriculum(
+        recovery_config, forced_stage="frozen_context")
+    restored_recovery.load_context(recovery.state())
+    assert restored_recovery.frozen_context_focus_finger == 2
+    assert (
+        restored_recovery.frozen_context_focus_evidence
+        == recovery.frozen_context_focus_evidence)
+    recovered = _song_stats(True)
+    for finger in range(1, 5):
+        recovered[f"curriculum_finger_{finger}_target_active_count"] = 10.0
+        recovered[f"curriculum_finger_{finger}_target_distance"] = 0.005
+    state = recovery.after_iteration(recovered)
+    assert state["curriculum_frozen_context_focus_finger"] == 0
+    recovery.bridge_last_metrics = {"finger_min": 0.64}
+    assert not recovery._hard_timeout_quality_floor_passes()
+    recovery.bridge_last_metrics = {
+        "finger_min": 0.75,
+        "f1": 0.80,
+        "no_press": 0.92,
+        "wrong": 0.04,
+        "sustain": 0.75,
+        "event_success": 0.45,
+        "failure": 0.01,
+    }
+    assert recovery._hard_timeout_quality_floor_passes()
+    recovery.bridge_last_metrics["event_success"] = 0.39
+    assert not recovery._hard_timeout_quality_floor_passes()
+    recovery.bridge_last_metrics = {"finger_min": 0.64}
+    recovery.stage = "goal_pair"
+    assert recovery._hard_timeout_quality_floor_passes()
     assert curriculum.STAGES == (
         "coarse_reach", "fine_reach", "isolated_press",
         "integrated_press", "chord_reach", "chord_fine_reach",
@@ -794,7 +954,12 @@ def main():
         "coverage:hard_timeout")
 
     regression = FingertipApproachCurriculum(
-        replace(config, goal_pair_max_iterations=10))
+        replace(
+            config,
+            goal_pair_max_iterations=10,
+            goal_pair_recovery_min_iterations=1,
+            goal_pair_recovery_windows=2,
+            goal_pair_phase_baseline_warmup_iterations=0))
     regression.stage = "frozen_context"
     regression.required_song_fingers = (1, 2, 3, 4)
     regression._accumulate_bridge_stats(_song_stats(True))
@@ -807,14 +972,27 @@ def main():
         "no_press_evidence_count": 100.0,
         "wrong_press_rate": 0.03,
         "sustain_event_success_rate": 0.86,
+        "failure_termination": 0.03,
     })
+    regression.after_iteration(_song_stats(True))
+    assert regression.goal_pair_phase_baseline_label == "retention"
     regression.after_iteration(regressed)
     state = regression.after_iteration(regressed)
     assert state["curriculum_regression_hold"]
     assert set(state["curriculum_regression_metrics"]) == {
-        "f1", "no_press", "wrong_press", "sustain_event"}
+        "f1", "no_press", "wrong_press", "sustain_event", "failure"}
+    assert state["curriculum_goal_pair_recovery"]
+    assert state["curriculum_goal_pair_recovery_reason"] == (
+        "performance_regression")
+    assert state["curriculum_goal_pair_rehearsal_probability"] == 0.50
+    assert state["curriculum_goal_pair_sequence_probability"] == 0.50
+    regression.goal_pair_mastered_fingers = [True] * 4
+    state = regression.after_iteration(_song_stats(True))
+    assert state["curriculum_regression_hold"]
+    assert state["curriculum_goal_pair_recovery_good_windows"] == 1
     state = regression.after_iteration(_song_stats(True))
     assert not state["curriculum_regression_hold"]
+    assert not state["curriculum_goal_pair_recovery"]
 
     legacy = FingertipApproachCurriculum(config)
     legacy.load_context({
@@ -888,7 +1066,25 @@ def main():
     assert schema5_checkpoint._frozen_context_evaluation_ready()
     assert not schema5_checkpoint.bridge_windows
     assert schema5_checkpoint.state()[
-        "curriculum_schema_version"] == 11
+        "curriculum_schema_version"] == 44
+    schema41_chord = FingertipApproachCurriculum(config)
+    schema41_chord.load_context({
+        "curriculum_stage": "chord_fine_reach",
+        "curriculum_stage_iteration": 4074,
+        "curriculum_total_iteration": 6256,
+        "curriculum_schema_version": 41,
+        "curriculum_chord_focus_index": -1,
+        "curriculum_chord_focus_iteration": 1938,
+        "curriculum_chord_focus_total_iteration": 4074,
+        "curriculum_chord_available_sets": [[1, 2], [1, 3], [1, 4]],
+        "curriculum_chord_unresolved_signatures": [3, 9],
+        "curriculum_recent": [0.0, 0.0, 0.0],
+    })
+    assert schema41_chord.stage == "chord_fine_reach"
+    assert schema41_chord.stage_iteration == 0
+    assert schema41_chord.chord_focus_index == 0
+    assert not schema41_chord.chord_available_sets
+    assert not schema41_chord.chord_unresolved_signatures
     current = FingertipApproachCurriculum(config)
     current.load_context({
         "curriculum_stage": "goal_pair",
@@ -920,8 +1116,63 @@ def main():
     assert schema6_restored.stage_entry_baseline == (
         schema6_source.stage_entry_baseline)
     assert schema6_restored.stage_entry_baseline_source == "frozen_context"
+    evidence_config = replace(
+        config,
+        chord_fine_min_phase_episodes=250,
+        promotion_windows=2)
+    evidence = FingertipApproachCurriculum(evidence_config)
+    evidence.stage = "chord_fine_reach"
+    evidence.chord_available_sets = ((1, 2), (1, 3))
+    evidence.chord_focus_count = 2
+    evidence.chord_focus_index = 0
+    batch = {
+        "episodes": 100,
+        "failure_termination": 0.0,
+        "curriculum_p90_target_distance": 0.005,
+        "curriculum_cell_alignment_rate": 0.95,
+        "chord_set_3_success_episodes": 90,
+        "chord_set_3_target_episodes": 100,
+        "chord_set_5_success_episodes": 100,
+        "chord_set_5_target_episodes": 100,
+    }
+    assert evidence._chord_fine_phase_sample(batch) < 0.0
+    assert "5" not in evidence.chord_phase_evidence
+    assert evidence._chord_fine_phase_sample(batch) < 0.0
+    saved = evidence.state()
+    restored_evidence = FingertipApproachCurriculum(evidence_config)
+    restored_evidence.load_context(saved)
+    assert restored_evidence.chord_phase_evidence["3"]["target"] == 200
+    assert restored_evidence._chord_fine_phase_sample(batch) == 0.9
+    assert "3" not in restored_evidence.chord_phase_evidence
+
+    bounded_config = replace(
+        config,
+        chord_fine_min_iterations=1,
+        chord_fine_max_iterations=1,
+        chord_fine_focus_min_iterations=1,
+        chord_fine_focus_max_iterations=1,
+        chord_fine_max_cycles=1,
+        promotion_windows=2)
+    bounded = FingertipApproachCurriculum(bounded_config)
+    bounded.stage = "chord_fine_reach"
+    bounded.chord_available_sets = ((1, 2), (1, 3))
+    bounded.chord_focus_count = 2
+    bounded.chord_focus_index = -1
+    bounded_state = bounded.after_iteration({
+        "nonfinite": 0.0,
+        "nonfinite_count": 0.0,
+        "velocity_blowup": 0.0,
+        "velocity_blowup_count": 0.0,
+        "failure_termination": 0.0,
+    })
+    assert bounded.stage == "static_chord"
+    assert bounded_state["curriculum_last_forced_advance_from"] == (
+        "chord_fine_reach:max_cycles")
+    assert bounded_state["curriculum_chord_unresolved_signatures"] == [3, 5]
+    assert bounded_state["curriculum_chord_max_cycles"] == 1
+
     print(
-        "PASS: schema-11 pooled bridge, timeout, regression, and migration")
+        "PASS: schema-44 bounded chord cycles and stage-specific evidence")
 
 
 if __name__ == "__main__":

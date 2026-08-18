@@ -1,12 +1,3 @@
-"""오른손 pick strike 학습 입력의 최소 시간 계약.
-
-원본 입력의 정본은 초 단위 ``events[].time``이다. ``frame``은 60 Hz
-시뮬레이터와의 정합성을 검사하고 로그를 사람이 추적하기 위한 파생
-필드이며, 런타임에서 시간을 다시 ``frame / fps``로 덮어쓰지 않는다.
-
-현재 v1은 pick 단현만 다룬다. 따라서 이벤트는 시간과 60 Hz frame 양쪽에서
-엄격히 증가해야 하며 한 frame에 둘 이상의 strike를 허용하지 않는다.
-"""
 from __future__ import annotations
 
 import json
@@ -16,8 +7,17 @@ from typing import Any, Mapping
 
 import torch
 
+from .strike_goal_compiler import (
+    GESTURE_ALTERNATE_RESTRIKE,
+    GESTURE_SINGLE_PICK,
+    GESTURE_STRUM,
+    compile_strike_events,
+)
 
-STRIKE_TRAINING_SCHEMA = "tab2body.strike_training.v1"
+
+STRIKE_TRAINING_SCHEMA_V1 = "tab2body.strike_training.v1"
+STRIKE_TRAINING_SCHEMA_V2 = "tab2body.strike_training.v2"
+STRIKE_TRAINING_SCHEMA = STRIKE_TRAINING_SCHEMA_V2
 STRIKE_FPS = 60
 N_GUITAR_STRINGS = 6
 MAX_FRAME_ERROR = 0.5
@@ -55,7 +55,8 @@ def validate_strike_training_data(document: Mapping[str, Any]) -> dict[str, Any]
     """
     if not isinstance(document, Mapping):
         raise ValueError("strike training document must be an object")
-    if document.get("schema") != STRIKE_TRAINING_SCHEMA:
+    schema = document.get("schema")
+    if schema not in (STRIKE_TRAINING_SCHEMA_V1, STRIKE_TRAINING_SCHEMA_V2):
         raise ValueError(
             f"unsupported strike training schema: {document.get('schema')!r}")
 
@@ -79,7 +80,11 @@ def validate_strike_training_data(document: Mapping[str, Any]) -> dict[str, Any]
     max_error_frames = 0.0
     used_strings = set()
     last_frame_by_string = {}
+    last_time_by_string = {}
     minimum_same_string_restrike_frames = None
+    minimum_same_string_restrike_s = None
+    minimum_event_gap_s = None
+    minimum_event_gap_frames = None
     for event_index, event in enumerate(events):
         if not isinstance(event, Mapping):
             raise ValueError(f"strike event {event_index}: event must be an object")
@@ -107,21 +112,43 @@ def validate_strike_training_data(document: Mapping[str, Any]) -> dict[str, Any]
 
         time_s = float(time_s)
         error_frames = abs(time_s * fps - frame)
-        # A tiny arithmetic allowance keeps an exactly half-frame decimal input
-        # from failing solely because of binary floating-point representation.
+
+
         if error_frames > MAX_FRAME_ERROR + 1e-9:
             raise ValueError(
                 f"strike event {event_index}: time/frame mismatch is "
                 f"{error_frames:.9f} frame, above the {MAX_FRAME_ERROR}-frame limit")
 
-        if previous_time is not None and time_s <= previous_time:
+        if (previous_time is not None
+                and schema == STRIKE_TRAINING_SCHEMA_V1
+                and time_s <= previous_time):
             raise ValueError(
                 "pick_monophonic_v1 requires strictly increasing event time; "
                 f"event {event_index} has time={time_s} after {previous_time}")
-        if previous_frame is not None and frame <= previous_frame:
+        if previous_time is not None:
+            if time_s < previous_time:
+                raise ValueError(
+                    f"strike event time must be non-decreasing; event "
+                    f"{event_index} has time={time_s} after {previous_time}")
+            gap_s = time_s - previous_time
+            minimum_event_gap_s = (
+                gap_s if minimum_event_gap_s is None
+                else min(minimum_event_gap_s, gap_s))
+        if (previous_frame is not None
+                and schema == STRIKE_TRAINING_SCHEMA_V1
+                and frame <= previous_frame):
             raise ValueError(
                 "pick_monophonic_v1 allows at most one strike per 60 Hz frame; "
                 f"event {event_index} has frame={frame} after {previous_frame}")
+        if previous_frame is not None:
+            if frame < previous_frame:
+                raise ValueError(
+                    f"strike event frame must be non-decreasing; event "
+                    f"{event_index} has frame={frame} after {previous_frame}")
+            gap_frames = frame - previous_frame
+            minimum_event_gap_frames = (
+                gap_frames if minimum_event_gap_frames is None
+                else min(minimum_event_gap_frames, gap_frames))
 
         if "event_id" in event:
             event_id = _validate_event_id(event["event_id"], event_index)
@@ -137,14 +164,22 @@ def validate_strike_training_data(document: Mapping[str, Any]) -> dict[str, Any]
             minimum_same_string_restrike_frames = (
                 spacing if minimum_same_string_restrike_frames is None
                 else min(minimum_same_string_restrike_frames, spacing))
+            spacing_s = time_s - last_time_by_string[string_index]
+            minimum_same_string_restrike_s = (
+                spacing_s if minimum_same_string_restrike_s is None
+                else min(minimum_same_string_restrike_s, spacing_s))
         last_frame_by_string[string_index] = frame
+        last_time_by_string[string_index] = time_s
         max_error_frames = max(max_error_frames, error_frames)
         used_strings.add(string_index)
 
     return {
         "contract_valid": True,
-        "schema": STRIKE_TRAINING_SCHEMA,
-        "profile": "pick_monophonic_v1",
+        "schema": schema,
+        "profile": (
+            "pick_monophonic_v1"
+            if schema == STRIKE_TRAINING_SCHEMA_V1
+            else "pick_gesture_compiler_v2"),
         "fps": fps,
         "time_authority": "events[].time",
         "string_convention": "Isaac 0=high-e, 5=low-E",
@@ -153,6 +188,10 @@ def validate_strike_training_data(document: Mapping[str, Any]) -> dict[str, Any]
         "used_strings": sorted(used_strings),
         "minimum_same_string_restrike_frames":
             minimum_same_string_restrike_frames,
+        "minimum_same_string_restrike_s":
+            minimum_same_string_restrike_s,
+        "minimum_event_gap_s": minimum_event_gap_s,
+        "minimum_event_gap_frames": minimum_event_gap_frames,
         "max_time_frame_error_frames": float(max_error_frames),
         "max_time_frame_error_seconds": float(max_error_frames / fps),
     }
@@ -165,39 +204,134 @@ class StrikeGoalSequence:
     :class:`StrikeTask`; this class only owns the canonical event timeline.
     """
 
-    def __init__(self, path, device="cpu"):
+    def __init__(
+            self, path, device="cpu", *, rearm_min_frames=2,
+            follow_through_min_frames=1,
+            initial_timing_tolerance_ms=100,
+            window_fraction=0.45):
         self.path = str(Path(path).resolve())
         document = json.loads(Path(self.path).read_text(encoding="utf-8"))
         self.validation_metadata = validate_strike_training_data(document)
         self.metadata = dict(document["metadata"])
         self.fps = int(self.validation_metadata["fps"])
 
-        events = document["events"]
+        source_events = document["events"]
+        self.compiled = compile_strike_events(
+            source_events,
+            fps=self.fps,
+            rearm_min_frames=rearm_min_frames,
+            follow_through_min_frames=follow_through_min_frames,
+            initial_timing_tolerance_ms=initial_timing_tolerance_ms,
+            window_fraction=window_fraction)
+        events = self.compiled.events
         self.time = torch.tensor(
-            [float(event["time"]) for event in events],
+            self.compiled.original_times_s,
+            dtype=torch.float32, device=device)
+        self.easy_time = torch.tensor(
+            self.compiled.easy_times_s,
             dtype=torch.float32, device=device)
         self.frame = torch.tensor(
-            [int(event["frame"]) for event in events],
+            [event.frame for event in events],
             dtype=torch.long, device=device)
         self.string = torch.tensor(
-            [int(event["string"]) for event in events],
+            [event.traversal_strings[0] for event in events],
             dtype=torch.long, device=device)
-        self.event_ids = tuple(
-            event.get("event_id", index) for index, event in enumerate(events))
+        self.exit_string = torch.tensor(
+            [event.traversal_strings[-1] for event in events],
+            dtype=torch.long, device=device)
+        gesture_codes = {
+            GESTURE_SINGLE_PICK: 0,
+            GESTURE_STRUM: 1,
+            GESTURE_ALTERNATE_RESTRIKE: 2,
+        }
+        self.gesture = torch.tensor(
+            [gesture_codes[event.gesture] for event in events],
+            dtype=torch.long, device=device)
+        self.direction = torch.tensor(
+            [event.direction for event in events],
+            dtype=torch.long, device=device)
+        self.audible_mask = torch.tensor([
+            [string_index in event.audible_strings
+             for string_index in range(N_GUITAR_STRINGS)]
+            for event in events], dtype=torch.bool, device=device)
+        self.traversal_mask = torch.tensor([
+            [string_index in event.traversal_strings
+             for string_index in range(N_GUITAR_STRINGS)]
+            for event in events], dtype=torch.bool, device=device)
+        self.protected_mask = torch.tensor([
+            [string_index in event.protected_strings
+             for string_index in range(N_GUITAR_STRINGS)]
+            for event in events], dtype=torch.bool, device=device)
+        self.event_ids = tuple(event.source_event_ids for event in events)
+        self.source_num_events = len(source_events)
 
-        # Descriptive aliases make task code self-documenting while retaining
-        # the compact field names that mirror the JSON contract.
         self.event_time_s = self.time
         self.event_frame = self.frame
         self.event_string = self.string
         self.events = {
             "time": self.time,
+            "easy_time": self.easy_time,
             "frame": self.frame,
             "string": self.string,
+            "exit_string": self.exit_string,
+            "gesture": self.gesture,
+            "direction": self.direction,
+            "audible_mask": self.audible_mask,
+            "traversal_mask": self.traversal_mask,
+            "protected_mask": self.protected_mask,
         }
         self.num_events = len(events)
         self.n_events = self.num_events
         self.n_frames = int(self.validation_metadata["n_frames"])
+        self.validation_metadata.update({
+            "source_num_events": self.source_num_events,
+            "compiled_num_events": self.num_events,
+            "single_pick_events": sum(
+                event.gesture == GESTURE_SINGLE_PICK for event in events),
+            "strum_events": sum(
+                event.gesture == GESTURE_STRUM for event in events),
+            "unsupported_alternate_restrike_events": len(
+                self.compiled.unsupported_events),
+            "physical_min_gap_s": self.compiled.physical_min_gap_s,
+            "easy_matching_gap_s": self.compiled.matching_gap_s,
+            "window_fraction": self.compiled.window_fraction,
+            "easy_timeline": self.compiled.gap_diagnostics(
+                0.0, initial_timing_tolerance_ms),
+            "original_timeline": self.compiled.gap_diagnostics(
+                1.0, initial_timing_tolerance_ms),
+        })
+
+    def gap_diagnostics(
+            self, tempo_lambda: float,
+            timing_tolerance_ms: float) -> dict[str, float | int | None]:
+        return dict(self.compiled.gap_diagnostics(
+            tempo_lambda, timing_tolerance_ms))
+
+    def runtime_time(self, tempo_lambda: float) -> torch.Tensor:
+        value = float(tempo_lambda)
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            raise ValueError("tempo_lambda must be finite and in [0, 1]")
+        return self.time + (1.0 - value) * (self.easy_time - self.time)
+
+    def runtime_windows(
+            self, tempo_lambda: float,
+            timing_tolerance_ms: float) -> tuple[torch.Tensor, torch.Tensor]:
+        left, right = self.compiled.event_windows(
+            tempo_lambda, timing_tolerance_ms)
+        return (
+            torch.tensor(left, dtype=self.time.dtype, device=self.time.device),
+            torch.tensor(right, dtype=self.time.dtype, device=self.time.device),
+        )
+
+    def require_supported_gestures(self) -> None:
+        unsupported = self.compiled.unsupported_events
+        if not unsupported:
+            return
+        first = unsupported[0]
+        raise ValueError(
+            "strike goal requires alternate same-string restrike, but the "
+            "current down-pick controller supports only single_pick and strum; "
+            f"first unsupported source events={first.source_event_ids!r}")
 
     def require_physical_rearm_spacing(self, rearm_min_frames: int) -> None:
         """Reject a timeline that the configured same-string detector cannot emit."""
@@ -205,13 +339,54 @@ class StrikeGoalSequence:
                 or int(rearm_min_frames) != rearm_min_frames
                 or rearm_min_frames < 1):
             raise ValueError("rearm_min_frames must be a positive integer")
-        # A release frame starts WAIT_REARM at zero.  The detector needs the
-        # requested complete waiting frames, then the next frame can release.
+
+
         required_delta = int(rearm_min_frames) + 1
-        actual = self.validation_metadata[
-            "minimum_same_string_restrike_frames"]
-        if actual is not None and actual < required_delta:
+        actual_s = self.validation_metadata[
+            "minimum_same_string_restrike_s"]
+        actual_frames = (
+            None if actual_s is None else actual_s * self.fps)
+        if (actual_frames is not None
+                and actual_frames + 1e-9 < required_delta):
             raise ValueError(
                 "strike goal contains a same-string restrike only "
-                f"{actual} frames later, but detector re-arm requires at "
+                f"{actual_frames:g} frames later, but detector re-arm requires at "
                 f"least {required_delta} frames")
+
+    def require_nonoverlapping_match_windows(
+            self, timing_tolerance_ms: float) -> None:
+        """Reject ordered events whose symmetric match windows overlap.
+
+        The v1 matcher owns only the current event.  Until a multi-event
+        ordered matcher exists, overlapping adjacent windows could consume a
+        valid next-string release as a false positive for the preceding event.
+        """
+        if (isinstance(timing_tolerance_ms, bool)
+                or not isinstance(timing_tolerance_ms, (int, float))
+                or not math.isfinite(float(timing_tolerance_ms))
+                or float(timing_tolerance_ms) <= 0.0):
+            raise ValueError(
+                "timing_tolerance_ms must be finite and positive")
+        left, right = self.compiled.event_windows(
+            1.0, timing_tolerance_ms)
+        times = self.compiled.original_times_s
+        for index in range(len(times) - 1):
+            if times[index] + right[index] >= times[index + 1] - left[index + 1]:
+                raise RuntimeError(
+                    "adaptive strike matching windows unexpectedly overlap")
+
+    def require_motor_recovery_spacing(
+            self, minimum_event_delta_frames: int) -> None:
+        if (isinstance(minimum_event_delta_frames, bool)
+                or not isinstance(minimum_event_delta_frames, int)
+                or minimum_event_delta_frames < 1):
+            raise ValueError(
+                "minimum_event_delta_frames must be a positive integer")
+        actual_s = self.validation_metadata["minimum_event_gap_s"]
+        actual_frames = (
+            None if actual_s is None else actual_s * self.fps)
+        if (actual_frames is not None
+                and actual_frames + 1e-9 < minimum_event_delta_frames):
+            raise ValueError(
+                f"{actual_frames:g} frames apart, but motor recovery requires at "
+                f"least {minimum_event_delta_frames} frames")

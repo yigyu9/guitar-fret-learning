@@ -70,6 +70,7 @@ def main(argv=None):
     args = parser().parse_args(argv)
     env = FretTask(**configured_kwargs(
               FretTask, FRET,
+              reward_config=FRET,
               goal_path=args.goal,
               hand_targets_path=args.hand_targets or None,
               num_envs=1,

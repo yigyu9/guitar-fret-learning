@@ -6,11 +6,11 @@ from pathlib import Path
 import sys
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from learning.strike_curriculum import (  # noqa: E402
+from tab2body.learning.strike_curriculum import (
     A0_PICK_GRIP,
     A1_TIP_READY,
     A2_FREE_CROSSING,
@@ -60,7 +60,11 @@ def config():
 
 
 def grip(value=0.95):
-    return {"curriculum_grip_success_rate": value}
+    return {
+        "episodes": 1,
+        "strike_grip_success_rate": value,
+        "failure_termination": 0.0,
+    }
 
 
 def ready(value=0.95):
@@ -68,6 +72,7 @@ def ready(value=0.95):
         "episodes": 1,
         "strike_grip_success_rate": 0.95,
         "strike_tip_ready_success_rate": value,
+        "failure_termination": 0.0,
     }
 
 
@@ -78,6 +83,7 @@ def crossing(recall=0.99, false_positive=0.01):
         "strike_tip_ready_success_rate": 0.95,
         "strike_release_recall": recall,
         "strike_false_positive_rate": false_positive,
+        "failure_termination": 0.0,
     }
 
 
@@ -124,20 +130,24 @@ def main():
     assert env.calls[-1] == (A0_PICK_GRIP, 100, False)
     assert "_reset_observation" not in applied
 
-    # Maximum iteration is a stalled diagnostic, never an automatic promotion.
+
     curriculum.after_iteration(grip(0.0))
     stalled = curriculum.after_iteration(grip(0.0))
     assert curriculum.stage == A0_PICK_GRIP
     assert stalled["curriculum_stalled"]
+    unsafe_grip = grip()
+    unsafe_grip["failure_termination"] = 1.0
+    curriculum.after_iteration(unsafe_grip)
+    assert curriculum.promotion_streak == 0
     curriculum.after_iteration(grip())
-    assert curriculum.stage == A0_PICK_GRIP  # one passing window is insufficient
+    assert curriculum.stage == A0_PICK_GRIP
     curriculum.after_iteration(grip())
     assert curriculum.stage == A1_TIP_READY
     assert not curriculum.stalled and curriculum.stage_iteration == 0
 
-    # Missing a retained episode grip metric fails closed.  A rollout without
-    # a terminal A1 episode is no evidence and preserves, but cannot advance,
-    # the streak; a completed failed episode breaks it.
+
+
+
     curriculum.after_iteration(
         {"episodes": 1, "strike_tip_ready_success_rate": 1.0})
     curriculum.after_iteration(ready())
@@ -149,12 +159,16 @@ def main():
     assert curriculum.promotion_streak == ready_streak
     curriculum.after_iteration(ready(0.0))
     assert curriculum.stage == A1_TIP_READY
+    failed_recovery = ready()
+    failed_recovery["failure_termination"] = 1.0
+    curriculum.after_iteration(failed_recovery)
+    assert curriculum.promotion_streak == 0
     promote(curriculum, ready())
     assert curriculum.stage == A2_FREE_CROSSING
 
-    # Terminal gates pool a complete non-overlapping episode cohort.  Three
-    # tiny success-only rollouts cannot hide the failure that completes the
-    # fourth row, and a partially accumulated cohort survives checkpointing.
+
+
+
     pooled_config = replace(
         config(), terminal_evidence_episodes=4)
     pooled = StrikeCurriculum(pooled_config)
@@ -177,7 +191,7 @@ def main():
         pooled_restored.after_iteration(ready())
     assert pooled_restored.stage == A2_FREE_CROSSING
 
-    # A2 has no timing gate.  Recall/FP and all earlier skills gate promotion.
+
     curriculum.after_iteration({
         **crossing(),
         "curriculum_timing_p95_ms": 10000.0,
@@ -193,7 +207,7 @@ def main():
     assert curriculum.timing_tolerance_ms == 100
     assert curriculum.current_timed_f1_gate == 0.80
 
-    # A3 needs a fresh run of consecutive windows at every tolerance level.
+
     curriculum.after_iteration(timed(90))
     state = curriculum.after_iteration(timed(90))
     assert curriculum.stage == A3_TIMED_CROSSING
@@ -201,13 +215,13 @@ def main():
     assert state["curriculum_strike_f1_gate"] == 0.90
     assert state["curriculum_timing_streak"] == 0
 
-    # Tightening is itself an environment change and therefore requests reset.
+
     applied = curriculum.apply(env)
     assert env.calls[-1] == (A3_TIMED_CROSSING, 67, True)
     assert "_reset_observation" in applied
 
     curriculum.after_iteration(timed(60))
-    curriculum.after_iteration(timed(70))  # outside +/-67 ms: reset streak
+    curriculum.after_iteration(timed(70))
     assert curriculum.timing_streak == 0
     curriculum.after_iteration(timed(60))
     state = curriculum.after_iteration(timed(60))
@@ -215,7 +229,7 @@ def main():
     assert state["curriculum_strike_f1_gate"] == 0.95
     assert curriculum.stage == A3_TIMED_CROSSING
 
-    # Save/restore preserves a partial final-tolerance streak exactly.
+
     curriculum.after_iteration(timed(45))
     saved = curriculum.state()
     restored = StrikeCurriculum(config())
@@ -228,9 +242,9 @@ def main():
     assert restored.state()["curriculum_strike_f1_gate"] == 0.98
     assert not restored.complete
 
-    # Live per-frame diagnostics cannot complete A4.  A rollout with no
-    # terminal episode is "no evidence": it neither advances nor resets a
-    # legitimate episode-based promotion streak.
+
+
+
     live_only = {
         "curriculum_grip_success_rate": 1.0,
         "curriculum_tip_ready_success_rate": 1.0,
@@ -247,28 +261,76 @@ def main():
     restored.after_iteration(live_only)
     assert restored.promotion_streak == streak and not restored.complete
     completed = restored.after_iteration(zone())
+    assert not restored.complete
+    assert completed["curriculum_tempo_lambda"] == 0.25
+    previous_lambda = restored.tempo_lambda
+    for _ in range(20):
+        completed = restored.after_iteration(zone())
+        assert restored.tempo_lambda >= previous_lambda
+        previous_lambda = restored.tempo_lambda
+        if restored.complete:
+            break
     assert restored.complete and completed["curriculum_complete"]
+    assert completed["curriculum_original_tempo_reached"]
+    assert completed["curriculum_tempo_lambda"] == 1.0
     final_iteration = restored.stage_iteration
     restored.after_iteration(zone())
     assert restored.stage == A4_ZONE_CONTROL
     assert restored.stage_iteration == final_iteration + 1
 
-    # Context/config mismatch fails instead of silently changing tolerance.
+
     bad = dict(saved, curriculum_timing_tolerance_ms=51)
     expect_error("disagrees", lambda: StrikeCurriculum(config()).load_context(bad))
     bad = dict(saved, curriculum_timing_level=9)
     expect_error("outside", lambda: StrikeCurriculum(config()).load_context(bad))
+    bad = dict(saved, curriculum_stalled="false")
+    expect_error("must be bool", lambda: StrikeCurriculum(config()).load_context(bad))
 
-    # Timing schedule must narrow strictly.
+
     expect_error(
         "strictly decreasing",
         lambda: StrikeCurriculumConfig(timing_tolerances_ms=(100, 100, 50)))
     expect_error(
         "positive integer",
         lambda: StrikeCurriculumConfig(terminal_evidence_episodes=0))
+    expect_error(
+        "must be integers",
+        lambda: StrikeCurriculumConfig(grip_min_iterations=0.5))
+    expect_error(
+        "positive integer",
+        lambda: StrikeCurriculumConfig(promotion_windows=True))
 
-    # Success before the minimum is capped below the transition threshold, so
-    # every normally saved checkpoint remains resumable.
+
+
+    invalid_live = StrikeCurriculum(replace(
+        config(), grip_min_iterations=0, promotion_windows=1))
+    invalid_live.after_iteration(grip(1.0001))
+    assert invalid_live.stage == A0_PICK_GRIP
+    assert invalid_live.promotion_streak == 0
+    invalid_live.after_iteration(grip(True))
+    assert invalid_live.stage == A0_PICK_GRIP
+    assert invalid_live.promotion_streak == 0
+
+    for invalid_value in (-0.01, 1.01):
+        invalid_rate = StrikeCurriculum(replace(
+            config(), ready_min_iterations=0, promotion_windows=1))
+        invalid_rate.stage = A1_TIP_READY
+        bad_ready = ready()
+        bad_ready["strike_tip_ready_success_rate"] = invalid_value
+        invalid_rate.after_iteration(bad_ready)
+        assert invalid_rate.stage == A1_TIP_READY
+        assert invalid_rate.promotion_streak == 0
+
+    invalid_timing = StrikeCurriculum(replace(
+        config(), timed_min_iterations=0, promotion_windows=1))
+    invalid_timing.stage = A3_TIMED_CROSSING
+    invalid_timing.after_iteration(timed(-0.001))
+    assert invalid_timing.stage == A3_TIMED_CROSSING
+    assert invalid_timing.timing_level == 0
+    assert invalid_timing.timing_streak == 0
+
+
+
     long_minimum = StrikeCurriculumConfig(
         grip_min_iterations=5,
         grip_max_iterations=10,

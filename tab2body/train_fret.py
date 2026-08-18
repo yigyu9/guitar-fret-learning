@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping
-from datetime import datetime, timezone
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -24,6 +22,8 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_ROOT.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from tab2body.learning.checkpoint_contract import file_sha256
 
 
 def _add_local_isaacgym_path():
@@ -47,6 +47,9 @@ def _load_fret_runtime():
     global seal_checkpoint_contract, evaluation_gate_summary
     global default_evaluation_path, default_video_path
     global has_training_history, layout_for, resolve_run_dir
+    global record_artifact_error, record_artifact_result
+    global record_run_metadata, shared_training_resource_preflight
+    global utc_now_iso
 
     _add_local_isaacgym_path()
     import isaacgym  # noqa: F401
@@ -78,6 +81,13 @@ def _load_fret_runtime():
         layout_for as make_layout,
         resolve_run_dir as resolve_training_run_dir,
     )
+    from tab2body.learning.run_io import (
+        record_artifact_error as write_artifact_error,
+        record_artifact_result as write_artifact_result,
+        record_run_metadata as write_run_metadata,
+        training_resource_preflight as shared_resource_preflight,
+        utc_now_iso as current_utc_iso,
+    )
 
     torch = torch_module
     FRET = fret_config
@@ -98,21 +108,36 @@ def _load_fret_runtime():
     has_training_history = run_has_training_history
     layout_for = make_layout
     resolve_run_dir = resolve_training_run_dir
+    record_artifact_error = write_artifact_error
+    record_artifact_result = write_artifact_result
+    record_run_metadata = write_run_metadata
+    shared_training_resource_preflight = shared_resource_preflight
+    utc_now_iso = current_utc_iso
 
 
 FRET_REWARD_SAFETY_KEYS = (
+    "future_context_lookahead",
     "failure_termination_penalty",
     "wrist_weight", "smooth_weight",
     "wrong_press_penalty", "wrong_press_avoidance_weight",
+    "wrong_press_termination_frames", "joint_limit_diagnostic_fraction",
+    "press_near_miss_penalty", "press_near_miss_distance",
     "press_class_weight", "no_press_class_weight",
     "no_press_failure_credit", "press_hold_min_frames",
     "chord_bridge_bottleneck_weight",
+    "chord_fine_joint_weight", "chord_fine_depth_start",
     "static_chord_bottleneck_weight", "static_chord_joint_weight",
     "static_chord_no_press_failure_credit",
     "static_chord_no_press_completion_power",
     "press_hold_full_frames", "press_dropout_penalty",
+    "static_chord_min_duration_seconds",
     "press_position_dense_scale", "press_precision_gate_floor",
     "next_goal_weight", "goal_pair_transition_next_goal_weight",
+    "goal_pair_context_next_goal_weight",
+    "chord_fine_success_pose_guide_weight",
+    "goal_pair_success_pose_guide_weight",
+    "goal_pair_success_pose_focus_weight",
+    "goal_pair_success_pose_proximal_fraction",
     "next_goal_lookahead_s",
     "next_goal_progress_weight",
     "next_goal_progress_near", "next_goal_progress_far",
@@ -145,6 +170,9 @@ FRET_REWARD_SAFETY_KEYS = (
     "finger_coupling_weight", "finger_coupling_coefficients",
     "finger_coupling_min_speed_deg", "finger_coupling_full_speed_deg",
     "finger_coupling_tolerance_deg_s",
+    "reference_motion_prior_weight",
+    "reference_motion_prior_finger_fraction",
+    "reference_motion_prior_exemplars",
     "finger_synergy_coefficients", "finger_synergy_min_driver_delta_deg",
     "finger_synergy_full_driver_delta_deg",
     "finger_synergy_max_induced_delta_deg",
@@ -156,10 +184,20 @@ FRET_REWARD_SAFETY_KEYS = (
     "finger_back_proximal_limit_z", "finger_back_frames",
     "finger_back_samples_per_segment", "finger_back_min_fraction",
     "palm_down_threshold", "palm_down_frames",
-    "penetration_threshold", "penetration_frames", "penetration_termination",
+    "penetration_threshold", "penetration_frames",
+    "penetration_soft_threshold", "penetration_soft_penalty",
+    "penetration_termination",
     "finger_capsule_radius", "finger_overlap_tolerance",
     "sustain_boundary_grace_frames", "sustain_hold_threshold",
     "sustain_max_dropout_frames", "pressed_drag_threshold",
+    "success_rsi_probability", "success_rsi_min_quality",
+    "success_rsi_min_thumb_quality",
+    "success_finger_pose_min_quality",
+    "success_finger_pose_guide_scale_fraction",
+    "success_action_teacher_min_pose_quality",
+    "chord_fine_action_teacher_min_pose_quality",
+    "success_action_teacher_proximal_fraction",
+    "goal_pair_action_routing", "goal_pair_action_release_frames",
     "evaluation_f1_gate", "evaluation_no_press_accuracy_gate",
     "evaluation_wrong_press_rate_gate",
     "evaluation_max_finger_overlap_env_frames",
@@ -168,26 +206,33 @@ FRET_REWARD_SAFETY_KEYS = (
 
 FRET_IMPLEMENTATION_FILES = (
     "cfg.py",
+    "song_bundles.py",
     "train.py",
     "train_fret.py",
     "assets/guitar_asset.xml",
     "assets/smpl_mpl_hands_body.xml",
+    "env/__init__.py",
     "env/base.py",
     "env/config.py",
     "env/collision.py",
     "env/goals.py",
     "env/metrics.py",
+    "env/rewards/__init__.py",
     "env/rewards/common.py",
     "env/rewards/fret.py",
     "env/rewards/motion.py",
+    "env/rewards/reference_posture.py",
     "env/rewards/thumb.py",
     "env/safety.py",
+    "env/tasks/__init__.py",
     "env/tasks/task_fret.py",
+    "learning/__init__.py",
     "learning/checkpoint_contract.py",
     "learning/curriculum.py",
     "learning/evaluation.py",
     "learning/models.py",
     "learning/ppo.py",
+    "learning/run_io.py",
     "learning/run_layout.py",
 )
 
@@ -215,18 +260,118 @@ def thumb_base_exploration_floor(
     return initial_std + progress * (target_std - initial_std)
 
 
+def finger_exploration_ceiling(
+        iteration, initial_std, target_std, warmup_iterations,
+        ramp_iterations):
+    """정밀 코드 단계가 진행될수록 손가락 탐색 분산을 줄인다."""
+    initial_std = float(initial_std)
+    target_std = float(target_std)
+    warmup_iterations = int(warmup_iterations)
+    ramp_iterations = int(ramp_iterations)
+    if (not math.isfinite(initial_std) or not math.isfinite(target_std)
+            or not 0.0 < target_std <= initial_std):
+        raise ValueError("finger exploration std schedule is invalid")
+    if warmup_iterations < 0 or ramp_iterations < 1:
+        raise ValueError("finger exploration iteration schedule is invalid")
+    progress = min(max(
+        (int(iteration) - warmup_iterations) / float(ramp_iterations),
+        0.0), 1.0)
+    return initial_std + progress * (target_std - initial_std)
+
+
+FINGER_PRECISION_STAGES = {
+    "chord_fine_reach", "static_chord", "frozen_context", "goal_pair",
+    "transition_window", "coverage", "integration", "full_song",
+}
+
+
+def finger_precision_schedule(state):
+    """Return whether precision annealing is active, its age, and focus fingers."""
+    stage = str(state.get("curriculum_stage", ""))
+    if stage not in FINGER_PRECISION_STAGES:
+        return False, 0, ()
+    age = max(0, int(state.get(
+        "curriculum_chord_focus_total_iteration", 0)))
+    if stage != "chord_fine_reach":
+        age += max(0, int(state.get("curriculum_stage_iteration", 0)))
+    focus = ()
+    if stage == "chord_fine_reach":
+        index = int(state.get("curriculum_chord_focus_index", -1))
+        catalog = state.get("curriculum_chord_available_sets", ())
+        if 0 <= index < len(catalog):
+            focus = tuple(int(finger) for finger in catalog[index])
+    elif stage == "frozen_context":
+        finger = int(state.get(
+            "curriculum_frozen_context_focus_finger", 0))
+        focus = (finger,) if 1 <= finger <= 4 else ()
+    elif stage == "goal_pair":
+        finger = int(state.get("curriculum_goal_pair_focus_finger", 0))
+        focus = (finger,) if 1 <= finger <= 4 else ()
+    return True, age, focus
+
+
+def summarize_goal_finger_coverage(goals):
+    """Summarize whether one song can exercise all four fretting fingers."""
+    fret = goals.fret.detach().cpu()
+    finger = goals.finger.detach().cpu()
+    events = tuple(getattr(goals, "sustain_events", ()))
+    stable_chords = getattr(
+        goals, "practice_chord_frames_by_finger_set", {})
+    names = ("index", "middle", "ring", "pinky")
+    rows = {}
+    active_counts = []
+    for finger_number, name in enumerate(names, start=1):
+        active = ((fret > 0) & (finger == finger_number)).any(dim=1)
+        active_frames = int(active.sum().item())
+        active_counts.append(active_frames)
+        starts = sum(
+            int(event.get("finger", 0)) == finger_number
+            for event in events)
+        targets = sorted({
+            (int(event["string"]), int(event["fret"]))
+            for event in events
+            if int(event.get("finger", 0)) == finger_number
+        })
+        stable_runs = sum(
+            int(catalog.numel())
+            for finger_set, catalog in stable_chords.items()
+            if finger_number in finger_set)
+        rows[name] = {
+            "finger": finger_number,
+            "active_frames": active_frames,
+            "press_start_events": starts,
+            "unique_string_fret_targets": [list(target) for target in targets],
+            "stable_chord_runs": stable_runs,
+        }
+    maximum = max(active_counts, default=0)
+    underrepresented = [
+        name for name, row in rows.items()
+        if (row["active_frames"] == 0
+            or (maximum > 0 and row["active_frames"] < 0.20 * maximum)
+            or row["press_start_events"] < 5
+            or row["stable_chord_runs"] == 0)
+    ]
+    return {
+        "fingers": rows,
+        "active_frame_imbalance_ratio": (
+            float(maximum) / max(1.0, float(min(
+                (count for count in active_counts if count > 0),
+                default=1)))),
+        "underrepresented_fingers": underrepresented,
+        "warning": bool(underrepresented),
+    }
+
+
 def load_fret_initialization_model(
         model, checkpoint_state,
         appended_obs_dim=FRET_THUMB_OBSERVATION_DIM,
         calibration_observations=None):
-    """Strictly warm-start a fret model with at most two appended obs blocks."""
+    """Strictly warm-start a fret model with appended observation blocks."""
     if not isinstance(checkpoint_state, Mapping):
         raise TypeError("initialization model state must be a mapping")
     appended_obs_dim = int(appended_obs_dim)
-    if appended_obs_dim != FRET_THUMB_OBSERVATION_DIM:
-        raise ValueError(
-            "appended observation block must match the six-dimensional "
-            "thumb observation contract")
+    if appended_obs_dim <= 0:
+        raise ValueError("appended observation block must be positive")
 
     target_state = model.state_dict()
     source_keys = set(checkpoint_state)
@@ -336,6 +481,42 @@ def load_fret_initialization_model(
     }
 
 
+def _configure_initial_policy(model, env, *, seed_mean, repair_thumb_base):
+    controlled_names = [
+        env.dof_names[index]
+        for index in env.ctrl_idx.detach().cpu().tolist()]
+    configure_finger_flexion_policy(
+        model, controlled_names,
+        env.ctrl_mid[0], env.ctrl_half[0], env.action_scale,
+        FRET["articulation_flexion_init_std"],
+        FRET["articulation_seed_pip_deg"],
+        FRET["articulation_seed_dip_deg"],
+        seed_mean=seed_mean,
+        thumb_exploration_std=FRET["thumb_exploration_init_std"],
+        thumb_base_exploration_std=FRET["thumb_base_exploration_init_std"],
+        repair_saturated_thumb_base=repair_thumb_base,
+        thumb_base_action_limit=FRET["thumb_seed_action_limit"],
+    )
+
+
+def _initial_policy_context():
+    return {
+        "curriculum_schema_version":
+            FingertipApproachCurriculum.SCHEMA_VERSION,
+        "finger_flexion_initialized": True,
+        "articulation_flexion_init_std":
+            FRET["articulation_flexion_init_std"],
+        "thumb_exploration_init_std": FRET["thumb_exploration_init_std"],
+        "thumb_base_exploration_init_std":
+            FRET["thumb_base_exploration_init_std"],
+        "thumb_base_exploration_target_std":
+            FRET["thumb_base_exploration_target_std"],
+        "thumb_support_seed_version": THUMB_SUPPORT_SEED_VERSION,
+        "thumb_geometry_observation_version":
+            THUMB_GEOMETRY_OBSERVATION_VERSION,
+    }
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="left-hand fret physics-RL training")
     parser.add_argument("--goal", default=FRET["goal_path"])
@@ -367,7 +548,7 @@ def build_parser():
         help="--initialize-from 사용 시 호환되는 PPO optimizer 상태도 warm-start")
     parser.add_argument("--eval", action="store_true",
                         help="checkpoint를 deterministic full-song episode로 평가")
-    parser.add_argument("--eval-episodes", type=int, default=64)
+    parser.add_argument("--eval-episodes", type=int, default=1)
     parser.add_argument("--eval-out", default=None)
     parser.add_argument("--no-random-start", action="store_true")
     parser.add_argument("--no-curriculum", action="store_true",
@@ -416,10 +597,6 @@ def canonical_song_bundle_for_goal(path):
     return root / relative.parts[0]
 
 
-def file_sha256(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def resolve_hand_targets(goal_path, explicit=None):
     if explicit:
         path = Path(explicit).resolve()
@@ -461,48 +638,14 @@ def protect_new_run_output(out_dir, checkpoint=None, evaluating=False):
             "Resume it with --checkpoint or choose a new --run-name/--out.")
 
 
-def record_run_metadata(layout, manifest, session):
-    """Write stable run identity once and append one launch record."""
-    layout = layout_for(layout.root if hasattr(layout, "root") else layout,
-                        create=True)
-    if layout.manifest.exists():
-        existing = json.loads(layout.manifest.read_text())
-        old_contract = existing.get("checkpoint_contract_sha256")
-        new_contract = manifest.get("checkpoint_contract_sha256")
-        if old_contract is not None and old_contract != new_contract:
-            raise RuntimeError(
-                "run_manifest checkpoint contract differs from this runtime: "
-                f"{layout.manifest}")
-    else:
-        layout.manifest.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
-    with layout.sessions.open("a") as stream:
-        stream.write(json.dumps(session, ensure_ascii=False) + "\n")
-
-
-def record_artifact_result(layout, artifacts):
-    """Record the outputs produced after a completed training session."""
-    manifest = json.loads(layout.manifest.read_text())
-    manifest["artifacts"] = {
-        **manifest.get("artifacts", {}),
-        **artifacts,
-    }
-    layout.manifest.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
-    with layout.sessions.open("a") as stream:
-        stream.write(json.dumps({
-            "completed_at_utc": datetime.now(timezone.utc).isoformat(),
-            "mode": "artifact_generation",
-            "artifacts": artifacts,
-        }, ensure_ascii=False) + "\n")
-
-
 def generate_training_plots(layout):
     """Render the standard plots from the run's append-only metric log."""
     plot_specs = (
         ("training_curves", "plot_fret_training.py", "training_curves.png"),
         ("fingertip_curriculum", "plot_fingertip_curriculum.py",
          "fingertip_curriculum.png"),
+        ("fret_diagnostics", "plot_fret_diagnostics.py",
+         "fret_diagnostics.png"),
     )
     generated = {}
     for key, script, filename in plot_specs:
@@ -519,6 +662,11 @@ def generate_training_plots(layout):
                 command, check=True, stdout=stream,
                 stderr=subprocess.STDOUT)
         generated[key] = str(output.resolve())
+        if key == "fret_diagnostics":
+            summary = output.with_suffix(".summary.json")
+            if summary.is_file():
+                generated["fret_diagnostics_summary"] = str(
+                    summary.resolve())
     return generated
 
 
@@ -569,66 +717,11 @@ def generate_rollout_video(layout, checkpoint, goal_path, hand_targets_path,
     return str(output.resolve())
 
 
-def _available_ram_bytes():
-    for line in Path("/proc/meminfo").read_text().splitlines():
-        if line.startswith("MemAvailable:"):
-            return int(line.split()[1]) * 1024
-    raise RuntimeError("cannot read MemAvailable from /proc/meminfo")
-
-
-def _nearest_existing_parent(path):
-    path = Path(path).resolve()
-    while not path.exists():
-        if path.parent == path:
-            raise RuntimeError(f"no existing parent for output path: {path}")
-        path = path.parent
-    return path
-
-
 def training_resource_preflight(device, out_dir, num_envs):
-    """Fail before Isaac Gym allocation when this PC lacks safe headroom."""
-    limits = FRET["resource_guard"]
-    if num_envs <= 0:
-        raise ValueError("--num-envs must be positive")
-    if num_envs > int(limits["max_num_envs"]):
-        raise ValueError(
-            f"--num-envs {num_envs} exceeds the validated RTX 4070 Ti ceiling "
-            f"{limits['max_num_envs']}")
-    device = torch.device(device)
-    if device.type != "cuda":
-        raise ValueError("the Isaac Gym fret task requires a CUDA device")
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is unavailable; refusing to start GPU PhysX training")
-    free_vram, total_vram = torch.cuda.mem_get_info(device)
-    props = torch.cuda.get_device_properties(device)
-    available_ram = _available_ram_bytes()
-    disk = shutil.disk_usage(_nearest_existing_parent(out_dir))
-    gib = 1024 ** 3
-    required = {
-        "free_vram": float(limits["min_free_vram_gib"]) * gib,
-        "available_ram": float(limits["min_available_ram_gib"]) * gib,
-        "free_disk": float(limits["min_free_disk_gib"]) * gib,
-    }
-    actual = {
-        "free_vram": int(free_vram),
-        "available_ram": int(available_ram),
-        "free_disk": int(disk.free),
-    }
-    failures = [
-        f"{name}={actual[name] / gib:.1f}GiB < {minimum / gib:.1f}GiB"
-        for name, minimum in required.items() if actual[name] < minimum]
-    if failures:
-        raise RuntimeError(
-            "insufficient resources; training was stopped before allocation: "
-            + ", ".join(failures))
-    return {
-        "gpu_name": props.name,
-        "gpu_total_vram_gib": round(total_vram / gib, 2),
-        "gpu_free_vram_gib": round(free_vram / gib, 2),
-        "available_ram_gib": round(available_ram / gib, 2),
-        "free_disk_gib": round(disk.free / gib, 2),
-        "num_envs": int(num_envs),
-    }
+    """공용 검증기로 fret 학습 전 GPU·RAM·디스크 여유를 확인한다."""
+    return shared_training_resource_preflight(
+        torch, device, out_dir, num_envs, FRET["resource_guard"],
+        task_name="fret")
 
 
 def build_runtime_checkpoint_contract(env, model, trainer, *, goal_sha256,
@@ -640,6 +733,8 @@ def build_runtime_checkpoint_contract(env, model, trainer, *, goal_sha256,
     implementation_fingerprint = fingerprint_file_set(
         tab2body_root, FRET_IMPLEMENTATION_FILES)
     reward_safety = {key: FRET[key] for key in FRET_REWARD_SAFETY_KEYS}
+    reward_safety["reference_motion_prior_sha256"] = file_sha256(
+        FRET["reference_motion_prior_path"])
     reward_safety["preparation_frames"] = int(preparation_frames)
     reward_safety["fingertip_approach_curriculum"] = FRET["curriculum"]
     controlled_names = [
@@ -719,6 +814,14 @@ def evaluate(env, model, episodes):
     thumb_eligible_stable_6_sum = 0.0
     max_thumb_contact_force = 0.0
     thumb_overforce_termination_count = 0
+    wrong_press_termination_count = 0
+    joint_limit_group_names = tuple(env.joint_limit_group_names)
+    joint_limit_max_usage = 0.0
+    joint_limit_near_sum = 0.0
+    joint_limit_max_by_group = {
+        group: 0.0 for group in joint_limit_group_names}
+    joint_limit_near_sum_by_group = {
+        group: 0.0 for group in joint_limit_group_names}
     proximal_reward_sum = 0.0
     proximal_gate_sum = 0.0
     finger_motion_sum = 0.0
@@ -748,11 +851,15 @@ def evaluate(env, model, episodes):
     palm_down_termination_count = 0
     wrist_safety_termination_count = 0
     finger_back_termination_count = 0
+    finger_back_termination_by_finger = [0, 0, 0, 0]
+    finger_back_min_local_z_by_finger = [float("inf")] * 4
     max_guitar_penetration = 0.0
     max_guitar_swept_penetration = 0.0
     guitar_tunneled_count = 0
     guitar_initial_overlap_count = 0
     guitar_penetration_termination_count = 0
+    guitar_penetration_termination_by_chain = [
+        0 for _ in env.penetration_monitor.CHAIN_NAMES]
     failure_termination_count = 0
     nonfinite_termination_count = 0
     velocity_blowup_termination_count = 0
@@ -826,6 +933,22 @@ def evaluate(env, model, episodes):
             float(info["thumb_contact_force"].max().cpu()))
         thumb_overforce_termination_count += int(
             info["thumb_overforce_termination"].sum().cpu())
+        wrong_press_termination_count += int(
+            info["wrong_press_termination"].sum().cpu())
+        if live.any():
+            joint_limit_max_usage = max(
+                joint_limit_max_usage,
+                float(info["joint_limit_max_usage"][live.bool()].max().cpu()))
+        joint_limit_near_sum += float(
+            (info["joint_limit_near_rate"] * live).sum().cpu())
+        for group in joint_limit_group_names:
+            group_max = info[f"joint_limit_{group}_max_usage"]
+            if live.any():
+                joint_limit_max_by_group[group] = max(
+                    joint_limit_max_by_group[group],
+                    float(group_max[live.bool()].max().cpu()))
+            joint_limit_near_sum_by_group[group] += float(
+                (info[f"joint_limit_{group}_near_rate"] * live).sum().cpu())
         proximal_reward_sum += float(info["proximal_reward"].sum().cpu())
         proximal_gate_sum += float(info["proximal_gate"].sum().cpu())
         finger_motion_sum += float(info["finger_motion"].sum().cpu())
@@ -882,6 +1005,14 @@ def evaluate(env, model, episodes):
             info["wrist_safety_termination"].sum().cpu())
         finger_back_termination_count += int(
             info["finger_back_termination"].sum().cpu())
+        termination_by_finger = info["finger_back_termination_by_finger"]
+        minimum_by_finger = info["finger_back_min_local_z"].amin(dim=0)
+        for finger_index in range(4):
+            finger_back_termination_by_finger[finger_index] += int(
+                termination_by_finger[:, finger_index].sum().cpu())
+            finger_back_min_local_z_by_finger[finger_index] = min(
+                finger_back_min_local_z_by_finger[finger_index],
+                float(minimum_by_finger[finger_index].cpu()))
         max_guitar_penetration = max(
             max_guitar_penetration,
             float(info["guitar_penetration_depth"].max().cpu()))
@@ -892,6 +1023,12 @@ def evaluate(env, model, episodes):
         guitar_initial_overlap_count += int(info["guitar_initial_overlap"].sum().cpu())
         guitar_penetration_termination_count += int(
             info["guitar_penetration_termination"].sum().cpu())
+        termination_by_chain = info[
+            "guitar_penetration_termination_by_chain"]
+        for chain_index in range(
+                len(guitar_penetration_termination_by_chain)):
+            guitar_penetration_termination_by_chain[chain_index] += int(
+                termination_by_chain[:, chain_index].sum().cpu())
         failure_termination_count += int(info["failure_termination"].sum().cpu())
         nonfinite_termination_count += int(info["nonfinite"].sum().cpu())
         velocity_blowup_termination_count += int(
@@ -908,6 +1045,7 @@ def evaluate(env, model, episodes):
                     "accuracy_l", "precision_l", "recall_l", "f1_l",
                     "no_press_accuracy", "wrong_press_rate",
                     "sustain_hold_rate", "sustain_event_success_rate",
+                    "sustain_event_success_count",
                     "sustain_min_event_hold_rate",
                     "sustain_max_dropout_frames",
                     "sustain_interruption_count", "sustain_event_count",
@@ -998,7 +1136,13 @@ def evaluate(env, model, episodes):
         thumb_wrong_contact_gate=
             FRET["curriculum"]["thumb_wrong_contact_rate"],
         thumb_contact_gate_enabled=
-            FRET["curriculum"]["thumb_contact_gate_enabled"])
+            FRET["curriculum"]["thumb_contact_gate_enabled"],
+        thumb_press_readiness=(
+            thumb_press_readiness_sum / thumb_evaluation_count),
+        thumb_press_readiness_gate=
+            FRET["curriculum"]["thumb_press_readiness_rate"],
+        thumb_geometry_gate_enabled=
+            FRET["curriculum"]["thumb_geometry_gate_enabled"])
     result.update(
         mean_target_distance_m=target_distance_sum / max(active_count, 1.0),
         mean_press_depth_m=press_depth_sum / max(active_count, 1.0),
@@ -1044,6 +1188,15 @@ def evaluate(env, model, episodes):
         thumb_eligible_env_frames=thumb_eligible_count,
         max_thumb_contact_force_n=max_thumb_contact_force,
         thumb_overforce_termination_count=thumb_overforce_termination_count,
+        wrong_press_termination_count=wrong_press_termination_count,
+        max_joint_limit_usage=joint_limit_max_usage,
+        mean_joint_limit_near_rate=(
+            joint_limit_near_sum / max(goal_diagnostic_count, 1)),
+        joint_limit_max_usage_by_group=joint_limit_max_by_group,
+        joint_limit_near_rate_by_group={
+            group: value / max(goal_diagnostic_count, 1)
+            for group, value in joint_limit_near_sum_by_group.items()
+        },
         mean_proximal_reward=proximal_reward_sum / max(diagnostic_count, 1),
         mean_proximal_gate=proximal_gate_sum / max(diagnostic_count, 1),
         mean_finger_motion=finger_motion_sum / max(diagnostic_count, 1),
@@ -1074,11 +1227,24 @@ def evaluate(env, model, episodes):
         palm_down_termination_count=palm_down_termination_count,
         wrist_safety_termination_count=wrist_safety_termination_count,
         finger_back_termination_count=finger_back_termination_count,
+        finger_back_termination_by_finger={
+            name: finger_back_termination_by_finger[index]
+            for index, name in enumerate(("index", "middle", "ring", "pinky"))
+        },
+        finger_back_min_local_z_by_finger_m={
+            name: finger_back_min_local_z_by_finger[index]
+            for index, name in enumerate(("index", "middle", "ring", "pinky"))
+        },
         max_guitar_penetration_m=max_guitar_penetration,
         max_guitar_swept_penetration_m=max_guitar_swept_penetration,
         guitar_tunneled_count=guitar_tunneled_count,
         guitar_initial_overlap_count=guitar_initial_overlap_count,
         guitar_penetration_termination_count=guitar_penetration_termination_count,
+        guitar_penetration_termination_by_chain={
+            name: guitar_penetration_termination_by_chain[index]
+            for index, name in enumerate(
+                env.penetration_monitor.CHAIN_NAMES)
+        },
         failure_termination_count=failure_termination_count,
         nonfinite_termination_count=nonfinite_termination_count,
         velocity_blowup_termination_count=velocity_blowup_termination_count,
@@ -1150,6 +1316,8 @@ def main(argv=None):
         num_envs, iterations = min(num_envs, 8), 1
         ppo_kwargs.update(horizon=4, epochs=1, minibatch_size=32,
                           save_interval=1, log_interval=1)
+    elif args.eval:
+        num_envs = 1
     if iterations <= 0:
         raise ValueError("--iterations must be positive")
     rollout_batch = num_envs * int(ppo_kwargs["horizon"])
@@ -1167,6 +1335,7 @@ def main(argv=None):
 
     env = FretTask(**configured_kwargs(
         FretTask, FRET,
+        reward_config=FRET,
         goal_path=str(goal_path),
         hand_targets_path=hand_targets_path,
         num_envs=num_envs,
@@ -1178,6 +1347,7 @@ def main(argv=None):
                       not args.no_random_start and FRET["random_start"]),
         preparation_frames=preparation_frames,
     ))
+    goal_finger_coverage = summarize_goal_finger_coverage(env.goals)
     init_action = ((env.init_pose[env.ctrl_idx] - env.ctrl_mid[0]) /
                    (env.action_scale * env.ctrl_half[0]).clamp_min(1e-6)).clamp(-1.0, 1.0)
     model = ActorCritic(env.num_obs, env.num_actions, env.value_dim,
@@ -1196,6 +1366,7 @@ def main(argv=None):
             args.initialize_from, map_location=args.device, weights_only=True)
         initialization_load = load_fret_initialization_model(
             model, initialization["model"],
+            appended_obs_dim=env.future_context_obs_dim,
             calibration_observations=trainer.obs)
         optimizer_warm_started = False
         if args.initialize_optimizer:
@@ -1223,37 +1394,10 @@ def main(argv=None):
             prior_context.get("thumb_support_seed_version", 0))
         thumb_seed_repaired = (
             prior_thumb_seed_version < THUMB_SUPPORT_SEED_VERSION)
-        configure_finger_flexion_policy(
-            model,
-            [env.dof_names[index]
-             for index in env.ctrl_idx.detach().cpu().tolist()],
-            env.ctrl_mid[0], env.ctrl_half[0], env.action_scale,
-            FRET["articulation_flexion_init_std"],
-            FRET["articulation_seed_pip_deg"],
-            FRET["articulation_seed_dip_deg"],
-            seed_mean=not prior_flexion_initialized,
-            thumb_exploration_std=FRET["thumb_exploration_init_std"],
-            thumb_base_exploration_std=
-                FRET["thumb_base_exploration_init_std"],
-            repair_saturated_thumb_base=thumb_seed_repaired,
-            thumb_base_action_limit=FRET["thumb_seed_action_limit"],
-        )
-        trainer.training_context.update({
-            "curriculum_schema_version":
-                FingertipApproachCurriculum.SCHEMA_VERSION,
-            "finger_flexion_initialized": True,
-            "articulation_flexion_init_std":
-                FRET["articulation_flexion_init_std"],
-            "thumb_exploration_init_std":
-                FRET["thumb_exploration_init_std"],
-            "thumb_base_exploration_init_std":
-                FRET["thumb_base_exploration_init_std"],
-            "thumb_base_exploration_target_std":
-                FRET["thumb_base_exploration_target_std"],
-            "thumb_support_seed_version": THUMB_SUPPORT_SEED_VERSION,
-            "thumb_geometry_observation_version":
-                THUMB_GEOMETRY_OBSERVATION_VERSION,
-        })
+        _configure_initial_policy(
+            model, env, seed_mean=not prior_flexion_initialized,
+            repair_thumb_base=thumb_seed_repaired)
+        trainer.training_context.update(_initial_policy_context())
         if migrated_stage in FingertipApproachCurriculum.STAGES:
             trainer.training_context.update({
                 "curriculum_stage": migrated_stage,
@@ -1295,37 +1439,9 @@ def main(argv=None):
             f"->{initialization_load['target_obs_dim']}, "
             f"optimizer={'warm' if optimizer_warm_started else 'fresh'})")
     elif not args.checkpoint:
-        configure_finger_flexion_policy(
-            model,
-            [env.dof_names[index]
-             for index in env.ctrl_idx.detach().cpu().tolist()],
-            env.ctrl_mid[0], env.ctrl_half[0], env.action_scale,
-            FRET["articulation_flexion_init_std"],
-            FRET["articulation_seed_pip_deg"],
-            FRET["articulation_seed_dip_deg"],
-            seed_mean=True,
-            thumb_exploration_std=FRET["thumb_exploration_init_std"],
-            thumb_base_exploration_std=
-                FRET["thumb_base_exploration_init_std"],
-            repair_saturated_thumb_base=True,
-            thumb_base_action_limit=FRET["thumb_seed_action_limit"],
-        )
-        trainer.training_context.update({
-            "curriculum_schema_version":
-                FingertipApproachCurriculum.SCHEMA_VERSION,
-            "finger_flexion_initialized": True,
-            "articulation_flexion_init_std":
-                FRET["articulation_flexion_init_std"],
-            "thumb_exploration_init_std":
-                FRET["thumb_exploration_init_std"],
-            "thumb_base_exploration_init_std":
-                FRET["thumb_base_exploration_init_std"],
-            "thumb_base_exploration_target_std":
-                FRET["thumb_base_exploration_target_std"],
-            "thumb_support_seed_version": THUMB_SUPPORT_SEED_VERSION,
-            "thumb_geometry_observation_version":
-                THUMB_GEOMETRY_OBSERVATION_VERSION,
-        })
+        _configure_initial_policy(
+            model, env, seed_mean=True, repair_thumb_base=True)
+        trainer.training_context.update(_initial_policy_context())
 
     if args.checkpoint:
         # Current checkpoints contain tensors plus plain Python containers only;
@@ -1336,6 +1452,9 @@ def main(argv=None):
         if args.migrate_contract:
             trainer.resume_migrated(checkpoint)
             migrated_context = trainer.training_context
+            source_curriculum_schema = int(
+                checkpoint.get("training_context", {}).get(
+                    "curriculum_schema_version", 1))
             migrated_stage = migrated_context.get("curriculum_stage")
             if migrated_stage in FingertipApproachCurriculum.STAGES:
                 # A migrated checkpoint keeps the learned phase/focus, but its
@@ -1346,6 +1465,7 @@ def main(argv=None):
                     "curriculum_total_iteration": trainer.iteration,
                     "curriculum_stalled": False,
                     "curriculum_recent": [],
+                    "curriculum_chord_phase_evidence": {},
                     "curriculum_bridge_windows": [],
                     "curriculum_bridge_accumulator": {},
                     "curriculum_bridge_last_metrics": {},
@@ -1353,6 +1473,17 @@ def main(argv=None):
                     "curriculum_goal_pair_mixed_level_iteration": 0,
                     "curriculum_goal_pair_phase_evidence": {},
                 })
+                if (source_curriculum_schema < 37
+                        and bool(migrated_context.get(
+                            "curriculum_goal_pair_recovery", False))):
+                    migrated_context.update({
+                        "curriculum_goal_pair_recovery_iteration": 0,
+                        "curriculum_goal_pair_recovery_good_windows": 0,
+                        "curriculum_goal_pair_recovery_failures": [],
+                        "curriculum_goal_pair_focus_finger": 0,
+                        "curriculum_goal_pair_focus_iteration": 0,
+                        "curriculum_goal_pair_focus_scores": [None] * 4,
+                    })
                 trainer.training_context = migrated_context
         else:
             trainer.resume(checkpoint, purpose="evaluate" if args.eval else "resume")
@@ -1360,6 +1491,10 @@ def main(argv=None):
               f"(iteration={trainer.iteration}, steps={trainer.global_step}, "
               f"contract={'migrated' if args.migrate_contract else 'verified'})")
 
+    curriculum_config = dict(FRET["curriculum"])
+    curriculum_config["coverage_iterations"] = args.coverage_iterations
+    curriculum_config["integration_iterations"] = args.integration_iterations
+    restored_curriculum_context = dict(trainer.training_context)
     base_context = {
         "training_mode": "per_song_trajectory_optimization",
         "song_id": song_id,
@@ -1370,10 +1505,30 @@ def main(argv=None):
         "hand_targets_path": hand_targets_path,
         "hand_targets_sha256": hand_targets_sha256,
         "preparation_frames": preparation_frames,
+        "goal_finger_coverage": goal_finger_coverage,
+        "static_chord_catalog": {
+            "min_duration_seconds":
+                env.goals.static_chord_min_duration_seconds,
+            "min_duration_frames":
+                env.goals.static_chord_min_duration_frames,
+            "stable_finger_sets": [
+                list(values) for values in
+                env.goals.practice_available_chord_finger_sets],
+            "transient_finger_sets": [
+                list(values) for values in
+                env.goals.practice_transient_chord_finger_sets],
+            "stable_run_count":
+                env.goals.practice_static_chord_run_count,
+            "transient_run_count":
+                env.goals.practice_transient_chord_run_count,
+        },
         "checkpoint_contract_schema": checkpoint_contract["payload"]["schema"],
         "checkpoint_contract_sha256": checkpoint_contract["sha256"],
         "initialized_from": (str(Path(args.initialize_from).resolve())
                              if args.initialize_from else None),
+        "curriculum_schema_version":
+            FingertipApproachCurriculum.SCHEMA_VERSION,
+        "curriculum_config": curriculum_config,
     }
     trainer.training_context.update(base_context)
     run_layout = trainer.run_layout
@@ -1393,6 +1548,12 @@ def main(argv=None):
                 "policy_init_std": FRET["policy_init_std"],
                 "articulation_flexion_init_std":
                     FRET["articulation_flexion_init_std"],
+                "finger_exploration_target_std":
+                    FRET["finger_exploration_target_std"],
+                "chord_focus_finger_exploration_std":
+                    FRET["chord_focus_finger_exploration_std"],
+                "goal_pair_focus_finger_exploration_std":
+                    FRET["goal_pair_focus_finger_exploration_std"],
                 "articulation_seed_pip_deg":
                     FRET["articulation_seed_pip_deg"],
                 "articulation_seed_dip_deg":
@@ -1425,7 +1586,7 @@ def main(argv=None):
             "minibatch_size": minibatch_size,
         },
         {
-            "started_at_utc": datetime.now(timezone.utc).isoformat(),
+            "started_at_utc": utc_now_iso(),
             "mode": ("evaluation" if args.eval else
                      "resume" if args.checkpoint else
                      "initialize" if args.initialize_from else "training"),
@@ -1444,14 +1605,11 @@ def main(argv=None):
         },
     )
     curriculum = None
-    if not args.eval and not args.no_curriculum and not args.no_random_start:
-        curriculum_config = dict(FRET["curriculum"])
-        curriculum_config["coverage_iterations"] = args.coverage_iterations
-        curriculum_config["integration_iterations"] = args.integration_iterations
+    if not args.eval and not args.no_curriculum:
         curriculum = FingertipApproachCurriculum(
             FingertipApproachCurriculumConfig(**curriculum_config),
             forced_stage=args.curriculum_stage)
-        curriculum.load_context(trainer.training_context)
+        curriculum.load_context(restored_curriculum_context)
     elif args.no_random_start or args.curriculum_stage == "full_song":
         env.goals.set_random_start_probability(0.0)
         env.set_curriculum_stage("full_song")
@@ -1467,6 +1625,7 @@ def main(argv=None):
         "requested_iterations": iterations, "run": str(run_layout.root),
         "checkpoints": str(run_layout.checkpoints),
         "metrics": str(run_layout.metrics), "resources": resource_snapshot,
+        "goal_finger_coverage": goal_finger_coverage,
     }
     with run_layout.training_log.open("a") as stream:
         stream.write("startup=" + json.dumps(
@@ -1476,6 +1635,24 @@ def main(argv=None):
         if song_bundle_path is not None else "none (custom --goal)")
     print(f"song={song_id} | song_bundle={bundle_display}")
     print(f"goal={goal_path} | hand_targets={hand_targets_path or 'none'}")
+    print(
+        "static_chords="
+        f"{[list(values) for values in env.goals.practice_available_chord_finger_sets]} "
+        f"| transient_chords="
+        f"{[list(values) for values in env.goals.practice_transient_chord_finger_sets]} "
+        f"| min_duration={env.goals.static_chord_min_duration_frames}frames")
+    coverage_rows = goal_finger_coverage["fingers"]
+    print(
+        "finger_coverage(active/start/stable_chord)="
+        + " ".join(
+            f"{name}:{row['active_frames']}/"
+            f"{row['press_start_events']}/{row['stable_chord_runs']}"
+            for name, row in coverage_rows.items()))
+    if goal_finger_coverage["warning"]:
+        print(
+            "warning: underrepresented fingers in this song="
+            + ",".join(goal_finger_coverage["underrepresented_fingers"])
+            + "; use a better-balanced song for four-finger validation")
     print(f"run={run_layout.root} | envs={env.num_envs} | "
           f"epochs={iterations} | detailed_log={run_layout.training_log}")
 
@@ -1494,11 +1671,25 @@ def main(argv=None):
         for finger_number, finger_name in enumerate(
             ("index", "middle", "ring", "pinky"), start=1)
     }
+    finger_policy_indices = {
+        finger_number: [
+            index for index, name in enumerate(controlled_names)
+            if name.startswith(f"LH:{finger_name}")]
+        for finger_number, finger_name in enumerate(
+            ("index", "middle", "ring", "pinky"), start=1)
+    }
+    all_finger_policy_indices = [
+        index for indices in finger_policy_indices.values()
+        for index in indices]
 
     def training_iteration_callback(iteration):
         state = (
-            curriculum.apply(env, iteration)
+            curriculum.apply(env)
             if curriculum is not None else {})
+        if args.no_random_start:
+            env.goals.set_random_start_probability(0.0)
+            state = dict(state)
+            state["curriculum_random_start_probability"] = 0.0
         floor = thumb_base_exploration_floor(
             iteration,
             FRET["thumb_base_exploration_init_std"],
@@ -1516,10 +1707,48 @@ def main(argv=None):
         state["thumb_base_exploration_floor"] = float(floor)
         state["thumb_base_exploration_ceiling"] = float(
             FRET["thumb_base_exploration_target_std"])
-        focus_finger = int(
-            state.get("curriculum_goal_pair_focus_finger", 0))
+        stage_is_goal_pair = (
+            state.get("curriculum_stage") == "goal_pair")
+        finger_ceiling = FRET["articulation_flexion_init_std"]
+        precision_active, precision_age, focus_fingers = (
+            finger_precision_schedule(state))
+        if precision_active:
+            finger_ceiling = finger_exploration_ceiling(
+                precision_age,
+                FRET["articulation_flexion_init_std"],
+                FRET["finger_exploration_target_std"],
+                FRET["finger_exploration_warmup_iterations"],
+                FRET["finger_exploration_ramp_iterations"])
+            with torch.no_grad():
+                ceiling_log = model.log_std.new_tensor(
+                    finger_ceiling).log()
+                model.log_std[all_finger_policy_indices] = torch.minimum(
+                    model.log_std[all_finger_policy_indices], ceiling_log)
+                focus_std_key = (
+                    "goal_pair_focus_finger_exploration_std"
+                    if stage_is_goal_pair
+                    else "chord_focus_finger_exploration_std")
+                focus_log = model.log_std.new_tensor(
+                    FRET[focus_std_key]).log()
+                for focus_finger in focus_fingers:
+                    if focus_finger not in finger_policy_indices:
+                        continue
+                    indices = finger_policy_indices[focus_finger]
+                    model.log_std[indices] = torch.maximum(
+                        model.log_std[indices], focus_log)
+        state["finger_exploration_ceiling"] = float(finger_ceiling)
+        state["finger_exploration_schedule_age"] = int(precision_age)
+        state["finger_exploration_focus_fingers"] = list(focus_fingers)
+        state["chord_focus_finger_exploration_floor"] = (
+            float(FRET["chord_focus_finger_exploration_std"])
+            if precision_active and not stage_is_goal_pair and focus_fingers
+            else 0.0)
+        state["goal_pair_focus_finger_exploration_floor"] = (
+            float(FRET["goal_pair_focus_finger_exploration_std"])
+            if stage_is_goal_pair and focus_fingers else 0.0)
         lateral_floor = 0.0
-        if (state.get("curriculum_stage") == "goal_pair"
+        focus_finger = focus_fingers[0] if len(focus_fingers) == 1 else 0
+        if (stage_is_goal_pair
                 and focus_finger in finger_lateral_policy_indices):
             lateral_floor = float(state[
                 "curriculum_goal_pair_focus_lateral_exploration_std"])
@@ -1544,6 +1773,7 @@ def main(argv=None):
         print(f"artifact: queued epoch {iteration} rollout", flush=True)
 
     auto_video_checkpoint = None
+    interrupted = False
     try:
         if args.eval:
             result = evaluate(env, model, args.eval_episodes)
@@ -1568,15 +1798,33 @@ def main(argv=None):
             if not args.smoke and not args.no_auto_video:
                 auto_video_checkpoint = (
                     trainer.checkpoint_dir / f"fret_{trainer.iteration:06d}.pt")
+    except KeyboardInterrupt:
+        interrupted = True
+        if not args.eval and trainer.iteration > 0:
+            try:
+                trainer.save(trainer.iteration)
+                if not args.smoke and not args.no_auto_video:
+                    auto_video_checkpoint = (
+                        trainer.checkpoint_dir
+                        / f"fret_{trainer.iteration:06d}.pt")
+                print(
+                    f"training interrupted: saved epoch {trainer.iteration}",
+                    flush=True)
+            except (OSError, RuntimeError, ValueError) as exc:
+                print(
+                    f"warning: interrupt checkpoint failed: {exc}",
+                    file=sys.stderr, flush=True)
     finally:
         env.close()
 
     if not args.eval:
         artifact_results = {}
+        resolved_artifact_errors = []
         try:
             artifact_results.update(generate_training_plots(run_layout))
+            resolved_artifact_errors.append("training_plots")
         except (OSError, subprocess.CalledProcessError) as exc:
-            artifact_results["plot_error"] = str(exc)
+            record_artifact_error(run_layout, "training_plots", exc)
             print(f"warning: automatic training plots failed: {exc}",
                   file=sys.stderr, flush=True)
     if auto_video_checkpoint is not None:
@@ -1594,7 +1842,7 @@ def main(argv=None):
                     run_layout, checkpoint, goal_path, hand_targets_path,
                     preparation_frames, key)
             except (OSError, subprocess.CalledProcessError) as exc:
-                artifact_results[f"{key}_error"] = str(exc)
+                record_artifact_error(run_layout, key, exc)
                 print(
                     f"warning: epoch {iteration} rollout video failed: {exc}",
                     file=sys.stderr, flush=True)
@@ -1608,9 +1856,13 @@ def main(argv=None):
             # and report a rerunnable failure instead of losing training output.
             print(f"warning: automatic rollout video failed: {exc}",
                   file=sys.stderr, flush=True)
-            artifact_results["video_error"] = str(exc)
+            record_artifact_error(run_layout, "rollout_video", exc)
     if not args.eval:
-        record_artifact_result(run_layout, artifact_results)
+        record_artifact_result(
+            run_layout, artifact_results,
+            resolved_errors=resolved_artifact_errors)
+    if interrupted:
+        raise KeyboardInterrupt
 
 
 if __name__ == "__main__":

@@ -85,18 +85,32 @@ def main():
             {
                 "sustain_max_dropout_frames": 2.0,
                 "press_max_dropout_frames": 1.0,
+                "sustain_event_success_count": 2.0,
+                "sustain_event_count": 3.0,
+                "curriculum_success_rate": 1.0,
+                "curriculum_chord_set_9_success": 1.0,
+                "curriculum_chord_set_9_count": 1.0,
                 "press_finger_1_success": 8.0,
                 "press_finger_1_count": 10.0,
             },
             {
                 "sustain_max_dropout_frames": 7.0,
                 "press_max_dropout_frames": 5.0,
+                "sustain_event_success_count": 1.0,
+                "sustain_event_count": 2.0,
+                "curriculum_success_rate": 0.0,
+                "curriculum_chord_set_9_success": 0.0,
+                "curriculum_chord_set_9_count": 1.0,
                 "press_finger_1_success": 9.0,
                 "press_finger_1_count": 10.0,
             },
         ],
         (
             "sustain_max_dropout_frames", "press_max_dropout_frames",
+            "sustain_event_success_count", "sustain_event_count",
+            "curriculum_success_rate",
+            "curriculum_chord_set_9_success",
+            "curriculum_chord_set_9_count",
             "press_finger_1_success",
             "press_finger_1_count",
         ),
@@ -107,6 +121,19 @@ def main():
     assert abs(hold["sustain_p95_dropout_frames"] - 6.75) < 1e-6
     assert abs(hold["press_p95_dropout_frames"] - 4.8) < 1e-6
     assert abs(hold["finger_1_press_success_rate"] - 0.85) < 1e-6
+    assert hold["finger_1_press_success_frames"] == 17
+    assert hold["finger_1_press_target_frames"] == 20
+    assert hold["press_success_frames"] == 17
+    assert hold["press_target_frames"] == 20
+    assert abs(hold["press_success_rate"] - 0.85) < 1e-6
+    assert hold["sustain_event_success_total"] == 3
+    assert hold["sustain_event_total"] == 5
+    assert abs(hold["sustain_event_success_rate_pooled"] - 0.6) < 1e-6
+    assert hold["curriculum_success_episodes"] == 1
+    assert hold["curriculum_episode_total"] == 2
+    assert hold["chord_set_9_success_episodes"] == 1
+    assert hold["chord_set_9_target_episodes"] == 2
+    assert abs(hold["chord_set_9_success_rate"] - 0.5) < 1e-6
 
     active = torch.tensor([
         [1.0, 4.0],
@@ -246,6 +273,40 @@ def main():
         action_mask=masked_rollout["action_masks"].reshape(-1, 3))
     assert torch.allclose(
         recomputed, masked_rollout["logp"].reshape(-1), atol=2e-5)
+
+    lifecycle_env = _EnvStub()
+    lifecycle_model = ActorCritic(
+        5, 3, value_dim=6, init_std=0.2, init_mean=torch.zeros(3))
+    lifecycle_trainer = PPOTrainer(
+        lifecycle_env, lifecycle_model,
+        PPOConfig(horizon=1, epochs=1, minibatch_size=4,
+                  log_interval=100, save_interval=100))
+    lifecycle_trainer.collect = lambda: {
+        "rewards": torch.zeros(1, lifecycle_env.num_envs, 6),
+        "diagnostics": {},
+        "episode": [],
+    }
+    lifecycle_trainer.update = lambda _rollout: {}
+
+    class StopAfterSecond(RuntimeError):
+        pass
+
+    seen = []
+
+    def stop_after_second(iteration, _stats):
+        seen.append(iteration)
+        if iteration == 2:
+            raise StopAfterSecond
+
+    try:
+        lifecycle_trainer.learn(
+            3, post_iteration_callback=stop_after_second, history_limit=0)
+    except StopAfterSecond:
+        pass
+    else:
+        raise AssertionError("post-iteration stop must propagate")
+    assert seen == [1, 2]
+    assert lifecycle_trainer.iteration == 2
 
     print("PASS: actor advantages and finite PPO guards")
 

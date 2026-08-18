@@ -5,18 +5,18 @@ from pathlib import Path
 import sys
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from learning.strike_curriculum import (  # noqa: E402
+from tab2body.learning.strike_curriculum import (
     A0_PICK_GRIP,
     A1_TIP_READY,
     A2_FREE_CROSSING,
     A3_TIMED_CROSSING,
     A4_ZONE_CONTROL,
 )
-from learning.strike_evaluation import (  # noqa: E402
+from tab2body.learning.strike_evaluation import (
     strike_evaluation_gate_summary,
 )
 
@@ -69,7 +69,7 @@ def main():
     assert not a0["timing_applicable"]
     assert not a0["zone_applicable"]
 
-    # Future-stage failures cannot reject an earlier stage.
+
     future_bad = metrics()
     future_bad.update(
         tip_ready_success_rate=0.0,
@@ -100,7 +100,7 @@ def main():
     bad = metrics()
     bad["false_positive_rate"] = 0.021
     assert not gates(A2_FREE_CROSSING, bad)["release_passed"]
-    # A2 explicitly ignores timing.
+
     bad = metrics()
     bad["timing_p95_ms"] = 100000.0
     assert gates(A2_FREE_CROSSING, bad)["passed"]
@@ -122,9 +122,35 @@ def main():
 
     a4 = gates(A4_ZONE_CONTROL)
     assert a4["passed"] and a4["zone_applicable"]
+    canonical = {
+        "strike_grip_success_rate": 0.95,
+        "strike_tip_ready_success_rate": 0.95,
+        "strike_precision": 0.99,
+        "strike_release_recall": 0.99,
+        "strike_false_positive_rate": 0.01,
+        "strike_episode_f1": 0.99,
+        "strike_timing_p95_ms": 45.0,
+        "strike_zone_success_rate": 0.97,
+    }
+    assert gates(A4_ZONE_CONTROL, canonical)["passed"]
+    canonical["precision"] = 0.0
+    assert gates(A4_ZONE_CONTROL, canonical)["precision"] == 0.99
     bad = metrics()
     bad["zone_success_rate"] = 0.94
     assert not gates(A4_ZONE_CONTROL, bad)["zone_passed"]
+
+    strum = metrics()
+    strum.update({
+        "strum_event_count": 8,
+        "strum_completion_rate": 0.98,
+        "strum_traversal_recall": 1.0,
+        "strum_order_accuracy": 1.0,
+        "strum_direction_accuracy": 1.0,
+        "strum_protected_crossing_rate": 0.0,
+    })
+    assert gates(A4_ZONE_CONTROL, strum)["strum_passed"]
+    strum["strum_order_accuracy"] = 0.8
+    assert not gates(A4_ZONE_CONTROL, strum)["strum_passed"]
 
     incomplete = rows()
     incomplete[0] = {
@@ -134,7 +160,7 @@ def main():
     unsafe = gates(A4_ZONE_CONTROL, safety_passed=False)
     assert unsafe["task_passed"] and not unsafe["passed"]
 
-    # Applicable metrics fail closed; inapplicable metrics may be absent.
+
     missing = metrics()
     del missing["timing_p95_ms"]
     expect_error(
@@ -145,6 +171,24 @@ def main():
     expect_error(
         "finite",
         lambda: gates(A2_FREE_CROSSING, invalid))
+    invalid = metrics()
+    invalid["release_recall"] = True
+    expect_error(
+        "finite scalar",
+        lambda: gates(A2_FREE_CROSSING, invalid))
+    string_goal = rows()
+    string_goal[0]["goal_finished"] = "false"
+    expect_error(
+        "goal_finished must be bool",
+        lambda: gates(A0_PICK_GRIP, episode_rows=string_goal))
+    string_failure = rows()
+    string_failure[0]["failure_termination"] = "false"
+    expect_error(
+        "failure_termination must be bool",
+        lambda: gates(A0_PICK_GRIP, episode_rows=string_failure))
+    expect_error(
+        "safety_passed must be bool",
+        lambda: gates(A0_PICK_GRIP, safety_passed="false"))
     expect_error(
         "unknown",
         lambda: gates("A9_UNKNOWN"))

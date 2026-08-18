@@ -1,0 +1,174 @@
+Fret
+
+내일 확인
+    새 학습: 02_BN3-119-G_solo, 1024 environments
+    현재: 630 epoch, fine_reach
+    거리: P90 6.9 mm로 기준 10 mm 통과
+    정렬: 78.5%로 승급 기준 90% 미달
+    비정상 종료는 아직 없음
+
+추가 진단 후보
+    1. 승급 실패 조건을 현재값/기준값으로 바로 출력
+    2. 줄·프렛별 압현 실패와 오압현 heatmap 생성
+    3. 두 checkpoint의 정확도·관절·영상을 같은 조건으로 비교
+
+우선 구현
+    승급 조건 진단 → 줄·프렛 heatmap
+
+지난 주 결과
+    단일 손가락 목표는 학습되지만 여러 손가락을 함께 학습하면 이전 성능이 떨어짐
+    실제 곡 전환에서 중지와 소지의 압현 성공률이 특히 낮음
+    미래 목표와 실제 곡 구간을 추가해 전체 F1은 약 3% 상승했지만 아직 부족함
+    여러 손가락의 성능 유지, 오압현 감소, 자연스러운 손 관절 움직임이 필요함
+
+
+시도해볼 목록
+
+1. 손가락별 실패 원인 측정
+    각 손가락의 전체 목표 수, 압현 성공 수, 성공률을 기록
+    이전 손가락에서 다음 손가락으로 이동하는 전환 조합별 성공률을 기록
+    목표 거리, 프렛 위치 오차, 압현 깊이, 오압현, 관절 포화를 함께 기록
+    중지와 소지가 목표에 도달하지 못하는지, 도달 후 누르지 못하는지 구분
+
+2. 네 손가락 균형 학습
+    학습 배치에 검지, 중지, 약지, 소지 목표가 일정 비율로 포함되도록 구성
+    새 손가락을 학습할 때 이미 학습한 손가락 표본도 계속 섞어서 망각 방지
+    최근 실패가 많은 손가락과 전환 조합의 표본 비율을 조금 높임
+    한 손가락만 오래 학습하는 단계는 줄이고 처음부터 여러 손가락을 함께 연습
+
+3. 중지와 소지 집중 보완
+    중지와 소지 목표가 실제 관절 범위 안에서 도달 가능한지 먼저 검사
+    단일 압현, 두 손가락 조합, 실제 곡 전환 순서로 난이도를 높임
+    검지와 약지 표본을 함께 유지해 집중 학습 중 다른 손가락 성능 저하 방지
+    성공 자세가 확보되면 초기 자세와 자세 유도 데이터로 재사용
+
+4. 실제 곡 전환 학습 강화
+    목표 직전부터 다음 목표의 압현 유지까지 포함하는 짧은 곡 구간을 사용
+    현재 사용 중인 0.5초, 1.0초, 1.5초 미래 목표 관측의 효과를 각각 비교
+    짧고 단순한 전환에서 시작해 전환 수와 구간 길이를 점차 늘림
+    KEEP, MOVE, REST 관계별 성공률을 따로 확인
+
+5. 여러 손가락 동시 압현 학습
+    단일 손가락 성공만으로 다음 단계에 진입하지 않도록 변경
+    두 손가락과 세 손가락 목표를 배치에 함께 포함
+    모든 목표 손가락의 압현과 유지가 동시에 성공했을 때 코드 성공으로 판정
+    가장 약한 손가락의 성공률이 기준을 넘어야 다음 단계로 이동
+
+6. 오압현 감소
+    오압현이 발생한 프레임은 관련 압현 보상을 0으로 유지
+    짧은 접촉과 지속적인 오압현을 구분해 지속 시간에 따라 감점
+    연속 오압현이 일정 횟수를 넘을 때만 조기 종료를 시험
+    종료 조건이 탐색을 막는지 확인하기 위해 감점만 적용한 실험과 비교
+
+7. 사람 손에 가까운 관절 범위
+    손가락 관절별 실제 학습 분포와 limit 도달 빈도를 먼저 기록
+    비디오나 손 동작 데이터에서 MCP, PIP, DIP의 일반적인 범위를 수집
+    자연스러운 범위는 soft penalty로 유도하고 명백히 불가능한 자세만 hard limit 적용
+    한 번에 모든 관절을 바꾸지 않고 관절별로 범위를 좁혀 영향 비교
+
+8. 손 움직임 데이터 활용
+    손만 촬영된 영상이나 공개 손 자세 데이터에서 관절 각도와 손가락 연동을 추출
+    압현 중인 손가락은 목표를 유지하고 비활성 손가락에만 약한 자세 prior 적용
+    옆 손가락이 움직일 때 다른 손가락이 조금 따라 움직이는 관계를 데이터로 추정
+    정확한 압현 성능을 해치지 않는 범위에서 자연스러움 보상으로 추가
+
+9. 동일 조건 비교 실험
+    같은 곡, seed, 환경 수, 학습 epoch로 변경 전후를 비교
+    전체 F1뿐 아니라 손가락별 성공률, 압현 유지율, 오압현률을 확인
+    goal-pair와 실제 곡 단계에서 머문 시간과 승급 여부를 기록
+    checkpoint 영상을 같은 카메라에서 렌더해 손가락 굽힘과 전환을 비교
+
+
+우선 실행 순서
+    1) 손가락별·전환별 실패 원인 측정
+    2) 네 손가락 균형 표본과 망각 방지 rehearsal 적용
+    3) 중지·소지 단일 압현과 실제 곡 전환 보완
+    4) 여러 손가락 동시 압현 기준 적용
+    5) 오압현 감점과 연속 오압현 종료 조건 비교
+    6) 관절 범위와 손 움직임 prior는 정확도 개선 후 적용
+
+
+확인 기준
+    중지와 소지의 압현 성공률이 기준 실험보다 상승하는가
+    중지와 소지를 개선한 뒤 검지와 약지 성공률이 크게 떨어지지 않는가
+    실제 곡 전환 성공률과 압현 유지율이 함께 상승하는가
+    오압현률이 줄면서 목표 접근과 탐색이 멈추지 않는가
+    영상에서 손가락이 충분히 굽고 압현 후 과도하게 멀어지지 않는가
+
+
+구현 방법과 현재 적용 상태
+
+1. 손가락별 실패 원인 측정
+    매 프레임의 거리, 프렛 정렬, 압현 성공, 유지, 오압현을 환경 info로 전달한다.
+    PPO가 손가락별 지표와 이전 손가락→다음 손가락 전환 행렬을 metrics.jsonl에 기록한다.
+    적용 위치: env/tasks/task_fret.py, learning/ppo.py
+
+2. 네 손가락 균형 학습
+    네 손가락 표본을 균형 배치하고, 이전 성공 표본 rehearsal과 실패 표본 focus를 함께 사용한다.
+    한 손가락만 장시간 고정하지 않고 같은 배치에서 네 손가락을 계속 재학습한다.
+    적용 위치: learning/curriculum.py, env/goals.py
+
+3. 중지와 소지 집중 보완
+    손가락별 거리와 성공률로 병목을 찾고 실패가 큰 손가락의 표본 확률을 높인다.
+    성공한 관절 자세와 action을 cache에 보관해 초기화와 자세 유도에 재사용한다.
+    적용 위치: learning/curriculum.py, env/tasks/task_fret.py
+
+4. 실제 곡 전환 학습 강화
+    현재 목표와 0.5초, 1.0초, 1.5초 뒤 목표를 관측한다.
+    goal-pair에서 짧은 전환, sequence, full-song 순으로 문맥을 늘리고 KEEP/MOVE/REST를 관측에 포함한다.
+    lookahead 값은 cfg.py에서 바꿀 수 있어 동일 조건 비교가 가능하다.
+    적용 위치: cfg.py, env/goals.py, env/tasks/task_fret.py, learning/curriculum.py
+
+5. 여러 손가락 동시 압현 학습
+    chord_reach, chord_fine_reach, static_chord에서 2개 이상 손가락을 함께 학습한다.
+    평균 성공률뿐 아니라 가장 약한 손가락 품질과 동시 유지가 기준을 넘어야 승급한다.
+    적용 위치: env/rewards/fret.py, learning/curriculum.py
+
+6. 오압현 감소
+    오압현 프레임의 관련 압현 보상을 0으로 만들고 회피 보상과 감점을 함께 적용한다.
+    goal_pair 이후에는 12프레임 연속 오압현만 실패 종료한다. cfg 값이 0이면 종료를 끌 수 있다.
+    종료 횟수는 metrics.jsonl과 evaluation.json에 별도로 기록한다.
+    적용 위치: cfg.py, env/metrics.py, env/tasks/task_fret.py, learning/ppo.py, train_fret.py
+
+7. 사람 손에 가까운 관절 범위
+    관절 중앙을 0, hard limit을 1로 정규화해 전체와 관절군별 최대값·90% 근접률·p95를 기록한다.
+    이 값은 현재 보상에 넣지 않는다. 학습 분포를 확인한 뒤 soft range를 정할 때 사용한다.
+    적용 위치: env/metrics.py, env/tasks/task_fret.py, learning/ppo.py, train_fret.py
+
+8. 손 움직임 데이터 활용
+    현재 보유한 reference posture를 약한 prior로 사용하고 비활성 손가락에는 synergy를 적용한다.
+    압현 중인 손가락에는 연동을 적용하지 않아 압현 유지가 우선된다.
+    외부 영상에서 새 각도를 추출하는 작업은 데이터가 확보된 뒤 reference 입력만 교체하면 된다.
+    적용 위치: env/rewards/reference_posture.py, env/tasks/task_fret.py,
+              env/rewards/fret.py
+
+9. 동일 조건 비교 실험
+    실행마다 곡과 파일 hash, seed, 환경 수, 설정, 구현 fingerprint를 manifest에 저장한다.
+    metrics, checkpoint, plot, 같은 카메라의 rollout video를 같은 run 디렉토리에 보관한다.
+    적용 위치: train_fret.py, learning/run_layout.py, tools/plot_fret_training.py,
+              tools/record_fret_rollout.py
+
+
+이번 변경의 기본값
+    wrong_press_termination_frames = 12
+    joint_limit_diagnostic_fraction = 0.90
+
+비교 실험
+    오압현 종료 없음: wrong_press_termination_frames = 0
+    오압현 종료 적용: wrong_press_termination_frames = 12
+    나머지 곡, seed, 환경 수, iteration은 동일하게 유지한다.
+
+
+추가 관측 도구
+    학습 종료 시 plots/fret_diagnostics.png와 summary JSON을 자동 생성한다.
+    손가락별 성공률, 목표 거리, 오압현, 유지율, 관절 한계, 자세 prior를 한 화면에서 본다.
+    체크포인트 영상의 stability JSON에는 33개 제어 관절의 각도 분위수와 limit 사용률을 기록한다.
+    실제 움직임에서 검지-중지, 중지-약지, 약지-소지 변화량 상관도 함께 기록한다.
+    사람 reference JSON은 analyze_reference_hand_motion.py로 분석해 관절 분포 그림을 만든다.
+
+    학습 로그 분석:
+        python tab2body/tools/plot_fret_diagnostics.py <metrics.jsonl>
+
+    사람 reference 분석:
+        python tab2body/tools/analyze_reference_hand_motion.py \
+            related_work/guitar/assets/motions/scale.json

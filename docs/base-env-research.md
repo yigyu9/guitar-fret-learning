@@ -4,13 +4,14 @@
 > `env_base_smoke` 명칭은 현재 파일로 제공되지 않으며, 현재 검증은 공용
 > `python -m tab2body.train --task fret --smoke` 또는 `--task strike --smoke`를 사용한다.
 
-> 4개 레퍼런스(guitar/·DIGIT/·GPS/·현 base.py)를 병렬 분석해 종합한 결과.
+> 4개 레퍼런스(guitar/·과거 DIGIT 실험·GPS·현 base.py)를 병렬 분석해 종합한 결과.
+> 과거 DIGIT 소스 디렉터리는 정리했으며, 이 문서에는 설계에 반영한 핵심 결론만 남긴다.
 > base.py 설계 근거의 원자료. 요약·적용은 tab2body/env/README.md(설계 문서) 참조.
-> 태그: [G]=guitar/ [D]=DIGIT/ [P]=docs+GPS [C]=현 base.py.
+> 태그: [G]=guitar/ [D]=과거 digit-fail 분석 [P]=docs+GPS [C]=현 base.py.
 
 # base.py Synthesis — Stable, Complete Physics-RL Env Core for a Seated 105-DOF Guitar Humanoid
 
-Cross-analysis tags: **[G]** = guitar-env (canonical port `guitar/`), **[D]** = digit-fail (`DIGIT/`), **[P]** = gps-papers (design docs + GPS sibling), **[C]** = current-base (`tab2body/env/base.py` today).
+Cross-analysis tags: **[G]** = guitar-env (canonical port `guitar/`), **[D]** = historical digit-fail analysis, **[P]** = gps-papers (design docs + GPS sibling), **[C]** = current-base (`tab2body/env/base.py` today).
 
 ---
 

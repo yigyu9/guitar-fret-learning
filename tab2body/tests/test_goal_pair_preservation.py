@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from cfg import FRET
-from env.goals import FretGoalSequence
+from env.goals import FretGoalSequence, goal_pair_finger_action_routing
 from learning.curriculum import FingertipApproachCurriculumConfig
 
 
@@ -62,9 +62,26 @@ def _sample(path, seed, focus_finger=None, focus_probability=1.0):
 
 
 def main():
+    assert FRET["goal_pair_action_routing"] is False
+    current = torch.tensor([[True, False, False, False]])
+    event = torch.zeros(1, 4, 13)
+    event[0, 1, 7] = 1.0
+    event[0, 1, 8] = event[0, 1, 11] = 1.0
+    event[0, 3, 7] = 0.5
+    event[0, 3, 8] = event[0, 3, 11] = 1.0
+    release = torch.tensor([[False, False, True, False]])
+    routed = goal_pair_finger_action_routing(
+        current, event, release, lookahead_s=1.5)
+    assert routed.tolist() == [[True, False, True, True]]
+    prepared = goal_pair_finger_action_routing(
+        current, event, release,
+        preparation_remaining=torch.tensor([60]), lookahead_s=1.5)
+    assert prepared.tolist() == [[True, False, True, False]]
+
     config = FingertipApproachCurriculumConfig()
     assert config.goal_pair_rehearsal_probability == 1.0 / 3.0
-    assert config.goal_pair_mixed_sequence_probabilities[-1] == 0.25
+    assert config.goal_pair_mixed_sequence_probabilities[-1] == 0.35
+    assert config.goal_pair_mixed_sequence_max_events == (2, 4, 8)
     assert (
         FRET["curriculum"]["goal_pair_rehearsal_probability"]
         == 1.0 / 3.0)
@@ -84,16 +101,32 @@ def main():
         for name in (
                 "goal_pair_previous_frame", "goal_pair_next_frame",
                 "goal_pair_before_remaining", "goal_pair_group_index",
-                "goal_pair_incoming_finger", "goal_pair_rehearsal_mask",
+                "goal_pair_incoming_finger",
+                "goal_pair_previous_finger_mask",
+                "goal_pair_rehearsal_mask",
+                "goal_pair_rehearsal_anchor_finger",
                 "goal_pair_sequence_mask", "goal_pair_full_song_mask",
+                "goal_pair_sequence_event_count",
                 "practice_remaining"):
             assert torch.equal(getattr(goals, name), getattr(repeated, name))
+
+        small = torch.cat([
+            goals._stratified_choices((1, 2, 3, 4), 1)
+            for _ in range(256)
+        ])
+        small_counts = torch.bincount(small, minlength=5)[1:]
+        assert (small_counts > 0).all(), small_counts
+        assert int(small_counts.max() - small_counts.min()) < 40, small_counts
 
         rehearsal = goals.goal_pair_rehearsal_mask
         rehearsal_rate = rehearsal.float().mean().item()
         assert 0.32 < rehearsal_rate < 0.35, rehearsal_rate
         assert (goals.goal_pair_group_index[rehearsal] == -1).all()
         assert (goals.goal_pair_incoming_finger[rehearsal] == 0).all()
+        assert (goals.goal_pair_rehearsal_anchor_finger[rehearsal] > 0).all()
+        assert torch.equal(
+            goals.goal_pair_rehearsal_anchor_finger[~rehearsal],
+            goals.goal_pair_incoming_finger[~rehearsal])
         assert torch.equal(
             goals.goal_pair_previous_frame[rehearsal],
             goals.goal_pair_next_frame[rehearsal])
@@ -105,6 +138,17 @@ def main():
         assert torch.equal(
             goals.goal_pair_next_frame[transition],
             goals.goal_pair_previous_frame[transition] + 1)
+        previous_finger = goals.finger[
+            goals.goal_pair_previous_frame[transition]]
+        previous_fret = goals.fret[
+            goals.goal_pair_previous_frame[transition]]
+        expected_previous_mask = torch.stack([
+            ((previous_finger == finger) & (previous_fret > 0)).any(dim=1)
+            for finger in range(1, 5)
+        ], dim=1)
+        assert torch.equal(
+            goals.goal_pair_previous_finger_mask[transition],
+            expected_previous_mask)
         incoming = goals.goal_pair_incoming_finger[transition]
         incoming_mask = incoming > 0
         incoming_rate = incoming_mask.float().mean().item()
@@ -115,6 +159,9 @@ def main():
         assert torch.all((counts - expected).abs() < 0.07 * expected), counts
 
         current = goals.current()
+        assert torch.equal(
+            current["finger_pose_slot"],
+            goals.finger_pose_slot[goals.frame_idx])
         active = current["fret"] > 0
         rehearsal_active = torch.stack([
             ((current["finger"] == finger) & active).any(dim=1)
@@ -128,6 +175,14 @@ def main():
         assert torch.equal(
             current["finger_event"][rehearsal],
             goals.finger_events[goals.frame_idx[rehearsal]])
+        rehearsal_frame = goals.frame_idx.clone()
+        rehearsal_remaining = goals.practice_remaining.clone()
+        goals.advance(rehearsal)
+        assert torch.equal(
+            goals.frame_idx[rehearsal], rehearsal_frame[rehearsal] + 1)
+        assert torch.equal(
+            goals.practice_remaining[rehearsal],
+            rehearsal_remaining[rehearsal] - 1)
 
         focused = _sample(
             path, seed=31, focus_finger=4, focus_probability=0.70)
@@ -144,11 +199,19 @@ def main():
         focused_counts = focused_active[focused_rehearsal].sum(dim=0).float()
         focused_rehearsal_rate = (
             focused_counts[3] / focused_counts.sum()).item()
-        assert focused_rehearsal_rate > 0.70, focused_counts
-        focused_expected = focused_counts[:3].mean()
+        assert 0.68 < focused_rehearsal_rate < 0.72, focused_counts
+        focused_anchor_counts = torch.bincount(
+            focused.goal_pair_rehearsal_anchor_finger[focused_rehearsal],
+            minlength=5)[1:].float()
+        focused_anchor_rate = (
+            focused_anchor_counts[3]
+            / focused_anchor_counts.sum()).item()
+        assert 0.68 < focused_anchor_rate < 0.72, focused_anchor_counts
+        focused_nonfocus = focused_counts[:3]
+        focused_nonfocus_expected = focused_nonfocus.mean()
         assert torch.all(
-            (focused_counts[:3] - focused_expected).abs()
-            < 0.12 * focused_expected), focused_counts
+            (focused_nonfocus - focused_nonfocus_expected).abs()
+            < 0.12 * focused_nonfocus_expected), focused_counts
 
         focused_transition = ~focused_rehearsal
         focused_incoming = focused.goal_pair_incoming_finger[focused_transition]
@@ -181,7 +244,10 @@ def main():
             for name in (
                 "goal_pair_previous_frame", "goal_pair_next_frame",
                 "goal_pair_before_remaining", "goal_pair_group_index",
-                "goal_pair_incoming_finger", "goal_pair_rehearsal_mask",
+                "goal_pair_incoming_finger",
+                "goal_pair_previous_finger_mask",
+                "goal_pair_rehearsal_mask",
+                "goal_pair_rehearsal_anchor_finger",
                 "goal_pair_sequence_mask", "goal_pair_full_song_mask",
                 "practice_remaining"))
         replay.load_curriculum_sampler_state_dict(sampler_state)
@@ -191,13 +257,31 @@ def main():
             for name in (
                 "goal_pair_previous_frame", "goal_pair_next_frame",
                 "goal_pair_before_remaining", "goal_pair_group_index",
-                "goal_pair_incoming_finger", "goal_pair_rehearsal_mask",
+                "goal_pair_incoming_finger",
+                "goal_pair_previous_finger_mask",
+                "goal_pair_rehearsal_mask",
+                "goal_pair_rehearsal_anchor_finger",
                 "goal_pair_sequence_mask", "goal_pair_full_song_mask",
                 "practice_remaining"))
         assert all(
             first.device.type == "cpu" and torch.equal(first, second)
             for first, second in zip(sampled_once, sampled_twice))
         assert replay.set_goal_pair_transition_focus(None)
+
+        uncovered = FretGoalSequence(path, 512, device="cpu", seed=53)
+        valid = torch.ones(uncovered.pose_slot_count, dtype=torch.bool)
+        slot_fingers = uncovered.finger[uncovered.pose_slot_frames]
+        valid[(slot_fingers == 4).any(dim=1)] = False
+        uncovered.set_goal_pair_success_pose_valid(valid)
+        uncovered.set_goal_pair_uncovered_pose_probability(1.0)
+        uncovered.set_goal_pair_rehearsal_probability(1.0)
+        uncovered.set_goal_pair_transition_focus(
+            4, focus_probability=1.0)
+        uncovered.set_curriculum_stage("goal_pair", duration_frames=120)
+        uncovered.reset(torch.arange(uncovered.num_envs))
+        uncovered_slots = uncovered.frame_pose_slot[uncovered.frame_idx]
+        assert (~valid[uncovered_slots]).all()
+        assert (uncovered.goal_pair_rehearsal_anchor_finger == 4).all()
 
         for invalid_finger in (True, 0, 5, 1.5):
             try:
@@ -216,6 +300,15 @@ def main():
             else:
                 raise AssertionError(
                     "invalid goal-pair rehearsal focus probability was accepted")
+        for invalid_probability in (-0.01, 1.01, float("nan")):
+            try:
+                replay.set_goal_pair_uncovered_pose_probability(
+                    invalid_probability)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    "invalid uncovered-pose probability was accepted")
 
         exact = FretGoalSequence(path, 512, device="cpu", seed=59)
         exact.set_goal_pair_rehearsal_probability(1.0)
@@ -223,7 +316,12 @@ def main():
         exact.set_curriculum_stage("goal_pair", duration_frames=120)
         exact.reset(torch.arange(exact.num_envs))
         assert exact.goal_pair_rehearsal_mask.all()
-        assert (exact.practice_remaining == 150).all()
+        assert (exact.practice_remaining > 0).all()
+        assert (exact.practice_remaining <= 150).all()
+        assert torch.equal(
+            exact.frame_idx,
+            exact.practice_run_starts[
+                exact.frame_run_index[exact.frame_idx]])
         assert torch.equal(
             exact.current()["finger_event"],
             exact.finger_events[exact.frame_idx])
@@ -241,9 +339,11 @@ def main():
 
         sequence = FretGoalSequence(path, 4096, device="cpu", seed=67)
         assert sequence.set_goal_pair_sequence_sampling(
-            1.0, duration_frames=60, full_song_fraction=0.20)
+            1.0, duration_frames=60, full_song_fraction=0.20,
+            max_events=4)
         assert not sequence.set_goal_pair_sequence_sampling(
-            1.0, duration_frames=60, full_song_fraction=0.20)
+            1.0, duration_frames=60, full_song_fraction=0.20,
+            max_events=4)
         sequence.set_goal_pair_rehearsal_probability(1.0)
         sequence.set_curriculum_stage("goal_pair", duration_frames=120)
         sequence_ids = torch.arange(sequence.num_envs)
@@ -256,7 +356,22 @@ def main():
         window = ~full
         assert (sequence.frame_idx[full] == 0).all()
         assert (sequence.practice_remaining[full] == sequence.n_frames).all()
-        assert (sequence.practice_remaining[window] == 60).all()
+        assert (sequence.practice_remaining[window] > 0).all()
+        assert (sequence.practice_remaining[window] <= 60).all()
+        assert (sequence.goal_pair_sequence_event_count[window] >= 2).all()
+        assert (sequence.goal_pair_sequence_event_count[window] <= 4).all()
+        incoming = sequence.goal_pair_incoming_finger[window]
+        window_end = (
+            sequence.frame_idx[window]
+            + sequence.practice_remaining[window] - 1)
+        incoming_at_end = (
+            sequence.finger[window_end] == incoming[:, None]).any(dim=1)
+        assert incoming_at_end[incoming > 0].all()
+        incoming = incoming[incoming > 0]
+        incoming_counts = torch.bincount(incoming, minlength=5)[1:]
+        assert int(incoming_counts.max() - incoming_counts.min()) <= 2
+        assert (sequence.goal_pair_sequence_event_count[full]
+                == sequence.practice_run_starts.numel()).all()
         assert torch.equal(
             sequence.current()["finger_event"],
             sequence.finger_events[sequence.frame_idx])
@@ -277,8 +392,16 @@ def main():
             else:
                 raise AssertionError(
                     "invalid goal-pair sequence sampling was accepted")
+        try:
+            sequence.set_goal_pair_sequence_sampling(
+                0.5, duration_frames=60, max_events=0)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "invalid goal-pair sequence event count was accepted")
 
-    print("PASS: goal-pair replay, sequence bridge, and weak-finger focus")
+    print("PASS: balanced retention clips, pair transitions, and sequence bridge")
 
 
 if __name__ == "__main__":

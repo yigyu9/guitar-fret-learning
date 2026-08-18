@@ -8,7 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from env.goals import build_finger_next_goal_vectors
+from env.goals import (
+    FINGER_EVENT_TIME_SCALE_S,
+    build_finger_next_goal_vectors,
+)
 
 
 def main():
@@ -49,20 +52,29 @@ def main():
 
     # Before the first target: one-hot string mask, fret, 0.1 s, MOVE.
     assert np.allclose(vectors[0, 0, :6], [1, 0, 0, 0, 0, 0])
-    assert np.allclose(vectors[0, 0, 6:10], [3 / 22, .1, 1, 0])
+    assert np.allclose(
+        vectors[0, 0, 6:10],
+        [3 / 22, .1 / FINGER_EVENT_TIME_SCALE_S, 1, 0])
     assert np.allclose(vectors[0, 0, 10:13], [0, 1, 0])
     # Mask expansion/reduction retains contact at the same fret: KEEP.
     assert np.allclose(vectors[1, 0, :6], [1, 1, 0, 0, 0, 0])
-    assert np.allclose(vectors[1, 0, 7:10], [.2, 1, .2])
+    assert np.allclose(
+        vectors[1, 0, 7:10],
+        [.2 / FINGER_EVENT_TIME_SCALE_S, 1,
+         .2 / FINGER_EVENT_TIME_SCALE_S])
     assert np.allclose(vectors[1, 0, 10:13], [1, 0, 0])
     assert np.allclose(vectors[3, 0, :6], [0, 1, 0, 0, 0, 0])
     assert np.allclose(vectors[3, 0, 10:13], [1, 0, 0])
     # A release gap makes the later identical target MOVE, not KEEP.
-    assert np.allclose(vectors[4, 0, 7:10], [.2, 1, .1])
+    assert np.allclose(
+        vectors[4, 0, 7:10],
+        [.2 / FINGER_EVENT_TIME_SCALE_S, 1,
+         .1 / FINGER_EVENT_TIME_SCALE_S])
     assert np.allclose(vectors[4, 0, 10:13], [0, 1, 0])
     # No later active target means REST while current-change time remains valid.
     assert np.allclose(vectors[6, 0, 10:13], [0, 0, 1])
-    assert np.isclose(vectors[6, 0, 9], .2)
+    assert np.isclose(
+        vectors[6, 0, 9], .2 / FINGER_EVENT_TIME_SCALE_S)
     # Direct different-fret transition is MOVE.
     assert np.allclose(vectors[1, 1, :6], [0, 0, 0, 0, 1, 0])
     assert np.allclose(vectors[1, 1, 10:13], [0, 1, 0])

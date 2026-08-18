@@ -1,7 +1,135 @@
 """Episode-level diagnostics that do not shape the policy reward."""
 from __future__ import annotations
 
+import math
+
 import torch
+
+
+def normalized_joint_limit_usage(position, lower, upper):
+    """관절 중앙은 0, hard limit은 1이 되는 사용률을 반환한다."""
+    if lower.shape != upper.shape or position.shape[-lower.ndim:] != lower.shape:
+        raise ValueError("joint limits must match the trailing position shape")
+    half = 0.5 * (upper - lower)
+    if half.device.type == "cpu" and (
+            not torch.isfinite(half).all() or (half <= 0.0).any()):
+        raise ValueError("joint limits must be finite and increasing")
+    center = 0.5 * (lower + upper)
+    return ((position - center) / half.clamp_min(1e-8)).abs()
+
+
+def update_wrong_press_termination(
+        previous, wrong_press, enabled, *, stage, frames, stages):
+    """후기 단계에서만 지속 오압현 streak과 종료 여부를 계산한다."""
+    if (previous.ndim != 1 or wrong_press.shape != previous.shape
+            or enabled.shape != previous.shape):
+        raise ValueError("wrong-press termination tensors must share shape [N]")
+    if isinstance(frames, bool) or int(frames) < 0:
+        raise ValueError("wrong-press termination frames must be non-negative")
+    frames = int(frames)
+    active = bool(stage in tuple(stages)) and frames > 0
+    violation = wrong_press.bool() & enabled.bool() if active else torch.zeros_like(
+        wrong_press, dtype=torch.bool)
+    streak = torch.where(
+        violation, previous + 1, torch.zeros_like(previous))
+    termination = (
+        streak >= frames if active
+        else torch.zeros_like(streak, dtype=torch.bool))
+    return streak, termination
+
+
+def update_wrong_crossing_termination(
+        total_wrong, consecutive_wrong_events, event_had_wrong,
+        wrong_count, event_resolved, resolved_events, enabled, *,
+        minimum_resolved_events, max_count, max_rate,
+        consecutive_event_limit):
+    vectors = (
+        total_wrong, consecutive_wrong_events, event_had_wrong,
+        wrong_count, event_resolved, resolved_events, enabled)
+    if any(value.ndim != 1 for value in vectors):
+        raise ValueError("wrong-crossing termination inputs must have shape [N]")
+    if any(value.shape != total_wrong.shape for value in vectors[1:]):
+        raise ValueError("wrong-crossing termination inputs must share shape [N]")
+    if event_had_wrong.dtype != torch.bool or event_resolved.dtype != torch.bool \
+            or enabled.dtype != torch.bool:
+        raise TypeError("wrong-crossing masks must use torch.bool")
+    if minimum_resolved_events < 0 or max_count < 1 \
+            or consecutive_event_limit < 1:
+        raise ValueError("wrong-crossing termination counts are invalid")
+    max_rate = float(max_rate)
+    if not math.isfinite(max_rate) or not 0.0 <= max_rate <= 1.0:
+        raise ValueError("wrong-crossing max_rate must be in [0, 1]")
+    next_total = total_wrong + wrong_count
+    current_had_wrong = event_had_wrong | (wrong_count > 0)
+    next_resolved = resolved_events + event_resolved.to(resolved_events.dtype)
+    next_consecutive = torch.where(
+        event_resolved,
+        torch.where(
+            current_had_wrong,
+            consecutive_wrong_events + 1,
+            torch.zeros_like(consecutive_wrong_events)),
+        consecutive_wrong_events)
+    next_event_had_wrong = current_had_wrong & ~event_resolved
+    eligible = enabled & (next_resolved >= minimum_resolved_events)
+    rate = next_total / next_resolved.clamp_min(1).to(next_total.dtype)
+    termination = eligible & (
+        (next_total >= max_count)
+        | (rate > max_rate)
+        | (next_consecutive >= consecutive_event_limit))
+    return {
+        "total_wrong": next_total,
+        "resolved_events": next_resolved,
+        "consecutive_wrong_events": next_consecutive,
+        "event_had_wrong": next_event_had_wrong,
+        "wrong_rate": rate,
+        "termination": termination,
+    }
+
+
+def summarize_joint_trajectory(position, lower, upper, names):
+    """관절 trajectory의 각도 분위수와 hard-limit 사용률을 요약한다."""
+    if position.ndim != 2 or lower.shape != position.shape[1:] \
+            or upper.shape != position.shape[1:]:
+        raise ValueError("joint trajectory must have shapes [T,D], [D], [D]")
+    if len(names) != position.shape[1] or position.shape[0] == 0:
+        raise ValueError("joint names and non-empty trajectory are required")
+    usage = normalized_joint_limit_usage(position, lower, upper)
+    quantiles = torch.quantile(
+        position.float(),
+        torch.tensor([0.05, 0.50, 0.95], device=position.device), dim=0)
+    scale = 180.0 / math.pi
+    return {
+        str(name): {
+            "min_deg": float(position[:, index].min()) * scale,
+            "p05_deg": float(quantiles[0, index]) * scale,
+            "median_deg": float(quantiles[1, index]) * scale,
+            "p95_deg": float(quantiles[2, index]) * scale,
+            "max_deg": float(position[:, index].max()) * scale,
+            "max_limit_usage": float(usage[:, index].max()),
+            "near_limit_rate": float((usage[:, index] >= 0.90).float().mean()),
+        }
+        for index, name in enumerate(names)
+    }
+
+
+def adjacent_finger_motion_correlations(flexion):
+    """[T,4,3] 굽힘 변화량에서 인접 손가락의 Pearson 상관을 구한다."""
+    if flexion.ndim != 3 or flexion.shape[1:] != (4, 3):
+        raise ValueError("finger flexion must have shape [T,4,3]")
+    labels = ("index_middle", "middle_ring", "ring_pinky")
+    if flexion.shape[0] < 3:
+        return {label: None for label in labels}
+    delta = flexion[1:] - flexion[:-1]
+    motion = delta.mean(dim=2).float()
+    result = {}
+    for index, label in enumerate(labels):
+        left = motion[:, index] - motion[:, index].mean()
+        right = motion[:, index + 1] - motion[:, index + 1].mean()
+        denominator = left.square().sum().sqrt() * right.square().sum().sqrt()
+        result[label] = (
+            float((left * right).sum() / denominator)
+            if float(denominator) > 1e-8 else None)
+    return result
 
 
 def update_live_dropout_streak(previous, dropout, enabled):
@@ -83,6 +211,7 @@ class PressSustainTracker:
             return {
                 "sustain_hold_rate": empty,
                 "sustain_event_success_rate": empty,
+                "sustain_event_success_count": empty,
                 "sustain_min_event_hold_rate": empty,
                 "sustain_max_dropout_frames": empty,
                 "sustain_interruption_count": empty,
@@ -94,6 +223,7 @@ class PressSustainTracker:
             return {
                 "sustain_hold_rate": one,
                 "sustain_event_success_rate": one,
+                "sustain_event_success_count": count,
                 "sustain_min_event_hold_rate": one,
                 "sustain_max_dropout_frames": count,
                 "sustain_interruption_count": count,
@@ -115,6 +245,7 @@ class PressSustainTracker:
             "sustain_hold_rate": total_hold,
             "sustain_event_success_rate": (event_success.sum(dim=1).float()
                                            / valid_count.clamp_min(1).float()),
+            "sustain_event_success_count": event_success.sum(dim=1).float(),
             "sustain_min_event_hold_rate": min_ratio,
             "sustain_max_dropout_frames": max_dropout.float(),
             "sustain_interruption_count": interruptions.float(),

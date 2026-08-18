@@ -402,16 +402,13 @@
   GPU PhysX 배관 smoke 후 **512env·2,500회 checkpoint=40,960,000 samples 본 학습**.
   checkpoint 비교(같은 S0 곡, deterministic 64 episode): F1 500회 0.1667 → 1,000회 0.7237 →
   1,500회 0.9020 → **2,000회 0.9175(구 기준 최선)** → 2,500회 0.9108. 당시 선택
-  `_gen/checkpoints/fret_s0_pilot/fret_002000.pt`, 상세 `RESULTS.md`. resume는 iteration/global step을
-  연속 복원하고 평가는 target/wrist 거리도 JSON에 기록한다. 선택 정책 영상 도구는
-  `tab2body/tools/record_fret_rollout.py`; 선택 모델 영상 `fret_002000_rollout.mp4` 생성·재생 검증.
-  ⚠️ 이 checkpoint는 07-20 signed-depth 기준에서 F1=0으로 효력이 끝났다. 새 보상 재학습 전이며,
-  해당 곡 전체 롤아웃의 관통·limit·비제어 부위·목표 영상 대조 전에는 최종 물리 성공 미선언.
+  `_gen/checkpoints/fret_s0_pilot/`의 07-20 구 checkpoint와 frame dump는 정리했으며, 역사 결과 요약만
+  `RESULTS.md`로 남긴다. 현재 재개·평가는 `fret/training/runs/20260803_*`만 사용한다.
 
 - ✅ 전제 P1~P8 전부 실측 해소 (research-flow §7)
 - ✅ 에셋 확정: `tab2body/assets/` (휴머노이드 65바디/105DOF + 독립 기타 + 정본 좌식 자세 seated_pose.json)
 - ✅ 검증 완료: 좌식 자세(관통 0), 프렛 도달 34/36(굽힌 운지), 스트라이크 6/6, GPU 512env
-- ✅ **`tab2body/env/base.py` 마감 완료 + 전 검증 PASS** — 참조연구(guitar/DIGIT/GPS) 종합 기반. 두 축:
+- ✅ **`tab2body/env/base.py` 마감 완료 + 전 검증 PASS** — 참조연구(guitar/GPS)와 과거 DIGIT 분석을 종합한 기반. 두 축:
   - **초기자세 안정**: 하체 furniture 3중 잠금(pinch+armature+매스텝 재주입) → 드리프트 **0.0000°/50s**(verify_stability). 능동 상체 제어 중에도 0°. 발은 평평·바닥위~1cm(발 접지 시 잠금-접촉 떨림 트레이드오프 회피, §4).
   - **RL 루프**: reset/RSI · 액션 EMA(0.5)+2×스케일 · step(자동리셋) · 종료(timeout/NaN/blow) · **기타-상대 관측**(quat 버그 회피) · 접촉텐서 · 버퍼. 당시 공용 task smoke PASS.
   - **설계 문서** `tab2body/env/README.md`(왜 이렇게 구성됐나, 근거 태깅) + 원자료 `docs/base-env-research.md`.
@@ -497,7 +494,7 @@ related_work/                ← 관련 구현 3종 (동결, 수정 금지 — �
   guitar/                    ← Pei Xu SA'24 원본 (⚠️활성 의존: env.py 보상·goal·main.py 학습루프 이식 소스, assets/motions 손 mocap, notes/ 20곡=주 학습 데이터)
   GPS/                       ← CGF'24 로봇손 (프렛 수식·기타 메시(미터 단위)·어블레이션 참조)
   ELGAR/                     ← SIGGRAPH'25 첼로, 물리 없는 diffusion (노벨티 비교축)
-DIGIT/                       ← 과거 AMP 기반 실패 구현 (newvec 브랜치에 온전, summary.md=실패일지, sit_guitar mocap 5클립=동일 190.4s 테이크 가공 5종)
+과거 DIGIT 실패 구현        ← 소스 디렉터리는 정리했으며 안티패턴 요약만 본 문서와 docs에 보존
 isaacgym/                    ← Isaac Gym Preview 4 설치본 (분석 불필요)
 ```
 
@@ -535,4 +532,4 @@ python tab2fingermapping/pipeline.py <wav> --bpm N
 | docs/plans/ | 태스크별 규칙·계획·검증 체크리스트 |
 | tab2body/env/README.md | env 모듈 구조, 하이브리드 PD 근거, 제어방식 3사 비교 |
 | tab2body/assets/README.md | 에셋 출처·재생성·주의 |
-| DIGIT/isaacgymenvs/summary.md | 과거 실패 18차 보상수정 일지 (안티패턴 목록) |
+| docs/base-env-research.md | 과거 DIGIT 실패 구현의 안티패턴 요약 |

@@ -94,6 +94,38 @@ def update_consecutive_violation(streak, violation, valid=None):
     return torch.where(active, streak + 1, torch.zeros_like(streak))
 
 
+def exclude_thumb_from_generic_penetration(
+        depth_by_chain, tunneled_by_chain, termination_by_chain,
+        penetration_threshold, thumb_chain_index=1):
+    """엄지 체인은 일반 관통 대신 압축·과힘·접촉 위치 규칙에 맡긴다."""
+    if (depth_by_chain.ndim != 2
+            or tunneled_by_chain.shape != depth_by_chain.shape
+            or termination_by_chain.shape != depth_by_chain.shape):
+        raise ValueError("penetration chain tensors must share shape [N,C]")
+    _, chains = depth_by_chain.shape
+    if (not 0 <= int(thumb_chain_index) < chains
+            or penetration_threshold <= 0.0):
+        raise ValueError("thumb penetration filter thresholds are invalid")
+    unsafe_by_chain = (
+        (depth_by_chain > float(penetration_threshold))
+        | tunneled_by_chain.bool())
+    unsafe_by_chain = unsafe_by_chain.clone()
+    termination_by_chain = termination_by_chain.bool().clone()
+    raw_thumb_unsafe = unsafe_by_chain[:, int(thumb_chain_index)].clone()
+    unsafe_by_chain[:, int(thumb_chain_index)] = False
+    termination_by_chain[:, int(thumb_chain_index)] = False
+    effective_depth = depth_by_chain.clone()
+    effective_depth[:, int(thumb_chain_index)] = 0.0
+    return {
+        "raw_thumb_unsafe": raw_thumb_unsafe,
+        "effective_depth": effective_depth.amax(dim=-1),
+        "unsafe_by_chain": unsafe_by_chain,
+        "unsafe": unsafe_by_chain.any(dim=-1),
+        "termination_by_chain": termination_by_chain,
+        "termination": termination_by_chain.any(dim=-1),
+    }
+
+
 def wrist_box_violation(local_wrist, bounds_min, bounds_max):
     """Return per-axis and aggregate violations of a guitar-local safety box."""
     lo = _constant_like(local_wrist, bounds_min)
@@ -231,7 +263,8 @@ class FingerBackLimitMonitor:
         distal_depth = (
             self.soft_limit_z - local[:, :, 2:, :, 2]
         ).clamp_min(0.0)
-        soft_depth_by_finger = distal_depth.flatten(2).mean(dim=-1)
+        soft_depth_by_finger = distal_depth.square().flatten(2).mean(
+            dim=-1).sqrt()
         soft_penalty_by_finger = (
             1.0 - torch.exp(
                 -((soft_depth_by_finger / self.soft_scale) ** 2))
@@ -435,6 +468,7 @@ class GuitarPenetrationMonitor:
         ("LH:palm", "LH:ring1", "LH:ring2", "LH:ring3", "LH:ring_top"),
         ("LH:palm", "LH:pinky1", "LH:pinky2", "LH:pinky3", "LH:pinky_top"),
     )
+    CHAIN_NAMES = ("arm", "thumb", "index", "middle", "ring", "pinky")
 
     def __init__(self, env, threshold=0.005, frames=3, spatial_samples=4,
                  temporal_samples=9, termination_enabled=False):
@@ -454,19 +488,28 @@ class GuitarPenetrationMonitor:
             0.0, 1.0, int(spatial_samples), device=env.device).view(1, -1, 1)
         self._temporal_alpha = torch.linspace(
             0.0, 1.0, int(temporal_samples), device=env.device).view(1, -1, 1, 1)
-        self.n_samples = sum((len(chain) - 1) * int(spatial_samples)
-                             for chain in self.CHAINS)
+        samples_per_chain = tuple(
+            (len(chain) - 1) * int(spatial_samples)
+            for chain in self.CHAINS)
+        self.n_samples = sum(samples_per_chain)
+        self._point_chain = torch.repeat_interleave(
+            torch.arange(len(self.CHAINS), device=env.device),
+            torch.tensor(samples_per_chain, device=env.device))
         self.previous_local = torch.zeros(
             env.num_envs, self.n_samples, 3, device=env.device)
         self.has_previous = torch.zeros(
             env.num_envs, dtype=torch.bool, device=env.device)
         self.streak = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+        self.chain_streak = torch.zeros(
+            env.num_envs, len(self.CHAINS),
+            dtype=torch.long, device=env.device)
 
     def reset(self, env_ids):
         if env_ids.numel():
             self.previous_local[env_ids] = 0.0
             self.has_previous[env_ids] = False
             self.streak[env_ids] = 0
+            self.chain_streak[env_ids] = 0
 
     def _sample_world(self):
         segments = []
@@ -481,8 +524,13 @@ class GuitarPenetrationMonitor:
         current = self.env.to_guitar_frame(self._sample_world())
         current_depth_by_point, current_solid_by_point = guitar_solid_inside_depth(current)
         current_depth, current_point = current_depth_by_point.max(dim=-1)
+        current_depth_by_chain = torch.stack([
+            current_depth_by_point[:, self._point_chain == chain].amax(dim=-1)
+            for chain in range(len(self.CHAINS))
+        ], dim=-1)
         current_solid = torch.gather(
             current_solid_by_point, 1, current_point[:, None]).squeeze(1)
+        current_chain = self._point_chain[current_point]
 
         swept_points = (self.previous_local[:, None]
                         + self._temporal_alpha * (current - self.previous_local)[:, None])
@@ -496,22 +544,39 @@ class GuitarPenetrationMonitor:
                              & (current_depth_by_point <= 0.0)
                              & (swept_depth_by_point > self.threshold))
         tunneled = self.has_previous & tunneled_by_point.any(dim=-1)
+        tunneled_by_chain = torch.stack([
+            tunneled_by_point[:, self._point_chain == chain].any(dim=-1)
+            for chain in range(len(self.CHAINS))
+        ], dim=-1)
+        tunneled_by_chain &= self.has_previous[:, None]
         violation = current_depth > self.threshold
+        violation_by_chain = current_depth_by_chain > self.threshold
         self.streak.copy_(update_consecutive_violation(self.streak, violation))
+        self.chain_streak.copy_(update_consecutive_violation(
+            self.chain_streak, violation_by_chain))
+        termination_by_chain = (
+            self.termination_enabled
+            & ((self.chain_streak >= self.frames) | tunneled_by_chain))
         termination = (self.termination_enabled
-                       & ((self.streak >= self.frames) | tunneled))
+                       & termination_by_chain.any(dim=-1))
         initial_overlap = (~self.has_previous) & (progress_buf <= 1) & violation
 
         self.previous_local.copy_(current)
         self.has_previous.fill_(True)
         return {
             "guitar_penetration_depth": current_depth,
+            "guitar_penetration_depth_by_chain": current_depth_by_chain,
             "guitar_swept_penetration_depth": swept_depth,
             "guitar_penetration_point": current_point,
+            "guitar_penetration_chain": current_chain,
             "guitar_penetration_solid": current_solid,
             "guitar_penetration_streak": self.streak.clone(),
+            "guitar_penetration_streak_by_chain": self.chain_streak.clone(),
             "guitar_penetration": violation,
             "guitar_tunneled": tunneled,
+            "guitar_tunneled_by_chain": tunneled_by_chain,
             "guitar_initial_overlap": initial_overlap,
             "guitar_penetration_termination": termination,
+            "guitar_penetration_termination_by_chain":
+                termination_by_chain,
         }

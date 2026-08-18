@@ -14,11 +14,11 @@ for path in (str(PACKAGE_ROOT), str(PROJECT_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from tools.record_strike_visualized_rollout import (  # noqa: E402
+from tools.record_strike_visualized_rollout import (
     resolve_visualized_report_path,
     resolve_visualized_video_paths,
 )
-from tools.strike_visualization import (  # noqa: E402
+from tools.strike_visualization import (
     CameraSpec,
     VISUAL_STRING_RIBBON_HALF_WIDTH_M,
     build_strike_overlay_geometry,
@@ -93,6 +93,30 @@ def main():
         lane_core_half_width_m=0.006,
         target_string=2,
     )
+
+
+    build_strike_overlay_geometry(
+        starts,
+        ends,
+        allowed_y=ALLOWED,
+        preferred_y=PREFERRED,
+        target_lane_y=float(np.float32(PREFERRED[1])),
+        lane_outer_half_width_m=0.0125,
+        lane_core_half_width_m=0.006,
+        target_string=2,
+    )
+    recovery_geometry = build_strike_overlay_geometry(
+        starts,
+        ends,
+        allowed_y=ALLOWED,
+        preferred_y=PREFERRED,
+
+        target_lane_y=-0.2919691205024719,
+        lane_outer_half_width_m=0.0125,
+        lane_core_half_width_m=0.006,
+        target_string=2,
+    )
+    assert recovery_geometry["target_lane_within_preferred"] is False
     assert geometry["target_string_number"] == 3
     assert geometry["ribbon_half_width_m"] == (
         VISUAL_STRING_RIBBON_HALF_WIDTH_M)

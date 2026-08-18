@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from env.tasks.task_fret import goal_pair_phase_diagnostics
+from env.tasks.task_fret import FretTask, goal_pair_phase_diagnostics
 from learning.models import ActorCritic
 from learning.ppo import PPOConfig, PPOTrainer
 
@@ -56,6 +56,47 @@ def _phase_gate_checks():
         preserved, quality, distance, progress) == {}
 
 
+def _recovery_action_mask_checks():
+    class Goals:
+        goal_pair_preview_mask = torch.tensor([False, False])
+        goal_pair_rehearsal_mask = torch.tensor([True, False])
+        goal_pair_incoming_finger = torch.tensor([0, 0])
+
+        @staticmethod
+        def current():
+            return {
+                "fret": torch.tensor([
+                    [0, 5, 0, 0, 0, 0],
+                    [4, 0, 0, 0, 0, 0],
+                ]),
+                "finger": torch.tensor([
+                    [0, 2, 0, 0, 0, 0],
+                    [1, 0, 0, 0, 0, 0],
+                ]),
+            }
+
+    task = object.__new__(FretTask)
+    task.device = torch.device("cpu")
+    task.num_envs = 2
+    task.num_actions = 7
+    task.curriculum_stage = "goal_pair"
+    task.goal_pair_action_assist = False
+    task.goal_pair_recovery_assist = True
+    task.goal_pair_action_routing = False
+    task.preparation_remaining = torch.zeros(2, dtype=torch.long)
+    task._action_finger_ids = torch.tensor([0, 1, 2, -1, -1, -1, -1])
+    task._action_is_wrist = torch.tensor(
+        [False, False, False, True, False, False, False])
+    task._action_is_transition_proximal = torch.tensor(
+        [False, False, False, True, True, True, False])
+    task._goal_pair_routed_fingers = torch.empty(
+        2, 4, dtype=torch.bool)
+    task.goals = Goals()
+    mask = task.policy_action_mask()
+    assert mask[0].all()
+    assert mask[1].all()
+
+
 class _Goals:
     fret = torch.tensor([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
 
@@ -80,6 +121,10 @@ class _DiagnosticEnv:
             "goal_pair_transition_finger_4_next_progress",
             "goal_pair_transition_finger_4_target_active",
             "goal_pair_transition_finger_4_target_distance",
+            "goal_pair_transition_finger_4_hold_quality",
+            "goal_pair_transition_finger_4_dropout_rate",
+            "goal_pair_full_song_finger_4_target_active",
+            "goal_pair_full_song_finger_4_press_success",
         )
         self.step_index = 0
 
@@ -103,6 +148,8 @@ class _DiagnosticEnv:
             next_progress = torch.tensor([0.01, 9.0, 9.0])
             target_active = torch.tensor([True, True, False])
             target_distance = torch.tensor([0.30, 0.05, 9.0])
+            hold_quality = torch.tensor([0.90, 0.80, 9.0])
+            dropout_rate = torch.tensor([0.10, 0.20, 9.0])
         else:
             settled = torch.tensor([False, False, True])
             pre_active = torch.tensor([False, True, False])
@@ -115,6 +162,8 @@ class _DiagnosticEnv:
             next_progress = torch.tensor([9.0, -0.02, 9.0])
             target_active = torch.tensor([False, False, True])
             target_distance = torch.tensor([9.0, 9.0, 0.07])
+            hold_quality = torch.tensor([9.0, 9.0, 0.70])
+            dropout_rate = torch.tensor([9.0, 9.0, 0.30])
         info = {
             "diagnostic_active": torch.ones(3, dtype=torch.bool),
             "curriculum_diagnostic_enabled": settled,
@@ -129,6 +178,13 @@ class _DiagnosticEnv:
             "goal_pair_transition_finger_4_next_progress": next_progress,
             "goal_pair_transition_finger_4_target_active": target_active,
             "goal_pair_transition_finger_4_target_distance": target_distance,
+            "goal_pair_transition_finger_4_hold_quality": hold_quality,
+            "goal_pair_transition_finger_4_dropout_rate": dropout_rate,
+            "goal_pair_full_song_active": (
+                torch.tensor([False, True, True]) if first
+                else torch.tensor([False, False, True])),
+            "goal_pair_full_song_finger_4_target_active": target_active,
+            "goal_pair_full_song_finger_4_press_success": hold_quality,
         }
         obs = torch.full(
             (self.num_envs, self.num_obs), float(self.step_index))
@@ -175,10 +231,22 @@ def _rollout_aggregation_checks():
     assert abs(
         stats["curriculum_goal_pair_transition_finger_4_target_distance"] - 0.06
     ) < 1e-7
+    assert abs(
+        stats["curriculum_goal_pair_transition_finger_4_hold_quality"] - 0.75
+    ) < 1e-7
+    assert abs(
+        stats["curriculum_goal_pair_transition_finger_4_dropout_rate"] - 0.25
+    ) < 1e-7
+    assert stats[
+        "curriculum_goal_pair_full_song_finger_4_target_active_count"] == 2.0
+    assert abs(
+        stats["curriculum_goal_pair_full_song_finger_4_press_success"] - 0.75
+    ) < 1e-7
 
 
 def main():
     _phase_gate_checks()
+    _recovery_action_mask_checks()
     _rollout_aggregation_checks()
     print("PASS: phase-gated goal-pair diagnostics and active evidence counts")
 

@@ -200,6 +200,30 @@ def main():
         assert goals.validation_metadata["contract_valid"]
         assert not goals.barre_enabled
 
+        transfer_frames = [frame(index) for index in range(3)]
+        transfer_frames[0]["fret_goal"][0] = 3
+        transfer_frames[0]["finger_goal"][0] = 1
+        transfer_frames[1]["fret_goal"][:3] = [3, 0, 5]
+        transfer_frames[1]["finger_goal"][:3] = [1, 0, 3]
+        transfer_frames[2]["fret_goal"][0] = 4
+        transfer_frames[2]["finger_goal"][0] = 1
+        transfer_path = Path(tmp) / "finger_pose_slots.json"
+        transfer_path.write_text(json.dumps({
+            "schema": "tab2body.fret_training.v1",
+            "metadata": {"fps": 60},
+            "frames": transfer_frames,
+        }))
+        transfer_goals = FretGoalSequence(
+            transfer_path, num_envs=1, device="cpu")
+        isolated_slot = transfer_goals.finger_pose_slot[0, 0].item()
+        chord_slot = transfer_goals.finger_pose_slot[1, 0].item()
+        moved_slot = transfer_goals.finger_pose_slot[2, 0].item()
+        assert isolated_slot == chord_slot
+        assert isolated_slot != moved_slot
+        assert transfer_goals.frame_pose_slot[0].item() != (
+            transfer_goals.frame_pose_slot[1].item())
+        assert transfer_goals.finger_pose_slot_count == 3
+
         hand_path = Path(tmp) / "valid.hand_position_targets.json"
         hand_payload = {
             "schema": "tab2body.hand_position_targets.v1",

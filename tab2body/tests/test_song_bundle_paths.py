@@ -61,9 +61,9 @@ def main():
         state = manifest["training_status"]["strike"]["state"]
         ready_strike += state == "ready"
         ineligible_strike += state == "ineligible"
-    assert ready_strike == 6
-    assert ineligible_strike == 2
-    print("PASS: 8 canonical song bundles, 8 fret goals, 6 pick-only strike goals")
+    assert ready_strike == 7
+    assert ineligible_strike == 1
+    print("PASS: 8 canonical song bundles, 8 fret goals, 7 pick-only strike goals")
 
 
 if __name__ == "__main__":

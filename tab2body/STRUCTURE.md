@@ -1,6 +1,6 @@
 # tab2body 학습 코드 구조
 
-> 최종 갱신: 2026-08-03
+> 최종 갱신: 2026-08-19
 
 현재 실행 가능한 물리 RL 태스크는 왼손 fret과 새 pick-only 오른손 strike다. strike는 제거된
 과거 pilot을 복원한 것이 아니라 최소 goal과 A0~A4 curriculum으로 다시 구현했으며 이전
@@ -19,11 +19,12 @@ PPOTrainer
 
 - `env/base.py`: Isaac Gym 세계, action/PD/reset/물리·관측 공용 코어
 - `env/goals.py`: fret goal
-- `env/strike_goals.py`, `env/strike_detector.py`: strike 최소 goal과 물리 RELEASE 검출
+- `env/strike_goal_compiler.py`, `env/strike_goals.py`: strike 입력 검증, single/strum compile과 시간표
+- `env/strike_detector.py`, `env/strike_events.py`: 물리 RELEASE 검출과 ordered event 상태 전이
 - `env/rewards/fret.py`: fret 보상
 - `env/rewards/strike.py`: stage별 strike 보상
-- `env/tasks/task_fret.py`: 33-action/353-observation fret 조립
-- `env/tasks/task_strike.py`: 30-action/263-observation strike 조립
+- `env/tasks/task_fret.py`: 33-action/428-observation fret 조립
+- `env/tasks/task_strike.py`: 30-action/281-observation strike 조립
 - `learning/`: 모델, PPO, fret/strike curriculum·평가·checkpoint/run 계약
 - `train.py`: fret/strike 공용 학습 진입점 (`--task fret|strike`)
 - `song_bundles.py`: `data/song_bundles/<song_id>` 정본 경로와 곡 ID 해석
@@ -55,8 +56,8 @@ strike 전용 기능이 아니라 모든 태스크의 과거 관측을 보존하
 
 ## strike 상태
 
-- 입력: `tab2body.strike_training.v1`, 필수 `[time,frame,string]`
-- 제어/관측/출력: 30 action, 263 observation, scalar value/reward
+- 입력: `tab2body.strike_training.v1/v2`, 필수 `[time,frame,string]`
+- 제어/관측/출력: 30 action, 281 observation, scalar value/reward
 - 피크/줄: 질량 없는 `RH:pick` 기준점과 고정 유한 선분 6개
 - 성공: 방향·속도·깊이를 만족한 swept crossing 직후 RELEASE
 - 학습: A0 grip → A1 ready → A2 crossing → A3 timing → A4 zone
@@ -65,11 +66,15 @@ strike 전용 기능이 아니라 모든 태스크의 과거 관측을 보존하
 - A4 위치: preferred lane 중심, `±6 mm` 만점·`±12.5 mm` 성공
 - 산출물: checkpoint/log/evaluation/analysis/plot/remembered+current MP4
 
+진입부터 종료까지의 모듈별 실제 호출 계약은
+[`docs/2026-08-19/STRIKE_TRAIN_EXECUTION_FLOW.md`](../docs/2026-08-19/STRIKE_TRAIN_EXECUTION_FLOW.md)를
+기준으로 한다.
+
 과거 806-observation/593D goal/iteration 강제 승급 계약과 그 checkpoint는 현행이 아니다.
 
-Fret의 현재 observation은 기본 180 + goal 128 + 이전 action 33 + thumb geometry 12로
-총 353차원이다. 따라서 과거 341-observation 또는 37-action checkpoint는 현재 계약으로
-resume하지 않는다. 호환 실행 기록은 `fret/training/runs/20260803_*`에서 확인한다.
+Fret의 현재 observation은 기본 180 + goal 128 + 이전 action 33 + thumb geometry 12 +
+미래 goal 문맥 75로 총 428차원이다. 이전 353차원 정책은 `--initialize-from`으로만 확장하며,
+구 341-observation 또는 37-action checkpoint는 현재 계약으로 strict resume하지 않는다.
 
 배관 검증은 별도 legacy smoke 파일이 아니라 공용 진입점으로 실행한다.
 

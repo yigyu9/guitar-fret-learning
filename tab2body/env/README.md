@@ -1,7 +1,7 @@
 # tab2body/env — 설계 문서 (base.py가 왜 이렇게 구성되었는가)
 
 > 이 문서는 `base.py`(공유 환경 코어)의 **모든 설계 결정과 그 근거**를 정리한다.
-> 근거 표기: **[G]**=guitar/(Pei Xu SA'24, 이식 원본) · **[D]**=DIGIT/(자체 실패작, 안티패턴) ·
+> 근거 표기: **[G]**=guitar/(Pei Xu SA'24, 이식 원본) · **[D]**=과거 DIGIT 실패 분석(안티패턴) ·
 > **[P]**=PROJECT_CONTEXT(설계 정본·실측 함정) · **[M]**=이 프로젝트에서 직접 실측(도구 명시).
 > 최종 갱신: 2026-08-03. 현재 배관 smoke는 `python -m tab2body.train --task ... --smoke`로 실행한다.
 
@@ -26,7 +26,7 @@
 | `rewards/motion.py` | wrist goal 도달 후 finger→wrist→elbow→shoulder R12 속도 우선순위 | ✅ CPU+GPU smoke |
 | `safety.py` | R13 손바닥 법선 + R14 기타 관통 + R22 손가락 쌍별 capsule 관통 진단 | ✅ CPU+GPU smoke |
 | `rewards/hold.py` | 기타 안정 (G1 스트랩) | ⬜ W2+ |
-| `tasks/task_fret.py` | 33DOF 제어·353D 관측·goal/reward/R13 손바닥 종료/F1 집계·4-tuple step | ✅ S0 |
+| `tasks/task_fret.py` | 33DOF 제어·428D 관측·goal/reward/R13 손바닥 종료/F1 집계·4-tuple step | ✅ S0 |
 | `strike_goals.py` | 최소 `[time,frame,string]` goal 검증·60 Hz canonical timeline | ✅ v1 |
 | `strike_detector.py` | goal 독립 finite swept crossing·RELEASE·물리 re-arm·zone quality | ✅ CPU/CUDA |
 | `rewards/strike.py` | A0~A4 stage-mask scalar reward와 guitar reference grip | ✅ v1 |
@@ -153,9 +153,10 @@ PopArt/AdaptNet, G1 자유기타 root/스트랩 plumbing.
 ### 6.1 S0 fret 확장 (2026-07-19)
 
 `base.py` 코어는 유지하고 task subclass에서 goal/reward를 배관했다. `obs_buf`의 base-prefix 기록만
-확장 관측과 공존하도록 수정. `FretTask`: obs 353
-(기본180+goal128+EMA actuator state33+thumb geometry12), actions 33, reward/value 6.
-현재 checkpoint contract는 이 차원을 포함하며, 구 341D·37-action checkpoint는 호환되지 않는다.
+확장 관측과 공존하도록 수정. `FretTask`: obs 428
+(기본180+goal128+EMA actuator state33+thumb geometry12+미래 goal75), actions 33,
+reward/value 6. 현재 checkpoint contract는 이 차원을 포함한다. 이전 353D 정책은 명시적
+초기화로만 확장하며, 구 341D·37-action checkpoint는 strict resume하지 않는다.
 
 ### 6.2 pick-only strike 확장 (2026-07-27)
 
@@ -167,6 +168,19 @@ A4 zone을 성능 기반으로 승급하고 A3 허용 오차를 100→67→50 ms
 지표만 승급 증거로 쓰며, timing p95에는 허용창 밖의 유효 target crossing도 포함한다. A4 sampled
 lane은 `±6 mm` 만점, `±12.5 mm` 성공 경계다.
 
+### 6.3 Goal Pair 병목 개선 (2026-08-12)
+
+- pair와 연속 구간을 전환 종류·incoming 손가락별로 균형 표집한다.
+- 연속 구간 길이는 mixed 단계에서 2→4→8 이벤트, full에서 최대 12 이벤트로 늘린다.
+- 특정 손가락 집중을 끄고 네 손가락을 공동 학습한다.
+- 회복 중 모든 손가락과 왼쪽 어깨·팔꿈치·손목을 허용한다.
+- retention은 손가락 균형 표집한 실제 곡의 두 연속 구간을 재생한다.
+- 회복은 phase 기준선 대비 하락이 사라지면 끝낸다. 최종 숙달 기준과 혼용하지 않는다.
+- 안정 압현 자세는 goal 상태별 cache에 저장하고 reset의 35%에 재사용한다.
+- 사람 왼손 모션은 비활성 손가락·엄지에만 최대 0.03의 약한 자세 감점으로 적용한다.
+- `local_reach_margin`으로 현재 MCP 위치에서 손가락만으로 목표에 닿는지 기록한다.
+- 얕은 일반 관통은 연속 감점하며, 엄지 지지는 엄지 전용 안전 규칙으로 분리한다.
+
 ## 7. 검증 도구
 
 - 공용 배관 smoke — `python -m tab2body.train --task fret|strike --smoke --num-envs 8`
@@ -175,4 +189,5 @@ lane은 `±6 mm` 만점, `±12.5 mm` 성공 경계다.
 
 ## 8. 참조 문서
 - 설계 정본: `PROJECT_CONTEXT.md` §3·§4와 `docs/plans/`의 태스크별 문서.
-- 이식 원본: `guitar/env.py`. 실패 일지: `DIGIT/isaacgymenvs/summary.md`.
+- 이식 원본: `guitar/env.py`. 과거 DIGIT 실패 구현의 핵심 안티패턴은 이 문서와
+  `docs/base-env-research.md`에 요약되어 있으며, 원본 디렉터리는 정리되었다.

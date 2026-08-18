@@ -1,4 +1,7 @@
-# strike 구현 상태 — 2026-07-27 재설계판
+# strike 구현 상태 — 2026-08-04 규칙별 실행 판정 반영판
+
+현재 규칙 우선순위와 현재/확장 경계는 [`RIGHT_HAND_RULES.md`](../RIGHT_HAND_RULES.md) 및
+[`RIGHT_HAND_EXTENSIONS.md`](../RIGHT_HAND_EXTENSIONS.md)를 따른다.
 
 ## 구현·검증 완료
 
@@ -17,17 +20,20 @@
 | 그립 | guitar 연구 frame 2227에서 얻은 21-DOF qpos target | `pick-grip-reference.json` |
 | 단계 | A0 grip→A1 ready→A2 crossing→A3 timing→A4 zone | curriculum tests |
 | 시간 curriculum | A3에서 성능 gate로 100→67→50 ms | curriculum save/resume test |
-| 승급 증거 | A1~A4 완료 episode의 exact `strike_*`만 사용; no-episode rollout은 streak 유지 | curriculum regression |
+| 승급 증거 | A0~A4 완료 episode의 exact 지표와 failure=0만 사용; no-episode rollout은 streak 유지 | curriculum regression |
 | timing 통계 | timing/zone gate 전의 유효 target crossing 전체로 MAE/p95 계산 | pooled timing regression |
 | 전체곡 준비 | 첫 event 30 frame 전 시작, 현재 goal 최대 894 frame | GPU runtime audit |
 | A4 episode | 학습은 임의 시작 연속 8 events, 평가는 전체 42 events | task/evaluation smoke |
-| 회복 | hit 뒤 12 frame; 마지막 A4 hit도 보존, miss는 회복 없이 종료/진행 | task audit |
+| 회복 | matcher 성공과 무관하게 실제 RELEASE 뒤 직전 줄·lane·방향을 보존; 완전한 12 frame과 detector re-arm 뒤 종료 | event/recovery CPU regression |
 | 관측/보상 | 263D observation, scalar reward/value | GPU runtime audit |
 | 체크포인트 | model/optimizer/counter, goal/grip/config/code/asset hash, curriculum·task RNG; 평가 시 saved PPO/std 복원 | checkpoint tests + GPU reload |
 | 자동 산출물 | JSONL/log/eval/plot/analysis/두 카메라 MP4, manifest 오류 기록 | artifact contract + GPU end-to-end |
+| 운동·안전 진단 | RELEASE depth/speed, 관절군 phase motion, recovery crossing, 오른팔 기타 관통 JSON | `audit_strike_motion.py` + artifact contract |
 
-2026-07-29 GPU audit JSON은 역사 산출물로 정리했다. 현재 검증은
-`python -m tab2body.train --task strike --smoke` 실행 폴더의 manifest·로그·평가 JSON을 기준으로 한다.
+2026-07-29 GPU audit JSON은 역사 산출물로 정리했다. 2026-08-03 코드 정리본은 CPU 회귀를 통과했지만
+현재 장비에 CUDA device가 없어 새 GPU smoke를 완료하지 못했다. 다음 CUDA 실행의 기준은
+`python -m tab2body.train --task strike --smoke`가 만드는 manifest·로그·평가 JSON이다. 상세 범위는
+[`CODE_AUDIT_2026-08-03.md`](../CODE_AUDIT_2026-08-03.md)를 따른다.
 
 ## 구현했지만 수치 재보정이 필요한 항목
 
@@ -43,8 +49,10 @@ rollout과 영상에 근거해 명시적으로 바꾼다.
 
 ## 진단 또는 사람 검토로 남긴 항목
 
-- 오른손 손목 작업영역, 기타 관통, 비정상 지지의 strike 전용 calibrated safety proxy
-- phase duration, 어깨/팔꿈치/손목 기여율, jerk, path curvature, action saturation
+- 오른팔/손 기타 관통 monitor는 구현했지만 성공/실패 depth 분포가 없어 termination은 아직 비활성
+- phase duration, 어깨/팔꿈치/손목/손 기여율, acceleration/jerk, action saturation은 자동 JSON으로 수집
+- A4 event index가 진행된 뒤에도 직전 줄·lane·방향의 follow-through 문맥이 회복 종료까지 유지되는지 GPU 확인
+- 연속 down의 string-field 밖 recovery corridor와 역방향 재교차율
 - legacy quaternion과 현재 Isaac qpos 자세 사이의 FK 잔차
 - 충분히 학습된 A4에서 crossing-y/timing/re-arm 분포
 - 사람이 보기에 자연스러운지 remembered/current 영상 검토

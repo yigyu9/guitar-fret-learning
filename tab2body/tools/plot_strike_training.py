@@ -11,6 +11,15 @@ import argparse
 import json
 import math
 from pathlib import Path
+import sys
+
+
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = PACKAGE_ROOT.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from tab2body.strike_contract import STRIKE_STAGES
 
 import matplotlib
 
@@ -18,13 +27,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-STAGES = (
-    "A0_PICK_GRIP",
-    "A1_TIP_READY",
-    "A2_FREE_CROSSING",
-    "A3_TIMED_CROSSING",
-    "A4_ZONE_CONTROL",
-)
+STAGES = STRIKE_STAGES
 STAGE_COLORS = {
     "A0_PICK_GRIP": "#d9edf7",
     "A1_TIP_READY": "#dff0d8",
@@ -75,8 +78,9 @@ PANEL_SERIES = (
                 "strike_release_recall", "curriculum_release_recall",
                 "release_recall", "strike_recall")),
             ("false positive rate", (
+                "strike_false_positive_rate",
                 "curriculum_false_positive_rate", "false_positive_rate",
-                "strike_false_positive_rate", "release_false_positive_rate",
+                "release_false_positive_rate",
                 "strike_wrong_rate")),
         ),
         (0.0, 1.02),
@@ -89,8 +93,8 @@ PANEL_SERIES = (
                 "strike_release_recall", "curriculum_release_recall",
                 "strike_recall", "release_recall", "recall")),
             ("F1", (
-                "strike_f1", "strike_episode_f1",
-                "curriculum_strike_f1", "f1")),
+                "strike_episode_f1", "curriculum_strike_f1",
+                "strike_f1", "f1")),
         ),
         (0.0, 1.02),
     ),
@@ -116,8 +120,37 @@ PANEL_SERIES = (
                 "strike_zone_success_rate", "zone_success_rate",
                 "curriculum_zone_success_rate")),
             ("zone quality", (
-                "curriculum_zone_quality", "zone_quality",
-                "strike_zone_mean_quality", "mean_zone_quality")),
+                "strike_zone_mean_quality", "curriculum_zone_quality",
+                "zone_quality", "mean_zone_quality")),
+        ),
+        (0.0, 1.02),
+    ),
+    (
+        "Motion magnitude diagnostics",
+        (
+            ("tip speed (m/s)", (
+                "curriculum_tip_speed_m_s", "tip_speed_m_s")),
+            ("penetration depth (m)", (
+                "curriculum_guitar_penetration_depth",
+                "guitar_penetration_depth")),
+            ("swept penetration depth (m)", (
+                "curriculum_guitar_swept_penetration_depth",
+                "guitar_swept_penetration_depth")),
+        ),
+        None,
+    ),
+    (
+        "Motion diagnostic rates",
+        (
+            ("phase violation", (
+                "curriculum_release_phase_violation",
+                "release_phase_violation")),
+            ("penetration frame", (
+                "curriculum_guitar_penetration",
+                "guitar_penetration")),
+            ("action saturation", (
+                "curriculum_action_saturation_fraction",
+                "action_saturation_fraction")),
         ),
         (0.0, 1.02),
     ),
@@ -130,8 +163,10 @@ PANEL_SERIES = (
             ("timeout", (
                 "timeout", "early_timeout", "timeout_rate")),
             ("wrong crossing", (
-                "strike_wrong_rate", "wrong_crossing_rate",
-                "false_positive_rate")),
+                "strike_false_positive_rate",
+                "curriculum_false_positive_rate",
+                "false_positive_rate", "release_false_positive_rate",
+                "strike_wrong_rate", "wrong_crossing_rate")),
         ),
         (0.0, 1.02),
     ),
@@ -184,8 +219,8 @@ def step_values(rows):
         if value is None:
             value = float(index)
         if value < previous:
-            # Append-only logs should be monotonic.  Fail rather than drawing a
-            # misleading stage chronology.
+
+
             raise ValueError("metric step axis is not monotonic")
         result.append(value)
         previous = value
@@ -257,8 +292,12 @@ def render_plot(metrics, out=None):
     x = step_values(rows)
     spans = stage_spans(rows, x)
 
+    columns = 2
+    rows_count = math.ceil(len(PANEL_SERIES) / columns)
     fig, axes = plt.subplots(
-        4, 2, figsize=(15, 14), dpi=140, constrained_layout=True)
+        rows_count, columns,
+        figsize=(15, 3.5 * rows_count), dpi=140,
+        constrained_layout=True, squeeze=False)
     for axis, (title, specs, limits) in zip(axes.flat, PANEL_SERIES):
         for stage, start, end in spans:
             axis.axvspan(
@@ -282,6 +321,8 @@ def render_plot(metrics, out=None):
         axis.set_title(title)
         axis.set_xlabel("environment samples")
         axis.grid(alpha=0.25)
+    for axis in axes.flat[len(PANEL_SERIES):]:
+        axis.set_visible(False)
 
     transitions = []
     for stage, start, _end in spans:

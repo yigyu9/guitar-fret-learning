@@ -14,23 +14,32 @@ from env.rewards.fret import (
     aggregate_active_channel_bottleneck,
     apply_binary_penalty,
     balance_press_no_press_channels,
+    blend_anchor_finger_reward,
     blend_finger_coupling_reward,
+    blend_goal_pair_rehearsal_anchor_reward,
     bound_fret_reward,
+    cached_finger_action_teacher,
+    cached_finger_pose_guide,
     chord_aware_target_fraction,
+    chord_fine_conjunctive_reward,
     conjunctive_chord_quality,
     conjunctive_next_goal_quality,
     dense_fret_position_quality,
     fine_alignment_distance_reward,
     fret_position_quality,
+    guitar_penetration_soft_cost,
     next_goal_approach_reward,
     next_goal_distance_potential,
     next_goal_potential_progress,
     minimum_active_target_separation,
     precise_press_success,
     press_precision_gate,
+    press_near_miss_mask,
     suppress_positive_reward_on_penetration,
     update_press_hold_state,
+    wrong_press_finger_mask,
 )
+from env.goals import FINGER_EVENT_TIME_SCALE_S
 
 
 def test_same_fret_chord_targets_stagger_for_clearance():
@@ -107,6 +116,17 @@ def test_precise_success_uses_raw_fret_position():
     assert torch.equal(with_arch, torch.tensor([[False, False, False]]))
 
 
+def test_wrong_press_is_attributed_to_contacting_finger():
+    pressed = torch.zeros(1, 2, 4, 3, dtype=torch.bool)
+    forbidden = torch.zeros(1, 2, 3, dtype=torch.bool)
+    forbidden[0, 0, 2] = True
+    forbidden[0, 1, 1] = True
+    pressed[0, 0, 1, 2] = True
+    pressed[0, 1, 3, 0] = True
+    mask = wrong_press_finger_mask(pressed, forbidden)
+    assert torch.equal(mask, torch.tensor([[False, True, False, False]]))
+
+
 def test_hold_and_dropout():
     shape = (1, 2)
     streak = torch.zeros(shape, dtype=torch.long)
@@ -181,6 +201,16 @@ def test_large_failure_penalties_keep_reward_bounded():
         pass
     else:
         raise AssertionError("non-finite penalty was accepted")
+
+
+def test_near_miss_penalty_only_applies_after_approach():
+    active = torch.tensor([[True, True, True, False]])
+    success = torch.tensor([[False, False, True, False]])
+    distance = torch.tensor([[0.010, 0.030, 0.005, 0.001]])
+    miss = press_near_miss_mask(
+        active, success, distance, max_distance=0.015)
+    assert torch.equal(
+        miss, torch.tensor([[True, False, False, False]]))
 
 
 def test_class_balance():
@@ -282,6 +312,64 @@ def test_chord_bridge_active_finger_bottleneck():
     assert minimum[0] == 0
 
 
+def test_chord_fine_joint_reward_tracks_the_weakest_finger():
+    active = torch.tensor([[True, True, False]])
+    fine_distance = torch.tensor([[1.0, 0.3, 0.9]])
+    longitudinal = torch.ones_like(fine_distance)
+    lateral = torch.tensor([[1.0, 0.9, 1.0]])
+    normal = torch.tensor(
+        [[1.0, 0.0016, 1.0]], requires_grad=True)
+    depth = torch.tensor([[1.0, 0.25, 1.0]])
+    success = torch.tensor([[True, False, True]])
+    expanded, aggregate, mean, minimum, axis_minimum = (
+        chord_fine_conjunctive_reward(
+            fine_distance, longitudinal, lateral, normal,
+            depth, success, active, bottleneck_weight=1.0))
+    assert torch.isclose(axis_minimum[0, 1], torch.tensor(0.2))
+    assert torch.isclose(aggregate[0], minimum[0])
+    assert aggregate[0] < mean[0]
+    assert torch.equal(expanded[0, :2], aggregate.expand(2))
+    aggregate.sum().backward()
+    assert normal.grad[0, 1] > 0.0
+
+
+def test_goal_pair_anchor_exposes_selected_finger_quality():
+    balanced = torch.full((2, 3), 0.5)
+    channel = torch.tensor([[0.9, 0.1, 0.8], [0.2, 0.7, 0.4]])
+    anchor = torch.tensor([
+        [False, True, False],
+        [False, False, False],
+    ])
+    shaped, anchor_reward, active = (
+        blend_goal_pair_rehearsal_anchor_reward(
+            balanced, channel, anchor, weight=0.25))
+    assert torch.allclose(shaped[0], torch.full((3,), 0.4))
+    assert torch.equal(shaped[1], balanced[1])
+    assert torch.allclose(anchor_reward, torch.tensor([0.1, 0.0]))
+    assert torch.equal(active, torch.tensor([True, False]))
+
+
+def test_goal_pair_anchor_prioritizes_selected_next_goal():
+    mean = torch.tensor([0.40, 0.40, 0.40])
+    per_finger = torch.tensor([
+        [0.10, 0.90, 0.20, 0.30],
+        [0.10, 0.90, 0.20, 0.30],
+        [0.10, 0.90, 0.20, 0.30],
+    ])
+    active = torch.tensor([
+        [False, True, False, False],
+        [False, False, True, False],
+        [False, True, False, False],
+    ])
+    blended, selected, enabled = blend_anchor_finger_reward(
+        mean, per_finger, active, torch.tensor([2, 2, 0]), weight=0.25)
+    assert torch.isclose(blended[0], torch.tensor(0.525))
+    assert blended[1] == mean[1]
+    assert blended[2] == mean[2]
+    assert torch.equal(selected, torch.tensor([0.90, 0.90, 0.10]))
+    assert enabled.tolist() == [True, False, False]
+
+
 
 
 def test_next_goal_gate():
@@ -293,7 +381,7 @@ def test_next_goal_gate():
     event = torch.zeros(1, 4, 13)
     event[0, 0, 2] = 1.0
     event[0, 0, 6] = 4.0 / 22.0
-    event[0, 0, 7] = 0.25
+    event[0, 0, 7] = 0.25 / FINGER_EVENT_TIME_SCALE_S
     event[0, 0, 8] = 1.0
     event[0, 0, 11] = 1.0
     current_active = torch.zeros(1, 4, dtype=torch.bool)
@@ -330,6 +418,14 @@ def test_next_goal_gate():
     blocked, metrics = next_goal_approach_reward(
         tips, targets, outward, event, current_active)
     assert blocked[0] == 0
+    assert not bool(metrics["next_goal_approach_gate"][0, 0])
+
+    current_active[0, 0] = False
+    event[0, 0, 7] = 1.0
+    distant, metrics = next_goal_approach_reward(
+        tips, targets, outward, event, current_active,
+        lookahead_s=1.50)
+    assert distant[0] == 0
     assert not bool(metrics["next_goal_approach_gate"][0, 0])
 
 
@@ -407,6 +503,64 @@ def test_coupling_does_not_tax_closed_gate():
     assert blended[0, 1] == reward[0, 1]
 
 
+def test_cached_finger_pose_guide_is_dense_and_strictly_gated():
+    current = torch.zeros(2, 4, 4)
+    target = torch.zeros_like(current)
+    scale = torch.ones(4, 4)
+    valid = torch.zeros(2, 4, dtype=torch.bool)
+    gate = torch.zeros_like(valid)
+    valid[0, 1] = True
+    gate[0, 1] = True
+    target[0, 1] = 1.0
+    reward, per_finger, active = cached_finger_pose_guide(
+        current, target, scale, valid, gate)
+    expected = torch.exp(torch.tensor(-0.5))
+    assert torch.isclose(reward[0], expected)
+    assert reward[1] == 0.0
+    assert torch.isclose(per_finger[0, 1], expected)
+    assert int(active.sum()) == 1
+
+    target[0, 1] = 0.25
+    closer, _, _ = cached_finger_pose_guide(
+        current, target, scale, valid, gate)
+    assert closer[0] > reward[0]
+    gate.zero_()
+    closed, _, active = cached_finger_pose_guide(
+        current, target, scale, valid, gate)
+    assert torch.equal(closed, torch.zeros_like(closed))
+    assert not active.any()
+
+    proximal = torch.zeros(2, 4, 9)
+    proximal_scale = torch.ones(4, 9)
+    valid[1, 2] = True
+    gate[1, 2] = True
+    proximal_target = proximal.clone()
+    proximal_target[1, 2] = 0.5
+    proximal_reward, _, _ = cached_finger_pose_guide(
+        proximal, proximal_target, proximal_scale, valid, gate)
+    assert 0.0 < proximal_reward[1] < 1.0
+
+
+def test_cached_finger_action_teacher_composes_active_fingers():
+    target = torch.arange(32, dtype=torch.float32).reshape(2, 4, 4)
+    valid = torch.ones(2, 4, dtype=torch.bool)
+    active = torch.tensor([
+        [True, True, False, False],
+        [False, False, True, False],
+    ])
+    quality = torch.tensor([
+        [0.30, 0.10, 0.0, 0.0],
+        [0.0, 0.0, 0.80, 0.0],
+    ])
+    teacher, mask = cached_finger_action_teacher(
+        target, valid, active, quality, minimum_quality=0.20)
+    assert mask[0, 0].all() and not mask[0, 1:].any()
+    assert mask[1, 2].all() and not mask[1, :2].any()
+    assert not mask[1, 3].any()
+    assert torch.equal(teacher[0, 0], target[0, 0])
+    assert not teacher[0, 1:].any()
+
+
 def test_transition_quality_requires_preservation_and_penetration_blocks_credit():
     joint = conjunctive_next_goal_quality(
         torch.tensor([0.8, 0.8, 0.8]),
@@ -419,6 +573,11 @@ def test_transition_quality_requires_preservation_and_penetration_blocks_credit(
     assert torch.equal(gated[0], torch.tensor([0.0, -0.2]))
     assert torch.equal(gated[1], reward[1])
 
+    cost = guitar_penetration_soft_cost(torch.tensor([
+        0.0, 0.0025, 0.00375, 0.005, 0.010]))
+    assert torch.allclose(
+        cost, torch.tensor([0.0, 0.0, 0.0125, 0.05, 0.05]))
+
 
 def main():
     test_same_fret_chord_targets_stagger_for_clearance()
@@ -428,12 +587,18 @@ def main():
     test_precise_success_uses_raw_fret_position()
     test_hold_and_dropout()
     test_large_failure_penalties_keep_reward_bounded()
+    test_near_miss_penalty_only_applies_after_approach()
     test_class_balance()
     test_static_chord_bottleneck_and_completion_gate()
     test_chord_bridge_active_finger_bottleneck()
+    test_chord_fine_joint_reward_tracks_the_weakest_finger()
+    test_goal_pair_anchor_exposes_selected_finger_quality()
+    test_goal_pair_anchor_prioritizes_selected_next_goal()
     test_next_goal_gate()
     test_next_goal_progress_is_signed_and_target_safe()
     test_coupling_does_not_tax_closed_gate()
+    test_cached_finger_pose_guide_is_dense_and_strictly_gated()
+    test_cached_finger_action_teacher_composes_active_fingers()
     test_transition_quality_requires_preservation_and_penetration_blocks_credit()
     print("PASS: precision, hold/dropout, transition conjunction, safety gate")
 

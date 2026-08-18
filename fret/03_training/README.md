@@ -1,9 +1,9 @@
 # Fret 학습 문서
 
-> 최종 갱신: 2026-08-03
+> 최종 갱신: 2026-08-18
 
 Fret은 한 곡의 60Hz 운지 goal을 반복 최적화하는 왼손 물리 학습입니다. 현재 실행 계약은
-33 action, 353 observation, 6 reward/value이며, 곡을 섞은 범용 정책이 아니라 곡별 정책을
+33 action, 428 observation, 6 reward/value이며, 곡을 섞은 범용 정책이 아니라 곡별 정책을
 별도로 학습합니다.
 
 ## 입력
@@ -27,16 +27,17 @@ data/song_bundles/02_Jazz1-200-B_solo/
 
 ```text
 action       = 33
-observation  = 353
+observation  = 428
 reward/value = 6 / 6
 observation  = base180 + goal128 + previous EMA action33 + thumb geometry12
+               + future goal context75
 ```
 
 Fret의 기본 설정은 1,024 병렬 환경, 5,000 iteration, horizon 32, minibatch 4,096입니다.
 checkpoint는 기본 500 iteration마다 저장되고 학습 종료 시 마지막 iteration도 저장됩니다.
 
-37-action 또는 341-observation checkpoint는 현재 코드와 호환되지 않습니다. checkpoint를
-재사용할 때는 계약 hash와 goal·asset·구현 지문이 모두 일치해야 합니다.
+이전 353-observation 정책은 `--initialize-from`으로만 확장합니다. strict resume은 계약 hash와
+goal·asset·구현 지문이 모두 일치해야 하며, 37-action 또는 341-observation checkpoint는 제외합니다.
 
 ## 실행
 

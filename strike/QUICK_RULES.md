@@ -1,8 +1,11 @@
 # 오른손 strike 규칙 — 사람이 먼저 읽는 짧은 버전
 
 이 문서는 전체 규칙을 빠르게 이해하기 위한 요약이다. 구현 충돌이 생기면
-[규칙 정본 S1~S60](02_physical_control/rules.md), [goal 계약](01_goal_contract/README.md),
+[현재 구현 규칙 정본](RIGHT_HAND_RULES.md), [goal 계약](01_goal_contract/README.md),
 [구현 판정표](IMPLEMENTATION_CHECKLIST.md)를 따른다.
+
+코드 스트로크, Protected String과 왼손 `FretReady`는
+[Strum·양손 확장 규칙](RIGHT_HAND_EXTENSIONS.md)에 분리되어 있으며 현재 단현 v1의 구현 완료 항목이 아니다.
 
 ## 현재 v1 전제
 
@@ -55,9 +58,9 @@ READY → APPROACH → RELEASE_RECOVER
 ARMED → RELEASE pulse → WAIT_REARM → ARMED
 ```
 
-한 줄을 친 뒤에는 줄에서 충분히 떨어지고, 최소 시간과 방향 이력을 만족해야 같은 `(agent,string)`이
-다시 ARMED가 된다. 새 goal이 생겼다는 이유만으로 re-arm하지 않는다. 그래야 쉼 중 떨림과 반복 오타도
-숨지 않는다.
+현재 down-only v1은 한 줄을 친 뒤 충분한 3-D separation과 최소 대기 frame을 모두 만족해야 같은
+`(agent,string)`이 다시 ARMED가 된다. 새 goal이 생겼다는 이유만으로 re-arm하지 않는다. 방향이 둘인
+up/alternate 확장에서는 직전 방향 이력까지 추가한다. 그래야 쉼 중 떨림과 반복 오타도 숨지 않는다.
 
 ## 5. 유효한 pick RELEASE의 조건
 
@@ -111,5 +114,5 @@ A0_PICK_GRIP
 
 각 승급은 최소 iteration과 연속 성능 gate가 모두 필요하다. 물리 pick, 실제 grasp/slip,
 string 탄성, up/alternate, strum, fingerstyle와 hybrid는 A4 이후 별도 계약으로 다룬다.
-시간 p95에는 허용창 밖의 올바른 target crossing도 포함하며, A1~A4는 완료 episode가 없는
+시간 p95에는 허용창 밖의 올바른 target crossing도 포함하며, A0~A4는 완료 episode가 없는
 rollout을 승급 성공이나 실패로 세지 않는다.

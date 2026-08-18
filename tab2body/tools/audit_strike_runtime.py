@@ -12,13 +12,14 @@ PROJECT_ROOT = PACKAGE_ROOT.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Isaac Gym must precede torch.
-import isaacgym  # noqa: F401
+
+import isaacgym
 import torch
 
-from tab2body.env.rewards.strike import STAGES
+from tab2body.env.config import configured_kwargs
 from tab2body.env.tasks import StrikeTask
 from tab2body.strike_cfg import STRIKE
+from tab2body.strike_contract import STRIKE_STAGES as STAGES
 
 
 def build_parser():
@@ -40,26 +41,18 @@ def main(argv=None):
         raise ValueError("runtime audit needs at least six envs")
     if args.steps < 1:
         raise ValueError("runtime audit steps must be positive")
-    env = StrikeTask(
+    env = StrikeTask(**configured_kwargs(
+        StrikeTask,
+        STRIKE,
         goal_path=STRIKE["goal_path"],
         grip_reference_path=STRIKE["grip_reference_path"],
         num_envs=args.num_envs,
         device=args.device,
         headless=True,
         seed=STRIKE["seed"],
-        action_alpha=STRIKE["action_alpha"],
-        action_scale=STRIKE["action_scale"],
         reset_noise=0.0,
-        reset_soft_limit_fraction=STRIKE["reset_soft_limit_fraction"],
-        zone=STRIKE["zone"],
-        trajectory=STRIKE["trajectory"],
-        detector=STRIKE["detector"],
-        reward=STRIKE["reward"],
-        episode=STRIKE["episode"],
-        failure_termination_penalty=STRIKE[
-            "failure_termination_penalty"],
         random_start=False,
-    )
+    ))
     try:
         obs = env.reset()
         start, end = env.string_segments_g()
@@ -82,6 +75,12 @@ def main(argv=None):
             "controlled_dof_names": list(env.controlled_dof_names),
             "direction_profile": env.direction_profile,
             "collision": env.strike_collision_audit,
+            "right_guitar_penetration": {
+                "threshold_m": env.penetration_monitor.threshold,
+                "frames": env.penetration_monitor.frames,
+                "termination_enabled":
+                    env.penetration_monitor.termination_enabled,
+            },
             "zone": {
                 "allowed_y_m": list(env.allowed_y),
                 "preferred_y_m": list(env.preferred_y),
@@ -110,6 +109,8 @@ def main(argv=None):
             reward_min = float("inf")
             reward_max = float("-inf")
             failure_count = 0
+            max_penetration_depth = 0.0
+            max_swept_penetration_depth = 0.0
             for _ in range(args.steps):
                 obs, reward, _done, info = env.step(
                     env.grip_hold_action.clone())
@@ -121,6 +122,18 @@ def main(argv=None):
                 reward_max = max(reward_max, float(reward.max()))
                 failure_count += int(
                     info["failure_termination"].sum().item())
+                for key in (
+                        "guitar_penetration_depth",
+                        "guitar_swept_penetration_depth"):
+                    if not torch.isfinite(info[key]).all():
+                        raise RuntimeError(
+                            f"{stage}: non-finite {key}")
+                max_penetration_depth = max(
+                    max_penetration_depth,
+                    float(info["guitar_penetration_depth"].max()))
+                max_swept_penetration_depth = max(
+                    max_swept_penetration_depth,
+                    float(info["guitar_swept_penetration_depth"].max()))
             if failure_count:
                 raise RuntimeError(
                     f"{stage}: hold probe caused {failure_count} failures")
@@ -132,6 +145,10 @@ def main(argv=None):
                     env._current_target_string().detach().cpu().tolist())),
                 "lane_y_min_m": float(env.target_lane_y.min()),
                 "lane_y_max_m": float(env.target_lane_y.max()),
+                "max_right_guitar_penetration_depth_m":
+                    max_penetration_depth,
+                "max_right_guitar_swept_penetration_depth_m":
+                    max_swept_penetration_depth,
             }
             if stage == STAGES[3]:
                 target_time = env.practice_target_time_s

@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 import torch
 
 from env.safety import (FingerBackLimitMonitor, WristSafetyBoxMonitor,
+                        exclude_thumb_from_generic_penetration,
                         finger_back_limit_violation, wrist_box_violation)
 
 
@@ -92,6 +93,20 @@ def main():
         for name in back.chains[finger]:
             env.positions[name].zero_()
     assert back.streak.max().item() <= 1
+
+    depth = torch.tensor([
+        [0.0, 0.006, 0.0],
+        [0.0, 0.006, 0.0],
+        [0.0, 0.006, 0.007],
+    ])
+    tunneled = torch.zeros_like(depth, dtype=torch.bool)
+    termination = depth > 0.005
+    filtered = exclude_thumb_from_generic_penetration(
+        depth, tunneled, termination, penetration_threshold=0.005)
+    assert filtered["raw_thumb_unsafe"].tolist() == [True, True, True]
+    assert not filtered["termination"][0]
+    assert not filtered["termination"][1]
+    assert filtered["termination"][2]
     print("PASS: R7/R8 bounds, sampling, debounce, and termination")
 
 

@@ -43,6 +43,7 @@ def main(argv=None):
     torch.cuda.manual_seed_all(args.seed)
     env = FretTask(**configured_kwargs(
               FretTask, FRET,
+              reward_config=FRET,
               goal_path=FRET["goal_path"],
               hand_targets_path=FRET["hand_targets_path"],
               num_envs=args.num_envs,

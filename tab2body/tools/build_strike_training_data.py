@@ -18,7 +18,7 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
-from env.strike_goals import (  # noqa: E402
+from env.strike_goals import (
     N_GUITAR_STRINGS,
     STRIKE_FPS,
     STRIKE_TRAINING_SCHEMA,
@@ -48,7 +48,7 @@ def time_to_frame(time_s: float, fps: int = STRIKE_FPS) -> int:
 
 def build_strike_training_data(
         fingering: Mapping[str, Any], source_path=None) -> dict[str, Any]:
-    """Convert ordered fingering notes into the monophonic pick v1 timeline."""
+    """Convert ordered fingering notes into a gesture-compilable timeline."""
     if not isinstance(fingering, Mapping):
         raise ValueError("fingering document must be an object")
     notes = fingering.get("notes")
@@ -77,15 +77,15 @@ def build_strike_training_data(
 
         time_s = float(time_s)
         frame = time_to_frame(time_s)
-        if previous_time is not None and time_s <= previous_time:
+        if previous_time is not None and time_s < previous_time:
             raise ValueError(
-                "pick_monophonic_v1 requires fingering notes in strictly "
-                f"increasing t_on order; note {note_index} has {time_s} "
+                "strike gesture input requires fingering notes in "
+                f"non-decreasing t_on order; note {note_index} has {time_s} "
                 f"after {previous_time}")
-        if previous_frame is not None and frame <= previous_frame:
+        if previous_frame is not None and frame < previous_frame:
             raise ValueError(
-                "pick_monophonic_v1 allows at most one note onset per 60 Hz "
-                f"frame; note {note_index} maps to frame {frame} after "
+                "strike gesture input requires non-decreasing 60 Hz frames; "
+                f"note {note_index} maps to frame {frame} after "
                 f"{previous_frame}")
 
         events.append({
@@ -101,7 +101,7 @@ def build_strike_training_data(
         "schema": STRIKE_TRAINING_SCHEMA,
         "metadata": {
             "fps": STRIKE_FPS,
-            "profile": "pick_monophonic_v1",
+            "profile": "pick_gesture_compiler_v2",
             "time_authority": "events[].time copied from fingering.notes[].t_on",
             "source": source,
             "source_string_convention": "fingering notes 0=low-E, 5=high-e",
@@ -115,7 +115,7 @@ def build_strike_training_data(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="build a 60 Hz monophonic pick strike timeline from fingering notes")
+        description="build a 60 Hz pick gesture timeline from fingering notes")
     parser.add_argument("fingering", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     return parser
@@ -138,4 +138,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
-

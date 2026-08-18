@@ -33,6 +33,7 @@ def main(argv=None):
 
     env = FretTask(**configured_kwargs(
               FretTask, FRET,
+              reward_config=FRET,
               goal_path=args.goal,
               hand_targets_path=args.hand_targets,
               num_envs=args.num_envs,

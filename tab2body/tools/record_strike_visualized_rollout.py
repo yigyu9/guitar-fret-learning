@@ -1,10 +1,8 @@
 """Record an opt-in strike diagnostic replay with zone and pick overlays.
 
-This tool is intentionally separate from :mod:`record_strike_rollout`.
-The base recorder is part of the saved strike checkpoint implementation
-fingerprint, so changing it would make already-trained checkpoints fail their
-live-contract check.  This additive tool reuses its verified loading and
-camera helpers while leaving the original videos and metadata untouched.
+This tool is intentionally separate from :mod:`record_strike_rollout` so the
+diagnostic overlay videos and reports never overwrite the base rollout
+artifacts.  It reuses the same verified loading and camera helpers.
 
 The overlay is diagnostic only.  It projects the live fixed-string geometry,
 the guitar-local strike bands, and the geometry-less ``RH:pick`` point into
@@ -81,43 +79,24 @@ def restored_environment_spec(checkpoint):
 
 def construct_evaluation_replay_task(StrikeTask, args, strike_config, checkpoint):
     """Construct a task shape-compatible with checkpoint environment state."""
-    import inspect
+    from tab2body.env.config import configured_kwargs
 
     num_envs, random_start = restored_environment_spec(checkpoint)
-    signature = inspect.signature(StrikeTask)
-    parameters = signature.parameters
-    has_var_kwargs = any(
-        value.kind == inspect.Parameter.VAR_KEYWORD
-        for value in parameters.values())
-    stable = {
-        "goal_path": str(args.goal),
-        "grip_reference_path": str(args.grip_reference),
-        "num_envs": num_envs,
-        "device": args.device,
-        "headless": True,
-        "seed": int(strike_config["seed"]),
-        # Evaluation retains the training reset distribution.  Setting this
-        # to zero was the remaining source of a visually plausible but policy
-        # incompatible replay after restoring the RNG state.
-        "reset_noise": float(strike_config["reset_noise"]),
-        "reset_soft_limit_fraction": float(
-            strike_config["reset_soft_limit_fraction"]),
-        "action_alpha": float(strike_config["action_alpha"]),
-        "action_scale": float(strike_config["action_scale"]),
-        "zone": strike_config["zone"],
-        "trajectory": strike_config["trajectory"],
-        "detector": strike_config["detector"],
-        "reward": strike_config["reward"],
-        "episode": strike_config["episode"],
-        "failure_termination_penalty": float(
-            strike_config["failure_termination_penalty"]),
-        "random_start": random_start,
-    }
-    kwargs = {
-        key: value for key, value in stable.items()
-        if key in parameters or has_var_kwargs
-    }
-    return StrikeTask(**kwargs)
+    return StrikeTask(**configured_kwargs(
+        StrikeTask,
+        strike_config,
+        goal_path=str(args.goal),
+        grip_reference_path=str(args.grip_reference),
+        num_envs=num_envs,
+        device=args.device,
+        headless=True,
+        seed=int(strike_config["seed"]),
+
+
+
+        reset_noise=float(strike_config["reset_noise"]),
+        random_start=random_start,
+    ))
 
 
 def restore_evaluation_replay(env, checkpoint):
@@ -125,12 +104,15 @@ def restore_evaluation_replay(env, checkpoint):
     state = checkpoint.get("environment_state")
     if not isinstance(state, dict):
         raise ValueError("checkpoint has no environment_state for exact replay")
-    # PPOTrainer initializes observations before resume.  The resume then
-    # restores RNG/reset-generation and resets; evaluation requests full-song
-    # and resets once more.  Preserve that order exactly.
+
+
+
     env.reset()
     env.load_curriculum_state_dict(state)
-    env.set_evaluation_mode(True, reset=False)
+    full_song = bool(
+        env.curriculum_stage == "A4_ZONE_CONTROL"
+        and abs(float(env.tempo_lambda) - 1.0) <= 1e-9)
+    env.set_evaluation_mode(full_song, reset=False)
     return env.reset()
 
 
@@ -198,9 +180,9 @@ def main(argv=None):
     args = parser().parse_args(argv)
     _validate_args(args)
 
-    # Isaac Gym must register its bridge before torch or overlay helpers that
-    # may import torch are loaded.
-    import isaacgym  # noqa: F401
+
+
+    import isaacgym
     from isaacgym import gymapi
     import torch
 
@@ -218,7 +200,7 @@ def main(argv=None):
     ffmpeg = base.require_ffmpeg()
     checkpoint = base._load_checkpoint(
         torch, args.checkpoint, args.device)
-    stage, tolerance = base.restore_stage_and_tolerance(checkpoint)
+    stage, tolerance, tempo_lambda = base.restore_stage_and_tolerance(checkpoint)
     outputs = resolve_visualized_video_paths(
         args.checkpoint, args.out_remembered, args.out_current,
         evaluation_state=True)
@@ -342,7 +324,7 @@ def main(argv=None):
                                 camera_specs[view],
                                 pick_trail_world=pick_trail_world[:-1],
                             ))
-                    # Geometry state is view-independent; retain one copy.
+
                     last_overlay_state = frame_states["remembered"]
                     target_string = last_overlay_state.get(
                         "target_string_number")
@@ -389,6 +371,11 @@ def main(argv=None):
                 checkpoint["checkpoint_contract"]["sha256"],
             "curriculum_stage": stage,
             "timing_tolerance_ms": tolerance,
+            "tempo_lambda": tempo_lambda,
+            "evaluation_scope": (
+                "full_song_original_tempo"
+                if env.evaluation_full_song
+                else "training_phrase_current_tempo"),
             "source_mode": "deterministic_replay",
             "replay_initialization": (
                 "checkpoint environment_state restored at its saved "

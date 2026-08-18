@@ -23,27 +23,28 @@ from dataclasses import dataclass
 import math
 from typing import Mapping, Optional, Tuple
 
-
-A0_PICK_GRIP = "A0_PICK_GRIP"
-A1_TIP_READY = "A1_TIP_READY"
-A2_FREE_CROSSING = "A2_FREE_CROSSING"
-A3_TIMED_CROSSING = "A3_TIMED_CROSSING"
-A4_ZONE_CONTROL = "A4_ZONE_CONTROL"
-
-STRIKE_STAGES = (
-    A0_PICK_GRIP,
-    A1_TIP_READY,
-    A2_FREE_CROSSING,
-    A3_TIMED_CROSSING,
-    A4_ZONE_CONTROL,
-)
-
-TERMINAL_EVIDENCE_STAGES = (
-    A1_TIP_READY,
-    A2_FREE_CROSSING,
-    A3_TIMED_CROSSING,
-    A4_ZONE_CONTROL,
-)
+try:
+    from tab2body.strike_contract import (
+        A0_PICK_GRIP,
+        A1_TIP_READY,
+        A2_FREE_CROSSING,
+        A3_TIMED_CROSSING,
+        A4_ZONE_CONTROL,
+        STRIKE_STAGES,
+        TERMINAL_EVIDENCE_STAGES,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "tab2body":
+        raise
+    from strike_contract import (
+        A0_PICK_GRIP,
+        A1_TIP_READY,
+        A2_FREE_CROSSING,
+        A3_TIMED_CROSSING,
+        A4_ZONE_CONTROL,
+        STRIKE_STAGES,
+        TERMINAL_EVIDENCE_STAGES,
+    )
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class StrikeCurriculumConfig:
     false_positive_rate_gate: float = 0.02
     strike_f1_gate: float = 0.98
     timing_tolerances_ms: Tuple[int, ...] = (100, 67, 50)
+    tempo_lambdas: Tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 0.9, 1.0)
     timed_f1_by_level: Optional[Tuple[float, ...]] = None
     zone_f1_gate: float = 0.98
     zone_success_gate: float = 0.95
@@ -81,11 +83,18 @@ class StrikeCurriculumConfig:
             (self.timed_min_iterations, self.timed_max_iterations),
             (self.zone_min_iterations, self.zone_max_iterations),
         )
+        if any(
+                isinstance(value, bool) or not isinstance(value, int)
+                for pair in limits for value in pair):
+            raise ValueError(
+                "strike curriculum min/max iterations must be integers")
         if any(minimum < 0 or maximum < minimum
                for minimum, maximum in limits):
             raise ValueError("strike curriculum min/max iterations are invalid")
-        if self.promotion_windows < 1:
-            raise ValueError("promotion_windows must be positive")
+        if (isinstance(self.promotion_windows, bool)
+                or not isinstance(self.promotion_windows, int)
+                or self.promotion_windows < 1):
+            raise ValueError("promotion_windows must be a positive integer")
         if (isinstance(self.terminal_evidence_episodes, bool)
                 or not isinstance(self.terminal_evidence_episodes, int)
                 or self.terminal_evidence_episodes < 1):
@@ -100,7 +109,9 @@ class StrikeCurriculumConfig:
                 "zone_f1_gate",
                 "zone_success_gate"):
             value = float(getattr(self, name))
-            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            if (isinstance(getattr(self, name), bool)
+                    or not math.isfinite(value)
+                    or not 0.0 <= value <= 1.0):
                 raise ValueError(f"{name} must be finite and in [0, 1]")
         tolerances = tuple(self.timing_tolerances_ms)
         if len(tolerances) < 1:
@@ -113,10 +124,28 @@ class StrikeCurriculumConfig:
                for earlier, later in zip(tolerances, tolerances[1:])):
             raise ValueError(
                 "timing_tolerances_ms must be strictly decreasing")
+        tempo_lambdas = tuple(float(value) for value in self.tempo_lambdas)
+        if len(tempo_lambdas) < 2:
+            raise ValueError("tempo_lambdas must contain at least two levels")
+        if tempo_lambdas[0] != 0.0 or tempo_lambdas[-1] != 1.0:
+            raise ValueError("tempo_lambdas must start at 0 and end at 1")
+        if any(not math.isfinite(value) or not 0.0 <= value <= 1.0
+               for value in tempo_lambdas):
+            raise ValueError("tempo_lambdas must be finite and in [0, 1]")
+        if any(later <= earlier
+               for earlier, later in zip(tempo_lambdas, tempo_lambdas[1:])):
+            raise ValueError("tempo_lambdas must be strictly increasing")
         f1_gates = self.timed_f1_gates
         if len(f1_gates) != len(tolerances):
             raise ValueError(
                 "timed_f1_by_level must match timing_tolerances_ms")
+        raw_f1_gates = (
+            (self.strike_f1_gate,) * len(tolerances)
+            if self.timed_f1_by_level is None
+            else tuple(self.timed_f1_by_level))
+        if any(isinstance(value, bool) for value in raw_f1_gates):
+            raise ValueError(
+                "timed_f1_by_level values must be finite and in [0, 1]")
         if any(not math.isfinite(value) or not 0.0 <= value <= 1.0
                for value in f1_gates):
             raise ValueError(
@@ -158,6 +187,9 @@ _STAT_ALIASES = {
     "zone_success_rate": (
         "strike_zone_success_rate",
         "curriculum_zone_success_rate", "zone_success_rate"),
+    "failure_termination_rate": (
+        "failure_termination",
+        "curriculum_failure_termination_rate"),
 }
 
 _EPISODE_STAT_KEYS = {
@@ -168,18 +200,25 @@ _EPISODE_STAT_KEYS = {
     "strike_f1": "strike_episode_f1",
     "timing_p95_ms": "strike_timing_p95_ms",
     "zone_success_rate": "strike_zone_success_rate",
+    "failure_termination_rate": "failure_termination",
 }
 
 _STAGE_REQUIRED_EPISODE_STATS = {
+    A0_PICK_GRIP: (
+        "grip_success_rate",
+        "failure_termination_rate",
+    ),
     A1_TIP_READY: (
         "grip_success_rate",
         "tip_ready_success_rate",
+        "failure_termination_rate",
     ),
     A2_FREE_CROSSING: (
         "grip_success_rate",
         "tip_ready_success_rate",
         "release_recall",
         "false_positive_rate",
+        "failure_termination_rate",
     ),
     A3_TIMED_CROSSING: (
         "grip_success_rate",
@@ -188,6 +227,7 @@ _STAGE_REQUIRED_EPISODE_STATS = {
         "false_positive_rate",
         "strike_f1",
         "timing_p95_ms",
+        "failure_termination_rate",
     ),
     A4_ZONE_CONTROL: (
         "grip_success_rate",
@@ -197,6 +237,7 @@ _STAGE_REQUIRED_EPISODE_STATS = {
         "strike_f1",
         "timing_p95_ms",
         "zone_success_rate",
+        "failure_termination_rate",
     ),
 }
 
@@ -205,30 +246,45 @@ _EVIDENCE_RATE_STATS = tuple(
     if name != "timing_p95_ms")
 
 
+def _validated_stat_value(name: str, value: float) -> Optional[float]:
+    """Return a domain-valid curriculum statistic or fail closed with ``None``."""
+    if name == "timing_p95_ms":
+        return value if value >= 0.0 else None
+    return value if 0.0 <= value <= 1.0 else None
+
+
 def _finite_stat(stats: Mapping[str, object], name: str) -> Optional[float]:
-    """Read one scalar statistic; missing/non-finite values fail closed."""
+    """Read one bounded scalar statistic; invalid values fail closed."""
     for key in _STAT_ALIASES[name]:
         if key not in stats:
             continue
+        if isinstance(stats[key], bool):
+            return None
         try:
             value = float(stats[key])
         except (TypeError, ValueError):
             return None
-        return value if math.isfinite(value) else None
+        if not math.isfinite(value):
+            return None
+        return _validated_stat_value(name, value)
     return None
 
 
 def _finite_episode_stat(
         stats: Mapping[str, object], name: str) -> Optional[float]:
-    """Read only a completed-episode metric, never a live diagnostic alias."""
+    """Read a domain-valid completed-episode metric, never a live alias."""
     key = _EPISODE_STAT_KEYS[name]
     if key not in stats:
+        return None
+    if isinstance(stats[key], bool):
         return None
     try:
         value = float(stats[key])
     except (TypeError, ValueError):
         return None
-    return value if math.isfinite(value) else None
+    if not math.isfinite(value):
+        return None
+    return _validated_stat_value(name, value)
 
 
 def _has_completed_episode(stats: Mapping[str, object]) -> bool:
@@ -266,6 +322,7 @@ class StrikeCurriculum:
         self.promotion_streak = 0
         self.timing_level = 0
         self.timing_streak = 0
+        self.tempo_level = 0
         self.complete = False
         self._evidence_episodes = 0
         self._evidence_rate_sums = {
@@ -286,6 +343,16 @@ class StrikeCurriculum:
     @property
     def timing_applicable(self) -> bool:
         return self.stage in (A3_TIMED_CROSSING, A4_ZONE_CONTROL)
+
+    @property
+    def tempo_lambda(self) -> float:
+        if self.stage != A4_ZONE_CONTROL:
+            return 1.0
+        return float(self.config.tempo_lambdas[self.tempo_level])
+
+    @property
+    def original_tempo_reached(self) -> bool:
+        return self.tempo_lambda == 1.0
 
     @property
     def current_timed_f1_gate(self) -> float:
@@ -310,6 +377,9 @@ class StrikeCurriculum:
             "curriculum_timing_tolerance_ms": self.timing_tolerance_ms,
             "curriculum_timing_applicable": self.timing_applicable,
             "curriculum_timing_streak": int(self.timing_streak),
+            "curriculum_tempo_level": int(self.tempo_level),
+            "curriculum_tempo_lambda": self.tempo_lambda,
+            "curriculum_original_tempo_reached": self.original_tempo_reached,
             "curriculum_strike_f1_gate": self.current_strike_f1_gate,
             "curriculum_complete": bool(self.complete),
             "curriculum_evidence_episode_target": int(
@@ -343,6 +413,12 @@ class StrikeCurriculum:
                 raise ValueError(f"{key} must be a non-negative integer")
             return integer
 
+        def strict_boolean(key, default=False):
+            value = context.get(key, default)
+            if not isinstance(value, bool):
+                raise ValueError(f"{key} must be bool")
+            return value
+
         stage_iteration = nonnegative_integer(
             "curriculum_stage_iteration")
         total_iteration = nonnegative_integer(
@@ -370,19 +446,28 @@ class StrikeCurriculum:
             raise ValueError("pre-timing stages must use timing level zero")
         if stage == A4_ZONE_CONTROL and timing_level != last_level:
             raise ValueError("A4 must use the final timing tolerance")
+        tempo_level = nonnegative_integer("curriculum_tempo_level")
+        last_tempo_level = len(self.config.tempo_lambdas) - 1
+        if tempo_level > last_tempo_level:
+            raise ValueError("curriculum_tempo_level is outside the schedule")
+        if stage != A4_ZONE_CONTROL and tempo_level != 0:
+            raise ValueError("pre-A4 stages must use tempo level zero")
 
         self.stage = str(stage)
         self.stage_iteration = stage_iteration
         self.total_iteration = total_iteration
-        self.stalled = bool(context.get("curriculum_stalled", False))
+        self.stalled = strict_boolean("curriculum_stalled")
         self.promotion_streak = promotion_streak
         self.timing_level = timing_level
         self.timing_streak = timing_streak
-        self.complete = bool(context.get("curriculum_complete", False))
+        self.tempo_level = tempo_level
+        self.complete = strict_boolean("curriculum_complete")
         if self.complete and self.stage != A4_ZONE_CONTROL:
             raise ValueError("only A4 may be a complete strike curriculum")
         if self.complete and (promotion_streak or timing_streak):
             raise ValueError("a complete curriculum cannot retain a streak")
+        if self.complete and not self.original_tempo_reached:
+            raise ValueError("a complete curriculum must pass original tempo")
 
         saved_evidence_target = context.get(
             "curriculum_evidence_episode_target",
@@ -437,6 +522,11 @@ class StrikeCurriculum:
                 and float(saved_f1_gate) != self.current_strike_f1_gate):
             raise ValueError(
                 "saved strike F1 gate disagrees with timing level/config")
+        saved_tempo = context.get("curriculum_tempo_lambda")
+        if (saved_tempo is not None
+                and float(saved_tempo) != self.tempo_lambda):
+            raise ValueError(
+                "saved tempo lambda disagrees with tempo level/config")
         return self.state()
 
     def _reset_terminal_evidence(self):
@@ -495,12 +585,20 @@ class StrikeCurriculum:
     def apply(self, env):
         """Apply stage/tolerance and reset only when either value changed."""
         tolerance = self.timing_tolerance_ms
+        tempo_lambda = self.tempo_lambda
         changed = (
             getattr(env, "curriculum_stage", None) != self.stage
             or getattr(env, "timing_tolerance_ms", None) != tolerance
+            or (hasattr(env, "tempo_lambda")
+                and getattr(env, "tempo_lambda") != tempo_lambda)
         )
-        reset_observation = env.set_curriculum_stage(
-            self.stage, tolerance, reset=changed)
+        if hasattr(env, "tempo_lambda"):
+            reset_observation = env.set_curriculum_stage(
+                self.stage, tolerance,
+                tempo_lambda=tempo_lambda, reset=changed)
+        else:
+            reset_observation = env.set_curriculum_stage(
+                self.stage, tolerance, reset=changed)
         state = self.state()
         if reset_observation is not None:
             state["_reset_observation"] = reset_observation
@@ -532,6 +630,10 @@ class StrikeCurriculum:
 
         grip = read_stat(stats, "grip_success_rate")
         if grip is None or grip < self.config.grip_success_gate:
+            return False
+
+        failure_rate = read_stat(stats, "failure_termination_rate")
+        if failure_rate is None or failure_rate > 0.0:
             return False
         if self.stage == A0_PICK_GRIP:
             return True
@@ -584,6 +686,7 @@ class StrikeCurriculum:
             self.timing_level = 0
         elif self.stage == A4_ZONE_CONTROL:
             self.timing_level = len(self.config.timing_tolerances_ms) - 1
+            self.tempo_level = 0
 
     def after_iteration(self, stats: Mapping[str, object]):
         """Consume one iteration's statistics and update curriculum state."""
@@ -604,9 +707,9 @@ class StrikeCurriculum:
         before_minimum_cap = max(self.config.promotion_windows - 1, 0)
 
         def next_streak(current):
-            # Long event episodes can span several PPO rollouts.  A rollout
-            # with no completion provides no new evidence: it neither advances
-            # nor breaks a streak of consecutive evaluated episode batches.
+
+
+
             if not has_evidence:
                 return current
             if not passed:
@@ -642,14 +745,19 @@ class StrikeCurriculum:
             if (self.stage_iteration >= minimum
                     and self.promotion_streak
                     >= self.config.promotion_windows):
-                self.complete = True
-                self.stalled = False
                 self.promotion_streak = 0
                 self._reset_terminal_evidence()
+                if self.tempo_level < len(self.config.tempo_lambdas) - 1:
+                    self.tempo_level += 1
+                    self.stage_iteration = 0
+                    self.stalled = False
+                else:
+                    self.complete = True
+                    self.stalled = False
 
         if not self.complete and self.stage_iteration >= maximum:
-            # Maximum duration is diagnostic only.  A later run of consecutive
-            # passing windows may still recover and promote the stalled stage.
+
+
             self.stalled = True
         return self.state()
 

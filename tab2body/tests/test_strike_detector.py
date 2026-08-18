@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from env.strike_detector import (  # noqa: E402
+from env.strike_detector import (
     DETECTOR_ARMED,
     DETECTOR_WAIT_REARM,
     DIRECTION_DOWN,
@@ -67,8 +67,8 @@ def test_finite_sweep_and_subframe_order(device="cpu"):
 
 
 def test_current_guitar_asset_six_string_order():
-    # guitar_asset.xml marker coordinates, ordered string1(high-e) ->
-    # string6(low-E).  A +x_g/down sweep must encounter 6 -> 1.
+
+
     start = torch.tensor([
         [0.01765, 0.21650, 0.01230],
         [0.01050, 0.21650, 0.01230],
@@ -224,8 +224,8 @@ def test_lane_gate_preserves_attempt_denominator():
         result["hit"], torch.tensor([True, False, False, False]))
     assert result["attempt"].data_ptr() != result["hit"].data_ptr()
 
-    # A later in-place consumer of the hit result must not corrupt the
-    # pre-zone attempt denominator.
+
+
     result["hit"].fill_(False)
     assert torch.equal(result["attempt"], candidate)
 
@@ -260,8 +260,8 @@ def test_goal_independent_release_and_rearm_state():
     assert first["detector_state"].item() == DETECTOR_WAIT_REARM
     assert first["wait_frames"].item() == 0
 
-    # A real reverse crossing while waiting remains visible as a blocked
-    # duplicate, but cannot emit a second RELEASE.
+
+
     duplicate = detector.step(
         torch.tensor([[0.010, 0.0, -0.002]]),
         torch.tensor([[-0.010, 0.0, -0.002]]), start, end)

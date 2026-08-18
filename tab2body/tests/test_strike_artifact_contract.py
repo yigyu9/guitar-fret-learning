@@ -11,22 +11,28 @@ for path in (str(PACKAGE_ROOT), str(PROJECT_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from learning.checkpoint_contract import (  # noqa: E402
+from learning.checkpoint_contract import (
     STRIKE_CHECKPOINT_CONTRACT_SCHEMA,
     build_strike_contract_payload,
     checkpoint_evaluation_hyperparameters,
     file_sha256,
     seal_checkpoint_contract,
 )
-from tools.plot_strike_training import (  # noqa: E402
+from tools.plot_strike_training import (
+    PANEL_SERIES,
     STAGES,
+    available_series,
     default_output_path,
     read_metric_rows,
     render_plot,
     stage_spans,
     step_values,
 )
-from tools import record_strike_rollout as recorder  # noqa: E402
+from tools import record_strike_rollout as recorder
+from tools.audit_strike_motion import (
+    resolve_motion_audit_path,
+    summarize_samples,
+)
 
 
 def expect_error(fragment, callback, error_type=ValueError):
@@ -60,7 +66,7 @@ def metric_fixture():
             "curriculum_stage": "A2_FREE_CROSSING",
             "reward": 0.3,
             "release_recall": 0.80,
-            "false_positive_rate": 0.10,
+            "strike_false_positive_rate": 0.10,
         },
         {
             "steps": 400,
@@ -82,7 +88,13 @@ def metric_fixture():
             "curriculum_timing_tolerance_ms": 50.0,
             "zone_success_rate": 0.88,
             "failure_termination": 0.02,
-            "strike_wrong_rate": 0.03,
+            "strike_false_positive_rate": 0.03,
+            "curriculum_tip_speed_m_s": 0.42,
+            "curriculum_guitar_penetration_depth": 0.001,
+            "curriculum_guitar_swept_penetration_depth": 0.002,
+            "curriculum_release_phase_violation": 0.01,
+            "curriculum_guitar_penetration": 0.02,
+            "curriculum_action_saturation_fraction": 0.04,
         },
     ]
 
@@ -101,6 +113,25 @@ def main():
         x = step_values(loaded)
         spans = stage_spans(loaded, x)
         assert [stage for stage, _start, _end in spans] == list(STAGES)
+        failure_series = dict(PANEL_SERIES[-1][1])
+        wrong_x, wrong_y = available_series(
+            loaded, x, failure_series["wrong crossing"])
+        assert wrong_x == [300.0, 500.0]
+        assert wrong_y == [0.10, 0.03]
+        precedence_rows = [{
+            "steps": 1,
+            "strike_false_positive_rate": 0.02,
+            "false_positive_rate": 0.80,
+        }]
+        release_aliases = dict(PANEL_SERIES[3][1])[
+            "false positive rate"]
+        _x, values = available_series(
+            precedence_rows, [1.0], release_aliases)
+        assert values == [0.02]
+        motion_rates = dict(PANEL_SERIES[-2][1])
+        _x, saturation = available_series(
+            loaded, x, motion_rates["action saturation"])
+        assert saturation == [0.04]
         expected_plot = root / "run" / "plots" / "strike_training_curves.png"
         assert default_output_path(metrics) == expected_plot
         plotted = render_plot(metrics)
@@ -143,42 +174,85 @@ def main():
         override = root / "custom.mp4"
         assert recorder.resolve_video_paths(
             checkpoint_path, remembered=override)["remembered"] == override
+        assert resolve_motion_audit_path(checkpoint_path) == (
+            root / "run" / "evaluations"
+            / "strike_000500.motion_diagnostics.json")
+        summary = summarize_samples([3.0, 1.0, 2.0, float("nan")])
+        assert summary["count"] == 3
+        assert summary["mean"] == 2.0
+        assert summary["p50"] == 2.0
+        assert summary["p95"] == 2.9
+        assert summary["maximum"] == 3.0
+        assert summarize_samples([])["p95"] is None
 
         checkpoint = {
             "environment_state": {
+                "schema": "tab2body.strike_environment_state.v2",
                 "curriculum_stage": "A3_TIMED_CROSSING",
                 "timing_tolerance_ms": 67,
+                "tempo_lambda": 1.0,
             },
             "training_context": {
-                "curriculum_stage": "A2_FREE_CROSSING",
-                "curriculum_timing_tolerance_ms": 100,
+                "curriculum_stage": "A3_TIMED_CROSSING",
+                "curriculum_timing_tolerance_ms": 67,
             },
         }
         assert recorder.restore_stage_and_tolerance(checkpoint) == (
-            "A3_TIMED_CROSSING", 67.0)
-        fallback = {
+            "A3_TIMED_CROSSING", 67.0, 1.0)
+        mismatch = {
+            "environment_state": {
+                "schema": "tab2body.strike_environment_state.v2",
+                "curriculum_stage": "A3_TIMED_CROSSING",
+                "timing_tolerance_ms": 67,
+                "tempo_lambda": 1.0,
+            },
             "training_context": {
                 "curriculum_stage": "A4_ZONE_CONTROL",
                 "curriculum_timing_tolerance_ms": 50,
             },
         }
-        assert recorder.restore_stage_and_tolerance(fallback) == (
-            "A4_ZONE_CONTROL", 50.0)
+        expect_error(
+            "curriculum state mismatch",
+            lambda: recorder.restore_stage_and_tolerance(mismatch))
+        expect_error(
+            "environment_state.v2",
+            lambda: recorder.restore_stage_and_tolerance({
+                "training_context": {
+                    "curriculum_stage": "A4_ZONE_CONTROL",
+                    "curriculum_timing_tolerance_ms": 50,
+                },
+            }))
         expect_error(
             "timing tolerance",
             lambda: recorder.restore_stage_and_tolerance({
+                "environment_state": {
+                    "schema": "tab2body.strike_environment_state.v2",
+                    "curriculum_stage": "A0_PICK_GRIP",
+                },
                 "training_context": {
                     "curriculum_stage": "A0_PICK_GRIP",
+                    "curriculum_timing_tolerance_ms": 100,
                 },
             }))
         expect_error(
             "valid strike curriculum stage",
             lambda: recorder.restore_stage_and_tolerance({
                 "environment_state": {
+                    "schema": "tab2body.strike_environment_state.v2",
                     "curriculum_stage": "UNKNOWN",
                     "timing_tolerance_ms": 50,
+                    "tempo_lambda": 1.0,
+                },
+                "training_context": {
+                    "curriculum_stage": "UNKNOWN",
+                    "curriculum_timing_tolerance_ms": 50,
                 },
             }))
+        invalid_tempo = json.loads(json.dumps(checkpoint))
+        invalid_tempo["environment_state"]["tempo_lambda"] = 1.5
+        expect_error(
+            "tempo lambda",
+            lambda: recorder.restore_stage_and_tolerance(invalid_tempo))
 
         document = seal_checkpoint_contract({
             "schema": STRIKE_CHECKPOINT_CONTRACT_SCHEMA,
@@ -239,35 +313,6 @@ def main():
                 }),
             }))
 
-        class FakeIndices:
-            def detach(self):
-                return self
-
-            def cpu(self):
-                return self
-
-            def tolist(self):
-                return [0, 1]
-
-        class FakeEnv:
-            num_obs = 12
-            num_actions = 2
-            value_dim = 1
-            ctrl_idx = FakeIndices()
-            dof_names = ("R_Shoulder_x", "RH:index2")
-            observation_manifest = ("base", "strike_goal")
-
-        recorder._fallback_verify_live_contract(
-            full_checkpoint, full_document, full_payload, FakeEnv(),
-            goal, grip)
-        changed_goal = root / "changed_goal.json"
-        changed_goal.write_text('{"goal": false}\n', encoding="utf-8")
-        expect_error(
-            "goal SHA-256",
-            lambda: recorder._fallback_verify_live_contract(
-                full_checkpoint, full_document, full_payload, FakeEnv(),
-                changed_goal, grip))
-
         assert set(recorder.CAMERA_DIRECTIONS) == {
             "remembered", "current"}
         assert recorder.CAMERA_DIRECTIONS["remembered"] == (
@@ -288,6 +333,18 @@ def main():
                 error_type=RuntimeError)
         finally:
             recorder.shutil.which = original_which
+
+        frames = root / "frames"
+        frames.mkdir()
+        protected_video = root / "protected.mp4"
+        protected_video.write_bytes(b"existing-good-video")
+        expect_error(
+            "ffmpeg failed",
+            lambda: recorder._encode_video(
+                "/bin/false", frames, 30, protected_video),
+            error_type=RuntimeError)
+        assert protected_video.read_bytes() == b"existing-good-video"
+        assert not list(root.glob(".protected.*.mp4"))
 
     print("PASS: strike plot and dual-camera artifact contracts")
 

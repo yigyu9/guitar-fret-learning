@@ -59,7 +59,7 @@ data/song_bundles/<song_id>/training/
 
 ### Fret
 
-현재 Fret 계약은 33 action, 353 observation, 6 reward/value입니다. 기본 설정은 1,024 환경,
+현재 Fret 계약은 33 action, 428 observation, 6 reward/value입니다. 기본 설정은 1,024 환경,
 5,000 iteration입니다.
 
 ```bash

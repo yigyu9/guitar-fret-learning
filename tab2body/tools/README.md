@@ -6,6 +6,9 @@
 새 strike 도구:
 
 - `register_song_bundle.py`: 검수된 Stage1 결과를 `data/song_bundles/<song_id>` 정본으로 등록하고 manifest 생성
+- `plot_fret_diagnostics.py`: fret 로그에서 손가락·오압현·관절 한계·자연스러움 그래프와 JSON 요약 생성
+- `analyze_reference_hand_motion.py`: 사람 왼손 reference의 관절 각도 분포와 인접 손가락 연동 분석
+- `build_right_hand_motion_profile.py`: 오른손 reference frame을 gesture/phase별 관절 분위수 profile로 변환
 - `build_fret_training_data.py`: JAMS 또는 검수된 `mapping/fingering.json`을 60Hz fret goal로 변환
 - `build_strike_training_data.py`: fingering note를 최소 `[time,frame,string]` v1으로 변환
 - `audit_strike_runtime.py`: A0~A4 GPU 환경·줄·충돌·tensor 계약 감사

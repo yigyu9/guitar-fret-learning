@@ -21,6 +21,7 @@ EPISODE_METRIC_KEYS = (
     "no_press_accuracy", "no_press_correct_count",
     "no_press_evidence_count", "wrong_press_rate",
     "sustain_hold_rate", "sustain_event_success_rate",
+    "sustain_event_success_count",
     "sustain_min_event_hold_rate", "sustain_max_dropout_frames",
     "sustain_interruption_count", "sustain_event_count",
     "curriculum_success_rate",
@@ -46,18 +47,25 @@ EPISODE_REASON_KEYS = (
     "goal_finished", "failure_termination", "early_timeout",
     "nonfinite", "velocity_blowup", "palm_down_termination",
     "thumb_overforce_termination",
+    "wrong_press_termination",
     "wrist_safety_termination", "finger_back_termination",
     "guitar_penetration_termination",
+) + tuple(
+    f"guitar_penetration_{chain}_termination"
+    for chain in ("arm", "thumb", "index", "middle", "ring", "pinky")
 )
 ROLLOUT_DIAGNOSTIC_KEYS = (
-    "mean_target_distance", "cell_alignment_rate",
+    "mean_target_distance", "mean_local_reach_margin",
+    "joint_limit_max_usage", "joint_limit_near_rate",
+    "cell_alignment_rate",
     "mean_position_quality", "mean_ergonomic_position_quality",
     "mean_target_fraction", "target_min_separation",
     "target_clearance_rate", "mean_dense_position_quality",
     "mean_precision_gate", "mean_arch_quality",
     "mean_good_position_quality", "press_success_rate",
     "mean_press_hold_quality", "press_hold_acquired_rate",
-    "frame_press_dropout_rate", "max_press_dropout_streak",
+    "frame_press_dropout_rate", "frame_press_near_miss_rate",
+    "max_press_dropout_streak",
     "chord_ready", "frame_chord_hold_quality",
     "mean_mcp_flexion_deg", "mean_pip_flexion_deg",
     "mean_dip_flexion_deg", "tip_contact_rate",
@@ -72,7 +80,13 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     "finger_coupling_reward", "finger_coupling_active_rate",
     "finger_coupling_target_speed_deg",
     "finger_coupling_press_protected",
+    "reference_finger_posture_quality",
+    "reference_thumb_posture_quality",
+    "reference_posture_quality", "reference_posture_penalty",
+    "reference_posture_active",
     "finger_synergy_active_rate", "finger_synergy_induced_deg",
+    "goal_pair_action_routing_active",
+    "goal_pair_action_release_active",
     "next_goal_approach_reward", "next_goal_approach_active_rate",
     "next_goal_approach_distance",
     "next_goal_progress_reward", "next_goal_progress_active_rate",
@@ -80,6 +94,14 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     "next_goal_current_press_preservation_quality",
     "next_goal_current_press_preservation_gate",
     "next_goal_joint_preservation_quality",
+    "goal_pair_rehearsal_anchor_reward",
+    "goal_pair_rehearsal_anchor_active",
+    "goal_pair_anchor_next_reward", "goal_pair_anchor_next_active",
+    "success_pose_guide_reward", "success_pose_guide_active",
+    "success_pose_guide_anchor_reward",
+    "success_pose_guide_anchor_active",
+    "success_pose_guide_proximal_reward",
+    "success_pose_guide_proximal_active",
     "press_class_reward", "press_class_mean_reward",
     "press_class_min_reward", "no_press_class_reward",
     "press_class_completion", "no_press_class_completion",
@@ -88,6 +110,9 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     "class_balance_enabled", "chord_joint_quality",
     "chord_bridge_bottleneck_reward", "chord_bridge_mean_reward",
     "chord_bridge_min_reward",
+    "chord_fine_joint_reward", "chord_fine_joint_mean_reward",
+    "chord_fine_joint_min_reward", "chord_fine_axis_min_quality",
+    "chord_fine_broad_depth_progress",
     "thumb_reward", "thumb_distance", "thumb_gap", "thumb_contact_force",
     "thumb_contact", "thumb_in_back_region", "thumb_support",
     "thumb_wrong_contact", "thumb_goal_gate",
@@ -104,6 +129,24 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     "thumb_base_action_saturation_z",
     "thumb_base_saturation_penalty",
     "finger_back_soft_penalty", "finger_back_min_local_z",
+    "success_rsi_reset", "success_rsi_reset_quality",
+    "success_rsi_cache_fraction",
+    "success_finger_pose_cache_fraction",
+    "success_finger_action_cache_fraction",
+    "policy_teacher_proximal_active",
+    "guitar_penetration_soft_cost",
+    "guitar_penetration_effective_depth",
+    "guitar_penetration_thumb_chain_excluded",
+) + tuple(
+    f"policy_teacher_finger_{finger}_active"
+    for finger in range(1, 5)
+) + tuple(
+    name
+    for finger in range(1, 5)
+    for name in (
+        f"success_pose_guide_finger_{finger}_reward",
+        f"success_pose_guide_finger_{finger}_active",
+    )
 ) + (
     "goal_pair_pretransition_active",
     "goal_pair_pretransition_current_press_preserved",
@@ -112,8 +155,16 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     name
     for finger in range(1, 5)
     for name in (
+        f"goal_pair_incoming_finger_{finger}_active",
+        f"goal_pair_incoming_finger_{finger}_wrong_press",
+    )
+) + tuple(
+    name
+    for finger in range(1, 5)
+    for name in (
         f"finger_{finger}_target_active",
         f"finger_{finger}_target_distance",
+        f"finger_{finger}_local_reach_margin",
         f"finger_{finger}_fine_alignment_quality",
         f"finger_{finger}_fine_longitudinal_quality",
         f"finger_{finger}_fine_lateral_quality",
@@ -121,12 +172,15 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     )
 ) + tuple(
     name
-    for cohort in ("rehearsal", "transition", "sequence")
+    for cohort in ("rehearsal", "transition", "sequence", "full_song")
     for finger in range(1, 5)
     for name in (
         f"goal_pair_{cohort}_finger_{finger}_target_active",
         f"goal_pair_{cohort}_finger_{finger}_target_distance",
         f"goal_pair_{cohort}_finger_{finger}_press_success",
+        f"goal_pair_{cohort}_finger_{finger}_hold_quality",
+        f"goal_pair_{cohort}_finger_{finger}_dropout_rate",
+        f"goal_pair_{cohort}_finger_{finger}_wrong_press",
     )
 ) + tuple(
     name
@@ -140,9 +194,25 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     f"goal_pair_{scope}_{name}"
     for scope in ("sequence", "full_song")
     for name in (
-        "active", "press_success", "no_press_success", "wrong_press",
+        "active", "event_count", "press_success", "no_press_success", "wrong_press",
         "thumb_support", "penetration",
     )
+) + tuple(
+    name
+    for source in range(5)
+    for target in range(1, 5)
+    for name in (
+        f"goal_pair_transition_{source}_to_{target}_target_active",
+        f"goal_pair_transition_{source}_to_{target}_press_success",
+        f"goal_pair_transition_{source}_to_{target}_wrong_press",
+    )
+) + tuple(
+    f"joint_limit_{group}_{metric}"
+    for group in (
+        "thorax", "shoulder", "elbow", "wrist", "thumb",
+        "finger_1", "finger_2", "finger_3", "finger_4",
+    )
+    for metric in ("max_usage", "near_rate")
 )
 
 
@@ -167,9 +237,20 @@ def _conditional_diagnostic_active_key(name):
     if (name.startswith("goal_pair_transition_finger_")
             and name.endswith(("_next_distance", "_next_progress"))):
         return name.rsplit("_", 1)[0] + "_active"
-    if (name.startswith("goal_pair_")
-            and name.endswith(("_target_distance", "_press_success"))):
+    if (name.startswith("goal_pair_incoming_finger_")
+            and name.endswith("_wrong_press")):
+        return name.rsplit("_", 2)[0] + "_active"
+    if (name.startswith("goal_pair_transition_")
+            and "_to_" in name
+            and name.endswith(("_press_success", "_wrong_press"))):
         return name.rsplit("_", 2)[0] + "_target_active"
+    if (name.startswith("goal_pair_") and "_finger_" in name
+            and name.endswith((
+                "_target_distance", "_press_success",
+                "_hold_quality", "_dropout_rate", "_wrong_press"))):
+        prefix, suffix = name.split("_finger_", 1)
+        finger = suffix.split("_", 1)[0]
+        return f"{prefix}_finger_{finger}_target_active"
     return None
 
 
@@ -186,7 +267,17 @@ def detailed_training_line(stats):
         [f"iter={int(stats['iteration'])}", f"steps={int(stats['steps'])}"]
         + [f"{key}={_format_metric(value)}"
            for key, value in stats.items()
-           if key not in ("iteration", "steps")])
+           if key not in ("iteration", "steps")
+           and isinstance(value, (bool, int, float, str))])
+
+
+def compact_training_stats(stats):
+    """Keep JSONL useful for plots without repeating checkpoint-sized state."""
+    return {
+        key: value
+        for key, value in stats.items()
+        if isinstance(value, (bool, int, float, str))
+    }
 
 
 def concise_training_line(stats, first, last):
@@ -200,6 +291,19 @@ def concise_training_line(stats, first, last):
         fields.append(f"stage={stage}:{stage_iteration}")
     if stats.get("curriculum_stalled", False):
         fields.append("stalled=continue")
+    if stats.get("curriculum_goal_pair_recovery", False):
+        reason = stats.get(
+            "curriculum_goal_pair_recovery_reason", "recovery")
+        recovery_iteration = int(stats.get(
+            "curriculum_goal_pair_recovery_iteration", 0))
+        recovery_max = int(stats.get(
+            "curriculum_goal_pair_recovery_max_iterations", 0))
+        fields.append(
+            f"recovery={reason}:{recovery_iteration}/{recovery_max}")
+    if stats.get("curriculum_goal_pair_recovery_rollback", False):
+        rollback = stats.get(
+            "curriculum_goal_pair_last_recovery_rollback", "unknown")
+        fields.append(f"rollback={rollback}")
     if stats.get("curriculum_forced_advance", False):
         previous = stats.get("curriculum_last_forced_advance_from", "unknown")
         fields.append(f"forced-advance={previous}")
@@ -331,9 +435,58 @@ def aggregate_episode_rows(rows, metric_keys, reason_keys):
         count_key = f"press_finger_{finger}_count"
         if success_key not in result or count_key not in result:
             continue
+        success_frames = int(round(sum(
+            float(row[success_key]) for row in rows)))
+        target_frames = int(round(sum(
+            float(row[count_key]) for row in rows)))
+        result[f"finger_{finger}_press_success_frames"] = success_frames
+        result[f"finger_{finger}_press_target_frames"] = target_frames
         count = float(result[count_key])
         result[f"finger_{finger}_press_success_rate"] = (
             float(result[success_key]) / count if count > 0.0 else -1.0)
+    available_fingers = [
+        finger for finger in range(1, 5)
+        if f"finger_{finger}_press_success_frames" in result]
+    if available_fingers:
+        result["press_success_frames"] = sum(
+            result[f"finger_{finger}_press_success_frames"]
+            for finger in available_fingers)
+        result["press_target_frames"] = sum(
+            result[f"finger_{finger}_press_target_frames"]
+            for finger in available_fingers)
+        target_frames = result["press_target_frames"]
+        result["press_success_rate"] = (
+            result["press_success_frames"] / target_frames
+            if target_frames > 0 else -1.0)
+    if ("sustain_event_success_count" in rows[0]
+            and "sustain_event_count" in rows[0]):
+        result["sustain_event_success_total"] = int(round(sum(
+            float(row["sustain_event_success_count"]) for row in rows)))
+        result["sustain_event_total"] = int(round(sum(
+            float(row["sustain_event_count"]) for row in rows)))
+        event_total = result["sustain_event_total"]
+        result["sustain_event_success_rate_pooled"] = (
+            result["sustain_event_success_total"] / event_total
+            if event_total > 0 else -1.0)
+    if "curriculum_success_rate" in rows[0]:
+        result["curriculum_success_episodes"] = int(round(sum(
+            float(row["curriculum_success_rate"]) for row in rows)))
+        result["curriculum_episode_total"] = len(rows)
+    for signature in range(1, 16):
+        success_key = f"curriculum_chord_set_{signature}_success"
+        count_key = f"curriculum_chord_set_{signature}_count"
+        if success_key not in rows[0] or count_key not in rows[0]:
+            continue
+        success_total = int(round(sum(
+            float(row[success_key]) for row in rows)))
+        target_total = int(round(sum(
+            float(row[count_key]) for row in rows)))
+        if target_total <= 0:
+            continue
+        prefix = f"chord_set_{signature}"
+        result[f"{prefix}_success_episodes"] = success_total
+        result[f"{prefix}_target_episodes"] = target_total
+        result[f"{prefix}_success_rate"] = success_total / target_total
     if timing_samples:
         result["strike_timing_sample_count"] = len(timing_samples)
     return result
@@ -388,6 +541,29 @@ def action_saturation_regularization(
     return (squared * active).sum() / active_count.clamp_min(1.0)
 
 
+def masked_action_teacher_loss(mean_action, target_action, teacher_mask):
+    """성공 자세가 있는 각 action 차원을 빈도와 무관하게 맞춘다."""
+    if not isinstance(mean_action, torch.Tensor):
+        raise TypeError("mean_action must be a torch.Tensor")
+    if (mean_action.shape != target_action.shape
+            or teacher_mask.shape != mean_action.shape):
+        raise ValueError("action teacher tensors must share shape [N,A]")
+    if mean_action.ndim != 2:
+        raise ValueError("action teacher tensors must have shape [N,A]")
+    if not torch.is_floating_point(mean_action):
+        raise TypeError("action teacher tensors must be floating point")
+    if (not torch.isfinite(mean_action).all()
+            or not torch.isfinite(target_action).all()):
+        raise FloatingPointError("action teacher tensors must be finite")
+    active = teacher_mask.bool().to(mean_action.dtype)
+    active_per_action = active.sum(dim=0)
+    per_action_loss = (
+        ((mean_action - target_action).square() * active).sum(dim=0)
+        / active_per_action.clamp_min(1.0))
+    available = (active_per_action > 0).to(mean_action.dtype)
+    return (per_action_loss * available).sum() / available.sum().clamp_min(1.0)
+
+
 @dataclass
 class PPOConfig:
     horizon: int = 32
@@ -404,6 +580,7 @@ class PPOConfig:
     target_kl: float = 0.03
     action_saturation_regularization_weight: float = 0.0
     action_saturation_regularization_threshold: float = 0.90
+    action_teacher_weight: float = 0.0
     save_interval: int = 500
     log_interval: int = 1
 
@@ -436,6 +613,11 @@ class PPOTrainer:
                 "action saturation regularization threshold must be in [0, 1)")
         self.action_saturation_regularization_weight = saturation_weight
         self.action_saturation_regularization_threshold = saturation_threshold
+        self.action_teacher_weight = float(config.action_teacher_weight)
+        if (not math.isfinite(self.action_teacher_weight)
+                or self.action_teacher_weight < 0.0):
+            raise ValueError(
+                "action teacher weight must be finite and non-negative")
         self.action_saturation_regularization_indices = None
         if saturation_weight > 0.0:
             indices = getattr(
@@ -505,6 +687,7 @@ class PPOTrainer:
     def collect(self):
         obs_b, act_b, logp_b, value_b, reward_b, done_b = [], [], [], [], [], []
         action_mask_b = []
+        teacher_action_b, teacher_mask_b = [], []
         episode = []
         diagnostic_chunks = {
             name: [] for name in self.rollout_diagnostic_keys}
@@ -527,6 +710,21 @@ class PPOTrainer:
             done_b.append(done)
             if action_mask is not None:
                 action_mask_b.append(action_mask.clone())
+            teacher_action = info.get("policy_teacher_action")
+            teacher_mask = info.get("policy_teacher_mask")
+            if (teacher_action is None) != (teacher_mask is None):
+                raise KeyError(
+                    "environment must provide both policy teacher tensors")
+            if teacher_action is not None:
+                if (teacher_action.shape != action.shape
+                        or teacher_mask.shape != action.shape):
+                    raise ValueError(
+                        "policy teacher tensors must match action shape")
+                if not bool(torch.isfinite(teacher_action).all()):
+                    raise FloatingPointError(
+                        "policy teacher action contains a non-finite value")
+                teacher_action_b.append(teacher_action.clone())
+                teacher_mask_b.append(teacher_mask.clone())
             episode_trigger = self.episode_metric_keys[0]
             if episode_trigger in info:
                 for key in self.episode_metric_keys:
@@ -537,19 +735,32 @@ class PPOTrainer:
                     if f"episode_{key}" not in info:
                         raise KeyError(
                             f"environment omitted episode reason {key!r}")
-                for i in range(info[episode_trigger].numel()):
-                    row = {
-                        key: float(info[key][i])
-                        for key in self.episode_metric_keys}
-                    row.update({
-                        key: float(info[f"episode_{key}"][i])
-                        for key in self.episode_reason_keys})
-                    timing_count = info.get("episode_timing_count")
-                    timing_values = info.get("episode_timing_abs_ms")
-                    if timing_count is not None and timing_values is not None:
-                        count = int(timing_count[i].detach().cpu())
+                row_keys = (
+                    tuple(self.episode_metric_keys)
+                    + tuple(self.episode_reason_keys))
+                row_tensors = [info[key] for key in self.episode_metric_keys]
+                row_tensors.extend(
+                    info[f"episode_{key}"]
+                    for key in self.episode_reason_keys)
+                cpu_rows = torch.stack([
+                    value.detach().to(dtype=torch.float32)
+                    for value in row_tensors
+                ], dim=1).cpu()
+                timing_count = info.get("episode_timing_count")
+                timing_values = info.get("episode_timing_abs_ms")
+                cpu_timing_count = (
+                    timing_count.detach().cpu()
+                    if timing_count is not None else None)
+                cpu_timing_values = (
+                    timing_values.detach().cpu()
+                    if timing_values is not None else None)
+                for i, values in enumerate(cpu_rows.tolist()):
+                    row = dict(zip(row_keys, values))
+                    if (cpu_timing_count is not None
+                            and cpu_timing_values is not None):
+                        count = int(cpu_timing_count[i])
                         row["_timing_abs_ms"] = (
-                            timing_values[i, :count].detach().cpu().tolist())
+                            cpu_timing_values[i, :count].tolist())
                     episode.append(row)
             active = info.get("diagnostic_active", info.get("active_count"))
             if active is not None:
@@ -603,7 +814,7 @@ class PPOTrainer:
             self.obs = next_obs
             self.global_step += self.env.num_envs
         next_value = self.model.value(self.obs)
-        diagnostic_stats = {}
+        diagnostic_tensors = {}
         for name, chunks in diagnostic_chunks.items():
             if chunks:
                 values = torch.cat(chunks)
@@ -614,31 +825,44 @@ class PPOTrainer:
                     values if torch.is_floating_point(values)
                     else values.float())
                 metric_name = f"curriculum_{name}"
-                diagnostic_stats[metric_name] = float(
-                    mean_values.mean().cpu())
+                diagnostic_tensors[metric_name] = mean_values.mean()
                 if name.endswith("_active"):
-                    active_count = float(mean_values.sum().cpu())
-                    diagnostic_stats[f"{metric_name}_count"] = active_count
+                    active_count = mean_values.sum()
+                    diagnostic_tensors[f"{metric_name}_count"] = active_count
                     if name == "goal_pair_pretransition_active":
-                        diagnostic_stats[
+                        diagnostic_tensors[
                             "curriculum_goal_pair_pretransition_"
                             "current_press_preserved_count"] = active_count
-                        diagnostic_stats[
+                        diagnostic_tensors[
                             "curriculum_goal_pair_pretransition_"
                             "current_press_quality_count"] = active_count
                 if name == "mean_target_distance":
-                    diagnostic_stats["curriculum_p90_target_distance"] = float(
-                        torch.quantile(values, 0.90).cpu())
+                    diagnostic_tensors["curriculum_p90_target_distance"] = (
+                        torch.quantile(mean_values, 0.90))
+                elif name == "joint_limit_max_usage" or name.endswith(
+                        "_max_usage"):
+                    diagnostic_tensors[f"{metric_name}_p95"] = (
+                        torch.quantile(mean_values, 0.95))
                 elif name == "thumb_gap":
-                    diagnostic_stats["curriculum_thumb_gap_p10"] = float(
-                        torch.quantile(values, 0.10).cpu())
-                    diagnostic_stats["curriculum_thumb_gap_p90"] = float(
-                        torch.quantile(values, 0.90).cpu())
+                    diagnostic_tensors["curriculum_thumb_gap_p10"] = (
+                        torch.quantile(mean_values, 0.10))
+                    diagnostic_tensors["curriculum_thumb_gap_p90"] = (
+                        torch.quantile(mean_values, 0.90))
                 elif name == "thumb_contact_force":
-                    diagnostic_stats["curriculum_thumb_contact_force_p95"] = float(
-                        torch.quantile(values, 0.95).cpu())
-                    diagnostic_stats["curriculum_thumb_contact_force_max"] = float(
-                        values.max().cpu())
+                    diagnostic_tensors[
+                        "curriculum_thumb_contact_force_p95"] = (
+                            torch.quantile(mean_values, 0.95))
+                    diagnostic_tensors[
+                        "curriculum_thumb_contact_force_max"] = (
+                            mean_values.max())
+        diagnostic_stats = {}
+        if diagnostic_tensors:
+            names = tuple(diagnostic_tensors)
+            values = torch.stack([
+                diagnostic_tensors[name].to(dtype=torch.float32)
+                for name in names
+            ]).detach().cpu().tolist()
+            diagnostic_stats.update(zip(names, values))
         rollout = {
             "obs": torch.stack(obs_b), "actions": torch.stack(act_b),
             "logp": torch.stack(logp_b), "values": torch.stack(value_b),
@@ -650,12 +874,19 @@ class PPOTrainer:
             rollout["action_masks"] = torch.stack(action_mask_b)
             rollout["diagnostics"]["policy_active_action_fraction"] = float(
                 rollout["action_masks"].float().mean().cpu())
+        if teacher_action_b:
+            rollout["teacher_actions"] = torch.stack(teacher_action_b)
+            rollout["teacher_masks"] = torch.stack(teacher_mask_b)
+            rollout["diagnostics"]["policy_teacher_action_fraction"] = float(
+                rollout["teacher_masks"].float().mean().cpu())
         # One synchronization per rollout, rather than several GPU->CPU checks
         # per control frame.  The environment already contains per-row finite
         # guards; this is the final fail-fast boundary before optimizer/RMS use.
         finite = torch.isfinite(next_value).all()
         for key in ("obs", "actions", "logp", "values", "rewards"):
             finite &= torch.isfinite(rollout[key]).all()
+        if "teacher_actions" in rollout:
+            finite &= torch.isfinite(rollout["teacher_actions"]).all()
         if not bool(finite):
             raise FloatingPointError("non-finite value reached the PPO rollout boundary")
         return rollout
@@ -685,6 +916,13 @@ class PPOTrainer:
         action_masks = rollout.get("action_masks")
         if action_masks is not None:
             action_masks = action_masks.reshape(-1, self.env.num_actions)
+        teacher_actions = rollout.get("teacher_actions")
+        teacher_masks = rollout.get("teacher_masks")
+        if teacher_actions is not None:
+            teacher_actions = teacher_actions.reshape(
+                -1, self.env.num_actions)
+            teacher_masks = teacher_masks.reshape(
+                -1, self.env.num_actions)
         n = obs.shape[0]
         mb = min(self.cfg.minibatch_size, n)
         stats = {
@@ -693,6 +931,7 @@ class PPOTrainer:
             "entropy": 0.0,
             "kl": 0.0,
             "action_saturation_loss": 0.0,
+            "action_teacher_loss": 0.0,
         }
         updates = 0
         stop = False
@@ -702,7 +941,11 @@ class PPOTrainer:
                 minibatch_mask = (
                     action_masks[idx] if action_masks is not None else None)
                 deterministic_mean_action = None
-                if self.action_saturation_regularization_weight > 0.0:
+                needs_mean_action = (
+                    self.action_saturation_regularization_weight > 0.0
+                    or (self.action_teacher_weight > 0.0
+                        and teacher_actions is not None))
+                if needs_mean_action:
                     (logp, entropy, value,
                      deterministic_mean_action) = self.model.evaluate_actions(
                         obs[idx], actions[idx],
@@ -744,6 +987,15 @@ class PPOTrainer:
                             self.action_saturation_regularization_threshold,
                             action_mask=minibatch_mask))
                     loss = loss + action_saturation_loss
+                action_teacher_loss = None
+                if (self.action_teacher_weight > 0.0
+                        and teacher_actions is not None):
+                    action_teacher_loss = (
+                        self.action_teacher_weight
+                        * masked_action_teacher_loss(
+                            deterministic_mean_action,
+                            teacher_actions[idx], teacher_masks[idx]))
+                    loss = loss + action_teacher_loss
 
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
@@ -756,6 +1008,9 @@ class PPOTrainer:
                 if action_saturation_loss is not None:
                     stats["action_saturation_loss"] += float(
                         action_saturation_loss.detach())
+                if action_teacher_loss is not None:
+                    stats["action_teacher_loss"] += float(
+                        action_teacher_loss.detach())
                 updates += 1
             if stop:
                 break
@@ -901,9 +1156,20 @@ class PPOTrainer:
                 if (history_limit is not None
                         and len(history) > history_limit):
                     del history[:-history_limit]
-            if self.metrics_path:
+            stage = stats.get("curriculum_stage")
+            previous_stage = getattr(self, "_last_logged_stage", None)
+            write_log = (
+                iteration == first
+                or iteration == last
+                or iteration % self.cfg.log_interval == 0
+                or (self.out_dir
+                    and iteration % self.cfg.save_interval == 0)
+                or stage != previous_stage)
+            if self.metrics_path and write_log:
                 with self.metrics_path.open("a") as f:
-                    f.write(json.dumps(stats, sort_keys=True) + "\n")
+                    f.write(json.dumps(
+                        compact_training_stats(stats), sort_keys=True) + "\n")
+                self._last_logged_stage = stage
             if iteration % self.cfg.log_interval == 0:
                 detailed = detailed_training_line(stats)
                 if self.training_log_path:

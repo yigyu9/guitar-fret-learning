@@ -11,7 +11,6 @@ DEFAULT_BUNDLE = strike_goal_path(DEFAULT_SONG_ID)
 
 
 STRIKE = {
-    "song_id": DEFAULT_SONG_ID,
     "goal_path": str(DEFAULT_BUNDLE),
     "grip_reference_path": str(
         PROJECT_ROOT / "strike" / "02_physical_control"
@@ -27,24 +26,16 @@ STRIKE = {
     "reset_soft_limit_fraction": 0.02,
     "policy_init_std": 0.04,
     "failure_termination_penalty": -10.0,
-    "control_prefixes": (
-        "R_Shoulder", "R_Elbow", "R_Wrist", "RH:",
-    ),
     "zone": {
         "allowed_y_min_m": -0.385,
         "allowed_y_max_m": -0.255,
         "preferred_y_min_m": -0.355,
         "preferred_y_max_m": -0.295,
         "phrase_lane_y_m": -0.325,
-        # Each A4 event samples a lane inside the preferred region.  Its
-        # target is still a band, not a point: +/-6 mm is full quality and
-        # +/-12.5 mm is the outer success boundary.
         "lane_core_half_width_m": 0.006,
         "lane_allowed_half_width_m": 0.0125,
     },
     "trajectory": {
-        # Keep all three points inside one inter-string lane.  Wider values can
-        # cross a neighbouring string before the intended release phase.
         "ready_across_offset_m": 0.003,
         "entry_across_offset_m": 0.0015,
         "exit_across_offset_m": 0.003,
@@ -54,6 +45,7 @@ STRIKE = {
         "entry_distance_m": 0.006,
         "ready_hold_frames": 6,
         "recovery_frames": 12,
+        "follow_through_min_frames": 1,
         "approach_lead_s": 0.20,
     },
     "detector": {
@@ -64,6 +56,24 @@ STRIKE = {
         "rearm_distance_m": 0.003,
         "rearm_min_frames": 2,
     },
+    "safety": {
+        "penetration_threshold_m": 0.005,
+        "penetration_frames": 3,
+        "penetration_termination": False,
+    },
+    "wrong_crossing_termination": {
+        "enabled": True,
+        "minimum_tempo_lambda": 0.75,
+        "minimum_resolved_events": 4,
+        "max_count": 3,
+        "max_rate": 0.20,
+        "consecutive_event_limit": 2,
+    },
+    "joint_limits": {
+        "diagnostic_fraction": 0.90,
+        "soft_penalty_start_fraction": 0.95,
+        "soft_penalty_weight": 0.01,
+    },
     "reward": {
         "grip_weight": {
             "A0_PICK_GRIP": 1.00,
@@ -73,10 +83,24 @@ STRIKE = {
             "A4_ZONE_CONTROL": 0.003,
         },
         "reach_weight": 0.20,
-        "ready_quality_weight": 0.75,
+        "reach_discount": 0.95,
+        "ready_quality_weight": {
+            "A0_PICK_GRIP": 0.00,
+            "A1_TIP_READY": 0.75,
+            "A2_FREE_CROSSING": 0.05,
+            "A3_TIMED_CROSSING": 0.03,
+            "A4_ZONE_CONTROL": 0.02,
+        },
         "crossing_reward": 1.00,
-        "completion_reward": 0.15,
+        "completion_reward": {
+            "A0_PICK_GRIP": 0.00,
+            "A1_TIP_READY": 0.15,
+            "A2_FREE_CROSSING": 0.50,
+            "A3_TIMED_CROSSING": 0.35,
+            "A4_ZONE_CONTROL": 0.25,
+        },
         "wrong_crossing_penalty": 0.35,
+        "unprepared_crossing_penalty": 1.00,
         "miss_penalty": 0.50,
         "zone_weight": 0.20,
         "timing_core_ms": 20.0,
@@ -106,11 +130,9 @@ STRIKE = {
             "A4_ZONE_CONTROL": 5000,
         },
         "promotion_windows": 3,
-        # Pool at least one complete parallel-environment cohort before a
-        # terminal-stage gate can advance.  This prevents early-success
-        # rollouts from being judged separately from later timeout failures.
         "terminal_evidence_fraction": 1.0,
         "timing_tolerances_ms": (100, 67, 50),
+        "tempo_lambdas": (0.0, 0.25, 0.5, 0.75, 0.9, 1.0),
         "grip_success_rate": 0.90,
         "ready_success_rate": 0.85,
         "release_recall": 0.80,
@@ -126,6 +148,11 @@ STRIKE = {
         "max_wrong_rate": 0.01,
         "timing_p95_ms": 50.0,
         "zone_success_rate": 0.99,
+        "strum_completion_rate": 0.95,
+        "strum_traversal_recall": 0.99,
+        "strum_order_accuracy": 0.99,
+        "strum_direction_accuracy": 0.99,
+        "strum_max_protected_rate": 0.01,
     },
     "ppo": {
         "horizon": 32,
@@ -136,14 +163,13 @@ STRIKE = {
         "clip_ratio": 0.2,
         "value_coef": 1.0,
         "entropy_coef": 0.001,
-        "actor_learning_rate": 1e-5,
+        "actor_learning_rate": 3e-6,
         "learning_rate": 3e-4,
         "max_grad_norm": 1.0,
         "target_kl": 0.03,
         "save_interval": 500,
         "log_interval": 1,
     },
-    "video_interval": 500,
     "artifact_max_steps": 900,
     "resource_guard": {
         "max_num_envs": 1024,

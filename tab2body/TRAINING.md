@@ -1,6 +1,6 @@
 # tab2body 학습·평가 가이드
 
-> 최종 갱신: 2026-08-03
+> 최종 갱신: 2026-08-19
 
 이 문서는 현재 코드 기준의 Fret/Strike 실행 방법과 checkpoint 관리 규칙을 설명합니다.
 과거 37-action·341-observation Fret checkpoint와 과거 Strike checkpoint는 현재 계약과 호환되지
@@ -45,7 +45,7 @@ data/song_bundles/<song_id>/
 | 항목 | Fret | Strike |
 |---|---:|---:|
 | action | 33 | 30 |
-| observation | 353 | 263 |
+| observation | 428 | 281 |
 | reward/value | 6 / 6 | 1 / 1 |
 | 기본 환경 수 | 1024 | 512 |
 | 기본 iteration | 5000 | 3000 |
@@ -56,7 +56,8 @@ data/song_bundles/<song_id>/
 Fret observation은 다음 블록으로 구성됩니다.
 
 ```text
-base 180 + goal 128 + previous EMA action 33 + thumb geometry 12 = 353
+base 180 + goal 128 + previous EMA action 33 + thumb geometry 12
++ future goal context 75 = 428
 ```
 
 ## 4. Smoke 배관 테스트
@@ -120,8 +121,11 @@ python -m tab2body.train \
 python -m tab2body.train \
   --task fret --no-random-start \
   --num-envs 512 --iterations 500 \
-  --run-name fret_full_start_probe
+  --run-name fret_no_random_start_probe
 ```
+
+`--no-random-start`는 시작 시점 무작위화만 끄며 손끝 접근 커리큘럼은 유지합니다.
+커리큘럼까지 끄려면 `--no-curriculum`을 별도로 지정합니다.
 
 ## 6. Strike 학습
 
@@ -167,7 +171,7 @@ strike/training/runs/<run-name>/
 ```
 
 기본 checkpoint 저장 주기는 500 iteration이고, 학습 종료 시 마지막 iteration을 별도로 저장합니다.
-Fret 자동 영상 주기는 1,000 iteration, Strike 자동 영상 주기는 500 iteration입니다.
+Strike 영상은 학습 종료 후 최종 checkpoint에 대해 remembered/current 두 시점으로 생성합니다.
 
 영상 생성을 끄려면 다음 옵션을 사용합니다.
 
@@ -176,6 +180,9 @@ python -m tab2body.train --task fret \
   --num-envs 512 --iterations 500 \
   --no-auto-video --run-name fret_no_video
 ```
+
+Strike는 같은 위치에 `--task strike --no-auto-video`를 사용합니다. 자동 plot과 motion audit까지
+끄려면 `--no-auto-artifacts`를 함께 지정합니다.
 
 ## 8. 학습 재개와 warm-start
 
@@ -226,8 +233,17 @@ python -m tab2body.train \
 
 ## 10. 로그 확인
 
-- `logs/metrics.jsonl`: PPO·reward·task 지표
+- `logs/metrics.jsonl`: 기본 10 iteration 간격과 단계 변경·checkpoint·종료 시점의 scalar 지표
 - `logs/training.log`: 사람이 읽는 학습 진행 로그
+
+압현 성공 통계는 비율과 분자·분모를 함께 기록한다.
+
+- `sustain_event_success_total / sustain_event_total`: 성공한 압현 유지 이벤트 수
+- `press_success_frames / press_target_frames`: 전체 목표 압현 프레임 판정
+- `finger_N_press_success_frames / finger_N_press_target_frames`: 손가락별 프레임 판정
+- `curriculum_success_episodes / curriculum_episode_total`: 커리큘럼 성공 episode 수
+- `chord_set_S_success_episodes / chord_set_S_target_episodes`: 손가락 조합별 성공 episode 수
+- `sustain_event_success_rate_pooled`, `press_success_rate`, `finger_N_press_success_rate`: 각 비율
 - `logs/artifacts.log`: plot·evaluation·video 생성 로그
 - `run_manifest.json`: 입력 hash, 계약 hash, 환경 수, 산출물 경로
 

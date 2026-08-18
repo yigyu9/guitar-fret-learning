@@ -1,4 +1,4 @@
-"""CPU checks for the appended thumb observation warm-start contract."""
+"""CPU checks for appended fret observation warm-start contracts."""
 from pathlib import Path
 import sys
 
@@ -10,7 +10,10 @@ if str(ROOT) not in sys.path:
 
 from learning.models import ActorCritic
 from train_fret import (
+    finger_exploration_ceiling,
+    finger_precision_schedule,
     load_fret_initialization_model,
+    summarize_goal_finger_coverage,
     thumb_base_exploration_floor,
 )
 
@@ -31,6 +34,71 @@ def main():
         torch.tensor(0.075))
     assert thumb_base_exploration_floor(
         1000, 0.05, 0.10, 200, 800) == 0.10
+
+    assert finger_exploration_ceiling(0, 0.08, 0.025, 25, 300) == 0.08
+    assert finger_exploration_ceiling(25, 0.08, 0.025, 25, 300) == 0.08
+    assert torch.isclose(torch.tensor(
+        finger_exploration_ceiling(175, 0.08, 0.025, 25, 300)),
+        torch.tensor(0.0525))
+    assert finger_exploration_ceiling(
+        325, 0.08, 0.025, 25, 300) == 0.025
+    assert finger_exploration_ceiling(
+        1000, 0.08, 0.025, 25, 300) == 0.025
+    expect_value_error(
+        lambda: finger_exploration_ceiling(0, 0.08, 0.09, 25, 300))
+    expect_value_error(
+        lambda: finger_exploration_ceiling(0, 0.08, 0.025, -1, 300))
+    expect_value_error(
+        lambda: finger_exploration_ceiling(0, 0.08, 0.025, 25, 0))
+
+    assert finger_precision_schedule({
+        "curriculum_stage": "fine_reach",
+    }) == (False, 0, ())
+    assert finger_precision_schedule({
+        "curriculum_stage": "chord_fine_reach",
+        "curriculum_chord_focus_total_iteration": 175,
+        "curriculum_chord_focus_index": 1,
+        "curriculum_chord_available_sets": [[1, 2], [1, 3]],
+    }) == (True, 175, (1, 3))
+    assert finger_precision_schedule({
+        "curriculum_stage": "static_chord",
+        "curriculum_chord_focus_total_iteration": 325,
+        "curriculum_stage_iteration": 20,
+    }) == (True, 345, ())
+    assert finger_precision_schedule({
+        "curriculum_stage": "goal_pair",
+        "curriculum_chord_focus_total_iteration": 325,
+        "curriculum_stage_iteration": 20,
+        "curriculum_goal_pair_focus_finger": 4,
+    }) == (True, 345, (4,))
+
+    class FakeGoals:
+        fret = torch.tensor([
+            [3, 0, 0, 0, 0, 0],
+            [3, 5, 0, 0, 0, 0],
+            [0, 5, 7, 0, 0, 0],
+        ])
+        finger = torch.tensor([
+            [1, 0, 0, 0, 0, 0],
+            [1, 2, 0, 0, 0, 0],
+            [0, 2, 4, 0, 0, 0],
+        ])
+        sustain_events = (
+            {"finger": 1, "string": 0, "fret": 3},
+            {"finger": 2, "string": 1, "fret": 5},
+            {"finger": 4, "string": 2, "fret": 7},
+        )
+        practice_chord_frames_by_finger_set = {
+            (1, 2): torch.tensor([1]),
+            (2, 4): torch.tensor([2]),
+        }
+
+    coverage = summarize_goal_finger_coverage(FakeGoals())
+    assert coverage["fingers"]["index"]["active_frames"] == 2
+    assert coverage["fingers"]["middle"]["stable_chord_runs"] == 2
+    assert coverage["fingers"]["ring"]["active_frames"] == 0
+    assert set(coverage["underrepresented_fingers"]) == {
+        "index", "middle", "ring", "pinky"}
 
     torch.manual_seed(17)
     source = ActorCritic(
@@ -185,6 +253,35 @@ def main():
     for key, value in target.state_dict().items():
         assert torch.equal(same_size.state_dict()[key], value), key
 
+    future_context_target = ActorCritic(
+        428, 5, value_dim=2,
+        actor_hidden=(16, 8), critic_hidden=(16, 8), init_std=0.2)
+    future_context_calibration = torch.randn(128, 428)
+    future_report = load_fret_initialization_model(
+        future_context_target, target.state_dict(),
+        appended_obs_dim=75,
+        calibration_observations=future_context_calibration)
+    assert future_report == {
+        "expanded": True,
+        "source_obs_dim": 353,
+        "target_obs_dim": 428,
+    }
+    assert torch.equal(
+        future_context_target.actor[0].weight[:, :353],
+        target.actor[0].weight)
+    assert torch.equal(
+        future_context_target.actor[0].weight[:, 353:],
+        torch.zeros_like(
+            future_context_target.actor[0].weight[:, 353:]))
+    with torch.no_grad():
+        assert torch.allclose(
+            future_context_target.actor(
+                future_context_target.normalized(
+                    future_context_calibration)),
+            target.actor(target.normalized(
+                future_context_calibration[:, :353])),
+            atol=1e-6, rtol=1e-6)
+
     wrong_size = ActorCritic(
         354, 5, value_dim=2,
         actor_hidden=(16, 8), critic_hidden=(16, 8), init_std=0.2)
@@ -212,7 +309,7 @@ def main():
     malformed["actor.2.bias"] = malformed["actor.2.bias"][:-1]
     expect_value_error(
         lambda: load_fret_initialization_model(target, malformed))
-    print("PASS: appended thumb observation warm-start preserves the old policy")
+    print("PASS: appended fret observations preserve the old policy")
 
 
 if __name__ == "__main__":

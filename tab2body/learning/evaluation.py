@@ -9,7 +9,9 @@ def evaluation_gate_summary(
         wrong_press_gate, sustain_hold_gate, sustain_dropout_gate,
         thumb_support_rate=None, thumb_wrong_contact_rate=None,
         thumb_support_gate=0.80, thumb_wrong_contact_gate=0.05,
-        thumb_contact_gate_enabled=True):
+        thumb_contact_gate_enabled=True,
+        thumb_press_readiness=None, thumb_press_readiness_gate=0.35,
+        thumb_geometry_gate_enabled=False):
     """Return explicit, independently auditable learned-song gates."""
     if not episode_rows:
         raise ValueError("evaluation gates require at least one episode")
@@ -55,9 +57,17 @@ def evaluation_gate_summary(
             and float(thumb_wrong_contact_rate)
             <= float(thumb_wrong_contact_gate)))
     thumb_gate_enabled = bool(thumb_contact_gate_enabled and thumb_applicable)
+    thumb_geometry_applicable = thumb_press_readiness is not None
+    thumb_geometry_passed = (
+        not thumb_geometry_applicable
+        or float(thumb_press_readiness)
+            >= float(thumb_press_readiness_gate))
+    thumb_geometry_enabled = bool(
+        thumb_geometry_gate_enabled and thumb_geometry_applicable)
     passed = (press_passed and no_press_passed and wrong_press_passed
               and sustain_passed and safety_proxy_passed
-              and (thumb_passed or not thumb_gate_enabled))
+              and (thumb_passed or not thumb_gate_enabled)
+              and (thumb_geometry_passed or not thumb_geometry_enabled))
     return {
         "gate_f1": f1_gate,
         "gate_no_press_accuracy": no_press_gate,
@@ -87,6 +97,11 @@ def evaluation_gate_summary(
         "gate_thumb_support_rate": float(thumb_support_gate),
         "gate_thumb_wrong_contact_rate": float(thumb_wrong_contact_gate),
         "thumb_passed": bool(thumb_passed),
+        "thumb_geometry_applicable": bool(thumb_geometry_applicable),
+        "thumb_geometry_gate_enabled": thumb_geometry_enabled,
+        "thumb_geometry_diagnostic_only": not thumb_geometry_enabled,
+        "gate_thumb_press_readiness": float(thumb_press_readiness_gate),
+        "thumb_geometry_passed": bool(thumb_geometry_passed),
         # This no longer claims exact mesh safety; retained as a deprecated alias.
         "hard_safety_passed": bool(safety_proxy_passed),
         "passed": bool(passed),

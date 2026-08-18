@@ -45,13 +45,15 @@ python -m tab2body.train \
 - checkpoint 저장: 500 iteration마다 및 종료 시 마지막 iteration
 - resource guard: 최대 1,024 환경, 시작 시 여유 VRAM/RAM/디스크 확인
 
-현재 Fret 계약은 33 action, 353 observation, 6 reward/value입니다.
+현재 Fret 계약은 33 action, 428 observation, 6 reward/value입니다.
 
 ```text
 observation = base180 + goal128 + previous EMA action33 + thumb geometry12
+              + future goal context75
 ```
 
-구 37-action 또는 341-observation checkpoint는 현재 계약과 호환되지 않습니다.
+이전 353-observation 정책은 `--initialize-from`으로만 확장하며, 구 37-action 또는
+341-observation checkpoint는 strict resume하지 않습니다.
 
 ## 산출물 구조
 
@@ -90,7 +92,7 @@ python -m tab2body.train \
 python -m tab2body.train \
   --task fret --eval \
   --checkpoint runs/fret_s0/checkpoints/fret_005000.pt \
-  --num-envs 64 --eval-episodes 64
+  --eval-episodes 1
 ```
 
 재개는 모델·optimizer·iteration·global step·curriculum 상태를 복원합니다. 현재 코드와 입력,
@@ -98,3 +100,5 @@ asset, PPO 설정의 contract가 checkpoint와 다르면 안전을 위해 중단
 
 자동 영상을 끄려면 `--no-auto-video`를 사용합니다. 상세 옵션은
 [`tab2body/TRAINING.md`](../../tab2body/TRAINING.md)를 참조합니다.
+`metrics.jsonl`은 기본 10 iteration 간격과 단계 변경·checkpoint·종료 시점에 scalar만 기록합니다.
+Ctrl+C로 중단하면 마지막 완료 iteration을 저장한 뒤 plot과 최종 영상을 생성합니다.

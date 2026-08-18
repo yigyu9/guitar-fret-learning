@@ -50,7 +50,13 @@ def main():
         assert torch.allclose(delayed[:, 24], torch.tensor([1.0, 0.0]))
         assert torch.allclose(delayed[:, 49], torch.tensor([1.1, 0.1]))
         assert torch.allclose(delayed[:, 74], torch.tensor([1.25, 0.25]))
-    print("PASS: fixed-song phase context is normalized and observable")
+        future = goals.observe_future_context(
+            (30, 60, 90), torch.tensor([60, 0]))
+        assert future.shape == (2, 75)
+        assert torch.allclose(future[:, 24], torch.tensor([1.5, 0.5]))
+        assert torch.allclose(future[:, 49], torch.tensor([2.0, 1.0]))
+        assert torch.allclose(future[:, 74], torch.tensor([2.5, 1.5]))
+    print("PASS: short and long fixed-song context is normalized and observable")
 
 
 if __name__ == "__main__":

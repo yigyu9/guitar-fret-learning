@@ -91,6 +91,22 @@ def main():
     assert not gated_thumb["passed"]
     assert gated_thumb["thumb_contact_gate_enabled"]
 
+    gated_geometry = evaluation_gate_summary(
+        metrics(), rows(),
+        press_applicable=True, no_press_applicable=True,
+        expected_sustain_events=33,
+        penetration_proxy_passed=True,
+        finger_intersection_passed=True,
+        f1_gate=0.90, no_press_gate=0.99, wrong_press_gate=0.01,
+        sustain_hold_gate=0.90, sustain_dropout_gate=3,
+        thumb_press_readiness=0.20,
+        thumb_press_readiness_gate=0.35,
+        thumb_geometry_gate_enabled=True,
+        thumb_contact_gate_enabled=False)
+    assert not gated_geometry["passed"]
+    assert gated_geometry["thumb_geometry_gate_enabled"]
+    assert not gated_geometry["thumb_geometry_passed"]
+
     print("PASS: completion, release, sustain, and safety proxy evaluation gates")
 
 

@@ -46,6 +46,7 @@ def main():
                                   max_dropout_frames=3)
     feed(tracker, [True] * 9 + [False])
     metrics = tracker.episode_metrics(torch.tensor([True]))
+    assert metrics["sustain_event_success_count"].item() == 1.0
     assert abs(float(metrics["sustain_hold_rate"][0]) - 0.9) < 1e-6
     assert float(metrics["sustain_event_success_rate"][0]) == 1.0
 

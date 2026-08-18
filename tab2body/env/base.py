@@ -99,7 +99,15 @@ class GuitarEnvBase:
         sp.physx.rest_offset = 0.0
         sp.use_gpu_pipeline = True
         sp.physx.use_gpu = True
-        self.sim = self.gym.create_sim(0, 0 if not headless else 0, gymapi.SIM_PHYSX, sp)
+        device = torch.device(self.device)
+        if device.type != "cuda":
+            raise ValueError("GPU PhysX requires a CUDA device")
+        compute_device_id = (
+            torch.cuda.current_device()
+            if device.index is None else device.index)
+        self.sim = self.gym.create_sim(
+            compute_device_id, compute_device_id,
+            gymapi.SIM_PHYSX, sp)
         plane = gymapi.PlaneParams(); plane.normal = gymapi.Vec3(0, 0, 1)
         self.gym.add_ground(self.sim, plane)
 

@@ -11,8 +11,6 @@ helpers remains CPU-only.
 from __future__ import annotations
 
 import argparse
-import importlib
-import inspect
 import json
 import math
 from pathlib import Path
@@ -27,17 +25,10 @@ PROJECT_ROOT = PACKAGE_ROOT.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from tab2body.strike_contract import STRIKE_STAGES
 
-STRIKE_STAGES = (
-    "A0_PICK_GRIP",
-    "A1_TIP_READY",
-    "A2_FREE_CROSSING",
-    "A3_TIMED_CROSSING",
-    "A4_ZONE_CONTROL",
-)
 
-# Frozen in render_pick_grip_pose.py and PROJECT_CONTEXT.md.  Values point
-# from the shared RH:palm target toward the camera.
+
 CAMERA_DIRECTIONS = {
     "remembered": (0.15, 0.85, 0.62),
     "current": (-0.7474, 0.4317, 0.62),
@@ -50,65 +41,49 @@ def _mapping(value):
     return value if isinstance(value, dict) else {}
 
 
-def _state_sources(checkpoint):
-    environment = _mapping(checkpoint.get("environment_state"))
-    context = _mapping(checkpoint.get("training_context"))
-    sources = []
-    for source in (environment, context):
-        nested = _mapping(source.get("curriculum"))
-        sources.append(source)
-        if nested:
-            sources.append(nested)
-    return sources
-
-
 def restore_stage_and_tolerance(checkpoint):
-    """Resolve the saved task stage and timing tolerance, fail-closed.
-
-    ``environment_state`` is authoritative when present because it captures
-    the task itself.  ``training_context`` supports checkpoints produced
-    before task-local curriculum state was added.
-    """
+    """Restore the current task state after checking trainer/task alignment."""
     if not isinstance(checkpoint, dict):
         raise ValueError("checkpoint must be a mapping")
-    sources = _state_sources(checkpoint)
+    environment = checkpoint.get("environment_state")
+    context = checkpoint.get("training_context")
+    if (not isinstance(environment, dict)
+            or environment.get("schema")
+            != "tab2body.strike_environment_state.v2"):
+        raise ValueError(
+            "checkpoint requires current strike environment_state.v2")
+    if not isinstance(context, dict):
+        raise ValueError("checkpoint requires a training_context mapping")
+    for key in ("curriculum_stage", "curriculum_timing_tolerance_ms"):
+        if key not in context:
+            raise ValueError(f"training_context is missing {key}")
 
-    stage = None
-    stage_keys = ("curriculum_stage", "stage")
-    for source in sources:
-        for key in stage_keys:
-            if key in source:
-                stage = source[key]
-                break
-        if stage is not None:
-            break
+    from tab2body.learning.ppo import verify_checkpoint_curriculum_alignment
+
+    verify_checkpoint_curriculum_alignment(checkpoint)
+    stage = environment.get("curriculum_stage")
     if stage not in STRIKE_STAGES:
         raise ValueError(
             "checkpoint does not contain a valid strike curriculum stage")
-
-    tolerance = None
-    tolerance_keys = (
-        "timing_tolerance_ms",
-        "curriculum_timing_tolerance_ms",
-        "curriculum_tolerance_ms",
-    )
-    for source in sources:
-        for key in tolerance_keys:
-            if key in source:
-                tolerance = source[key]
-                break
-        if tolerance is not None:
-            break
+    tolerance = environment.get("timing_tolerance_ms")
     if isinstance(tolerance, bool):
         raise ValueError("checkpoint timing tolerance must be positive")
     try:
         tolerance = float(tolerance)
     except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "checkpoint does not contain a timing tolerance") from exc
+        raise ValueError("checkpoint does not contain a timing tolerance") from exc
     if not math.isfinite(tolerance) or tolerance <= 0.0:
         raise ValueError("checkpoint timing tolerance must be finite and positive")
-    return stage, tolerance
+    tempo_lambda = environment.get("tempo_lambda")
+    if isinstance(tempo_lambda, bool):
+        raise ValueError("checkpoint tempo lambda must be in [0, 1]")
+    try:
+        tempo_lambda = float(tempo_lambda)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("checkpoint does not contain a tempo lambda") from exc
+    if not math.isfinite(tempo_lambda) or not 0.0 <= tempo_lambda <= 1.0:
+        raise ValueError("checkpoint tempo lambda must be finite and in [0, 1]")
+    return stage, tolerance, tempo_lambda
 
 
 def require_ffmpeg():
@@ -160,154 +135,48 @@ def _checkpoint_payload(checkpoint):
     return validated, payload
 
 
-def _controlled_dof_names(env):
-    indices = env.ctrl_idx.detach().cpu().tolist()
-    return [str(env.dof_names[index]) for index in indices]
-
-
-def _fallback_verify_live_contract(
-        checkpoint, validated, payload, env, goal_path, grip_reference_path):
-    """Minimum complete compatibility check if the training helper is absent."""
-    from tab2body.learning.checkpoint_contract import (
-        file_sha256,
-        verify_checkpoint_contract,
-    )
-
-    # This call checks the signature and exercises the standard verification
-    # entry point.  The explicit comparisons below bind it to the live task.
-    verify_checkpoint_contract(
-        checkpoint, validated, purpose="record strike rollout")
-    model = _mapping(payload.get("model"))
-    live_dimensions = {
-        "num_obs": int(env.num_obs),
-        "num_actions": int(env.num_actions),
-        "value_dim": int(env.value_dim),
-    }
-    for key, live_value in live_dimensions.items():
-        if int(model.get(key, -1)) != live_value:
-            raise ValueError(
-                "checkpoint/live {} mismatch: {} != {}".format(
-                    key, model.get(key), live_value))
-
-    saved_names = list(_mapping(payload.get("control")).get(
-        "controlled_dof_names", ()))
-    live_names = _controlled_dof_names(env)
-    if saved_names != live_names:
-        raise ValueError("checkpoint/live controlled DOF ordering mismatch")
-
-    inputs = _mapping(payload.get("inputs"))
-    goal_hash = file_sha256(goal_path)
-    grip_hash = file_sha256(grip_reference_path)
-    if inputs.get("goal_sha256") != goal_hash:
-        raise ValueError("checkpoint goal SHA-256 does not match --goal")
-    if inputs.get("grip_reference_sha256") != grip_hash:
-        raise ValueError(
-            "checkpoint grip-reference SHA-256 does not match --grip-reference")
-
-    manifest = getattr(env, "observation_manifest", None)
-    saved_manifest = _mapping(payload.get("config")).get(
-        "observation_manifest")
-    if manifest is not None and list(manifest) != list(saved_manifest or ()):
-        raise ValueError("checkpoint/live observation manifest mismatch")
-
-
 def verify_live_contract(
         checkpoint, env, model, goal_path, grip_reference_path, strike_config):
     """Verify integrity and equality with the freshly constructed live task."""
-    validated, payload = _checkpoint_payload(checkpoint)
-    try:
-        train_module = importlib.import_module("tab2body.train_strike")
-    except ModuleNotFoundError as exc:
-        if exc.name != "tab2body.train_strike":
-            raise
-        train_module = None
-    helper = (
-        getattr(train_module, "build_runtime_checkpoint_contract", None)
-        if train_module is not None else None)
-    if helper is not None:
-        from tab2body.learning.checkpoint_contract import (
-            verify_checkpoint_contract,
-        )
+    _, payload = _checkpoint_payload(checkpoint)
+    from tab2body.learning.checkpoint_contract import verify_checkpoint_contract
+    from tab2body.strike_checkpoint import build_runtime_checkpoint_contract
 
-        live_config = dict(strike_config)
-        live_config["grip_reference_path"] = str(
-            Path(grip_reference_path).resolve())
-        saved_ppo = _mapping(
-            _mapping(payload.get("config")).get("ppo"))
-        live_contract = helper(
-            env, model, goal_path, config=live_config,
-            ppo_config=saved_ppo)
-        verify_checkpoint_contract(
-            checkpoint, live_contract, purpose="record strike rollout")
-    else:
-        _fallback_verify_live_contract(
-            checkpoint, validated, payload, env,
-            goal_path, grip_reference_path)
+    live_config = dict(strike_config)
+    live_config["grip_reference_path"] = str(
+        Path(grip_reference_path).resolve())
+    saved_ppo = _mapping(_mapping(payload.get("config")).get("ppo"))
+    live_contract = build_runtime_checkpoint_contract(
+        env, model, goal_path, config=live_config, ppo_config=saved_ppo)
+    verify_checkpoint_contract(
+        checkpoint, live_contract, purpose="record strike rollout")
     return payload
 
 
 def _construct_task(StrikeTask, args, strike_config):
-    """Pass the stable task arguments plus explicitly supported eval options."""
-    signature = inspect.signature(StrikeTask)
-    parameters = signature.parameters
-    has_var_kwargs = any(
-        value.kind == inspect.Parameter.VAR_KEYWORD
-        for value in parameters.values())
-    stable = {
-        "goal_path": str(args.goal),
-        "grip_reference_path": str(args.grip_reference),
-        "num_envs": 1,
-        "device": args.device,
-        "headless": True,
-        "seed": int(strike_config["seed"]),
-        "reset_noise": 0.0,
-        "reset_soft_limit_fraction": float(
-            strike_config["reset_soft_limit_fraction"]),
-        "action_alpha": float(strike_config["action_alpha"]),
-        "action_scale": float(strike_config["action_scale"]),
-        "zone": strike_config["zone"],
-        "trajectory": strike_config["trajectory"],
-        "detector": strike_config["detector"],
-        "reward": strike_config["reward"],
-        "episode": strike_config["episode"],
-        "failure_termination_penalty": float(
-            strike_config["failure_termination_penalty"]),
-        "random_start": False,
-    }
-    kwargs = {
-        key: value for key, value in stable.items()
-        if key in parameters or has_var_kwargs
-    }
-    # These names are not part of the required task API.  Supply them only
-    # when the constructor explicitly advertises them.
-    optional = {
-        "full_song": True,
-        "evaluation_mode": True,
-        "config": strike_config,
-    }
-    kwargs.update({
-        key: value for key, value in optional.items()
-        if key in parameters
-    })
-    return StrikeTask(**kwargs)
+    """Construct the one-environment recorder through the current task API."""
+    from tab2body.env.config import configured_kwargs
+
+    return StrikeTask(**configured_kwargs(
+        StrikeTask,
+        strike_config,
+        goal_path=str(args.goal),
+        grip_reference_path=str(args.grip_reference),
+        num_envs=1,
+        device=args.device,
+        headless=True,
+        seed=int(strike_config["seed"]),
+        reset_noise=0.0,
+        random_start=False,
+    ))
 
 
-def _set_evaluation_mode(env, stage):
-    setter = getattr(env, "set_evaluation_mode", None)
-    if callable(setter):
-        setter(stage == "A4_ZONE_CONTROL")
-
-
-def _restore_task(env, stage, tolerance):
-    setter = getattr(env, "set_curriculum_stage", None)
-    if not callable(setter):
-        raise RuntimeError("StrikeTask lacks set_curriculum_stage")
-    try:
-        setter(stage, tolerance, reset=False)
-    except TypeError:
-        # Permit a keyword-only tolerance without weakening any semantics.
-        setter(stage=stage, tolerance_ms=tolerance, reset=False)
-    _set_evaluation_mode(env, stage)
+def _restore_task(env, stage, tolerance, tempo_lambda):
+    env.set_curriculum_stage(
+        stage, tolerance, tempo_lambda=tempo_lambda, reset=False)
+    env.set_evaluation_mode(
+        stage == "A4_ZONE_CONTROL" and tempo_lambda >= 1.0,
+        reset=False)
     return env.reset()
 
 
@@ -316,8 +185,8 @@ def _load_checkpoint(torch, path, device):
         checkpoint = torch.load(
             str(path), map_location=device, weights_only=True)
     except TypeError:
-        # PyTorch versions bundled with some Isaac Gym installs predate the
-        # weights_only keyword.  The file is user-selected local input.
+
+
         checkpoint = torch.load(str(path), map_location=device)
     if not isinstance(checkpoint, dict) or "model" not in checkpoint:
         raise ValueError("checkpoint must contain a model state dict")
@@ -341,20 +210,28 @@ def _first_scalar(value):
 
 def _encode_video(ffmpeg, frames, fps, target):
     target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+            prefix=f".{target.stem}.", suffix=target.suffix,
+            dir=target.parent, delete=False) as stream:
+        temporary_output = Path(stream.name)
     command = [
         ffmpeg, "-y", "-loglevel", "error",
         "-framerate", str(fps),
         "-i", str(frames / "%05d.png"),
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        str(target),
+        str(temporary_output),
     ]
-    result = subprocess.run(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        universal_newlines=True)
-    if result.returncode:
-        detail = result.stderr.strip() or "unknown ffmpeg error"
-        raise RuntimeError(
-            "ffmpeg failed while creating {}: {}".format(target, detail))
+    try:
+        result = subprocess.run(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True)
+        if result.returncode:
+            detail = result.stderr.strip() or "unknown ffmpeg error"
+            raise RuntimeError(
+                "ffmpeg failed while creating {}: {}".format(target, detail))
+        temporary_output.replace(target)
+    finally:
+        temporary_output.unlink(missing_ok=True)
 
 
 def parser():
@@ -381,8 +258,6 @@ def main(argv=None):
     args = parser().parse_args(argv)
     if args.width <= 0 or args.height <= 0:
         raise ValueError("video dimensions must be positive")
-    if 60 % args.fps:
-        raise ValueError("fps must divide the 60 Hz simulation clock")
     if args.max_steps is not None and args.max_steps <= 0:
         raise ValueError("max steps must be positive")
     args.checkpoint = args.checkpoint.resolve()
@@ -396,8 +271,8 @@ def main(argv=None):
             raise FileNotFoundError("{} does not exist: {}".format(label, path))
     ffmpeg = require_ffmpeg()
 
-    # Isaac Gym has to register its torch bridge before torch itself loads.
-    import isaacgym  # noqa: F401
+
+    import isaacgym
     from isaacgym import gymapi
     import torch
 
@@ -406,14 +281,19 @@ def main(argv=None):
     from tab2body.strike_cfg import STRIKE
 
     checkpoint = _load_checkpoint(torch, args.checkpoint, args.device)
-    stage, tolerance = restore_stage_and_tolerance(checkpoint)
+    stage, tolerance, tempo_lambda = restore_stage_and_tolerance(checkpoint)
     outputs = resolve_video_paths(
         args.checkpoint, args.out_remembered, args.out_current)
+    if outputs["remembered"] == outputs["current"]:
+        raise ValueError("remembered/current video paths must be distinct")
     for output in outputs.values():
         output.parent.mkdir(parents=True, exist_ok=True)
 
     env = _construct_task(StrikeTask, args, STRIKE)
     try:
+        if env.SIM_HZ % args.fps:
+            raise ValueError(
+                f"fps must divide the {env.SIM_HZ} Hz simulation clock")
         contract = _checkpoint_payload(checkpoint)[1]
         contract_model = _mapping(contract.get("model"))
         init_std = float(contract_model.get(
@@ -425,7 +305,7 @@ def main(argv=None):
             checkpoint, env, model, args.goal, args.grip_reference, STRIKE)
         model.load_state_dict(checkpoint["model"])
         model.eval()
-        obs = _restore_task(env, stage, tolerance)
+        obs = _restore_task(env, stage, tolerance, tempo_lambda)
 
         target_tensor = env.hbody_pos("RH:palm")[0].detach().cpu()
         target = tuple(float(value) for value in target_tensor)
@@ -465,9 +345,10 @@ def main(argv=None):
             max_steps = int(STRIKE["artifact_max_steps"])
             goal_frames = getattr(getattr(env, "goals", None), "n_frames", 0)
             if stage == "A4_ZONE_CONTROL":
-                max_steps = max(max_steps, int(goal_frames) + 60)
+                max_steps = max(
+                    max_steps, int(goal_frames) + int(env.SIM_HZ))
 
-        stride = 60 // args.fps
+        stride = env.SIM_HZ // args.fps
         written = 0
         simulated = 0
         reset_count = 0
@@ -505,7 +386,12 @@ def main(argv=None):
                         "grip_quality", "tip_ready_success_rate",
                         "release_count", "target_hit",
                         "wrong_crossing_count", "timing_error_ms",
-                        "zone_quality"):
+                        "zone_quality", "strum_order_violation_count",
+                        "strum_wrong_direction_count",
+                        "strum_protected_crossing_count",
+                        "strum_duplicate_crossing_count",
+                        "wrong_crossing_rate", "joint_limit_max_usage",
+                        "minimum_effective_gap_s", "overlap_window_count"):
                     value = _first_scalar(info.get(key))
                     if value is not None:
                         sampled_info[key] = value
@@ -528,8 +414,13 @@ def main(argv=None):
                 "checkpoint_contract"]["sha256"],
             "curriculum_stage": stage,
             "timing_tolerance_ms": tolerance,
+            "tempo_lambda": tempo_lambda,
+            "evaluation_scope": (
+                "full_song_original_tempo"
+                if env.evaluation_full_song
+                else "training_phrase_current_tempo"),
             "deterministic": True,
-            "simulation_hz": 60,
+            "simulation_hz": env.SIM_HZ,
             "video_fps": args.fps,
             "steps_simulated": simulated,
             "frames_per_view": written,
@@ -550,12 +441,7 @@ def main(argv=None):
         print(json.dumps(report, indent=2, ensure_ascii=False))
         print("report: {}".format(report_path))
     finally:
-        close = getattr(env, "close", None)
-        if callable(close):
-            close()
-        elif getattr(env, "sim", None) is not None:
-            env.gym.destroy_sim(env.sim)
-            env.sim = None
+        env.close()
 
 
 if __name__ == "__main__":

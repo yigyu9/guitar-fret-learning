@@ -8,7 +8,7 @@
 > ① 운지 감독 = **처음부터 명시(explicit)** — 우리 fingermapping의 finger id를 goal로 감독.
 > ② 이 문서는 계획서로 저장, 구현은 별도 지시 후 착수.
 > 근거 표기: **[G]**=`related_work/guitar/env.py`(Xu SA'24, 이식원본) · **[GPS]**=`related_work/GPS/`(CGF'24) ·
-> **[D]**=`DIGIT/`(자체 실패작, 안티패턴) · **[P]**=PROJECT_CONTEXT/README(정본·함정) · **[M]**=본 프로젝트 실측.
+> **[D]**=과거 DIGIT 실패 분석(안티패턴) · **[P]**=PROJECT_CONTEXT/README(정본·함정) · **[M]**=본 프로젝트 실측.
 > 승계: 이 계획이 착수되면 PROJECT_CONTEXT §2 "다음 작업(T2)"의 구체화다. base.py는 완성·검증됨(env/README.md).
 >
 > **2026-07-21 방향 갱신**: 아래의 20곡 일괄 학습·난이도 자동 승급 서술은 초기 계획 기록이다.
@@ -59,9 +59,9 @@
 사용 줄 3개로, 한 음/한 프렛 고정은 피하면서 바레·화음 없이 시작하기 적합하다.
 
 - 생성 도구: `tab2body/tools/build_fret_training_data.py`
-- 산출물: `tab2body/_gen/fret_training/02_Jazz1-200-B_solo.fret_training.json`
-- 검수 번들: `tab2body/_gen/fret_training/02_Jazz1-200-B_solo_bundle/`에 오디오, JAMS annotation,
-  원본 fingering JSON, 학습 입력 JSON, finger-mapping 타임라인 PNG를 함께 보존한다.
+- 산출물: `data/song_bundles/02_Jazz1-200-B_solo/training/fret_training.json`
+- 검수 번들: 현재 정본은 `data/song_bundles/02_Jazz1-200-B_solo/`이며 오디오, JAMS annotation,
+  원본 fingering JSON, 학습 입력 JSON을 `source/`, `mapping/`, `training/`으로 분리해 보존한다.
 - 명시 운지 결과: press event 24개, 진단 0, 생체역학 위반 0.
 - 학습 표현: 60Hz 861프레임, 줄별 `fret_goal[6]`·`finger_goal[6]`·`barre_goal[6]`.
 - hand position: finger mapping의 검지 기준 `P`를 anchor로 쓰되 한 점을 강제하지 않고
@@ -183,5 +183,5 @@ reward/value, named termination, terminal observation과 자동 reset 다음 관
 | 운지 모듈 | `tab2fingermapping/fingermapping/` (ALGORITHM.md), 설계 `docs/finger-mapping-design.md` |
 | 도메인 통계 | `docs/guitar-basics-notes.md` (1~12프렛 91.8%) |
 | 함정·결정 | `PROJECT_CONTEXT.md` §3·§4·§7 |
-| 안티패턴 | `DIGIT/isaacgymenvs/summary.md` (18차 실패) |
+| 안티패턴 | 과거 DIGIT 18차 실패 기록의 요약 (소스 디렉터리는 정리됨) |
 | GPS 튜닝 | `related_work/GPS/`, `docs/GPS-paper-ko.md` |

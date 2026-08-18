@@ -39,7 +39,16 @@ def _assert_reset_observation(env, obs):
     action_end = goal_end + env.actuator_obs_dim
     assert action_end == env.thumb_obs_start
     assert torch.allclose(obs[:, goal_end:action_end], env.prev_action)
-    assert torch.allclose(obs[:, action_end:], env._settled_reset_thumb_obs)
+    thumb_end = env.thumb_obs_start + env.thumb_obs_dim
+    assert thumb_end == env.future_context_obs_start
+    assert torch.allclose(
+        obs[:, env.thumb_obs_start:thumb_end],
+        env._settled_reset_thumb_obs)
+    assert torch.allclose(
+        obs[:, env.future_context_obs_start:],
+        env.goals.observe_future_context(
+            env.future_context_lookahead,
+            env.preparation_remaining))
     assert (env.goals.frame_idx == 0).all()
     assert (env.preparation_remaining == env.preparation_frames).all()
 

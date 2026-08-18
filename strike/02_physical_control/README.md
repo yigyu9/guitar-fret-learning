@@ -105,7 +105,8 @@ strum/chord target 수가 task return 크기를 바꾸거나 non-target FP가 �
 - finger mode에서는 비활성 손가락이 줄을 우발적으로 가로지르는 경우를 false positive로 기록한다.
   단, 근접만으로 뮤트라고 판정하지 않으며 실제 crossing/engagement가 있어야 한다.
 
-상세 상태와 수치 후보는 [rules.md](rules.md), 구현 우선순위와 gate는
+현재 강제 범위는 [오른손 구현 규칙 정본](../RIGHT_HAND_RULES.md), 상세 상태와 수치 후보는
+[rules.md](rules.md), 구현 우선순위와 gate는
 [학습·평가 계획](../03_training/README.md)을 따른다.
 
 타현 위치는 점이 아니라 실제 줄 위 영역으로 정의한다. 허용·선호 구간과 에셋 기반 그림은

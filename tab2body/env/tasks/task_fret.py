@@ -1,6 +1,7 @@
 """곡별 반복 최적화를 위한 명시 운지 왼손 fret 태스크."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 import math
 
 import torch
@@ -9,12 +10,23 @@ from isaacgym import gymtorch
 from ..base import GuitarEnvBase
 from ..collision import THUMB_PAD_BODY
 from ..config import configured_kwargs
-from ..goals import FINGER_EVENT_TIME_SCALE_S, FretGoalSequence
-from ..metrics import PressSustainTracker, update_live_dropout_streak
+from ..goals import (
+    FINGER_EVENT_TIME_SCALE_S,
+    FretGoalSequence,
+    goal_pair_finger_action_routing,
+)
+from ..metrics import (
+    PressSustainTracker,
+    normalized_joint_limit_usage,
+    update_live_dropout_streak,
+    update_wrong_press_termination,
+)
 from ..rewards.fret import (
     FretReward,
     adjacent_finger_action_synergy,
+    cached_finger_action_teacher,
     finger_synergy_follower_mask,
+    guitar_penetration_soft_cost,
     suppress_positive_reward_on_penetration,
 )
 from ..rewards.thumb import (
@@ -27,6 +39,7 @@ from ..safety import (
     FingerSelfIntersectionMonitor,
     GuitarPenetrationMonitor,
     WristSafetyBoxMonitor,
+    exclude_thumb_from_generic_penetration,
     palm_inward_normal,
     update_consecutive_violation,
 )
@@ -37,6 +50,22 @@ FRET_CONTROL_PREFIXES = (
     "LH:thumb", "LH:index", "LH:middle", "LH:ring", "LH:pinky",
 )
 
+WRONG_PRESS_TERMINATION_STAGES = (
+    "goal_pair", "transition_window", "coverage", "integration", "full_song",
+)
+
+JOINT_LIMIT_GROUP_PREFIXES = (
+    ("thorax", "L_Thorax"),
+    ("shoulder", "L_Shoulder"),
+    ("elbow", "L_Elbow"),
+    ("wrist", "L_Wrist"),
+    ("thumb", "LH:thumb"),
+    ("finger_1", "LH:index"),
+    ("finger_2", "LH:middle"),
+    ("finger_3", "LH:ring"),
+    ("finger_4", "LH:pinky"),
+)
+
 FRET_OBS_BODIES = (
     "L_Wrist", "LH:palm",
     "LH:index_top", "LH:middle_top", "LH:ring_top", "LH:pinky_top",
@@ -45,6 +74,15 @@ FRET_OBS_BODIES = (
 FRET_THUMB_OBS_BODIES = ("LH:thumb3", "LH:thumb_top")
 FRET_THUMB_RAW_OBS_DIM = 3 * len(FRET_THUMB_OBS_BODIES)
 FRET_THUMB_OBS_DIM = FRET_THUMB_RAW_OBS_DIM + THUMB_GEOMETRY_OBS_DIM
+
+# ``FretTask`` used these defaults before reward configuration was separated.
+# The remaining FretReward defaults already match the former task defaults.
+DEFAULT_FRET_REWARD_OVERRIDES = {
+    "finger_coupling_weight": 0.015,
+    "finger_coupling_coefficients": (0.15, 0.20, 0.25),
+    "finger_coupling_min_speed_deg": 5.0,
+    "finger_coupling_full_speed_deg": 30.0,
+}
 
 DIRECT_INFO_METRIC_KEYS = (
     "chord_ready", "target_min_separation", "curriculum_frame_success",
@@ -63,13 +101,26 @@ DIRECT_INFO_METRIC_KEYS = (
     "hover_gap", "hover_gate", "hover_position_reward",
     "hover_velocity_reward", "hover_outward_speed", "hover_velocity_gate",
     "release_pose_reward", "finger_coupling_reward", "finger_coupling_press_protected",
+    "reference_finger_posture_quality", "reference_thumb_posture_quality",
+    "reference_posture_quality", "reference_posture_penalty",
+    "reference_posture_active",
     "next_goal_approach_reward", "next_goal_progress_reward", "next_goal_current_press_preserved",
     "next_goal_current_press_preservation_quality", "next_goal_current_press_preservation_gate", "next_goal_joint_preservation_quality",
     "press_class_reward", "press_class_mean_reward", "press_class_min_reward",
     "no_press_class_reward", "press_class_completion", "no_press_class_completion",
     "effective_press_class_weight", "effective_no_press_class_weight", "class_balanced_reward",
     "chord_joint_quality", "chord_bridge_bottleneck_reward", "chord_bridge_mean_reward",
-    "chord_bridge_min_reward", "class_balance_enabled", "slip_reward",
+    "chord_bridge_min_reward", "chord_fine_joint_reward",
+    "chord_fine_joint_mean_reward", "chord_fine_joint_min_reward",
+    "chord_fine_axis_min_quality", "chord_fine_broad_depth_progress",
+    "goal_pair_rehearsal_anchor_reward",
+    "goal_pair_rehearsal_anchor_active", "class_balance_enabled", "slip_reward",
+    "goal_pair_anchor_next_reward", "goal_pair_anchor_next_active",
+    "success_pose_guide_reward", "success_pose_guide_active",
+    "success_pose_guide_anchor_reward",
+    "success_pose_guide_anchor_active",
+    "success_pose_guide_proximal_reward",
+    "success_pose_guide_proximal_active",
     "slip_distance", "slip_instant", "slip_gate",
     "slip_streak", "r28_move_active", "r28_move_started",
     "r28_move_completed", "r28_pressed_endpoint_candidate", "r28_same_cell_drag",
@@ -151,97 +202,57 @@ class FretTask(GuitarEnvBase):
                  device="cuda:0", headless=True, seed=0, max_episode_length=None,
                  reset_noise=0.02, reset_soft_limit_fraction=0.02,
                  action_alpha=0.5, action_scale=1.0,
-                 random_start=False, wrist_weight=0.15,
-                 smooth_weight=0.0,
+                 random_start=False, reward_config=None,
                  wrist_safety_bounds_min=(-0.20, -0.35, -0.30),
                  wrist_safety_bounds_max=(0.30, 0.35, 0.25),
                  wrist_safety_frames=3,
-                 finger_back_soft_limit_z=-0.035,
-                 finger_back_soft_scale=0.015,
-                 finger_back_soft_penalty=0.05,
+                 finger_back_soft_limit_z=-0.025,
+                 finger_back_soft_scale=0.020,
+                 finger_back_soft_penalty=0.10,
                  finger_back_limit_z=-0.050,
                  finger_back_proximal_limit_z=None,
                  finger_back_frames=3,
                  finger_back_samples_per_segment=5,
                  finger_back_min_fraction=0.25,
-                 wrong_press_penalty=0.25, wrong_press_avoidance_weight=0.10,
-                 press_class_weight=0.75,
-                 no_press_class_weight=0.25,
-                 no_press_failure_credit=0.10,
-                 chord_bridge_bottleneck_weight=0.50,
-                 static_chord_bottleneck_weight=0.50,
-                 static_chord_joint_weight=0.30,
-                 static_chord_no_press_failure_credit=0.0,
-                 static_chord_no_press_completion_power=2.0,
-                 press_hold_min_frames=6,
-                 press_hold_full_frames=12,
-                 press_dropout_penalty=0.15,
-                 press_position_dense_scale=0.20,
-                 press_precision_gate_floor=0.40,
-                 next_goal_weight=0.15,
-                 goal_pair_transition_next_goal_weight=0.50,
-                 next_goal_lookahead_s=1.00,
-                 next_goal_progress_weight=2.0,
-                 next_goal_progress_near=0.010,
-                 next_goal_progress_far=0.100,
-                 next_goal_preservation_weight=0.35,
-                 next_goal_unprotected_progress_scale=0.0,
-                 goal_pair_transition_time_gate_floor=0.30,
-                 next_goal_prepress_clearance=0.004,
-                 finger_arch_reward_weight=0.10,
-                 thumb_weight=0.15,
-                 thumb_pad_radius=0.010,
-                 thumb_approach_scale=0.020, thumb_reach_scale=0.120,
-                 thumb_contact_on_force=0.5,
-                 thumb_contact_off_force=0.1,
-                 thumb_force_soft_limit=50000.0,
-                 thumb_force_decay_scale=100000.0,
-                 thumb_compression_free_depth=0.0005,
-                 thumb_compression_decay_scale=0.002,
-                 thumb_overforce_penalty=0.10,
-                 thumb_gate_full_distance=0.025,
-                 thumb_gate_zero_distance=0.080,
-                 thumb_press_gate_weight=0.15,
-                 thumb_base_saturation_threshold=0.90,
-                 thumb_base_saturation_penalty_weight=0.01,
                  thumb_force_termination_threshold=150000.0,
                  thumb_compression_termination_threshold=0.004,
                  thumb_force_termination_frames=3,
-                 proximal_weight=0.02, proximal_transition=0.10,
                  isolated_press_lock_after_frames=60,
-                 hover_weight=0.020, hover_free_gap=0.012,
-                 hover_decay_scale=0.020, hover_position_weight=0.55,
-                 hover_release_pose_weight=0.30,
-                 hover_release_blend_time=0.30,
-                 hover_release_relaxed_pip_deg=25.0,
-                 hover_release_relaxed_dip_deg=10.0,
-                 hover_release_tolerance_deg=(15.0, 20.0, 15.0),
-                 hover_free_outward_speed=0.03,
-                 hover_speed_decay_scale=0.12,
-                 hover_move_release_time=0.25,
-                 finger_coupling_weight=0.015,
-                 finger_coupling_coefficients=(0.15, 0.20, 0.25),
-                 finger_coupling_min_speed_deg=5.0,
-                 finger_coupling_full_speed_deg=30.0,
-                 finger_coupling_tolerance_deg_s=15.0,
                  finger_synergy_coefficients=(0.15, 0.20, 0.25),
                  finger_synergy_min_driver_delta_deg=0.10,
                  finger_synergy_full_driver_delta_deg=1.00,
                  finger_synergy_max_induced_delta_deg=2.00,
-                 slip_weight=0.005, slip_stable_frames=3,
-                 slip_free_distance=0.002, slip_decay_scale=0.003,
                  palm_down_threshold=-0.3, palm_down_frames=3,
                  penetration_threshold=0.005, penetration_frames=3,
+                 penetration_soft_threshold=0.0025,
+                 penetration_soft_penalty=0.10,
                  penetration_termination=True,
                  finger_capsule_radius=0.006,
                  finger_overlap_tolerance=0.002,
                  sustain_boundary_grace_frames=3,
+                 static_chord_min_duration_seconds=0.20,
                  sustain_hold_threshold=0.90,
                  sustain_max_dropout_frames=3,
-                 pressed_drag_threshold=0.003,
+                 wrong_press_termination_frames=12,
+                 joint_limit_diagnostic_fraction=0.90,
+                 success_rsi_probability=0.35,
+                 success_rsi_min_quality=0.75,
+                 success_rsi_min_thumb_quality=0.40,
+                 success_finger_pose_min_quality=0.60,
+                 success_finger_pose_guide_scale_fraction=0.30,
+                 success_action_teacher_min_pose_quality=0.70,
+                 chord_fine_action_teacher_min_pose_quality=0.20,
+                 success_action_teacher_proximal_fraction=0.0,
+                 goal_pair_action_routing=False,
+                 goal_pair_action_release_frames=18,
+                 future_context_lookahead=(30, 60, 90),
                  preparation_frames=60,
                  curriculum_settling_frames=30,
                  failure_termination_penalty=-25.0):
+        if reward_config is None:
+            reward_config = DEFAULT_FRET_REWARD_OVERRIDES
+        elif not isinstance(reward_config, Mapping):
+            raise TypeError("reward_config must be a mapping or None")
         # 데이터 길이는 goal 로더 생성 후 알 수 있으므로 충분히 큰 기본값을 사용하고 아래서 보정.
         base_episode_length = max_episode_length or 100000
         super().__init__(num_envs=num_envs, control_dofs=FRET_CONTROL_PREFIXES,
@@ -274,8 +285,27 @@ class FretTask(GuitarEnvBase):
         self._action_finger_ids = torch.tensor(
             action_finger_ids, dtype=torch.long, device=self.device)
         self.goal_pair_action_assist = False
+        self.goal_pair_recovery_assist = False
+        self.goal_pair_action_routing = bool(goal_pair_action_routing)
+        self.goal_pair_action_release_frames = int(
+            goal_pair_action_release_frames)
+        if self.goal_pair_action_release_frames < 1:
+            raise ValueError(
+                "goal-pair action release frames must be positive")
         control_names = [self.dof_names[index]
                          for index in self.ctrl_idx.detach().cpu().tolist()]
+        self.joint_limit_group_indices = {}
+        for group, prefix in JOINT_LIMIT_GROUP_PREFIXES:
+            indices = [
+                index for index, name in enumerate(control_names)
+                if name.startswith(prefix)]
+            if not indices:
+                raise RuntimeError(
+                    f"joint-limit diagnostic group is empty: {group}")
+            self.joint_limit_group_indices[group] = torch.tensor(
+                indices, dtype=torch.long, device=self.device)
+        self.joint_limit_group_names = tuple(
+            self.joint_limit_group_indices)
         self._action_is_wrist = torch.tensor(
             [name.startswith("L_Wrist") for name in control_names],
             dtype=torch.bool, device=self.device)
@@ -307,6 +337,42 @@ class FretTask(GuitarEnvBase):
         self._finger_flexion_action_indices = torch.tensor(
             [[action_index[name] for name in row] for row in flexion_names],
             dtype=torch.long, device=self.device)
+        finger_pose_actions = [
+            [index for index, name in enumerate(control_names)
+             if name.startswith(f"LH:{finger_name}")]
+            for finger_name in ("index", "middle", "ring", "pinky")]
+        if any(len(indices) != 4 for indices in finger_pose_actions):
+            raise RuntimeError(
+                "each fretting finger must expose four controlled pose joints")
+        self._finger_pose_action_indices = torch.tensor(
+            finger_pose_actions, dtype=torch.long, device=self.device)
+        self._finger_pose_dof_indices = self.ctrl_idx[
+            self._finger_pose_action_indices]
+        success_finger_pose_guide_scale_fraction = float(
+            success_finger_pose_guide_scale_fraction)
+        if not 0.0 < success_finger_pose_guide_scale_fraction <= 1.0:
+            raise ValueError(
+                "success finger-pose guide scale fraction must be in (0, 1]")
+        self._finger_pose_scale = (
+            success_finger_pose_guide_scale_fraction
+            * self.ctrl_half[0, self._finger_pose_action_indices]
+        ).clamp_min(torch.deg2rad(torch.tensor(
+            10.0, device=self.device)))
+        proximal_pose_actions = [
+            index for index, name in enumerate(control_names)
+            if name.startswith(("L_Shoulder", "L_Elbow", "L_Wrist"))]
+        if len(proximal_pose_actions) != 9:
+            raise RuntimeError(
+                "finger pose guide requires nine proximal arm joints")
+        self._finger_pose_proximal_action_indices = torch.tensor(
+            proximal_pose_actions, dtype=torch.long, device=self.device)
+        self._finger_pose_proximal_dof_indices = self.ctrl_idx[
+            self._finger_pose_proximal_action_indices]
+        self._finger_pose_proximal_scale = (
+            0.50 * self.ctrl_half[
+                0, self._finger_pose_proximal_action_indices]
+        ).clamp_min(torch.deg2rad(torch.tensor(
+            10.0, device=self.device)))
         self.finger_synergy_coefficients = tuple(
             float(value) for value in finger_synergy_coefficients)
         self.finger_synergy_min_driver_delta_deg = float(
@@ -338,12 +404,19 @@ class FretTask(GuitarEnvBase):
                                       hand_targets_path=hand_targets_path,
                                       random_start=random_start, seed=seed,
                                       sustain_boundary_grace_frames=
-                                      sustain_boundary_grace_frames)
+                                      sustain_boundary_grace_frames,
+                                      static_chord_min_duration_seconds=
+                                      static_chord_min_duration_seconds)
+        self._goal_pair_previous_active = self._current_finger_activity()
+        self._goal_pair_release_remaining = torch.zeros(
+            self.num_envs, 4, dtype=torch.long, device=self.device)
+        self._goal_pair_routed_fingers = torch.ones(
+            self.num_envs, 4, dtype=torch.bool, device=self.device)
         self.curriculum_stage = "full_song"
         if max_episode_length is None:
             self.max_episode_length = self.goals.n_frames + self.preparation_frames
         self.reward_fn = FretReward(**configured_kwargs(
-            FretReward, locals(), env=self))
+            FretReward, reward_config, env=self))
         self.thumb_force_termination_threshold = float(
             thumb_force_termination_threshold)
         self.thumb_compression_termination_threshold = float(
@@ -380,7 +453,93 @@ class FretTask(GuitarEnvBase):
         self.thumb_obs_start = (
             self.actuator_obs_start + self.actuator_obs_dim)
         self.num_obs = self.thumb_obs_start + self.thumb_obs_dim
+        self.future_context_lookahead = tuple(
+            int(offset) for offset in future_context_lookahead)
+        if (not self.future_context_lookahead
+                or tuple(sorted(set(self.future_context_lookahead)))
+                != self.future_context_lookahead
+                or self.future_context_lookahead[0]
+                <= max(self.goals.lookahead)):
+            raise ValueError(
+                "future context lookahead must be sorted, unique, and later "
+                "than the base lookahead")
+        self.future_context_obs_dim = (
+            len(self.future_context_lookahead)
+            * self.goals.per_lookahead_dim)
+        self.future_context_obs_start = self.num_obs
+        self.num_obs += self.future_context_obs_dim
         self.obs_buf = torch.zeros(self.num_envs, self.num_obs, device=self.device)
+        self.success_rsi_probability = float(success_rsi_probability)
+        self.success_rsi_min_quality = float(success_rsi_min_quality)
+        self.success_rsi_min_thumb_quality = float(
+            success_rsi_min_thumb_quality)
+        self.success_finger_pose_min_quality = float(
+            success_finger_pose_min_quality)
+        if not 0.0 <= self.success_rsi_probability <= 1.0:
+            raise ValueError("success RSI probability must be in [0, 1]")
+        if not 0.0 <= self.success_rsi_min_quality <= 1.0:
+            raise ValueError("success RSI quality must be in [0, 1]")
+        if not 0.0 <= self.success_rsi_min_thumb_quality <= 1.0:
+            raise ValueError("success RSI thumb quality must be in [0, 1]")
+        if not 0.0 <= self.success_finger_pose_min_quality <= 1.0:
+            raise ValueError(
+                "success finger-pose quality must be in [0, 1]")
+        body_start = 2 * self.n_nonlocked
+        body_obs_dim = self.base_obs_dim - body_start
+        pose_slots = self.goals.pose_slot_count
+        finger_pose_slots = self.goals.finger_pose_slot_count
+        self._success_pose_valid = torch.zeros(
+            pose_slots, dtype=torch.bool, device=self.device)
+        self._success_pose_quality = torch.zeros(
+            pose_slots, device=self.device)
+        self._success_pose_q = torch.zeros(
+            pose_slots, self.n_dof, device=self.device)
+        self._success_pose_body_obs = torch.zeros(
+            pose_slots, body_obs_dim, device=self.device)
+        self._success_pose_thumb_obs = torch.zeros(
+            pose_slots, self.thumb_obs_dim, device=self.device)
+        self._success_finger_pose_valid = torch.zeros(
+            finger_pose_slots, 4, dtype=torch.bool, device=self.device)
+        self._success_finger_pose_quality = torch.zeros(
+            finger_pose_slots, 4, device=self.device)
+        self._success_finger_pose_q = torch.zeros(
+            finger_pose_slots, 4, 4, device=self.device)
+        self._success_finger_pose_proximal_q = torch.zeros(
+            finger_pose_slots, 4, 9, device=self.device)
+        self._success_finger_action_valid = torch.zeros(
+            finger_pose_slots, 4, dtype=torch.bool, device=self.device)
+        self._success_finger_action_quality = torch.zeros(
+            finger_pose_slots, 4, device=self.device)
+        self._success_finger_action = torch.zeros(
+            finger_pose_slots, 4, 4, device=self.device)
+        self._success_finger_proximal_action = torch.zeros(
+            finger_pose_slots, 4, 9, device=self.device)
+        self.success_action_teacher_min_pose_quality = float(
+            success_action_teacher_min_pose_quality)
+        self.chord_fine_action_teacher_min_pose_quality = float(
+            chord_fine_action_teacher_min_pose_quality)
+        if not 0.0 <= self.success_action_teacher_min_pose_quality <= 1.0:
+            raise ValueError(
+                "success action teacher pose quality must be in [0, 1]")
+        if not 0.0 <= self.chord_fine_action_teacher_min_pose_quality <= 1.0:
+            raise ValueError(
+                "chord-fine action teacher pose quality must be in [0, 1]")
+        proximal_fraction = float(
+            success_action_teacher_proximal_fraction)
+        if not 0.0 <= proximal_fraction <= 1.0:
+            raise ValueError(
+                "success action teacher proximal fraction must be in [0, 1]")
+        env_index = torch.arange(
+            self.num_envs, dtype=torch.long, device=self.device)
+        cohort_key = torch.remainder(env_index * 48271, 104729)
+        self._success_action_teacher_proximal_cohort = (
+            cohort_key.float() < proximal_fraction * 104729.0)
+        self.goals.set_goal_pair_success_pose_valid(
+            self._success_pose_valid)
+        self.success_rsi_reset = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device)
+        self.success_rsi_reset_quality = torch.zeros(
+            self.num_envs, device=self.device)
         self.rew_dim = 6
         self.value_dim = 6
         self.reward_weights = torch.full((6,), 1.0 / 6.0, device=self.device)
@@ -414,6 +573,16 @@ class FretTask(GuitarEnvBase):
         self.penetration_monitor = GuitarPenetrationMonitor(
             self, threshold=penetration_threshold, frames=penetration_frames,
             termination_enabled=penetration_termination)
+        self.penetration_soft_threshold = float(
+            penetration_soft_threshold)
+        self.penetration_soft_penalty = float(penetration_soft_penalty)
+        if (not 0.0 <= self.penetration_soft_threshold
+                < self.penetration_monitor.threshold
+                or not math.isfinite(self.penetration_soft_penalty)
+                or self.penetration_soft_penalty < 0.0):
+            raise ValueError(
+                "penetration soft threshold/penalty must be finite and "
+                "below the hard threshold")
         self.finger_intersection_monitor = FingerSelfIntersectionMonitor(
             self, capsule_radius=finger_capsule_radius,
             overlap_tolerance=finger_overlap_tolerance)
@@ -422,6 +591,20 @@ class FretTask(GuitarEnvBase):
             self.num_envs, self.goals.sustain_n_events, self.device,
             hold_threshold=sustain_hold_threshold,
             max_dropout_frames=sustain_max_dropout_frames)
+        self.wrong_press_termination_frames = int(
+            wrong_press_termination_frames)
+        if self.wrong_press_termination_frames < 0:
+            raise ValueError(
+                "wrong-press termination frames must be non-negative")
+        self.joint_limit_diagnostic_fraction = float(
+            joint_limit_diagnostic_fraction)
+        if not 0.0 < self.joint_limit_diagnostic_fraction <= 1.0:
+            raise ValueError(
+                "joint-limit diagnostic fraction must be in (0, 1]")
+        self.wrong_press_streak = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device)
+        self.wrong_press_termination = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device)
 
         self.metric_tp = torch.zeros(self.num_envs, device=self.device)
         self.metric_fp = torch.zeros(self.num_envs, device=self.device)
@@ -465,7 +648,11 @@ class FretTask(GuitarEnvBase):
         This task currently uses the fixed-guitar G0 environment.  A future moving-guitar task
         must replace this snapshot with forward kinematics or an indexed reset-state cache.
         """
-        obs = super().reset()
+        self._full_reset_in_progress = True
+        try:
+            obs = super().reset()
+        finally:
+            self._full_reset_in_progress = False
         ds = self.dof_state.view(self.num_envs, self.n_dof, 2)
         # Keep one physically refreshed RSI pose per parallel environment.  Reusing
         # this exact q/body pair on asynchronous resets makes every returned reset
@@ -484,6 +671,10 @@ class FretTask(GuitarEnvBase):
         self._settled_reset_thumb_obs = obs[
             :, self.thumb_obs_start:
             self.thumb_obs_start + self.thumb_obs_dim].detach().clone()
+        self._reset_body_obs = self._settled_reset_body_obs.clone()
+        self._reset_thumb_obs = self._settled_reset_thumb_obs.clone()
+        self.success_rsi_reset.zero_()
+        self.success_rsi_reset_quality.zero_()
         # Refresh just the proprioceptive slice after zeroing reset velocities;
         # body positions remain the valid post-PhysX snapshot above.
         obs = self.compute_observations()
@@ -506,7 +697,42 @@ class FretTask(GuitarEnvBase):
     def set_goal_pair_action_assist(self, enabled):
         self.goal_pair_action_assist = bool(enabled)
 
-    def policy_action_mask(self):
+    def set_goal_pair_recovery_assist(self, enabled):
+        self.goal_pair_recovery_assist = bool(enabled)
+
+    def _current_finger_activity(self):
+        current = self.goals.current()
+        finger_numbers = torch.arange(
+            1, 5, device=self.device).view(1, 1, 4)
+        return (
+            (current["fret"] > 0)[..., None]
+            & (current["finger"].long()[..., None] == finger_numbers)
+        ).any(dim=1)
+
+    def _update_goal_pair_action_routing(self, env_ids, reset=False):
+        env_ids = torch.as_tensor(
+            env_ids, dtype=torch.long, device=self.device).reshape(-1)
+        if env_ids.numel() == 0:
+            return
+        active = self._current_finger_activity()[env_ids]
+        if reset:
+            remaining = torch.zeros_like(
+                self._goal_pair_release_remaining[env_ids])
+        else:
+            remaining = (
+                self._goal_pair_release_remaining[env_ids] - 1
+            ).clamp_min(0)
+            released = (
+                self._goal_pair_previous_active[env_ids] & ~active)
+            remaining = torch.where(
+                released,
+                torch.full_like(
+                    remaining, self.goal_pair_action_release_frames),
+                remaining)
+        self._goal_pair_release_remaining[env_ids] = remaining
+        self._goal_pair_previous_active[env_ids] = active
+
+    def policy_action_mask(self, include_goal_pair_routing=True):
         mask = torch.ones(
             self.num_envs, self.num_actions,
             dtype=torch.bool, device=self.device)
@@ -523,12 +749,22 @@ class FretTask(GuitarEnvBase):
                 allowed |= self._action_is_wrist[None]
                 mask = torch.where(
                     restricted[:, None], allowed.expand_as(mask), mask)
-        if (hasattr(self, "goals")
+        if (include_goal_pair_routing
+                and hasattr(self, "goals")
                 and self.curriculum_stage == "goal_pair"
-                and self.goal_pair_action_assist):
-            assisted = (
-                self.goals.goal_pair_preview_mask
-                & (self.preparation_remaining <= 0))
+                and (self.goal_pair_action_assist
+                     or self.goal_pair_recovery_assist)):
+            preview_assisted = torch.zeros(
+                self.num_envs, dtype=torch.bool, device=self.device)
+            if self.goal_pair_action_assist:
+                preview_assisted |= self.goals.goal_pair_preview_mask
+            recovery_assisted = torch.zeros_like(preview_assisted)
+            if self.goal_pair_recovery_assist:
+                recovery_assisted |= self.goals.goal_pair_rehearsal_mask
+            ready = self.preparation_remaining <= 0
+            preview_assisted &= ready
+            recovery_assisted &= ready
+            assisted = preview_assisted | recovery_assisted
             if assisted.any():
                 current = self.goals.current()
                 finger_numbers = torch.arange(
@@ -541,7 +777,10 @@ class FretTask(GuitarEnvBase):
                 allowed = (
                     self._action_finger_ids[None] == 0
                 ).expand(self.num_envs, -1).clone()
-                allowed |= self._action_is_transition_proximal[None]
+                allowed |= recovery_assisted[:, None]
+                allowed |= (
+                    preview_assisted[:, None]
+                    & self._action_is_transition_proximal[None])
                 for finger_number in range(1, 5):
                     finger_allowed = (
                         current_fingers[:, finger_number - 1]
@@ -552,11 +791,37 @@ class FretTask(GuitarEnvBase):
                            == finger_number))
                 mask = torch.where(
                     assisted[:, None], allowed, mask)
+        if (hasattr(self, "goals")
+                and self.curriculum_stage == "goal_pair"
+                and self.goal_pair_action_routing):
+            current = self.goals.current()
+            current_active = self._current_finger_activity()
+            routed_fingers = goal_pair_finger_action_routing(
+                current_active, current["finger_event"],
+                self._goal_pair_release_remaining > 0,
+                preparation_remaining=self.preparation_remaining,
+                fps=self.goals.fps,
+                lookahead_s=self.reward_fn.next_goal_lookahead_s)
+            self._goal_pair_routed_fingers.copy_(routed_fingers)
+            routed_actions = (
+                self._action_finger_ids[None] <= 0
+            ).expand(self.num_envs, -1).clone()
+            for finger_number in range(1, 5):
+                routed_actions |= (
+                    routed_fingers[:, finger_number - 1, None]
+                    & (self._action_finger_ids[None] == finger_number))
+            mask &= routed_actions
+        else:
+            self._goal_pair_routed_fingers.fill_(True)
         return mask
 
     def apply_actions(self, actions):
         """Progressively unlock wrist and elbow after finger-only acquisition."""
-        action_mask = self.policy_action_mask()
+        # Goal Pair routing isolates PPO log-probability gradients only.  The
+        # physical controller keeps every finger available for hover, release
+        # and anticipatory hand shaping.
+        action_mask = self.policy_action_mask(
+            include_goal_pair_routing=False)
         actions = torch.where(action_mask, actions, self.prev_action)
         if hasattr(self, "goals"):
             current = self.goals.current()
@@ -585,28 +850,342 @@ class FretTask(GuitarEnvBase):
         super().apply_actions(actions)
 
     def curriculum_state_dict(self):
-        return self.goals.curriculum_sampler_state_dict()
+        return {
+            "goal_sampler": self.goals.curriculum_sampler_state_dict(),
+            "success_rsi": {
+                "valid": self._success_pose_valid.detach().cpu(),
+                "quality": self._success_pose_quality.detach().cpu(),
+                "q": self._success_pose_q.detach().cpu(),
+                "body_obs": self._success_pose_body_obs.detach().cpu(),
+                "thumb_obs": self._success_pose_thumb_obs.detach().cpu(),
+                "finger_valid":
+                    self._success_finger_pose_valid.detach().cpu(),
+                "finger_quality":
+                    self._success_finger_pose_quality.detach().cpu(),
+                "finger_q": self._success_finger_pose_q.detach().cpu(),
+                "finger_proximal_q":
+                    self._success_finger_pose_proximal_q.detach().cpu(),
+                "finger_action_valid":
+                    self._success_finger_action_valid.detach().cpu(),
+                "finger_action_quality":
+                    self._success_finger_action_quality.detach().cpu(),
+                "finger_action":
+                    self._success_finger_action.detach().cpu(),
+                "finger_proximal_action":
+                    self._success_finger_proximal_action.detach().cpu(),
+            },
+        }
 
     def load_curriculum_state_dict(self, state):
-        self.goals.load_curriculum_sampler_state_dict(state)
+        sampler = state.get("goal_sampler", state)
+        self.goals.load_curriculum_sampler_state_dict(sampler)
+        cache = state.get("success_rsi")
+        if cache is None:
+            return None
+        targets = {
+            "valid": self._success_pose_valid,
+            "quality": self._success_pose_quality,
+            "q": self._success_pose_q,
+            "body_obs": self._success_pose_body_obs,
+            "thumb_obs": self._success_pose_thumb_obs,
+        }
+        for name, target in targets.items():
+            source = cache.get(name)
+            if source is None or tuple(source.shape) != tuple(target.shape):
+                raise ValueError(
+                    f"success RSI {name} shape mismatch: expected "
+                    f"{tuple(target.shape)}")
+            target.copy_(source.to(device=self.device, dtype=target.dtype))
+        pose_targets = {
+            "finger_valid": self._success_finger_pose_valid,
+            "finger_quality": self._success_finger_pose_quality,
+            "finger_q": self._success_finger_pose_q,
+            "finger_proximal_q":
+                self._success_finger_pose_proximal_q,
+        }
+        action_targets = {
+            "finger_action_valid": self._success_finger_action_valid,
+            "finger_action_quality": self._success_finger_action_quality,
+            "finger_action": self._success_finger_action,
+            "finger_proximal_action":
+                self._success_finger_proximal_action,
+        }
+        for optional_targets in (pose_targets, action_targets):
+            optional_sources = {
+                name: cache.get(name) for name in optional_targets}
+            present = [
+                source is not None for source in optional_sources.values()]
+            if any(present) and not all(present):
+                raise ValueError(
+                    "success RSI optional cache group is incomplete")
+            for name, target in optional_targets.items():
+                source = optional_sources[name]
+                if source is None:
+                    continue
+                if tuple(source.shape) != tuple(target.shape):
+                    raise ValueError(
+                        f"success RSI {name} shape mismatch: expected "
+                        f"{tuple(target.shape)}")
+                target.copy_(
+                    source.to(device=self.device, dtype=target.dtype))
+        return None
+
+    def _apply_success_rsi(self, env_ids):
+        self.success_rsi_reset[env_ids] = False
+        self.success_rsi_reset_quality[env_ids] = 0.0
+        if (self.goals.pose_slot_count == 0
+                or self.success_rsi_probability <= 0.0
+                or self.curriculum_stage not in (
+                    "static_chord", "frozen_context", "goal_pair",
+                    "transition_window", "coverage", "integration",
+                    "full_song")):
+            return
+        slots = self.goals.frame_pose_slot[
+            self.goals.frame_idx[env_ids]]
+        eligible = slots >= 0
+        safe_slots = slots.clamp_min(0)
+        eligible &= self._success_pose_valid[safe_slots]
+        sampled = torch.rand(
+            env_ids.numel(), generator=self.rng,
+            device=self.device) < self.success_rsi_probability
+        selected = eligible & sampled
+        if not selected.any():
+            return
+        selected_envs = env_ids[selected]
+        selected_slots = slots[selected]
+        ds = self.dof_state.view(self.num_envs, self.n_dof, 2)
+        ds[selected_envs, :, 0] = self._success_pose_q[selected_slots]
+        self._reset_body_obs[selected_envs] = (
+            self._success_pose_body_obs[selected_slots])
+        self._reset_thumb_obs[selected_envs] = (
+            self._success_pose_thumb_obs[selected_slots])
+        self.success_rsi_reset[selected_envs] = True
+        self.success_rsi_reset_quality[selected_envs] = (
+            self._success_pose_quality[selected_slots])
+
+    def _update_success_rsi_cache(
+            self, frame_idx, metrics, terminal_obs, safe):
+        if self.goals.pose_slot_count == 0:
+            return
+        active = metrics["active"]
+        active_count = active.sum(dim=1)
+        position_quality = (
+            metrics["good_position_quality"].masked_fill(~active, 0.0)
+            .sum(dim=1) / active_count.clamp_min(1))
+        thumb_quality = metrics["thumb_support_quality"]
+        quality = (
+            metrics["chord_hold_quality"]
+            * position_quality
+            * thumb_quality).clamp_min(0.0).pow(1.0 / 3.0)
+        candidate = (
+            safe & (active_count > 0) & metrics["chord_ready"]
+            & metrics["all_correct"] & metrics["thumb_support"]
+            & (thumb_quality >= self.success_rsi_min_thumb_quality)
+            & (quality >= self.success_rsi_min_quality))
+        slots = self.goals.frame_pose_slot[frame_idx]
+        finger_slots = self.goals.finger_pose_slot[frame_idx]
+        candidate &= slots >= 0
+        body_start = 2 * self.n_nonlocked
+        body_obs = terminal_obs[:, body_start:self.base_obs_dim]
+        thumb_obs = terminal_obs[
+            :, self.thumb_obs_start:
+            self.thumb_obs_start + self.thumb_obs_dim]
+        q = self.dof_state.view(
+            self.num_envs, self.n_dof, 2)[:, :, 0]
+        required = (
+            active[..., None] & metrics["finger_assignment"])
+        required_count = required.sum(dim=1)
+        finger_press = (
+            (~required) | metrics["press_success"][..., None]).all(dim=1)
+        finger_position = (
+            (metrics["good_position_quality"][..., None]
+             * required.float()).sum(dim=1)
+            / required_count.clamp_min(1))
+        finger_hold = metrics["press_hold_quality"][..., None].masked_fill(
+            ~required, float("inf")).amin(dim=1)
+        finger_hold = torch.where(
+            required_count > 0, finger_hold,
+            torch.zeros_like(finger_hold))
+        finger_quality = (
+            finger_position * finger_hold).clamp_min(0.0).sqrt()
+        finger_candidate = (
+            safe[:, None] & (finger_slots >= 0)
+            & (required_count > 0) & finger_press
+            & ~metrics["wrong_press"].any(dim=1)[:, None]
+            & (finger_quality >= self.success_finger_pose_min_quality))
+        finger_q = q[:, self._finger_pose_dof_indices]
+        proximal_q = q[:, self._finger_pose_proximal_dof_indices]
+        finger_action = self.prev_action[
+            :, self._finger_pose_action_indices]
+        proximal_action = self.prev_action[
+            :, self._finger_pose_proximal_action_indices]
+        for finger_index in range(4):
+            selected = finger_candidate[:, finger_index]
+            if not selected.any():
+                continue
+            selected_slots = finger_slots[selected, finger_index]
+            best_by_slot = torch.full_like(
+                self._success_finger_pose_quality[:, finger_index],
+                -float("inf"))
+            best_by_slot.scatter_reduce_(
+                0, selected_slots, finger_quality[selected, finger_index],
+                reduce="amax", include_self=True)
+            improved = (
+                torch.isfinite(best_by_slot)
+                & (~self._success_finger_pose_valid[:, finger_index]
+                   | (best_by_slot
+                      > self._success_finger_pose_quality[:, finger_index])))
+            action_improved = (
+                torch.isfinite(best_by_slot)
+                & (~self._success_finger_action_valid[:, finger_index]
+                   | (best_by_slot
+                      > self._success_finger_action_quality[:, finger_index])))
+            for slot in torch.nonzero(
+                    improved | action_improved,
+                    as_tuple=False).squeeze(-1).tolist():
+                rows = torch.nonzero(
+                    selected & (finger_slots[:, finger_index] == slot),
+                    as_tuple=False).squeeze(-1)
+                row = rows[
+                    finger_quality[rows, finger_index].argmax()]
+                if improved[slot]:
+                    self._success_finger_pose_valid[slot, finger_index] = True
+                    self._success_finger_pose_quality[slot, finger_index] = (
+                        finger_quality[row, finger_index])
+                    self._success_finger_pose_q[slot, finger_index] = (
+                        finger_q[row, finger_index])
+                    self._success_finger_pose_proximal_q[
+                        slot, finger_index] = proximal_q[row]
+                if action_improved[slot]:
+                    self._success_finger_action_valid[
+                        slot, finger_index] = True
+                    self._success_finger_action_quality[
+                        slot, finger_index] = (
+                            finger_quality[row, finger_index])
+                    self._success_finger_action[slot, finger_index] = (
+                        finger_action[row, finger_index])
+                    self._success_finger_proximal_action[
+                        slot, finger_index] = proximal_action[row]
+        if not candidate.any():
+            return
+        best_by_slot = torch.full_like(
+            self._success_pose_quality, -float("inf"))
+        best_by_slot.scatter_reduce_(
+            0, slots[candidate], quality[candidate],
+            reduce="amax", include_self=True)
+        improved = (
+            torch.isfinite(best_by_slot)
+            & (~self._success_pose_valid
+               | (best_by_slot > self._success_pose_quality)))
+        for slot in torch.nonzero(
+                improved, as_tuple=False).squeeze(-1).tolist():
+            rows = torch.nonzero(
+                candidate & (slots == slot), as_tuple=False).squeeze(-1)
+            row = rows[quality[rows].argmax()]
+            self._success_pose_valid[slot] = True
+            self._success_pose_quality[slot] = quality[row]
+            self._success_pose_q[slot] = q[row]
+            self._success_pose_body_obs[slot] = body_obs[row]
+            self._success_pose_thumb_obs[slot] = thumb_obs[row]
+
+    def _success_pose_policy_teacher(self, goal, metrics):
+        """성공한 손가락 자세는 동시에 복습하고, 상위 관절은 초점 하나만 따른다."""
+        teacher = torch.zeros(
+            self.num_envs, self.num_actions, device=self.device)
+        mask = torch.zeros(
+            self.num_envs, self.num_actions,
+            dtype=torch.bool, device=self.device)
+        if self.curriculum_stage not in (
+                "chord_fine_reach", "static_chord", "goal_pair"):
+            return teacher, mask
+        slots = goal["finger_pose_slot"].long()
+        finger_gate = metrics["success_pose_guide_active_per_finger"]
+        finger_pose_quality = metrics[
+            "success_pose_guide_per_finger"]
+        minimum_quality = (
+            self.chord_fine_action_teacher_min_pose_quality
+            if self.curriculum_stage in (
+                "chord_fine_reach", "static_chord")
+            else self.success_action_teacher_min_pose_quality)
+        safe_slots = slots.clamp_min(0)
+        finger_indices = torch.arange(
+            4, device=self.device).view(1, 4)
+        cached_action = self._success_finger_action[
+            safe_slots, finger_indices]
+        cached_valid = (
+            (slots >= 0)
+            & self._success_finger_action_valid[
+                safe_slots, finger_indices])
+        finger_teacher, finger_mask = cached_finger_action_teacher(
+            cached_action, cached_valid, finger_gate,
+            finger_pose_quality, minimum_quality=minimum_quality)
+        for finger_index in range(4):
+            action_indices = self._finger_pose_action_indices[finger_index]
+            teacher[:, action_indices] = finger_teacher[:, finger_index]
+            mask[:, action_indices] = finger_mask[:, finger_index]
+
+        if self.curriculum_stage != "goal_pair":
+            return teacher, mask
+
+        proximal_candidate = (
+            metrics["next_goal_inactive_move_gate"]
+            & (slots >= 0)
+            & self._success_finger_action_valid[
+                safe_slots, finger_indices]
+            & self._success_action_teacher_proximal_cohort[:, None])
+        chosen_finger = torch.where(
+            proximal_candidate,
+            finger_pose_quality,
+            torch.full_like(finger_pose_quality, float("inf")),
+        ).argmin(dim=1)
+        proximal_rows = torch.nonzero(
+            proximal_candidate.any(dim=1),
+            as_tuple=False).squeeze(-1)
+        if proximal_rows.numel() > 0:
+            selected_fingers = chosen_finger[proximal_rows]
+            selected_slots = slots[
+                proximal_rows, selected_fingers]
+            proximal_indices = self._finger_pose_proximal_action_indices
+            proximal_action = self._success_finger_proximal_action[
+                selected_slots, selected_fingers]
+            teacher[
+                proximal_rows[:, None], proximal_indices[None]
+            ] = proximal_action
+            mask[
+                proximal_rows[:, None], proximal_indices[None]
+            ] = True
+        return teacher, mask
 
     def reset_idx(self, env_ids):
         super().reset_idx(env_ids)
-        if hasattr(self, "_settled_reset_q") and env_ids.numel() > 0:
+        if hasattr(self, "goals"):
+            self.goals.reset(env_ids)
+        if hasattr(self, "_goal_pair_release_remaining"):
+            self._update_goal_pair_action_routing(env_ids, reset=True)
+        full_reset = bool(getattr(
+            self, "_full_reset_in_progress", False))
+        if full_reset and hasattr(self, "success_rsi_reset"):
+            self.success_rsi_reset[env_ids] = False
+            self.success_rsi_reset_quality[env_ids] = 0.0
+        if (hasattr(self, "_settled_reset_q")
+                and env_ids.numel() > 0 and not full_reset):
             # Base reset samples bounded RSI noise.  Once a valid body snapshot
             # exists, restore its matching q so partial-reset proprioception and
             # rigid-body geometry describe the same physical pose.
             ds = self.dof_state.view(self.num_envs, self.n_dof, 2)
             ds[env_ids, :, 0] = self._settled_reset_q[env_ids]
             ds[env_ids, :, 1] = 0.0
+            self._reset_body_obs[env_ids] = (
+                self._settled_reset_body_obs[env_ids])
+            self._reset_thumb_obs[env_ids] = (
+                self._settled_reset_thumb_obs[env_ids])
+            self._apply_success_rsi(env_ids)
             self.gym.set_dof_state_tensor(
                 self.sim, gymtorch.unwrap_tensor(self.dof_state))
             self.pd_target.view(self.num_envs, self.n_dof)[env_ids] = (
-                self._settled_reset_q[env_ids])
+                ds[env_ids, :, 0])
             self.prev_action[env_ids] = self.actions_for_pd_targets(
-                self._settled_reset_q[env_ids][:, self.ctrl_idx], env_ids)
-        if hasattr(self, "goals"):
-            self.goals.reset(env_ids)
+                ds[env_ids][:, self.ctrl_idx, 0], env_ids)
         if hasattr(self, "reward_fn"):
             self.reward_fn.reset(env_ids)
         if hasattr(self, "finger_synergy_induced_deg"):
@@ -623,6 +1202,7 @@ class FretTask(GuitarEnvBase):
             "metric_max_press_dropout_streak", "palm_down_streak",
             "palm_world_z", "palm_normal_valid", "palm_down_termination",
             "thumb_overforce_streak", "thumb_overforce_termination",
+            "wrong_press_streak", "wrong_press_termination",
         )
         for name in reset_names:
             if hasattr(self, name):
@@ -663,8 +1243,15 @@ class FretTask(GuitarEnvBase):
         self.last_nonfinite_observation |= self.rows_with_nonfinite(
             thumb_obs)
         thumb_obs = self.sanitize_finite(thumb_obs)
+        future_context = self.goals.observe_future_context(
+            self.future_context_lookahead,
+            self.preparation_remaining)
+        self.last_nonfinite_observation |= self.rows_with_nonfinite(
+            future_context)
+        future_context = self.sanitize_finite(future_context)
         obs = torch.cat(
-            [base, goal_obs, self.prev_action, thumb_obs], dim=-1)
+            [base, goal_obs, self.prev_action, thumb_obs, future_context],
+            dim=-1)
         self.obs_buf[:] = obs
         return obs
 
@@ -685,11 +1272,11 @@ class FretTask(GuitarEnvBase):
         reset_obs = self.compute_observations()
         body_start = 2 * self.n_nonlocked
         reset_obs[env_ids, body_start:self.base_obs_dim] = (
-            self._settled_reset_body_obs[env_ids])
+            self._reset_body_obs[env_ids])
         reset_obs[
             env_ids,
             self.thumb_obs_start:self.thumb_obs_start + self.thumb_obs_dim
-        ] = self._settled_reset_thumb_obs[env_ids]
+        ] = self._reset_thumb_obs[env_ids]
         self.obs_buf.copy_(reset_obs)
         return reset_obs
 
@@ -878,6 +1465,7 @@ class FretTask(GuitarEnvBase):
                 nonfinite |= value
         velocity_blowup = base_reasons["velocity_blowup"]
         preparing = self.preparation_remaining > 0
+        goal_frame_idx = self.goals.frame_idx.clone()
         goal = self.goals.current()
         event = goal["finger_event"].clone()
         delay = (
@@ -902,6 +1490,9 @@ class FretTask(GuitarEnvBase):
         goal = dict(goal)
         goal["finger_event"] = event
         reward, metrics = self.reward_fn.compute(goal)
+        (policy_teacher_action,
+         policy_teacher_mask) = self._success_pose_policy_teacher(
+            goal, metrics)
         finger_back = self.finger_back_monitor.compute()
         finger_back_cost = (
             self.finger_back_soft_penalty
@@ -947,12 +1538,45 @@ class FretTask(GuitarEnvBase):
             goal["sustain_event_id"],
             goal["sustain_eligible"] & metrics_enabled[:, None],
             metrics["press_success"])
+        wrong_press_now = metrics["wrong_press"].any(dim=1)
+        wrong_press_streak, wrong_press_termination = (
+            update_wrong_press_termination(
+                self.wrong_press_streak,
+                wrong_press_now,
+                metrics_enabled,
+                stage=self.curriculum_stage,
+                frames=self.wrong_press_termination_frames,
+                stages=WRONG_PRESS_TERMINATION_STAGES))
+        self.wrong_press_streak.copy_(wrong_press_streak)
+        self.wrong_press_termination.copy_(wrong_press_termination)
         self.goals.advance(live)
+        if self.goal_pair_action_routing:
+            self._update_goal_pair_action_routing(
+                torch.nonzero(live, as_tuple=False).squeeze(-1))
         self.preparation_remaining.sub_(1).clamp_(min=0)
         penetration = self.penetration_monitor.compute(self.progress_buf)
-        unsafe_penetration = (
-            penetration["guitar_penetration"]
-            | penetration["guitar_tunneled"])
+        filtered_penetration = exclude_thumb_from_generic_penetration(
+            penetration["guitar_penetration_depth_by_chain"],
+            penetration["guitar_tunneled_by_chain"],
+            penetration["guitar_penetration_termination_by_chain"],
+            penetration_threshold=self.penetration_monitor.threshold)
+        raw_termination = penetration["guitar_penetration_termination"]
+        penetration["guitar_penetration_raw_termination"] = raw_termination
+        penetration["guitar_penetration_thumb_chain_excluded"] = (
+            filtered_penetration["raw_thumb_unsafe"])
+        penetration["guitar_penetration_effective_depth"] = (
+            filtered_penetration["effective_depth"])
+        penetration["guitar_penetration_termination"] = (
+            filtered_penetration["termination"])
+        penetration["guitar_penetration_termination_by_chain"] = (
+            filtered_penetration["termination_by_chain"])
+        penetration_soft_cost = guitar_penetration_soft_cost(
+            filtered_penetration["effective_depth"],
+            soft_threshold=self.penetration_soft_threshold,
+            hard_threshold=self.penetration_monitor.threshold,
+            max_cost=self.penetration_soft_penalty)
+        reward = reward - penetration_soft_cost[:, None]
+        unsafe_penetration = filtered_penetration["unsafe"]
         reward = suppress_positive_reward_on_penetration(
             reward, unsafe_penetration)
         finger_intersection = self.finger_intersection_monitor.compute(self.progress_buf)
@@ -983,9 +1607,14 @@ class FretTask(GuitarEnvBase):
         nonfinite |= observation_nonfinite
         task_failure = (palm_down_termination
                         | self.thumb_overforce_termination
+                        | self.wrong_press_termination
                         | wrist_safety["wrist_safety_termination"]
                         | finger_back["finger_back_termination"]
                         | penetration["guitar_penetration_termination"])
+        self._update_success_rsi_cache(
+            goal_frame_idx, metrics, terminal_obs,
+            metrics_enabled & ~unsafe_penetration & ~task_failure
+            & ~observation_nonfinite)
         # Reaching the planned time limit together with the final goal is normal.  A time limit
         # before the song finishes is a failure, as are non-finite state, velocity blow-up and
         # every hard task-safety reason.  A safety failure wins if it coincides with completion.
@@ -1016,8 +1645,26 @@ class FretTask(GuitarEnvBase):
                 active_count.clamp_min(1)
 
         arch_angles = torch.rad2deg(metrics["designated_arch_angles"])
+        controlled_position = self.dof_state.view(
+            self.num_envs, self.n_dof, 2)[:, self.ctrl_idx, 0]
+        joint_limit_usage = normalized_joint_limit_usage(
+            controlled_position, self.ctrl_lo, self.ctrl_hi)
+        joint_limit_near = (
+            joint_limit_usage >= self.joint_limit_diagnostic_fraction)
+        if self.goals.finger_pose_slot_count:
+            finger_pose_cache_fraction = (
+                self._success_finger_pose_valid.any(dim=1).float().mean())
+            finger_action_cache_fraction = (
+                self._success_finger_action_valid.any(dim=1).float().mean())
+        else:
+            finger_pose_cache_fraction = torch.zeros(
+                (), device=self.device)
+            finger_action_cache_fraction = torch.zeros(
+                (), device=self.device)
         info = {
             "mean_target_distance": active_mean(metrics["target_distance"]),
+            "mean_local_reach_margin": active_mean(
+                metrics["local_reach_margin"]),
             "active_count": active_count,
             "mean_press_depth": active_mean(metrics["press_depth"]),
             "mean_press_depth_progress": active_mean(
@@ -1028,6 +1675,8 @@ class FretTask(GuitarEnvBase):
                 metrics["press_hold_acquired"].float()),
             "frame_press_dropout_rate": active_mean(
                 metrics["press_dropout"].float()),
+            "frame_press_near_miss_rate": active_mean(
+                metrics["press_near_miss"].float()),
             "max_press_dropout_streak":
                 metrics["press_dropout_streak"].amax(dim=1),
             "frame_chord_hold_quality": metrics["chord_hold_quality"],
@@ -1066,7 +1715,12 @@ class FretTask(GuitarEnvBase):
             "curriculum_diagnostic_enabled": curriculum_diagnostic_enabled,
             "press_success_rate": active_mean(metrics["press_success"].float()),
             "wrong_press_count": metrics["wrong_press"].sum(dim=1),
+            "wrong_press_streak": self.wrong_press_streak.clone(),
+            "wrong_press_termination":
+                self.wrong_press_termination.clone(),
             "supervised_count": metrics["supervised"].sum(dim=1),
+            "joint_limit_max_usage": joint_limit_usage.amax(dim=1),
+            "joint_limit_near_rate": joint_limit_near.float().mean(dim=1),
             "thumb_contact": metrics["thumb_contact"].clone(),
             "thumb_base_action_saturation":
                 (self.prev_action[:, self._thumb_base_action_indices].abs()
@@ -1120,6 +1774,10 @@ class FretTask(GuitarEnvBase):
                 self.finger_synergy_induced_deg
                 * self.finger_synergy_gate.float()).sum(dim=1)
                 / self.finger_synergy_gate.sum(dim=1).clamp_min(1),
+            "goal_pair_action_routing_active":
+                self._goal_pair_routed_fingers.float().mean(dim=1),
+            "goal_pair_action_release_active":
+                (self._goal_pair_release_remaining > 0).float().mean(dim=1),
             "next_goal_approach_active_rate":
                 metrics["next_goal_approach_gate"].float().mean(dim=1),
             "next_goal_approach_distance": (
@@ -1145,11 +1803,50 @@ class FretTask(GuitarEnvBase):
             "preparing": preparing.clone(),
             "goal_metrics_enabled": metrics_enabled.clone(),
             "preparation_remaining_frames": self.preparation_remaining.clone(),
+            "success_rsi_reset": self.success_rsi_reset.clone(),
+            "success_rsi_reset_quality":
+                self.success_rsi_reset_quality.clone(),
+            "success_rsi_cache_fraction":
+                self._success_pose_valid.float().mean().expand(self.num_envs),
+            "success_finger_pose_cache_fraction":
+                finger_pose_cache_fraction.expand(self.num_envs),
+            "success_finger_action_cache_fraction":
+                finger_action_cache_fraction.expand(self.num_envs),
+            "policy_teacher_action": policy_teacher_action,
+            "policy_teacher_mask": policy_teacher_mask,
+            "policy_teacher_proximal_active": policy_teacher_mask[
+                :, self._finger_pose_proximal_action_indices].any(dim=1),
+            "guitar_penetration_soft_cost": penetration_soft_cost,
         }
+        for finger_index in range(4):
+            info[f"policy_teacher_finger_{finger_index + 1}_active"] = (
+                policy_teacher_mask[
+                    :, self._finger_pose_action_indices[finger_index]
+                ].any(dim=1))
+        for group, indices in self.joint_limit_group_indices.items():
+            group_usage = joint_limit_usage[:, indices]
+            info[f"joint_limit_{group}_max_usage"] = group_usage.amax(dim=1)
+            info[f"joint_limit_{group}_near_rate"] = (
+                group_usage >= self.joint_limit_diagnostic_fraction
+            ).float().mean(dim=1)
         info.update({name: metrics[name] for name in DIRECT_INFO_METRIC_KEYS})
+        for finger_index in range(4):
+            finger_number = finger_index + 1
+            info[
+                f"success_pose_guide_finger_{finger_number}_reward"] = (
+                    metrics["success_pose_guide_per_finger"][
+                        :, finger_index])
+            info[
+                f"success_pose_guide_finger_{finger_number}_active"] = (
+                    metrics["success_pose_guide_active_per_finger"][
+                        :, finger_index])
         if self.curriculum_stage == "goal_pair":
             sequence_active = (
                 metrics_enabled & self.goals.goal_pair_sequence_mask)
+            pair_active = (
+                metrics_enabled
+                & ~self.goals.goal_pair_rehearsal_mask
+                & ~self.goals.goal_pair_sequence_mask)
             full_song_active = (
                 sequence_active & self.goals.goal_pair_full_song_mask)
             press_count = metrics["active"].sum(dim=1)
@@ -1172,6 +1869,8 @@ class FretTask(GuitarEnvBase):
                 (metrics["wrong_press"] & metrics["supervised"])
                 .sum(dim=1).float() / supervised_count.clamp_min(1))
             sequence_values = {
+                "event_count":
+                    self.goals.goal_pair_sequence_event_count.float(),
                 "press_success": sequence_press_success,
                 "no_press_success": sequence_no_press_success,
                 "wrong_press": sequence_wrong_press,
@@ -1180,6 +1879,16 @@ class FretTask(GuitarEnvBase):
             }
             info["goal_pair_sequence_active"] = sequence_active
             info["goal_pair_full_song_active"] = full_song_active
+            for finger_number in range(1, 5):
+                incoming_active = (
+                    pair_active
+                    & (self.goals.goal_pair_incoming_finger
+                       == finger_number))
+                info[f"goal_pair_incoming_finger_{finger_number}_active"] = (
+                    incoming_active)
+                info[
+                    f"goal_pair_incoming_finger_{finger_number}_wrong_press"
+                ] = metrics["wrong_press"].any(dim=1).float()
             for name, value in sequence_values.items():
                 info[f"goal_pair_sequence_{name}"] = value
                 info[f"goal_pair_full_song_{name}"] = value
@@ -1199,6 +1908,8 @@ class FretTask(GuitarEnvBase):
                 finger_count > 0)
             info[f"finger_{finger_number}_target_distance"] = finger_mean(
                 metrics["target_distance"])
+            info[f"finger_{finger_number}_local_reach_margin"] = finger_mean(
+                metrics["local_reach_margin"])
             info[f"finger_{finger_number}_fine_alignment_quality"] = (
                 finger_mean(metrics["fine_alignment_quality"]))
             info[f"finger_{finger_number}_fine_longitudinal_quality"] = (
@@ -1214,10 +1925,17 @@ class FretTask(GuitarEnvBase):
                 finger_success = finger_mean(
                     metrics["press_success"].float())
                 finger_distance = finger_mean(metrics["target_distance"])
+                finger_hold_quality = finger_mean(
+                    metrics["press_hold_quality"])
+                finger_dropout_rate = finger_mean(
+                    metrics["press_dropout"].float())
+                finger_wrong_press = metrics[
+                    "wrong_press_per_finger"][:, finger_index].float()
                 cohorts = {
                     "rehearsal": rehearsal,
                     "transition": ~rehearsal & ~sequence,
                     "sequence": sequence,
+                    "full_song": self.goals.goal_pair_full_song_mask,
                 }
                 for cohort_name, cohort_mask in cohorts.items():
                     prefix = (
@@ -1226,6 +1944,27 @@ class FretTask(GuitarEnvBase):
                         finger_active & cohort_mask)
                     info[f"{prefix}_target_distance"] = finger_distance
                     info[f"{prefix}_press_success"] = finger_success
+                    info[f"{prefix}_hold_quality"] = finger_hold_quality
+                    info[f"{prefix}_dropout_rate"] = finger_dropout_rate
+                    info[f"{prefix}_wrong_press"] = finger_wrong_press
+                incoming_target = (
+                    pair_active
+                    & (self.goals.goal_pair_incoming_finger
+                       == finger_number))
+                previous_mask = self.goals.goal_pair_previous_finger_mask
+                for source_finger in range(5):
+                    source_active = (
+                        ~previous_mask.any(dim=1)
+                        if source_finger == 0
+                        else previous_mask[:, source_finger - 1])
+                    matrix_prefix = (
+                        f"goal_pair_transition_{source_finger}"
+                        f"_to_{finger_number}")
+                    info[f"{matrix_prefix}_target_active"] = (
+                        finger_active & incoming_target & source_active)
+                    info[f"{matrix_prefix}_press_success"] = finger_success
+                    info[f"{matrix_prefix}_wrong_press"] = (
+                        metrics["wrong_press"].any(dim=1).float())
         info.update({name: value.clone() for name, value in penetration.items()})
         info.update({name: value.clone() for name, value in finger_intersection.items()})
         info.update({name: value.clone() for name, value in contact_load.items()})
@@ -1245,6 +1984,7 @@ class FretTask(GuitarEnvBase):
             "velocity_blowup": velocity_blowup,
             "palm_down_termination": palm_down_termination,
             "thumb_overforce_termination": self.thumb_overforce_termination,
+            "wrong_press_termination": self.wrong_press_termination,
             "wrist_safety_termination":
                 wrist_safety["wrist_safety_termination"],
             "finger_back_termination":
@@ -1255,6 +1995,13 @@ class FretTask(GuitarEnvBase):
             "normal_termination": normal_termination,
             "success": episode_success,
         }
+        for chain_index, chain_name in enumerate(
+                self.penetration_monitor.CHAIN_NAMES):
+            episode_reasons[
+                f"guitar_penetration_{chain_name}_termination"] = (
+                    penetration[
+                        "guitar_penetration_termination_by_chain"
+                    ][:, chain_index])
         info.update({f"episode_{name}": value[env_ids].clone()
                      for name, value in episode_reasons.items()})
         for name, value in base_reasons.items():

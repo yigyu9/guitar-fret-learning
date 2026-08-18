@@ -81,7 +81,7 @@ def main(argv=None):
         if not path.is_file():
             raise FileNotFoundError(f"{label} does not exist: {path}")
 
-    import isaacgym  # noqa: F401
+    import isaacgym
     import torch
 
     from tab2body.env.tasks import StrikeTask
@@ -95,7 +95,7 @@ def main(argv=None):
 
     checkpoint = base._load_checkpoint(
         torch, args.checkpoint, args.device)
-    stage, tolerance = base.restore_stage_and_tolerance(checkpoint)
+    stage, tolerance, tempo_lambda = base.restore_stage_and_tolerance(checkpoint)
     if stage != "A4_ZONE_CONTROL":
         raise ValueError(
             "string-alignment audit requires an A4 checkpoint")
@@ -126,16 +126,20 @@ def main(argv=None):
         records = []
         release_offsets = Counter()
         wrong_release_offsets = Counter()
+        blocked_release_offsets = Counter()
         release_pairs = Counter()
         target_hits = Counter()
         target_misses = Counter()
         target_switches_in_recovery = 0
+        motion_target_switches_in_recovery = 0
         simulated = 0
         episode_ended = False
 
         for step_index in range(max_steps):
             target_before = int(
                 _scalar(env._current_target_string())) + 1
+            motion_target_before = int(
+                _scalar(env._current_motion_target()[0])) + 1
             event_before = int(_scalar(env.event_index))
             phase_before = _phase(_scalar(env.motor_phase))
             song_time_before = float(_scalar(env.song_time_s))
@@ -149,26 +153,85 @@ def main(argv=None):
             releases = [
                 int(index) + 1
                 for index in torch.nonzero(
-                    env._last_release[0]).reshape(-1).cpu().tolist()
+                    info["release_mask"][0]).reshape(-1).cpu().tolist()
             ]
+            blocked_releases = [
+                int(index) + 1
+                for index in torch.nonzero(
+                    info["blocked_release_mask"][0]
+                ).reshape(-1).cpu().tolist()
+            ]
+            accepted_releases = [
+                int(index) + 1
+                for index in torch.nonzero(
+                    info["accepted_release_mask"][0]
+                ).reshape(-1).cpu().tolist()
+            ]
+
+            def crossing_detail(released_string, classification):
+                index = released_string - 1
+                raw_direction = int(_scalar(
+                    info["release_direction"][0, index]))
+                return {
+                    "string": released_string,
+                    "offset_from_target": released_string - target_before,
+                    "classification": classification,
+                    "direction": (
+                        "down" if raw_direction == 1
+                        else "up" if raw_direction == -1
+                        else f"unknown_{raw_direction}"),
+                    "subframe_t": float(_scalar(
+                        info["release_subframe_t"][0, index])),
+                    "depth_m": float(_scalar(
+                        info["release_depth_m"][0, index])),
+                    "across_speed_m_s": float(_scalar(
+                        info["release_across_speed_m_s"][0, index])),
+                    "crossing_y_g_m": float(_scalar(
+                        info["release_crossing_y"][0, index])),
+                    "zone_allowed": bool(_scalar(
+                        info["release_zone_allowed"][0, index])),
+                    "zone_quality": float(_scalar(
+                        info["release_zone_quality"][0, index])),
+                }
             target_hit = bool(_scalar(info["target_hit"]))
             miss = bool(_scalar(info["miss"]))
             wrong_count = int(round(
                 float(_scalar(info["wrong_crossing_count"]))))
             target_after = int(
-                _scalar(env._current_target_string())) + 1
-            event_after = int(_scalar(env.event_index))
-            phase_after = _phase(_scalar(env.motor_phase))
+                _scalar(info["event_target_string_after_step"])) + 1
+            motion_target_after = int(
+                _scalar(info["motion_target_string_after_step"])) + 1
+            event_after = int(_scalar(info["event_index_after_step"]))
+            phase_after = _phase(_scalar(info["motor_phase"]))
+            phase_violation = bool(_scalar(
+                info["release_phase_violation"]))
 
-            wrong_releases = list(releases)
-            if target_hit and target_before in wrong_releases:
-                wrong_releases.remove(target_before)
+            wrong_releases = [
+                released for released in releases
+                if released not in accepted_releases]
+            release_details = [
+                crossing_detail(
+                    released,
+                    "accepted_progress"
+                    if released in accepted_releases else "wrong_release")
+                for released in releases
+            ]
+            blocked_release_details = [
+                crossing_detail(released, "blocked_wait_rearm")
+                for released in blocked_releases
+            ]
+            if wrong_count != len(wrong_releases):
+                raise RuntimeError(
+                    "strike false-positive diagnostic is internally "
+                    "inconsistent")
             for released in releases:
                 offset = released - target_before
                 release_offsets[offset] += 1
                 release_pairs[(target_before, released)] += 1
             for released in wrong_releases:
                 wrong_release_offsets[released - target_before] += 1
+            for released in blocked_releases:
+                blocked_release_offsets[released - target_before] += 1
             if target_hit:
                 target_hits[target_before] += 1
             if miss:
@@ -178,9 +241,14 @@ def main(argv=None):
                 and phase_after == "RELEASE_RECOVER"
             ):
                 target_switches_in_recovery += 1
+            if (
+                motion_target_after != motion_target_before
+                and phase_after == "RELEASE_RECOVER"
+            ):
+                motion_target_switches_in_recovery += 1
 
             if (
-                releases or target_hit or miss
+                releases or blocked_releases or target_hit or miss
                 or event_after != event_before
             ):
                 records.append({
@@ -190,7 +258,28 @@ def main(argv=None):
                     "event_index_after": event_after,
                     "target_string_before": target_before,
                     "target_string_after": target_after,
+                    "motion_target_string_before": motion_target_before,
+                    "motion_target_string_after": motion_target_after,
                     "released_strings": releases,
+                    "accepted_releases": accepted_releases,
+                    "release_details": release_details,
+                    "target_gesture": int(_scalar(info["target_gesture"])),
+                    "target_traversal_mask": [
+                        bool(value) for value in
+                        info["target_traversal_mask"][0].cpu().tolist()],
+                    "completed_traversal_mask": [
+                        bool(value) for value in
+                        info["target_release_progress_mask"][0].cpu().tolist()],
+                    "order_violation_count": int(round(float(_scalar(
+                        info["strum_order_violation_count"])))),
+                    "wrong_direction_count": int(round(float(_scalar(
+                        info["strum_wrong_direction_count"])))),
+                    "protected_crossing_count": int(round(float(_scalar(
+                        info["strum_protected_crossing_count"])))),
+                    "duplicate_crossing_count": int(round(float(_scalar(
+                        info["strum_duplicate_crossing_count"])))),
+                    "blocked_released_strings": blocked_releases,
+                    "blocked_release_details": blocked_release_details,
                     "release_offsets_from_target": [
                         released - target_before
                         for released in releases
@@ -201,8 +290,13 @@ def main(argv=None):
                     "wrong_crossing_count": wrong_count,
                     "phase_before": phase_before,
                     "phase_after": phase_after,
+                    "release_phase_violation": phase_violation,
                     "target_switched_during_recovery": (
                         target_after != target_before
+                        and phase_after == "RELEASE_RECOVER"
+                    ),
+                    "motion_target_switched_during_recovery": (
+                        motion_target_after != motion_target_before
                         and phase_after == "RELEASE_RECOVER"
                     ),
                 })
@@ -213,6 +307,8 @@ def main(argv=None):
 
         summary = {
             "total_release_pulses": int(sum(release_offsets.values())),
+            "total_blocked_wait_rearm_crossings": int(
+                sum(blocked_release_offsets.values())),
             "exact_target_releases": int(release_offsets[0]),
             "release_offset_counts": {
                 str(offset): int(count)
@@ -222,6 +318,11 @@ def main(argv=None):
                 str(offset): int(count)
                 for offset, count in sorted(
                     wrong_release_offsets.items())
+            },
+            "blocked_release_offset_counts": {
+                str(offset): int(count)
+                for offset, count in sorted(
+                    blocked_release_offsets.items())
             },
             "target_release_pairs": [
                 {
@@ -243,15 +344,22 @@ def main(argv=None):
             },
             "target_switches_during_release_recover":
                 target_switches_in_recovery,
+            "motion_target_switches_during_release_recover":
+                motion_target_switches_in_recovery,
         }
         report = {
-            "schema": "tab2body.strike_string_alignment_audit.v1",
+            "schema": "tab2body.strike_string_alignment_audit.v3",
             "checkpoint": str(args.checkpoint),
             "checkpoint_contract_sha256":
                 checkpoint["checkpoint_contract"]["sha256"],
             "goal": str(args.goal),
             "stage": stage,
             "timing_tolerance_ms": tolerance,
+            "tempo_lambda": tempo_lambda,
+            "evaluation_scope": (
+                "full_song_original_tempo"
+                if env.evaluation_full_song
+                else "training_phrase_current_tempo"),
             "string_conventions": {
                 "input_fingering":
                     "0=low-E, 5=high-e",

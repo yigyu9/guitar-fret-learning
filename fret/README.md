@@ -45,8 +45,8 @@
 | 곡별 반복 커리큘럼 | 구현 완료 | 같은 곡 내부 coverage → integration → 전체곡 연주 |
 | 화음·바레 | 후속 단계 | 현재 S0는 암묵 바레와 동일 손가락 다중 줄 목표를 로딩 단계에서 거부하며, 명시적 바레 확장 흔적만 보존 |
 
-현재 인터페이스는 `33 action / 353 observation / 6 reward-value`다. observation은 base180 + goal128 +
-직전 EMA action33 + thumb geometry12로 구성된다. 정책은 bounded action과 EMA를
+현재 인터페이스는 `33 action / 428 observation / 6 reward-value`다. observation은 base180 + goal128 +
+직전 EMA action33 + thumb geometry12 + 미래 goal75로 구성된다. 정책은 bounded action과 EMA를
 사용한다. 체크포인트는 제어 순서, 보상, 안전 설정, 곡 데이터와 코드 지문이 모두 맞아야 로드된다.
 R22 손가락 capsule 겹침은 아직 진단 전용이다.
 

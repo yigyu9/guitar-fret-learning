@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 N_GUITAR_STRINGS = 6
 VISUAL_STRING_RIBBON_HALF_WIDTH_M = 0.002
 
-# Plain tuples keep this mapping directly JSON serializable.
+
 OVERLAY_COLORS = {
     "string": (218, 224, 232, 215),
     "allowed": (41, 121, 255, 82),
@@ -345,11 +345,20 @@ def build_strike_overlay_geometry(
         raise ValueError(
             "lane widths must satisfy 0 <= core < outer"
         )
-    if not preferred[0] <= lane_y <= preferred[1]:
-        raise ValueError("target_lane_y must be inside preferred_y")
+
+
+
+
+
+
+    tolerance = 1e-7
+    lane_within_preferred = (
+        preferred[0] - tolerance
+        <= lane_y
+        <= preferred[1] + tolerance
+    )
     lane_outer = (lane_y - outer, lane_y + outer)
     lane_core = (lane_y - core, lane_y + core)
-    tolerance = 1e-12
     if (
         lane_outer[0] < allowed[0] - tolerance
         or lane_outer[1] > allowed[1] + tolerance
@@ -397,6 +406,7 @@ def build_strike_overlay_geometry(
         "allowed_y": allowed,
         "preferred_y": preferred,
         "target_lane_y": lane_y,
+        "target_lane_within_preferred": lane_within_preferred,
         "lane_outer_y": lane_outer,
         "lane_core_y": lane_core,
         "target_string": target_index,
@@ -473,13 +483,18 @@ def _environment_overlay_state(
     starts_g = _string_array(starts_g, name="env string starts")
     ends_g = _string_array(ends_g, name="env string ends")
 
-    if not callable(getattr(env, "_current_target_string", None)):
-        raise TypeError("env must expose _current_target_string()")
+    motion_target = getattr(env, "_current_motion_target", None)
+    if callable(motion_target):
+        target_value, lane_value = motion_target()
+    else:
+        if not callable(getattr(env, "_current_target_string", None)):
+            raise TypeError("env must expose _current_target_string()")
+        target_value = env._current_target_string()
+        lane_value = getattr(env, "target_lane_y", None)
     target_string = _target_index(_numpy(
-        env._current_target_string(), name="target_string").reshape(-1)[:1])
+        target_value, name="target_string").reshape(-1)[:1])
     lane_y_array = _numpy(
-        getattr(env, "target_lane_y", None), name="env.target_lane_y"
-    ).reshape(-1)
+        lane_value, name="env.target_lane_y").reshape(-1)
     if lane_y_array.size < 1:
         raise ValueError("env.target_lane_y must contain one value per environment")
     required = (
@@ -503,6 +518,25 @@ def _environment_overlay_state(
         lane_core_half_width_m=env.lane_core_half_width,
         target_string=target_string,
     )
+    target_masks = getattr(env, "_current_target_masks", None)
+    if callable(target_masks):
+        traversal = _numpy(
+            target_masks(), name="env target traversal mask")
+        if traversal.ndim == 2:
+            traversal = traversal[0]
+        if traversal.shape != (N_GUITAR_STRINGS,):
+            raise ValueError("env target traversal mask must have shape (N,6)")
+        for index, string in enumerate(geometry["strings"]):
+            string["active"] = bool(traversal[index])
+        geometry["target_traversal_mask"] = [
+            bool(value) for value in traversal.tolist()]
+    progress = getattr(env, "_event_release_mask", None)
+    if progress is not None:
+        progress = _numpy(progress, name="env release progress mask")
+        if progress.ndim == 2:
+            progress = progress[0]
+        geometry["completed_traversal_mask"] = [
+            bool(value) for value in progress.tolist()]
 
     if not callable(getattr(env, "guitar_frame", None)):
         raise TypeError("env must expose guitar_frame()")
@@ -730,6 +764,10 @@ def _serializable_overlay_state(
         ],
         "target_string_index": int(geometry["target_string"]),
         "target_string_number": int(geometry["target_string_number"]),
+        "target_traversal_mask": list(geometry.get(
+            "target_traversal_mask", [])),
+        "completed_traversal_mask": list(geometry.get(
+            "completed_traversal_mask", [])),
         "pick_world_m": [float(value) for value in pick_world],
         "pick_trail_sample_count": int(trail_sample_count),
         "colors_rgba": {
@@ -774,7 +812,7 @@ def draw_strike_zone_pick_overlay(
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer, "RGBA")
 
-    # Draw wide-to-narrow bands so every nested contract remains legible.
+
     for layer_name, fill_name, outline_name in (
         ("allowed", "allowed", "allowed_outline"),
         ("preferred", "preferred", "preferred_outline"),
@@ -804,7 +842,7 @@ def draw_strike_zone_pick_overlay(
                 width=3 if active else 1,
             )
 
-    # Exact finite centerlines, with the requested string highlighted.
+
     for string in geometry_world["strings"]:
         _draw_line(
             draw,
@@ -870,8 +908,8 @@ def draw_strike_zone_pick_overlay(
             width=2 if string["active"] else 1,
         )
 
-    # A short history makes the swept virtual point legible without implying a
-    # rigid pick blade.  The current point is always the final sample.
+
+
     if len(pick_path_world) > 1:
         _draw_line(
             draw,
