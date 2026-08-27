@@ -1,0 +1,1 @@
+../../tab2fingermapping/fingermapping/ALGORITHM.md
