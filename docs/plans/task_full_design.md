@@ -1,5 +1,7 @@
 # task_full (병합: 왼손 fret ∥ 오른손 strike) 설계 — §2 규칙 명세 (rule set)
 
+> **상태: SUPERSEDED.** AdaptNet이 관절 residual을 출력하고 하나의 Full 정책을 학습하던 초기 결합안이다. 현재 Synchronizer는 관절을 제어하지 않는 timing supervisor이며, 정본은 [`master_plan/05_synchronizer.md`](../../master_plan/05_synchronizer.md)와 [`master_plan/07_full_body_player.md`](../../master_plan/07_full_body_player.md)다.
+
 > 최종 갱신: 2026-08-03. 이 문서는 결합 태스크의 역사적 설계 초안이다. 현재 운영은 Fret과
 > Strike를 각각 검증하며, Full 전용 실행·checkpoint 계약은 아직 공개하지 않는다.
 

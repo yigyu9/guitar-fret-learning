@@ -1,6 +1,8 @@
 # task_fret 체크리스트 — "왼손이 finger mapping대로 동작하는가"
 
-> 최종 갱신: 2026-08-03. 현재 실행 계약은 `33 action / 353 observation / 6 reward-value`다.
+> **상태: SUPERSEDED.** Fret-v1 계열의 과거 검증 기록이다. 현재 구조는 [`master_plan/03_fret.md`](../../master_plan/03_fret.md)를 따르며, 아래 완료 표시는 Fret-v2의 완료를 의미하지 않는다.
+
+> 최종 갱신: 2026-09-01. 현재 실행 계약은 `30 action / 425 observation / 6 reward-value`다.
 > 아래 2026-07-22 측정값과 완료 표시는 당시 `341 observation` 구현에 대한 역사 기록이며,
 > 현재 계약 확인에는 [`tab2body/TRAINING.md`](../../tab2body/TRAINING.md)의 공용 smoke를 사용한다.
 
@@ -40,10 +42,10 @@
 
 ## P2. 제어 DOF 구성
 
-- [x] **control_dofs 재정의**: 몸통9 제거, `L_Thorax/Shoulder/Elbow/Wrist` 12 + 엄지5 + 네 손가락16 = **33 DOF**.
-  곡 진행률 1D와 actuator-state `prev_action33`에 현재 thumb geometry 12D를 포함한 runtime 계약은
-  `actions=33`, `obs=353`이다.
-  몸통·머리·우측·하체는 init PD target 고정.
+- [x] **control_dofs 재정의**: `L_Shoulder/Elbow/Wrist` 9 + 엄지5 + 네 손가락16 = **30 DOF**.
+  actuator-state `prev_action30`, thumb geometry 12D와 미래 문맥 75D를 포함한 runtime 계약은
+  `actions=30`, `obs=425`이다.
+  `L_Thorax`·몸통·머리·우측·하체는 init PD target 고정.
 - [~] **엄지 정책 제어·R6 지지 보상**: 엄지 5DOF action, tapered neck-back 기하,
   thumb3 실제 충돌+hysteresis, 접근30/접촉70, 전체 가중치5% 구현. CPU 기하검사·8-env GPU PPO smoke 통과.
   **남음**: 접촉 rollout로 0.5/0.1N 보정 및 지속 과이탈 종료 여부 결정.
@@ -78,7 +80,7 @@
 - [x] **손가락 상호관통 진단(R22)**: self-collision OFF 상태에서 5손가락 capsule 10쌍의 표면 간격,
   2mm 초과 관통·streak 기록. 초기 8-env×120step 전 쌍 0, 강제는 보류.
 - [x] **과압·비정상 지지 진단(R24)**: 손가락 마디·손바닥·손목·팔꿈치 순접촉력, target/inactive
-  distal 힘, 33 제어관절 실제 토크·cap 비율을 info와 감사 JSON으로 기록. 보상·종료는 비활성.
+  distal 힘, 30 제어관절 실제 토크·cap 비율을 info와 감사 JSON으로 기록. 보상·종료는 비활성.
 - [x] **finite 실패 원인**: action/PD/torque, DOF position/velocity, root/body/contact와 reward/observation의
   NaN/Inf를 이름별 mask로 기록하고 유한값으로 정리한 뒤 실패 종료. reward 뒤 결합한 goal·EMA 파생
   관측도 같은 step에서 `nonfinite_observation`으로 종료한다. velocity blowup은 별도 reason.
@@ -125,12 +127,12 @@
 
 ## P5. 관측
 
-- [x] **기본·actuator 관측**: base 180차원 뒤에 직전 EMA action 33차원을 포함해 같은 자세에서도
+- [x] **기본·actuator 관측**: base 180차원 뒤에 직전 EMA action 30차원을 포함해 같은 자세에서도
   서로 다른 내부 PD 상태를 구분. runtime shape 확인.
 - [x] **룩어헤드+손가락 이벤트 관측(R15)**: 시점당 25×3=75D 뒤에 손가락별
   `[string mask(6),fret,timing,valid,current-change,KEEP/MOVE/REST]` 13D×4와 반복 구간을 구분하는
-  곡 진행률 1D를 붙여 goal128D, base180+goal128+prev_action33=`obs341D`를 구현했고, 현재 thumb
-  geometry 12D를 더해 `obs353D`다.
+  곡 진행률 1D를 붙여 goal128D를 구성하고, 현재는
+  base180+goal128+prev_action30+thumb geometry12+future context75=`obs425D`다.
   합성 CPU 검사, S0 861프레임 전수 검사, GPU PPO smoke 통과. S0는 동일 손가락의 다중 줄과
   다중 프렛 배정을 모두 거부하며 명시적 바레 mask는 후속 `allow_barre=true`에서만 허용한다.
 - [x] **정규화**: fret/22, finger/4, anchor·range/21, wrist/0.25 + RunningMeanStd.
@@ -141,7 +143,7 @@
   구현. Actor/`log_std` lr=1e-5, Critic lr=3e-4로 분리하고 minibatch KL>0.03은 optimizer step 전에
   차단한다. 역사적 512env·2,500회 checkpoint=40,960,000 samples에서 NaN 없음,
   1,951~2,000회 평균 value loss 0.0525, KL 0.0203. **PopArt는 S0 후속**.
-- [x] **strict checkpoint 계약**: schema v1에 ordered 33 DOF, 현재 353/33/6 shape, policy/action/reset,
+- [x] **strict checkpoint 계약**: ordered 30 DOF, 현재 425/30/6 shape, policy/action/reset,
   reward·safety·PPO, 활성 줄 actor 가중치·scalar advantage 버전, goal/hand SHA, 자산·핵심 구현 지문을
   저장한다. save에는 계약이 필수이고 재개·평가 전에 전체 일치·payload 무결성을 확인하며 legacy를 거부.
 - [x] **곡별 RSI + R26 커리큘럼**: 한 곡의 goal/규칙을 고정한 채 coverage 1,000회 random-start 100%
@@ -159,7 +161,7 @@
 ## P7. 성공 판정 게이트 (이게 "성공적으로 동작"의 정의)
 
 - [ ] **정량 — 독립 정확도 gate**: PRESS F1≥0.90, 적용 가능한 NO_PRESS 정확도≥0.99,
-  `wrong_press_rate≤0.01`. 2026-07-22 수치는 역사 기준이며, 현재 353D 계약의 장기 학습 평가로
+  `wrong_press_rate≤0.01`. 2026-07-22 수치는 역사 기준이며, 현재 425D 계약의 장기 학습 평가로
   다시 측정해야 한다. **남음**: 정확도와 sustain gate 통과.
 - [ ] **완주·지속 gate**: 모든 평가 episode가 전체곡을 완료하고 실패 종료 0. 각 episode의 R27 이벤트
   수가 예상값과 같고 유지율≥0.90, 이벤트 성공률100%, 최장 이탈≤3프레임.

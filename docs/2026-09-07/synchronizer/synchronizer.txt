@@ -1,0 +1,40 @@
+Synchronizer
+
+목적
+    독립적으로 학습한 Fret과 Strike를 하나의 음악 시간축에서 함께 실행
+    왼손 압현이 준비된 뒤 오른손이 타현하도록 두 손의 타이밍을 조정
+
+입력
+    PlayEvent
+        곡의 타현 시각, 대상 줄과 프렛, 피킹·스트럼 방향과 순서
+    Fret readiness
+        타현해야 할 줄이 올바르게 눌려 있는지 여부
+    Strike readiness
+        피크가 타현 직전 위치에 준비되어 있는지 여부
+
+출력
+    Fret과 Strike의 실행·대기 명령
+    Strike 타현 허가
+    최대 허용 지연과 event 처리 결과
+        정상 실행, 부분 실행, 누락
+
+동작 방식
+    곡 전체에서 하나의 event 공유
+    예정 시각 전에 양손의 readiness를 확인
+    양손이 준비되면 타현을 허가
+    Fret에는 압현 시작 목표를 최대 3 frame 먼저 제시
+    현재 다른 프렛을 누르는 중이면 기존 압현을 유지해 음 전환 충돌 방지
+    그래도 준비가 늦으면 최대 3 frame(50 ms) 안에서 Strike를 기다리게 함
+    다음 타현과 충돌할 위험이 있으면 허용 지연을 자동으로 줄임
+    제한 시간까지 준비되지 않으면 현재 event를 누락 처리하고 다음 event로 진행
+    스트럼은 타현 대상 줄의 준비 상태에 따라 전체 또는 부분 실행 가능
+
+역할의 범위
+    Synchronizer는 관절을 직접 생성하는 제어 정책이 아님
+    Fret과 Strike가 만든 action을 시간적으로 허가하거나 잠시 보류하는 timing supervisor
+    기타의 위치·회전 안정화는 이후 StabilityAdapter가 담당
+
+현재 구현 상태
+    규칙 기반 Synchronizer와 Canonical PlayEvent, 공통 score clock 구현
+    Fret 30D와 Strike 30D action을 이름 기준으로 105D 전신 action에 결합하는 계약 구현
+    한 humanoid에 양손 action을 동시에 적용하는 10초 통합 프리뷰 녹화

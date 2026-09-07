@@ -1,7 +1,10 @@
 # task_fret (왼손 압현) 설계 — §2 규칙 명세 (rule set)
 
-> 역사 문서 최종 갱신: 2026-08-03. 원문은 2026-07-22의 `341 observation` 계약을 보존한다.
-> 현재 구현은 `33 action / 353 observation / 6 reward-value`이며, 운영 기준은
+> **상태: HISTORICAL FRET-V1 RULE SNAPSHOT.** 아래 33-action/341D 및 425D 안내는 현재
+> Fret-v2 계약이 아니다. 현재 정본은 [`master_plan/03_fret.md`](../../../master_plan/03_fret.md)다.
+
+> 역사 문서 안내 갱신: 2026-09-01. 원문은 2026-07-22의 33-action/341-observation 계약을 보존한다.
+> 현재 구현은 `30 action / 425 observation / 6 reward-value`이며, `L_Thorax`는 초기 PD 자세로 유지한다. 운영 기준은
 > [`tab2body/TRAINING.md`](../../../tab2body/TRAINING.md)다.
 
 > 백지 재설계의 **작업 정본**. 왼손이 fingermapping을 보고 정해진 타이밍에 정확한 (줄,프렛)을

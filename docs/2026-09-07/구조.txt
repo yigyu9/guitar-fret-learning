@@ -1,0 +1,179 @@
+Fret v2 / Strike v2 구조
+
+
+Finger Mapping
+    줄, 프렛, 손가락, press/release 계획
+        ↓
+Fret Timeline
+    현재 event, lookahead, 전이 관계, phase
+        ↓
+420D Observation
+    기타 좌표계 기반 named semantic blocks
+        ↓
+Fret Actor
+    block-encoded MLP
+    30D action distribution 생성
+        ↓
+Left Action
+    왼쪽 어깨, 팔꿈치, 손목, 엄지, 네 손가락 제어
+        ↓
+EMA + PD
+    action smoothing alpha = 0.5
+    joint target control
+        ↓
+Press Readiness
+    줄-프렛 압현 상태, contact, alignment 판정
+        └── physics feedback → 다음 observation
+
+    Block                   Input       Encoded
+    O_proprio                 60           96
+    O_arm_anchor              18           48
+    O_hand_geometry           60           96
+    O_current_event           45           64
+    O_target_geometry         24           48
+    O_finger_transition       52           64
+    O_lookahead               72           72
+    O_readiness_contact       45           64
+    O_phase                   12           32
+    O_synchronizer             2            8
+    O_history                 30           48
+    ------------------------------------------------
+    Total                    420          640
+
+Architecture
+    fret.block_encoder_mlp.v1
+    총 trainable parameter: 988,898
+
+Actor
+    11개 observation block을 각각 Linear + ELU로 encoding
+        → Concat 640D
+        → Linear 512 + ELU
+        → Linear 256 + ELU
+        → 30D action mean(mu)
+        + learned 30D log_std
+
+    Actor parameter: 497,518
+
+Critic
+    11개 observation block을 각각 Linear + ELU로 encoding
+        → Concat 640D
+        → Linear 512 + ELU
+        → Linear 256 + ELU
+        → 6D value heads
+
+    Critic parameter: 491,350
+
+Actor와 Critic은 동일한 observation ABI를 사용하지만
+block encoder와 MLP parameter를 서로 공유하지 않는다.
+
+
+[1-4. Action 계약]
+
+30D normalized action [-1, 1]
+    L_Shoulder
+    L_Elbow
+    L_Wrist
+    LH thumb
+    LH index
+    LH middle
+    LH ring
+    LH pinky
+
+
+2. Strike v2
+
+[2-1. 전체 흐름]
+
+Picking Plan
+    줄, 방향, gesture, sweep microtiming
+        ↓
+Strike Timeline
+    현재 event, lookahead, 목표 시각, timing window
+        ↓
+303D Observation
+    기타 좌표계 기반 named semantic blocks
+        ↓
+Strike Actor
+    block-encoded MLP
+    30D action distribution 생성
+        ↓
+Right Action
+    오른쪽 어깨, 팔꿈치, 손목, 손가락, pick grip 제어
+        ↓
+Grip Constraint + EMA + PD
+    pick grip constraint
+    action smoothing alpha = 0.5
+    READY / APPROACH / RECOVER 3-phase motor control
+        ↓
+Strike Detector
+    swept string crossing, 방향, timing, recovery 판정
+        └── physics feedback → 다음 observation
+
+
+[2-2. Observation 구조]
+
+    Block                   Input       Encoded
+    O_proprio                 60           96
+    O_arm_anchor              18           48
+    O_hand_geometry           30           64
+    O_grip_safety              7           16
+    O_current_event           32           64
+    O_target_geometry         25           48
+    O_lookahead               52           64
+    O_phase_detector          29           48
+    O_recovery                18           48
+    O_synchronizer             2            8
+    O_history                 30           48
+    ------------------------------------------------
+    Total                    303          552
+
+
+[2-3. 신경망 구조]
+
+Architecture
+    strike.block_encoder_mlp.v1
+    총 trainable parameter: 875,917
+
+Actor
+    11개 observation block을 각각 Linear + ELU로 encoding
+        → Concat 552D
+        → Linear 512 + ELU
+        → Linear 256 + ELU
+        → 30D action mean(mu)
+        + learned 30D log_std
+
+    Actor parameter: 441,670
+
+Critic
+    11개 observation block을 각각 Linear + ELU로 encoding
+        → Concat 552D
+        → Linear 512 + ELU
+        → Linear 256 + ELU
+        → 1D scalar value
+
+    Critic parameter: 434,217
+
+Actor와 Critic은 동일한 observation ABI를 사용하지만
+block encoder와 MLP parameter를 서로 공유하지 않는다.
+
+
+[2-4. Action 계약]
+
+30D normalized action [-1, 1]
+    R_Shoulder
+    R_Elbow
+    R_Wrist
+    RH thumb
+    RH fingers
+    RH pick-grip joints
+
+
+3. Fret v2와 Strike v2의 공통 원칙
+
+- 두 정책은 기타가 고정된 G0 환경에서 각각 독립적으로 학습한다.
+- Fret은 Finger Mapping, Strike는 Picking Plan을 주요 음악 입력으로 사용한다.
+- Raw audio는 정책에 직접 입력하지 않는다.
+- 모든 기하 관측은 기타 좌표계를 기준으로 구성한다.
+- 두 정책의 출력은 각각 30D이며 서로 겹치지 않는 왼팔·왼손과 오른팔·오른손을 제어한다.
+- Synchronizer는 관절 action을 생성하는 제어기가 아니라, 두 정책이 공유하는 음악 시간축과 readiness를 관리하는 timing supervisor로 사용한다.
+- 현재 checkpoint에서 O_synchronizer는 2D로 예약되어 있으며, 기본 policy-facing 값은 release_enable=1, timing_offset=0이다.

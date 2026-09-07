@@ -1,5 +1,7 @@
 # 오디오 → tablature
 
+> **상태: 2026-07-22 MEETING SNAPSHOT.** 현재 파이프라인 계약은 [`master_plan/01_audio_to_tablature.md`](../../../master_plan/01_audio_to_tablature.md)를 따른다.
+
 ## 입력과 출력
 
 대표 입력은 `04_Jazz2-187-F#_solo_mic.wav`다. 전사 단계는 오디오에서 다음 형태의 note event를 만든다.
@@ -37,4 +39,3 @@ string,start,end,pitch
 
 1. 오디오가 tablature로 얼마나 정확히 변환되는가
 2. 주어진 tablature와 운지를 왼손 정책이 얼마나 정확히 수행하는가
-

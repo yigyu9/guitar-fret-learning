@@ -1,0 +1,95 @@
+기타 연주 전신 제어 연구 정리
+
+기존에는 기타가 고정된 상태에서 양손을 제어하는 문제
+현재는 기타를 지지하고 안정화하는 하체·몸통·목·머리까지 포함하는
+전신 기타 연주 제어 구조로 확장했다.
+
+전체 흐름
+    Audio Processing:   Raw Audio                       -> Tablature, Finger Mapping, Picking Plan 
+    Task Learning:      Finger Mapping, Picking Plan    -> Fret, Strike
+    Synchronization:    Fret, Strike, PlayEvent         -> Synchronizer
+    Stability:          Synchronizer, Guitar Unpin      -> Stability_Adapter
+    FullBodyPlayer      Stability_Adapter               -> Final Action
+
+오디오는 물리 시뮬레이션 중에 직접 입력하지 않고, 가공한 Tablature, Finger Mapping, Picking Plan을 음악 이벤트로 변환해 사용
+
+Fret
+    왼손의 줄·프렛 압현과 유지 수행
+Strike
+    오른손의 single picking과 strumming을 수행
+
+각 곡마다 독립적으로 학습·저장
+
+Synchronizer
+    Fret과 Strike가 하나의 Canonical PlayEvent와 score를 공유
+    Fret 준비 상태와 Strike 접근 상태를 함께 확인
+    타현 허가·대기·부분 실행·누락을 결정
+    기본 지연은 최대 n frame이며 다음 event와 충돌하지 않도록 자동 제한
+    기타 안정화 torque나 손가락·피크 궤적 action은 담당하지 않음
+
+FullBodyPlayer와 action 구조
+
+최종 action 차원은 105D로 정했다.
+    Fret 30
+    Strike 30
+    Thorax/body 15
+    Lower body 24
+    Neck/Head 6
+    합계 105
+
+Neck/Head는 기타의 고정된 strike zone을 향하는 gaze/attention 용도로 사용
+StabilityAdapter는 손가락을 직접 수정하지 않고 body, 하체, 양쪽 shoulder/elbow부터 residual 
+
+기타 고정을 해제한 뒤에도 연주가 유지되도록 실제 스트랩과 신체 접촉을 물리 모델에 포함
+    기타의 두 strap button을 연결하는 준-비신축성 cable
+    가슴 위와 왼쪽 어깨를 따라가는 humanoid 표면 guide 경로
+    현재 검증 경로 길이 약 1.08 m
+    스트랩과 humanoid·기타의 관통 여부를 검사
+    물리 계산 경로와 시각화 경로를 동일하게 사용
+
+스트랩은 별도 작은 환경에서 먼저 검증했다.
+몸은 고정하고 기타만 자유롭게 움직이며 스트랩 장력,
+기타 낙하 억제, 관통 여부를 확인하는 구조
+
+이 물리 스트랩은 G1·G2의 기본 strapped-v1 장비로 사용한다.
+G2에서 0으로 만드는 것은 스트랩이 아니라 artificial assist다.
+
+G0·G1·G2 학습 순서
+    G0
+        기타 고정
+        Fret·Strike 결합
+        Synchronizer 검증
+    G1
+        기타 자유
+        physical strap 적용
+        강한 artificial assist 적용
+        하체와 Neck/Head trainable
+    G1 후반
+        assist 감소·무작위화
+        source 기술 보존 여부 확인
+    G2
+        physical strap만 유지
+        artificial assist를 0으로 설정
+
+
+
+기타 안정성 reward 하나로 최종 성공을 판단하지 않는다.
+    Fret
+        압현 정확도, sustain, chord readiness, 잘못된 프렛
+    Strike
+        crossing precision/recall/F1, timing 오차, strum 순서·방향·recovery
+    Synchronizer
+        premature strike, 지연·누락, full/partial event 비율
+    안정성
+        기타 위치·회전·속도, slip/drop, 접촉 하중
+    기술 보존
+        G0 source 대비 Fret·Strike event 성능 저하와 action drift
+
+----
+
+기타를 잘 잡은 상태 -> 기타연주
+시뮬레이션 시작 후 기타 안정화에 들어가는 시간을 주고 audio play
+시작 guitar position과 strap에 걸린 상태에서 원하는 goal 로 가져
+
+허욱 학생, 
+

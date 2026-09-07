@@ -1,0 +1,68 @@
+기타를 humanoid에 고정하지 않은 상태에서 스트랩이 기타의 낙하를 억제
+실제 기타 스트랩과 유사한 지지 역할을 수행하는지 작은 검증 환경에서 확인
+스트랩의 물리 작용과 경로를 독립적으로 검증
+
+구성
+    humanoid
+        현재 프로젝트의 smpl_mpl_hands_body.xml 사용
+        seated pose로 초기화
+        base link 고정
+
+    guitar
+        기타 asset 사용
+        fixed base 해제
+        중력 적용
+        자유 rigid body로 시뮬레이션
+
+    strap
+        두 개의 기타 strap button 연결
+        humanoid 표면을 따라가는 guide 경로 사용
+        장력만 전달하는 maximum-length cable
+
+시뮬레이션은 Isaac Gym PhysX에서 수행한다.
+물리 계산 주기는 240 Hz이며, 현재 probe의 기본 실행 시간은 6초다.
+
+기타 쪽은 일반적인 2-button 기타 스트랩 배치를 따른다.
+    upper button
+        기타 neck 쪽 상단 모서리 부근
+    lower button
+        기타 몸통 하단 중앙 부근
+
+신체 쪽 경로는 기타 상단 button에서 시작해 가슴 위쪽과 왼쪽 어깨를 감싼 뒤,
+기타 하단 button으로 돌아온다.
+
+총 11개의 surface guide를 사용한다.
+    Chest와 L_Thorax에 guide를 분산 배치
+    guide와 humanoid collision capsule 사이 거리 약 3.00에서 5.27 mm
+    guide 사이의 모든 선분도 humanoid capsule과의 최단거리 검사
+    현재 측정된 전체 선분 최소 여유 약 1.08 mm
+
+guide의 반력은 해당 guide가 속한 rigid body에 적용한다.
+따라서 strap의 힘은 L_Thorax와 Chest에 나누어 전달된다.
+
+스트랩은 탄성 줄이 아니라 거의 늘어나지 않는 tension-only cable
+    경로 길이가 설정된 maximum length보다 짧으면 장력 0
+    경로 길이가 maximum length를 넘으면 장력 발생
+    장력은 stiffness와 상대 endpoint 속도로 계산
+    스트랩은 기타를 밀지 않고 당기는 힘만 전달
+    최대 장력은 300 N으로 제한
+    최대 추가 신장은 설정 길이의 1% 이하
+
+시작 순간 기타에 큰 충격이 발생하지 않도록 처음에는 5 mm의 여유를 두고,
+1초 동안 자연 경로 길이까지 점진적으로 줄인다.
+임의로 1.2 m 지점으로 기타를 강제로 끌어당기는 방식은 사용하지 않는다.
+
+현재 surface route의 자연 경로 길이는 약 1.080 m다.
+이 값은 두 button과 humanoid 표면 guide 위치로부터 계산된 길이이다.
+
+물리 계산에 사용한 동일한 route point를 화면에 표시한다.
+
+시각화는 물리 경로를 임의로 바꾼 것이 아니다.
+다만 현재 strap 자체가 연속적인 collision mesh는 아니므로,
+depth 기반 가림은 시각 표현을 위한 것이며 strap-body self collision을 대신하지 않는다.
+
+결론적으로 현재 스트랩은 기타가 바닥으로 떨어지는 것을 막는 보조 지지로 사용 가능
+연주 자세와 회전은 G1 이후 body contact, arm contact, StabilityAdapter가 함께 담당해야 함
+
+
+실제 오브젝트가 아닌 가상의 케이블 제약, 후에 시각화 추가

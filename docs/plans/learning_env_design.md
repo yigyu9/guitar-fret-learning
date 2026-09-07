@@ -1,6 +1,8 @@
 # 학습 환경 정의 — 알고리즘·네트워크·하이퍼파라미터·I/O (fret · strike · full 공통)
 
-> 최종 갱신: 2026-08-03. 현재 호환 계약은 `33 action / 353 observation / 6 reward-value`다. 아래의
+> **상태: SUPERSEDED.** 초기 학습 구조를 보존한 역사 문서다. 현재 정본은 [`master_plan`](../../master_plan/README.md)이며, 아래의 차원·하이퍼파라미터·Full 구조를 현행 계약으로 사용하지 않는다.
+
+> 최종 갱신: 2026-09-01. 현재 Fret 계약은 `30 action / 425 observation / 6 reward-value`다. 아래의
 > `341 observation` 표기는 당시 설계 상태이며, 이 문서의
 > strike·full 값과 ‘후보’ 표기는 후속 설계다. fret 실행은 `tab2body/TRAINING.md`를 따른다.
 
@@ -10,7 +12,7 @@
 > `related_work/guitar/{main.py, models.py, env.py}`(Pei Xu SA'24) 정독 실측값이며, 다른 값을 쓸 땐 이유를
 > 붙였다(주파수·ob_horizon·goal 인코딩·fret/timer 정규화는 env.py에서만 확인).
 > 파일 지도 = `tab2body/STRUCTURE.md`, 결정 = `PROJECT_CONTEXT.md §3`. 원문 설계 갱신일은 2026-07-21이며,
-> 현재 실행 계약·명령은 위의 2026-08-03 안내와 `tab2body/TRAINING.md`를 따른다.
+> 현재 실행 계약·명령은 위의 2026-09-01 안내와 `tab2body/TRAINING.md`를 따른다.
 > 표기: **[G]**=guitar 실측 · **[우리]**=우리 결정/적응 · **[미정]**=착수 전 확정 필요.
 
 ## 0. 한 장 요약

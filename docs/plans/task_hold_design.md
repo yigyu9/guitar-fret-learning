@@ -1,7 +1,9 @@
 # task_full G1/G2 (기타 안정 hold) 설계 — §2 규칙 명세 (rule set)
 
-> 최종 갱신: 2026-08-03. 이 문서는 보류된 역사적 설계 초안이다. 현재 Fret 운영 계약은
-> `33 action / 353 observation / 6 reward-value`이며, Hold 전용 학습은 활성화되어 있지 않다.
+> **상태: SUPERSEDED.** 기존 Full 정책 자체를 G1/G2에서 직접 fine-tuning하던 초기안이다. 현재는 별도 StabilityAdapter와 제한적 source fine-tuning 구조를 사용하며, 정본은 [`master_plan/06_stability_adapter.md`](../../master_plan/06_stability_adapter.md)다.
+
+> 최종 갱신: 2026-09-01. 이 문서는 보류된 역사적 설계 초안이다. 현재 Fret 운영 계약은
+> `30 action / 425 observation / 6 reward-value`이며, Hold 전용 학습은 활성화되어 있지 않다.
 
 > 백지 재설계의 **작업 정본**. G0(월드고정)에서 병합된 전신 정책이, 기타를 물리적으로 풀어놓은 뒤에도
 > 기타를 **연주 앵커 포즈에 안정적으로 유지**하면서 **fret·strike 연주 성능을 그대로 지켜내는 것**을

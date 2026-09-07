@@ -1,5 +1,7 @@
 # Tablature → finger mapping
 
+> **상태: 2026-07-22 MEETING SNAPSHOT.** 현재 계약은 [`master_plan/02_tablature_to_finger_mapping.md`](../../../master_plan/02_tablature_to_finger_mapping.md)를 따른다.
+
 ## 역할
 
 Finger mapping은 각 note에 fret과 왼손 손가락을 배정하고, 재타현과 유지 구간을 합쳐 press event를 만든다. 학습 환경은 이 결과를 물리적으로 수행한다.
@@ -40,4 +42,3 @@ Finger mapping은 각 note에 fret과 왼손 손가락을 배정하고, 재타�
 - `DONT_CARE`: 음향 판정에는 영향 없음
 
 같은 위치의 재타현은 하나의 PRESS 구간으로 유지한다. 다른 fret으로 이동하기 전 빈 구간은 NO_PRESS, 마지막 event 뒤는 DONT_CARE로 처리한다.
-

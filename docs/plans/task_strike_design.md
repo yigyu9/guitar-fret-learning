@@ -1,5 +1,7 @@
 # task_strike (오른손 스트라이크/pluck) 설계 — §2 규칙 명세 (rule set)
 
+> **상태: SUPERSEDED.** Xu 기반 Strike 초기 이식안을 보존한 역사 문서다. 현재 정본은 [`master_plan/04_strike.md`](../../master_plan/04_strike.md)이며 Strike-v2 실행 계약은 코드와 최신 학습 문서를 따른다.
+
 > 최종 갱신: 2026-08-03. 이 문서는 역사적 설계 초안이며, 현재 Strike 실행 계약은
 > `30 action / 263 observation / scalar reward-value`다. 실제 실행·smoke·checkpoint 규칙은
 > [`strike/03_training/README.md`](../../strike/03_training/README.md)를 따른다.

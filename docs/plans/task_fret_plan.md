@@ -1,5 +1,7 @@
 # task_fret — 왼손 Fret 압현 학습 환경 설계·구현 계획 (2026-07-16)
 
+> **상태: HISTORICAL.** 최초 Fret 구현 계획과 결정 근거를 보존한다. 현재 정본은 [`master_plan/03_fret.md`](../../master_plan/03_fret.md)다.
+
 > 상태: **역사적 구현 계획**. 현재 정본은 `task_fret_design.md`, 실행 상태는 `PROJECT_CONTEXT.md`와
 > `fret/WORK_REPORT.md`를 따른다. 아래 내용은 초기 결정 근거를 보존한다.
 >

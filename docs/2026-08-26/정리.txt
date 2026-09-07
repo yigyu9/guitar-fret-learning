@@ -1,0 +1,153 @@
+GPS
+    왼손: DroQ로 학습
+    오른손: 규칙 기반 IK
+
+SDH
+    왼손: PPO
+    오른손: PPO
+
+GPS의 경우 병합 시 추가적으로 학습하지 않음. 왼손, 오른손의 결과를 각각 실행한다
+
+SDH의 경우 곡별 synchronizer를 학습
+한 곡에서 왼손, 오른손 goal window를 만들고 중앙 환경에서 학습. 
+왼손, 오른손 모두 학습의 결과이다 보니 약간의 타이밍 오차가 있을 수 있음
+이 때, fret보다 strike의 타이밍이 앞설 경우 조절하는 기능을 포함한다
+왼손과 오른손이 모두 학습 정책이므로 단순 병렬 실행 시 준비·타현 시점이 어긋날 수 있다. SDH는 왼손 준비 상태를 오른손 reward에 연결하고, 양손 latent를 함께 수정하는 synchronizer를 학습해 공동 성공률을 높인다.
+- 너무 빠른 Strike 억제
+- 늦은 Strike 보정
+
+---
+
+우리는 병합 모델이 별도로 필요한 것으로 판단된다
+왜 필요한가
+
+왼손, 오른손 작업의 안정적 수행
+고정이 해제된 기타의 안정성 확보
+
+---
+
+고려중인 모델 구조
+   Latent Sync + Action Support
+   단일 Action Residual
+
+      Latent Sync + Action Support
+         두 정책의 최종 관절 action을 직접 고치는 대신 action을 만들기 직전의 내부 표현(latent feature)을 조금 수정해 동기화하는 모델      
+         Latent Sync는 Strike를 정확히 3프레임 늦춘다 같은 명시적 scheduler가 아닌 PPO 보상을 통해 기존 정책의 내부 동작 표현을 어느 방향으로 수정해야 양손 성공률이 높아지는지 학습
+
+         
+      Action Residual
+         직접 action 값을 제어
+   
+   왜 이 두 모델인가?
+   SDH에서 latent sync 방법을 사용
+   action residual은 baseline으로 사용
+
+
+목적
+   왼손이 아직 준비되지 않음
+      Fret latent를 준비·유지 방향으로 
+      Strike latent를 접근 지연 방향으로 
+   왼손 준비 완료
+      Strike가 타현하도록 latent 수정
+      Fret은 압현을 유지하도록 
+   기타 안정화
+      기타의 위치·방향·선속도·각속도를 허용 범위에 유지
+      타현 충격을 지지하고 slip·낙하·과도한 접촉력을 막음
+      손 보조 연결이 점차 사라져도 실제 접촉만으로 기타를 유지
+
+
+입력:
+   양손 동기화 정보
+      연주할 줄과 프렛, 사용할 왼손 손가락
+      오른손이 타현할 줄과 방향
+      현재 음과 다음 음의 목표 시각
+      목표 시각까지 남은 시간
+      왼손 압현 준비 여부와 유지 시간
+      오른손 피크와 줄 사이의 거리·속도
+      양손 정책의 내부 특징과 제안 행동
+
+   사람의 관절 상태
+      제어 대상 관절의 현재 각도
+      관절의 움직임 속도
+      관절 한계까지 남은 범위
+      직전에 실행한 행동
+      직전 동기화 보정값
+      직전 안정화 보정값
+   하체는 현재 고정되어 있으므로 상세한 하체 상태는 제외
+   
+   기타 안정화 정보
+      기타의 위치와 방향
+      기준 자세와의 위치·방향 오차
+      기타의 이동 속도와 회전 속도
+      기타의 접촉 상태
+      접촉력과 미끄러짐 속도
+      다음 타현까지 남은 시간과 타현 방향
+      
+      손 보조 연결의 강도
+      보조 연결의 늘어난 정도와 힘
+      현재 기타가 고정·손 보조·완전 자유 중 어느 상태인지
+   
+   추가로 필요한 공통 정보
+      현재 곡의 진행 시각
+      현재 연주 단계: 준비·타현·유지·회복
+      현재와 다음 몇 개 음의 목표 정보
+      이전에 최종적으로 실행한 행동
+
+
+출력: 
+   대상 관절(DoF)
+      Fret 왼쪽	   33	Frozen Fret
+      Strike 오른쪽	30	Frozen Strike
+      오른쪽 Thorax	3	Action Support
+      중앙 몸통	   9	Action Support	
+      
+      합계	75
+
+   대상 관절에 대한 보정
+   Latent sync: 왼손 보정, 오른손 보정
+   Action Residual: 손가락을 제외한 관절 제어
+
+
+정리
+   기존 Fret/Strike 모델
+   → Latent Sync
+   → DoF 63 에 대한 제어 (왼팔, 오른팔)
+   → 제한된 Support Action Residual
+   → Dof 12 에 대한 제어 (상체)
+   → 최종 Action 75
+
+
+
+
+fret 신경망의 최종 Action Linear layer 직전 256차원 hidden activation 값
+strike 신경망의 최종 Action Linear layer 직전 256차원 hidden activation 값
+
+Fret hidden activation    256
+Strike hidden activation  256
+목표·악보 정보    Goal window
+압현·타현 준비 정보  encoder
+양손 제안 행동            33 + 30
+
+full 학습을 할 때는 fret, strike 모델의 checkpoint를 가져와 학습한다
+
+
+===
+
+기존에 생각한 synchronizer 구조
+
+Fret 제안 행동 33
+Strike 제안 행동 30
+목표·악보 정보
+압현·타현 준비 정보
+        ↓
+새로운 신경망
+        ↓
+최종 양손 행동
+
+
+두가지 모두 구현 해보아야 할 것 같다.
+
+
+한 몸에 여러 모델이 있을 때 합하는 연구 
+각각의 참조 모션이 있을때 한번에 컨트롤하는 연구
+

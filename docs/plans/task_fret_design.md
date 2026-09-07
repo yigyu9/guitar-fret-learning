@@ -1,7 +1,9 @@
 # task_fret (왼손 압현) 설계 — §2 규칙 명세 (rule set)
 
-> 최종 갱신: 2026-08-03. 이 문서는 규칙 정본이지만 일부 측정·관측 서술은 2026-07-22의
-> `341 observation` 구현을 기록한다. 현재 런타임 계약은 `33 action / 353 observation / 6 reward-value`이며,
+> **상태: SUPERSEDED.** Fret-v1 계열 규칙과 실험 근거를 보존한 역사 문서다. 현재 정본은 [`master_plan/03_fret.md`](../../master_plan/03_fret.md)이며 Fret-v2 실행 계약은 코드와 최신 학습 문서를 따른다.
+
+> 최종 갱신: 2026-09-01. 이 문서는 규칙 정본이지만 일부 측정·관측 서술은 2026-07-22의
+> `341 observation` 구현을 기록한다. 현재 런타임 계약은 `30 action / 425 observation / 6 reward-value`이며,
 > 실행·checkpoint·평가는 [`tab2body/TRAINING.md`](../../tab2body/TRAINING.md)를 따른다.
 
 > 백지 재설계의 **작업 정본**. 왼손이 fingermapping을 보고 정해진 타이밍에 정확한 (줄,프렛)을
@@ -33,17 +35,16 @@
 
 ## 1. 분류 체계 · 담당 파일
 
-### 제어 관절 계약(2026-07-20 재정의)
+### 제어 관절 계약(2026-09-01 재정의)
 
-- 정책 제어는 왼쪽 어깨 띠부터 손끝까지만 허용한다:
-  `L_Thorax(3) + L_Shoulder(3) + L_Elbow(3) + L_Wrist(3) + LH:thumb(5) + 검지·중지·약지·소지(각 4)` = **33 actions**.
-- `Torso/Spine/Chest` 9DOF와 머리·오른팔·오른손·하체는 seated init PD target에 고정한다.
-- `L_Thorax`는 몸통 굽힘이 아니라 작은 범위의 쇄골·어깨 띠 움직임이므로 제어에 남긴다.
+- 정책 제어는 왼쪽 어깨부터 손끝까지만 허용한다:
+  `L_Shoulder(3) + L_Elbow(3) + L_Wrist(3) + LH:thumb(5) + 검지·중지·약지·소지(각 4)` = **30 actions**.
+- `L_Thorax(3)`와 `Torso/Spine/Chest` 9DOF, 머리·오른팔·오른손·하체는 seated init PD target에 고정한다.
 - 엄지는 프렛 음을 담당하지 않지만 R6 넥 뒤 지지를 직접 조절할 수 있도록 정책 제어에 포함한다.
 - Actor는 잠재 diagonal Normal을 `tanh`로 변환하고 Jacobian을 보정하는 bounded policy
   `tanh_squashed_diagonal_gaussian.v1`이다. action scale=1.0, EMA α=0.5, 제어관절 reset hard-range
   inset=2%, 초기 policy std=.02를 함께 사용한다.
-- 구 37-action checkpoint는 action head shape가 달라 호환되지 않으며 새 환경에서 처음부터 재학습한다.
+- 기존 33/37-action checkpoint는 action head와 actuator-state 관측이 달라 호환되지 않으며 새 환경에서 처음부터 재학습한다.
 
 | 분류 | 뜻 | 주 담당 파일 |
 |---|---|---|
@@ -92,7 +93,7 @@
 | R21 | 모든 제어 관절은 hard limit 안에 있고 자연스러운 soft range를 선호한다 | **hard 완료 / soft 보류** | `base.py` + 향후 진단 | hard limit은 action/PD clamp로 항상 강제. R19를 흡수한 손목·손가락 soft range는 정상 압현 학습의 관절 분포를 확보한 뒤 결정하며 현재 임계값·보상 없음 |
 | R22 | 손가락끼리 관통하거나 서로의 목표 압현을 방해하지 않는다 | **진단 구현 / 강제 보류** | `safety.py` + `tools/audit_r22_runtime.py` | 다섯 손가락의 3개 마디를 6mm capsule로 근사해 10개 손가락 쌍의 최소 표면 간격·관통 깊이·지속시간 기록. 2mm 초과 겹침만 표시하며 보상·종료·self-collision 없음 |
 | R23 | PRESS/HOLD 동안 손끝의 접선 방향 미끄러짐을 억제한다 | **약한 감점 구현** | `rewards/fret.py` | 지정 손가락의 모든 목표 줄이 3프레임 연속 실제 PRESS에 성공하면 기타 로컬 x/y anchor 설정. 누적 2mm까지 자유, 초과분은 3mm scale로 감쇠하며 전체 0.5%. 목표 변경·접촉 실패·release 즉시 초기화 |
-| R24 | 목표 손끝·엄지 외 부위의 비정상 지지와 불필요한 과압을 허용하지 않는다 | **진단 구현 / 보상·종료 보류** | `safety.py` + `tools/audit_r24_runtime.py` | distal/middle/proximal 5손가락, 손바닥·손목·팔꿈치 순접촉력과 33 제어관절 실제 토크·limit 비율 기록. 정상 압현 분포 전 임계값 없음 |
+| R24 | 목표 손끝·엄지 외 부위의 비정상 지지와 불필요한 과압을 허용하지 않는다 | **진단 구현 / 보상·종료 보류** | `safety.py` + `tools/audit_r24_runtime.py` | distal/middle/proximal 5손가락, 손바닥·손목·팔꿈치 순접촉력과 30 제어관절 실제 토크·limit 비율 기록. 정상 압현 분포 전 임계값 없음 |
 | R25 | 여러 손가락 목표는 타현 전 준비되고 ChordReady가 짧은 연속 구간 유지돼야 한다 | **보류** | 향후 `goals.py` + 평가 | 현재 S0는 단일 압현 중심이고 60Hz goal에 strike timing 채널이 없어 타현 전 준비를 정확히 평가할 수 없음. dyad·코드 단계에서 strike 래스터화 후 3프레임(50ms) 연속 유지 진단부터 추가 |
 | R26 | 한 정책은 한 곡의 고정 goal을 반복 연습하며 부분구간 숙달에서 전체곡 연주로 통합한다 | **커리큘럼 구현** | `learning/curriculum.py` + `goals.py` | 모든 규칙과 원곡 goal은 유지. 1~1000 coverage(random start 100%) → 1001~2000 integration(100→0%) → 이후 full-song(frame 0). 다곡 혼합·zero-shot 목적 아님 |
 | R27 | 목표 PRESS 구간을 순간 접촉이 아니라 안정적으로 지속한다 | **진단+최종 평가 구현** | `goals.py` + `metrics.py` + `train.py` | 줄별 동일 fret/finger 연속 구간을 이벤트로 묶음. 충분히 긴 이벤트는 시작·끝 3프레임(각 50ms)을 제외하고, 유지율≥90%이며 연속 이탈≤3프레임인 이벤트만 성공. 모든 이벤트 성공을 최종 gate에 추가하되 별도 reward는 없음 |
@@ -220,8 +221,8 @@
 - 바로 이어진 상태가 같은 프렛에서 하나 이상의 줄 접촉을 공유하면 KEEP, release 공백이나 다른 목표는 MOVE,
   이후 목표가 없으면 REST다. 재생성한 S0 861프레임은 암묵 다중 줄 finger-frame이 105→0이며,
   fret 범위·정수성·mask·valid·시간·관계 one-hot 계약을 통과한다. 합성 전환 검사와 곡 진행률을 포함한
-  당시 배관은 action33, base180D, goal128D, prev_action33D, 전체 obs341D, value6이었다. 현재 thumb
-  geometry 12D를 추가해 전체 obs는 353D다.
+  당시 배관은 action33, base180D, goal128D, prev_action33D, 전체 obs341D, value6이었다. 이후 thumb
+  geometry 12D와 미래 문맥 75D를 추가하고 `L_Thorax` action 3D를 제외한 현재 전체 obs는 425D다.
 
 ### 3-7. 인프라 (R11)
 - 하체 잠금·우팔 좌식 유지는 base.py가 자동 처리(학습 대상 아님).
@@ -230,7 +231,7 @@
   반환하고, 직전 terminal obs와 reason은 info에 보존한다.
 - action/PD/torque, DOF 위치·속도, root/body/contact, reward·observation의 NaN/Inf를 이름 있는 finite
   실패 원인으로 기록하고 유한화한 뒤 실패 종료하므로 PPO 통계로 전파되지 않는다. reward 계산 뒤
-  goal128D와 EMA33을 붙여 만든 파생 관측도 같은 step에서 다시 검사해 즉시 `nonfinite_observation`으로
+  goal128D와 현재 EMA30을 붙여 만든 파생 관측도 같은 step에서 다시 검사해 즉시 `nonfinite_observation`으로
   종료한다.
 
 ### 3-8. 추가 안전·코드 준비·커리큘럼·지속 평가 (R21~R29)
@@ -245,7 +246,7 @@
   gate에도 포함하지 않는다. 초기자세 8-env×120스텝은 10쌍 모두 관통·초기겹침 0이었다.
 - **비정상 지지·과압(R24)**: 엄지를 포함한 다섯 손가락의 distal/middle/proximal, 손바닥·손목·팔꿈치
   rigid body 순접촉력을 매 프레임 기록한다. 네 압현 손가락은 현재 목표 활성 여부에 따라 target/inactive
-  distal 힘도 분리한다. 정책 제어 33관절에는 실제 적용 토크와 안전 cap 대비 비율을 함께 기록한다.
+  distal 힘도 분리한다. 정책 제어 30관절에는 실제 적용 토크와 안전 cap 대비 비율을 함께 기록한다.
   Isaac의 net contact force는 접촉 상대를 식별하지 못하므로 기타 접촉으로 단정하지 않으며,
   `audit_r24_runtime.py`가 선택적 checkpoint rollout의 평균·p50/p95/p99/max를 JSON으로 집계한다.
   엄지 과압만 500회 파일럿의 편법이 확인돼 R6에서 소프트 감점한다. 나머지 부위는 보상·종료
@@ -330,4 +331,5 @@
   Actor는 tanh-squashed bounded policy v1이며 초기 std=.02다.
   (γ=λ=0.95이므로 곱 GAMMA_LAMBDA=γλ=0.9025.)
 - **§3 입출력(type·shape)**: action `(N,33)`, 보상/value `(N,6)`, base obs180 + goal128 +
-  actuator-state(prev_action)33 = observation `(N,341)`으로 당시 확정했다. 현재 observation은 `(N,353)`다.
+  actuator-state(prev_action)33 = observation `(N,341)`으로 당시 확정했다. 현재 계약은 action `(N,30)`,
+  observation `(N,425)`이며 기존 checkpoint를 재사용하지 않는다.
