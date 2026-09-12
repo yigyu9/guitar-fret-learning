@@ -2,7 +2,7 @@
 
 > 2026-07-13 정리. 연구(탭→전신 기타 연주 모션)에 필요한 기타 도메인 지식의 단일 참고 문서.
 > 지판 지도 이미지: [fretboard-24fret-map.png](_gen/fretboard-24fret-map.png) (재생성: `python3 docs/_gen/render_fretboard.py`)
-> 관련 문서: [GPS-paper-ko.md](./GPS-paper-ko.md) · [guitar-paper-ko.md](./guitar-paper-ko.md) · [base-env-research.md](./base-env-research.md)
+> 관련 문서: [GPS-paper-ko.md](./GPS-paper-ko.md) · [guitar-paper-ko.md](./guitar-paper-ko.md) · [base-env-research.md](./archive/base-env-research.md)
 
 ---
 

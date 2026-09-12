@@ -1,6 +1,6 @@
 # 왼손 운지 결정(Finger Mapping) 알고리즘 설계 — v0 (2026-07-15)
 
-> **상태: HISTORICAL V0 DESIGN.** 현재 책임과 출력 계약은 [`master_plan/02_tablature_to_finger_mapping.md`](../master_plan/02_tablature_to_finger_mapping.md)를 우선한다.
+> **상태: HISTORICAL V0 DESIGN.** 현재 책임과 출력 계약은 [`master_plan/02_tablature_to_finger_mapping.md`](../../master_plan/02_tablature_to_finger_mapping.md)를 우선한다.
 
 > **[07-15 상태] v0 구현 완료** → `tab2fingermapping/fingermapping/` (구현 설명서 = 그곳의 `ALGORITHM.md`,
 > rock3 위반 0·교본 운지 재현). 이 문서는 설계 근거의 정본으로 유지. 구현과의 차이(§11 후처리 미구현 등)는 ALGORITHM.md §6.

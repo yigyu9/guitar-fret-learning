@@ -1,17 +1,17 @@
 # task_fret 체크리스트 — "왼손이 finger mapping대로 동작하는가"
 
-> **상태: SUPERSEDED.** Fret-v1 계열의 과거 검증 기록이다. 현재 구조는 [`master_plan/03_fret.md`](../../master_plan/03_fret.md)를 따르며, 아래 완료 표시는 Fret-v2의 완료를 의미하지 않는다.
+> **상태: SUPERSEDED.** Fret-v1 계열의 과거 검증 기록이다. 현재 구조는 [`master_plan/03_fret.md`](../../../master_plan/03_fret.md)를 따르며, 아래 완료 표시는 Fret-v2의 완료를 의미하지 않는다.
 
 > 최종 갱신: 2026-09-01. 현재 실행 계약은 `30 action / 425 observation / 6 reward-value`다.
 > 아래 2026-07-22 측정값과 완료 표시는 당시 `341 observation` 구현에 대한 역사 기록이며,
-> 현재 계약 확인에는 [`tab2body/TRAINING.md`](../../tab2body/TRAINING.md)의 공용 smoke를 사용한다.
+> 현재 계약 확인에는 [`tab2body/TRAINING.md`](../../../tab2body/TRAINING.md)의 공용 smoke를 사용한다.
 
 > 2026-07-22 당시 상태: 33 action / 341 observation / 6 reward-value 구현 완료. 당시 전체곡 평가는
 > F1 0.598, 완주율 100%, 안전 종료 0회였으며 정확도와 sustain 게이트는 미통과였다.
 
 > 목적: 왼손이 fingermapping 출력(`presses`)에 맞게 **올바른 (줄·프렛)을 올바른 손가락으로, 올바른 시각에, 관통·역꺾임 없이** 누르도록 만드는 데 필요한 전 항목을 검증 가능 단위로 분해.
 > 각 항목 = `[ ] 무엇` + **검증: 어떻게 확인** (실측 없이 완료 선언 금지, PROJECT_CONTEXT 규칙).
-> 동반 문서: `docs/plans/task_fret_plan.md`(설계). 근거 태그: [G]=guitar/env.py, [P]=PROJECT_CONTEXT, [M]=실측.
+> 동반 문서: `docs/archive/plans/task_fret_plan.md`(설계). 근거 태그: [G]=guitar/env.py, [P]=PROJECT_CONTEXT, [M]=실측.
 
 ---
 

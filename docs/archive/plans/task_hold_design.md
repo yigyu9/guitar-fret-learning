@@ -1,6 +1,6 @@
 # task_full G1/G2 (기타 안정 hold) 설계 — §2 규칙 명세 (rule set)
 
-> **상태: SUPERSEDED.** 기존 Full 정책 자체를 G1/G2에서 직접 fine-tuning하던 초기안이다. 현재는 별도 StabilityAdapter와 제한적 source fine-tuning 구조를 사용하며, 정본은 [`master_plan/06_stability_adapter.md`](../../master_plan/06_stability_adapter.md)다.
+> **상태: SUPERSEDED.** 기존 Full 정책 자체를 G1/G2에서 직접 fine-tuning하던 초기안이다. 현재는 별도 StabilityAdapter와 제한적 source fine-tuning 구조를 사용하며, 정본은 [`master_plan/06_stability_adapter.md`](../../../master_plan/06_stability_adapter.md)다.
 
 > 최종 갱신: 2026-09-01. 이 문서는 보류된 역사적 설계 초안이다. 현재 Fret 운영 계약은
 > `30 action / 425 observation / 6 reward-value`이며, Hold 전용 학습은 활성화되어 있지 않다.

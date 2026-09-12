@@ -1,0 +1,1455 @@
+StabilityAdapter 학습 구조: 입력, 상태공간, 출력
+=================================================
+
+0. 문서의 목적과 현재 상태
+--------------------------
+
+이 문서는 움직이는 기타를 안정화하는 StabilityAdapter가 실제로 무엇을
+입력받고, 어떤 상태를 관측하며, 어떤 출력을 만들어야 하는지 설명한다.
+
+Fret과 Strike 문서처럼 현재 코드에 이미 구현된 내용을 기준으로 작성하되,
+아직 실제 Isaac Gym 학습 환경에 연결되지 않은 부분은 명확히 구분한다.
+
+현재 구현 상태는 다음과 같다.
+
+    구현됨
+        - free guitar를 선택할 수 있는 GuitarEnvBase 경로
+        - 물리 효과를 갖는 strapped-v1 가상 스트랩
+        - pelvis 기준 초기 기타 pose 안정화 tracker
+        - 15D pre-play calibration observation
+        - 264D StabilityAdapter observation block 계약
+        - 43D named residual action 계약
+        - block encoder Actor와 5-value Critic
+        - CPU 계약 테스트
+
+    아직 구현되지 않음
+        - 하나의 simulator에서 Fret, Strike, 기타, 전신을 함께 실행하는 FullG1Task
+        - support contact를 strap/body/arm으로 귀속하는 tensor 생성기
+        - artificial assist force
+        - StabilityAdapter reward를 계산하는 실제 G1 task
+        - PPO training entry point
+        - source checkpoint와 StabilityAdapter를 함께 실행하는 물리 rollout
+        - G1에서 하체를 실제로 trainable하게 만드는 actuator 변경
+
+따라서 현재 상태는 다음과 같이 표현하는 것이 정확하다.
+
+    StabilityAdapter의 모델·입출력 ABI는 초안 구현되어 있지만,
+    실제 StabilityAdapter 학습은 아직 시작할 수 없다.
+
+이 문서는 학습 코드를 연결하기 전에 사용하는 상세 설계 문서다.
+
+
+1. StabilityAdapter의 역할
+--------------------------
+
+StabilityAdapter의 한 줄 정의는 다음과 같다.
+
+    움직이는 기타의 pose, velocity, support contact, slip 상태를 관측하고,
+    기존 Fret·Strike 연주 성능을 유지하는 범위에서 전신 residual action을 낸다.
+
+StabilityAdapter가 담당하는 것은 다음이다.
+
+    - 기타가 초기의 연주 가능한 위치에서 크게 벗어나지 않게 함
+    - 기타의 회전과 흔들림을 줄임
+    - 스트랩, 몸통, 허벅지, 팔의 지지 상태를 이용함
+    - 기타가 미끄러지거나 떨어지는 상태를 방지함
+    - 기타가 흔들릴 때 몸통·하체·팔의 자세를 조금 보정함
+    - 기존 Fret과 Strike 기술이 훼손되지 않도록 보정량을 제한함
+
+StabilityAdapter가 담당하지 않는 것은 다음이다.
+
+    - 어떤 음을 연주할지 결정
+    - score clock 또는 event cursor 변경
+    - 압현 손가락 선택
+    - pick 방향이나 타현 순서 생성
+    - Fret readiness 판정
+    - Strike crossing 판정
+    - Neck/Head 시선 제어
+    - 기타 root에 직접 위치 명령을 내리는 것
+
+각 책임은 다음처럼 분리된다.
+
+    Fret
+        왼손 압현 기술
+
+    Strike
+        오른손 picking/strumming 기술
+
+    Synchronizer
+        공통 음악 시간, readiness, 타현 permission
+
+    StabilityAdapter
+        움직이는 기타와 신체 지지에 대한 residual 보정
+
+    Gaze/AttentionBranch
+        Neck/Head가 strike zone을 향하도록 제어
+
+    ActionArbiter
+        모든 named proposal을 하나의 105D action으로 합성
+
+
+2. 전체 입력과 출력 흐름
+------------------------
+
+전체 실행 흐름은 다음과 같다.
+
+    Canonical music event
+        |                         live Isaac physics
+        |                                |
+        v                                v
+    frozen Fret policy              guitar pose/twist
+        -> left source action       strap/body/arm contact
+
+    frozen Strike policy            full-body q/qdot
+        -> right source action      slip/safety state
+        |                                |
+        +----------------+---------------+
+                         v
+              StabilityAdapter observation 264D
+                         |
+                         v
+              block-encoder Actor/Critic
+                         |
+                         v
+             compact residual proposal 43D
+                         |
+              rule consistency/safety gate
+                         |
+                         v
+    source/hold action + bounded stability residual
+                         |
+                         v
+              named 105D ActionArbiter
+                         |
+                         v
+                  common EMA + PD
+                         |
+                         v
+                 Isaac Gym physics step
+                         |
+                         v
+       stability reward + Fret/Strike retention reward
+
+중요한 점은 StabilityAdapter가 105D 최종 action을 혼자 만드는 정책이
+아니라는 것이다. 기존 Fret·Strike action 또는 seated hold action 위에
+작은 residual을 제안한다.
+
+
+3. 학습 환경 G0, G1, G2
+------------------------
+
+3.1 G0: fixed guitar
+
+    guitar root        fixed
+    gravity on guitar  disabled
+    strap force        disabled
+    artificial assist  none
+    StabilityAdapter   zero/frozen
+
+G0에서는 Fret·Strike 기술과 Synchronizer를 검증한다. StabilityAdapter는
+학습하지 않는다.
+
+3.2 G1: strapped and assisted free guitar
+
+    guitar root        free
+    gravity on guitar  enabled
+    physical strap     strapped-v1 enabled
+    artificial assist  strong -> reduced -> zero probe
+    StabilityAdapter   trainable
+    Fret/Strike        initially frozen
+
+G1은 StabilityAdapter의 주 학습 단계다. 기타는 자유 rigid body이며,
+스트랩은 실제 힘과 토크를 기타와 신체에 전달한다.
+
+Artificial assist는 스트랩과 다른 장치다.
+
+    physical strap
+        최종 G2에도 남는 실제 장비 역할
+
+    artificial assist
+        G1 curriculum에서만 사용하는 임시 보조력
+        G2에서는 정확히 0
+
+3.3 G2: final physical condition
+
+    guitar root        free
+    gravity            enabled
+    physical strap     enabled
+    artificial assist  exactly zero
+    support            strap + body + thigh + arm contact
+
+G2에서 정상 step 동안 기타 root를 직접 고정하거나 인공 보조력을
+가하는 것은 허용하지 않는다.
+
+
+4. 좌표계
+---------
+
+StabilityAdapter는 하나의 좌표계만 사용하면 안 된다.
+
+4.1 Guitar frame G
+
+기타 자체에 붙어 있는 좌표계다.
+
+    용도
+        - fret target geometry
+        - string 위치
+        - strike zone
+        - pick lane
+        - 기타 좌표계의 gravity 방향
+
+Fret과 Strike의 기술 관측은 계속 G를 사용한다. 기타가 움직여도 손과
+목표 사이의 상대 geometry를 같은 의미로 유지하기 위해서다.
+
+4.2 Body frame B
+
+현재 설계에서는 pelvis를 기준으로 하는 움직이는 신체 좌표계다.
+
+    용도
+        - 기타가 몸에 대해 얼마나 이동했는지
+        - 기타가 허벅지와 몸통에 대해 미끄러지는지
+        - episode 초기 기타 pose와 현재 pose의 차이
+
+StabilityAdapter의 primary reference는 B다.
+
+월드 좌표에서 사람이 조금 움직였더라도 기타와 pelvis가 함께 움직였다면
+그것을 기타 slip으로 보지 않는다. 반대로 기타가 월드에서는 거의 같은
+위치에 있어도 pelvis에 대해 미끄러졌다면 안정성 문제로 본다.
+
+4.3 World/gravity frame W
+
+    용도
+        - 중력 방향
+        - 기타가 쓰러지는 방향
+        - 낙하 속도
+        - tipping/drop safety
+
+W는 기타를 월드의 한 지점에 강제로 고정하기 위한 기준이 아니다.
+전체적인 작은 신체 움직임은 허용하고, 중력에 대한 위험한 기울기와
+낙하를 판정하는 secondary reference로 사용한다.
+
+
+5. Episode 시작 상태
+--------------------
+
+기타가 자유로운 G1/G2에서는 reset 직후 음악을 바로 시작하면 안 된다.
+스트랩 force와 기타 dynamics가 안정되지 않은 상태에서 첫 음이 시작되면
+Fret·Strike 실패와 안정화 실패를 구분할 수 없기 때문이다.
+
+시작 상태 machine은 다음과 같다.
+
+    reset
+      -> STABILIZING
+      -> READY_FOR_PREROLL
+      -> common pre-roll
+      -> score frame 0 / audio start
+
+STABILIZING 동안에는 다음이 적용된다.
+
+    - score clock을 진행하지 않음
+    - Fret·Strike source joint는 준비 자세 hold
+    - StabilityAdapter와 support physics만 실행
+    - episode reset 시점의 pelvis-relative guitar pose를 reference로 저장
+
+현재 `PrePlayStabilityConfig` 기본값은 다음과 같다.
+
+    simulation FPS                  60
+    minimum settling time           60 frames = 1.0 s
+    required stable dwell           30 frames = 0.5 s
+    timeout                         300 frames = 5.0 s
+    position tolerance              0.05 m
+    rotation tolerance              10 degrees
+    linear speed tolerance          0.05 m/s
+    angular speed tolerance         0.25 rad/s
+
+이 값들은 논문 최종 threshold가 아니라 초기 engineering default다.
+G1 micro-environment에서 분포를 측정한 후 보정해야 한다.
+
+
+6. Pre-play calibration용 15D 입력
+---------------------------------
+
+전체 음악 연주를 붙이기 전에, 기타가 안정될 수 있는지만 검사하는
+작은 환경에서는 15D 관측을 사용할 수 있다.
+
+    0~2   guitar position error in pelvis frame B       3D
+    3~5   guitar rotation error vector in B              3D
+    6~8   guitar linear velocity in B                    3D
+    9~11  guitar angular velocity in B                   3D
+    12    strap tension / maximum tension                1D
+    13    support safe flag                              1D
+    14    settling progress                              1D
+    --------------------------------------------------------
+          total                                          15D
+
+15D 관측은 최종 StabilityAdapter의 264D observation과 다르다.
+다음 용도로만 사용한다.
+
+    - free guitar asset이 정상적으로 떨어지고 움직이는지 확인
+    - strap이 기타를 실제로 지지하는지 확인
+    - 초기 pose gate가 동작하는지 확인
+    - 음악을 시작해도 되는 상태인지 판단
+
+현재 `tab2body/tools/audit_stability_startup.py`는 learned adapter 없이
+strap+hold만 사용하여 이 검사를 수행한다.
+
+
+7. 전체 StabilityAdapter 상태공간: 264D
+----------------------------------------
+
+현재 코드에 구현된 observation 계약은
+`tab2body.stability_observation.v2`이며 총 264D다.
+
+    block                  raw dimension    의미
+    ----------------------------------------------------------------
+    O_guitar_state              15          기타 pose/twist/gravity
+    O_support                   12          strap/body/arm 지지 상태
+    O_fret_summary              11          압현 기술 보존 상태
+    O_strike_summary             8          타현 기술 보존 상태
+    O_proprio                   86          43개 residual 관절 q/qdot
+    O_action_context           129          source/실행/residual history
+    O_phase                      3          assist와 episode phase
+    ----------------------------------------------------------------
+    total                      264
+
+이 264D는 Fret 420D와 Strike 303D를 단순히 이어 붙인 723D가 아니다.
+StabilityAdapter가 실제로 필요한 정보만 별도의 의미 계약으로 요약한다.
+
+
+8. O_guitar_state: 15D
+----------------------
+
+권장 field 순서는 다음과 같다.
+
+    guitar.position_error_B.x             1
+    guitar.position_error_B.y             1
+    guitar.position_error_B.z             1
+
+    guitar.rotation_error_B.rx             1
+    guitar.rotation_error_B.ry             1
+    guitar.rotation_error_B.rz             1
+
+    guitar.relative_linear_velocity_B.x    1
+    guitar.relative_linear_velocity_B.y    1
+    guitar.relative_linear_velocity_B.z    1
+
+    guitar.relative_angular_velocity_B.x   1
+    guitar.relative_angular_velocity_B.y   1
+    guitar.relative_angular_velocity_B.z   1
+
+    gravity_in_guitar_G.x                  1
+    gravity_in_guitar_G.y                  1
+    gravity_in_guitar_G.z                  1
+    ------------------------------------------------
+    total                                 15
+
+8.1 Position error 3D
+
+    e_position = current guitar position in B
+                 - reference guitar position in B
+
+단순 거리 1개가 아니라 x/y/z vector를 준다. 그래야 정책이 기타를 어느
+방향으로 되돌려야 하는지 알 수 있다.
+
+8.2 Rotation error 3D
+
+현재 기타 quaternion과 reference quaternion의 차이를 shortest
+axis-angle vector로 변환한다.
+
+    vector direction  = 되돌려야 할 회전축
+    vector magnitude  = 회전 오차 radian
+
+Quaternion 4개를 그대로 사용하지 않는 이유는 q와 -q가 같은 회전을
+표현하는 중복을 피하고, residual 방향을 더 직접적으로 주기 위해서다.
+
+8.3 Relative twist 6D
+
+기타의 world velocity만 사용하지 않는다. 움직이는 pelvis 원점과
+회전으로 인한 속도를 제거한 기타의 상대 선속도·각속도를 B에서 계산한다.
+
+이 값은 현재 기타가 목표 pose에서 멀리 떨어지지 않았더라도 곧 빠르게
+미끄러질 상태인지 알려준다.
+
+8.4 Gravity in G 3D
+
+기타 좌표계에서 본 중력 방향이다. 같은 pelvis-relative pose에서도
+기타가 중력에 대해 어떤 방향으로 기울어져 있는지 구분한다.
+
+
+9. O_support: 12D
+-----------------
+
+support를 너무 세밀한 접촉점별로 나누지 않고 세 그룹으로 집계한다.
+
+    strap
+    body_contact
+    arm_contact
+
+각 그룹은 4개 값을 가진다.
+
+    support[group].primary_load       1
+    support[group].tangential_load    1
+    support[group].slip_speed         1
+    support[group].contact_flag       1
+
+    3 groups x 4 = 12D
+
+9.1 Strap group
+
+스트랩은 표면 normal contact가 아니라 tension-only cable이므로 다음처럼
+해석하는 것이 적절하다.
+
+    primary_load       strap tension / max tension
+    tangential_load    strap extension ratio
+    slip_speed         route guide의 상대 sliding speed 또는 0
+    contact_flag       strap valid/taut flag
+
+현재 코드에서 직접 얻을 수 있는 값은 다음이다.
+
+    strap_tension
+    strap_extension
+    strap_extension_ratio
+    strap_total_length
+    strap_maximum_length
+
+현재 routed guide는 authored body-local point에 고정되어 있으므로 실제
+guide sliding은 아직 구현되지 않았다. 따라서 초기 v1에서는 slip_speed를
+0으로 두고 valid mask를 함께 기록하거나, field를 route length rate로
+명확히 정의해야 한다.
+
+9.2 Body contact group
+
+몸통과 허벅지가 기타를 지지하는 contact를 합친다.
+
+    primary_load       기타 표면 normal 방향의 총 지지력
+    tangential_load    표면 접선 방향의 총 힘
+    slip_speed         접촉 부위와 기타의 상대 접선 속도
+    contact_flag       유효한 지지 contact 존재 여부
+
+9.3 Arm contact group
+
+양쪽 palm/forearm의 support contact를 합친다.
+
+    primary_load       총 normal support load
+    tangential_load    총 tangential load
+    slip_speed         상대 접선 속도
+    contact_flag       유효 contact 여부
+
+Fret fingertip과 pick은 support group에 포함하지 않는다. 이들을 support로
+보상하면 손가락을 기타에 박아 넣거나 pick을 지지대로 쓰는 shortcut이
+생길 수 있다.
+
+9.4 현재 구현의 한계
+
+`GuitarEnvBase`는 body별 net contact force는 제공하지만, 그 힘이 기타와의
+접촉에서 생긴 것인지 chair 또는 다른 신체 부위에서 생긴 것인지 직접
+구분하지 않는다.
+
+따라서 실제 학습 전 다음이 필요하다.
+
+    - named body/thigh/arm support proxy
+    - guitar와의 geometry proximity gate
+    - contact normal/tangent 분해
+    - group별 slip velocity 계산
+    - force attribution 검사
+
+이 부분이 없으면 O_support 12D에 신뢰할 수 있는 값을 넣을 수 없다.
+
+
+10. O_fret_summary: 11D
+-----------------------
+
+StabilityAdapter는 Fret actor의 420D observation 전체를 받지 않는다.
+압현이 현재 유지되고 있는지를 authoritative evaluator 결과로 요약한다.
+
+현재 packer는 11D 크기만 검사하고 개별 field 이름은 아직 코드에
+봉인하지 않았다. 학습 전에 다음 field 계약을 추가하는 것을 권장한다.
+
+    fret.readiness_state[string 0..5]      6
+    fret.mean_target_error                 1
+    fret.wrong_press_fraction              1
+    fret.sustain_quality                   1
+    fret.chord_ready                       1
+    fret.time_to_required_strike           1
+    ------------------------------------------------
+    total                                 11
+
+10.1 String별 readiness state
+
+단순 bool 6개만 사용하면 현재 연주 대상이 아닌 줄과 준비되지 않은 줄을
+구분하기 어렵다. 한 값에 다음 의미를 넣는 것을 권장한다.
+
+    +1   이 줄이 현재 audible target이며 올바르게 준비됨
+    -1   이 줄이 현재 audible target이지만 준비되지 않음
+     0   현재 event에서 이 줄은 target이 아님
+
+readiness는 Fret policy가 스스로 출력한 confidence가 아니라 실제
+fret/string geometry에서 계산한 effective sounding-fret 결과여야 한다.
+
+10.2 Mean target error
+
+현재 필요한 손가락/줄 목표까지의 거리 또는 press cell error를 정규화한
+값이다. StabilityAdapter가 shoulder/elbow residual을 만들 때 왼손이
+이미 압현 경계에 가까운지 알 수 있다.
+
+10.3 Wrong press fraction
+
+현재 금지된 줄 또는 잘못된 높은 프렛을 누르고 있는 비율이다.
+StabilityAdapter가 안정화를 위해 왼팔을 움직이면서 압현을 망가뜨리는
+상태를 감지한다.
+
+10.4 Sustain quality와 chord ready
+
+    sustain_quality
+        이미 누른 음이 유지되고 있는 정도
+
+    chord_ready
+        현재 audible target 전체가 준비되었는가
+
+10.5 Time to required strike
+
+현재 압현이 실제로 사용될 다음 strike boundary까지 남은 시간을
+정규화한 값이다. 시간이 매우 짧으면 왼팔 residual authority를 줄이고,
+시간이 충분하면 기타 안정화를 위한 움직임을 더 허용할 수 있다.
+
+
+11. O_strike_summary: 8D
+------------------------
+
+StabilityAdapter는 Strike actor의 303D observation 전체를 받지 않는다.
+오른손의 phase와 target 접근 상태만 요약한다.
+
+현재 packer는 8D 크기만 검사하고 개별 field 이름은 아직 봉인하지 않았다.
+권장 field 계약은 다음과 같다.
+
+    strike.phase_approach                  1
+    strike.phase_traverse                  1
+    strike.phase_recovery                  1
+    strike.ready                           1
+    strike.signed_lane_or_entry_error      1
+    strike.time_to_release_boundary        1
+    strike.target_direction                1
+    strike.recovery_progress               1
+    ------------------------------------------------
+    total                                  8
+
+11.1 Motor phase 3D
+
+    APPROACH
+        pick이 strike entry로 이동 중
+
+    TRAVERSE
+        string crossing을 수행하는 구간
+
+    RECOVERY
+        다음 타현을 위해 빠져나오거나 재진입하는 구간
+
+StabilityAdapter가 오른팔을 기타 지지에 사용하더라도 TRAVERSE 구간의
+타현 궤적을 방해하면 안 된다.
+
+11.2 Strike ready
+
+Strike detector와 phase machine이 판단한 실제 준비 상태다.
+policy의 self-reported confidence가 아니다.
+
+11.3 Signed lane/entry error
+
+pick이 target lane의 어느 쪽에 있는지 부호 있는 값으로 표현한다.
+permission이 닫혀 있을 때 pick을 string 반대편으로 밀어버리는 residual을
+방지하는 데 사용한다.
+
+11.4 Time, direction, recovery
+
+    time_to_release_boundary
+        첫 string crossing이 허용될 시점까지 남은 시간
+
+    target_direction
+        down/up 또는 signed traversal direction
+
+    recovery_progress
+        현재 strike 이후 다음 approach로 돌아온 정도
+
+
+12. O_proprio: 86D
+--------------------
+
+StabilityAdapter가 residual을 제안하는 43개 named joint의 상태다.
+
+    q[43]       joint angle
+    qdot[43]    joint angular velocity
+    ---------------------------
+    total       86D
+
+q는 각 관절의 실제 회전 상태이고, qdot은 그 회전 상태가 시간에 따라
+얼마나 빠르게 변하는지를 나타낸다.
+
+정규화 예시는 다음과 같다.
+
+    q_normalized = (q - joint_mid) / joint_half_range
+    qdot_normalized = clip(qdot / velocity_scale, -1, 1)
+
+이 block이 필요한 이유는 같은 기타 pose error라도 현재 몸통·하체·팔의
+자세에 따라 가능한 안정화 action이 다르기 때문이다.
+
+
+13. O_action_context: 129D
+-------------------------
+
+43개 residual 대상 관절 각각에 대해 세 종류의 action context를 준다.
+
+    base source-or-hold proposal[43]       43
+    previous executed action[43]           43
+    previous stability residual[43]        43
+    ------------------------------------------
+    total                                  129
+
+13.1 Source-or-hold proposal
+
+StabilityAdapter가 개입하지 않았을 때 실행될 action이다.
+
+    body/lower-body joint
+        initial seated pose를 유지하는 normalized hold action
+
+    left shoulder/elbow
+        Fret source가 제안한 action
+
+    right shoulder/elbow
+        Strike source가 제안한 action
+
+정책은 이 값을 보고 source action을 대체하지 않고 얼마나 보정할지
+결정한다.
+
+13.2 Previous executed action
+
+지난 step에 common EMA까지 적용되어 실제 PD target 생성에 사용된 값이다.
+actor가 직전 명령과 현재 물리 상태의 관계를 볼 수 있게 한다.
+
+13.3 Previous residual
+
+직전 StabilityAdapter가 제안하고 gate를 통과한 보정량이다.
+residual의 급격한 변화와 oscillation을 줄이는 데 사용한다.
+
+Raw actor proposal과 실제 executed action은 다를 수 있다. 따라서 history에는
+반드시 최종 실행된 post-gate/post-EMA 의미를 명확히 구분해서 저장해야 한다.
+
+
+14. O_phase: 3D
+----------------
+
+    assist_strength_lambda      1
+    settling_progress           1
+    playback_active             1
+    --------------------------------
+    total                       3
+
+14.1 Assist strength
+
+현재 artificial assist의 강도다.
+
+    1에 가까움   강한 G1 assist
+    0에 가까움   약한 assist 또는 G2
+
+같은 기타 상태에서도 외부 보조력이 얼마나 남아 있는지에 따라 필요한
+action이 달라지므로 actor와 critic이 모두 관측해야 한다.
+
+14.2 Settling progress
+
+pre-play stability timeout까지 얼마나 진행되었는지 나타낸다.
+
+14.3 Playback active
+
+    0   STABILIZING 또는 pre-roll 전
+    1   실제 score가 진행 중
+
+음악이 시작되기 전에는 안정화가 우선이고, 시작된 뒤에는 Fret·Strike
+보존 우선순위가 더 높다는 것을 구분한다.
+
+
+15. 왜 Fret 420D와 Strike 303D를 모두 넣지 않는가
+---------------------------------------------------
+
+두 source observation을 그대로 연결하면 다음 크기가 된다.
+
+    Fret observation      420D
+    Strike observation    303D
+    guitar/support state   추가
+
+이 방식은 다음 문제가 있다.
+
+    - StabilityAdapter가 필요하지 않은 finger-level 목표까지 중복해서 봄
+    - Fret/Strike observation 내부 layout 변경에 직접 종속됨
+    - 어떤 값이 실제 readiness인지와 actor 내부 입력인지 구분하기 어려움
+    - source policy의 self-report와 실제 물리 판정을 혼동할 수 있음
+    - checkpoint compatibility가 매우 약해짐
+
+따라서 source 전체 입력 대신 다음 authoritative summary를 사용한다.
+
+    FretReadinessEvaluator
+        -> FretTaskSummary 11D
+
+    Strike detector + phase machine
+        -> StrikeTaskSummary 8D
+
+Summary schema는 Fret/Strike actor observation과 별도로 version 관리한다.
+
+
+16. StabilityAdapter 신경망 구조
+--------------------------------
+
+현재 모델 파일은 다음이다.
+
+    tab2body/learning/stability_model.py
+
+Architecture ID:
+
+    stability.block_encoder_mlp.v1
+
+16.1 Block encoder
+
+각 observation block을 별도로 encoding한다.
+
+    input block             input D    encoded D
+    ------------------------------------------------
+    O_guitar_state             15          64
+    O_support                  12          32
+    O_fret_summary             11          32
+    O_strike_summary            8          32
+    O_proprio                 102         128
+    O_action_context          153         128
+    O_phase                     3          16
+    ------------------------------------------------
+    concatenated                         432
+
+각 encoder는 다음 구조다.
+
+    Linear(input_dim, encoded_dim)
+        -> ELU
+
+Block을 분리하는 이유는 기타 pose, contact, 음악 기술 상태, 관절 상태가
+서로 다른 단위와 의미를 가지기 때문이다.
+
+16.2 Fusion trunk
+
+    encoded blocks 432D
+        -> Linear 432 to 512 + activation
+        -> Linear 512 to 256 + activation
+        -> output layer
+
+Actor와 Critic은 block 구조는 같지만 weight를 공유하지 않는다.
+
+16.3 Actor
+
+    432 -> 512 -> 256 -> 43
+
+Actor network parameter 수:
+
+    394,027
+
+마지막 layer의 weight와 bias는 0으로 초기화한다. 따라서 deterministic
+mean은 처음에 정확히 0 residual이다.
+
+이는 학습 첫 step부터 기존 Fret·Strike action을 크게 망가뜨리는 것을
+방지한다.
+
+Actor는 기존 `ActorCritic`의 tanh-squashed diagonal Gaussian을 사용한다.
+학습 중에는 작은 exploration noise가 존재하므로 zero mean이라고 해서
+sample action까지 항상 0인 것은 아니다.
+
+16.4 Critic
+
+    432 -> 512 -> 256 -> 5
+
+Critic network parameter 수:
+
+    384,261
+
+5개 value head는 다음이다.
+
+    guitar_stability
+    support_quality
+    fret_retention
+    strike_retention
+    regularization
+
+전체 모델 parameter 수는 log_std 43개를 포함하여 778,331개다.
+
+
+17. StabilityAdapter 출력: 현재 계약 43D
+------------------------------------------
+
+현재 `tab2body.stability_action.v2` 계약은 43개 named residual을 출력한다.
+
+    body                 15D
+    lower body           16D
+    proximal arms        12D
+    -------------------------
+    total                43D
+
+17.1 Lower body 16D
+
+    L_Hip_x, L_Hip_y, L_Hip_z
+    L_Knee_x
+    L_Ankle_x, L_Ankle_y, L_Ankle_z
+    L_Toe_x
+
+    R_Hip_x, R_Hip_y, R_Hip_z
+    R_Knee_x
+    R_Ankle_x, R_Ankle_y, R_Ankle_z
+    R_Toe_x
+
+의도는 하체가 평소에는 seated pose 근처에 머물고, 기타가 기울거나
+미끄러질 때만 작은 보정을 하는 것이다.
+
+`L/R_Knee_y,z`와 `L/R_Toe_y,z` 8축은 실제 사람의 무릎과 발가락을
+1축 관절로 표현하기 위해 MJCF range가 0으로 작성되어 있다. 이 축들은
+StabilityAdapter가 출력하거나 proprioception으로 관측하지 않고 초기 자세로
+hold한다. 다만 최종 FullBody 105D action ABI의 이름과 slot은 유지한다.
+
+17.2 Body 15D
+
+    Torso_x, Torso_y, Torso_z
+    Spine_x, Spine_y, Spine_z
+    Chest_x, Chest_y, Chest_z
+    L_Thorax_x, L_Thorax_y, L_Thorax_z
+    R_Thorax_x, R_Thorax_y, R_Thorax_z
+
+몸통은 기타와 pelvis 사이의 상대 pose를 유지하고, 스트랩과 몸통 contact의
+지지 방향을 조절한다.
+
+17.3 Proximal arms 12D
+
+    L_Shoulder_x, L_Shoulder_y, L_Shoulder_z
+    L_Elbow_x, L_Elbow_y, L_Elbow_z
+
+    R_Shoulder_x, R_Shoulder_y, R_Shoulder_z
+    R_Elbow_x, R_Elbow_y, R_Elbow_z
+
+왼팔은 neck support를, 오른팔은 guitar body support를 조금 보정할 수 있다.
+하지만 이 관절들은 Fret/Strike source action과 겹치므로 residual cap과
+기술 보존 gate가 반드시 필요하다.
+
+17.4 출력하지 않는 관절
+
+    L/R Wrist          초기에는 금지
+    LH/RH fingers      금지
+    Neck/Head          Gaze/AttentionBranch가 담당
+    guitar root        직접 action 금지
+
+Finger를 금지하는 이유는 StabilityAdapter가 기타를 붙잡기 위해 압현과
+pick grip을 직접 망가뜨리는 것을 막기 위해서다.
+
+
+18. 43D residual이 최종 action이 되는 과정
+------------------------------------------
+
+StabilityAdapter 출력은 바로 PD target이 아니다.
+
+    Fret/Strike source proposal
+        -> source-specific postprocessing
+        -> named base action
+
+    StabilityAdapter actor
+        -> raw normalized residual candidate 43D
+        -> per-group residual scale
+        -> authority mask
+        -> per-joint cap
+        -> safety/consistency veto
+        -> accepted residual
+
+    named base action + accepted residual
+        -> total joint cap
+        -> 105D ActionArbiter scatter
+        -> common EMA exactly once
+        -> joint PD targets
+        -> torque
+        -> PhysX
+
+18.1 Body/lower joint
+
+기본값은 숫자 0이 아니라 initial seated pose에 해당하는 hold action이다.
+
+    a_final[j] = a_seated_hold[j] + delta_stability[j]
+
+Normalized action 0은 joint range의 midpoint이므로, seated pose와 다를 수
+있다. 따라서 hold action을 실제 초기 q에서 역산해야 한다.
+
+18.2 Shoulder/elbow joint
+
+    a_final[j] = a_source[j] + delta_stability[j]
+
+여기서 source action은 왼팔이면 Fret, 오른팔이면 Strike에서 온다.
+
+18.3 Residual 단위
+
+정책이 출력하는 raw 값은 -1~1 범위지만, 실제 residual cap은 관절별
+물리 단위로 정의해야 한다.
+
+예를 들어 shoulder와 elbow에 같은 normalized cap을 적용하면 실제
+허용 각도가 서로 달라질 수 있다. 따라서 다음을 checkpoint contract에
+봉인해야 한다.
+
+    - joint별 residual radian cap
+    - group별 authority schedule
+    - residual rate cap
+    - total action cap
+    - action-to-PD mapping version
+
+
+19. Authority gate
+------------------
+
+Actor는 residual 후보를 제안할 뿐, 최종 권한은 외부 rule gate가 정한다.
+
+    global_safety_gate
+        body_gate
+        lower_body_gate
+        arm_support_gate
+
+19.1 Residual을 증가시킬 수 있는 상황
+
+    - 기타 position error 증가
+    - 기타 rotation error 증가
+    - linear/angular velocity 증가
+    - slip speed 증가
+    - contact가 끊길 위험
+    - friction reserve 감소
+
+19.2 Residual을 줄이거나 막는 상황
+
+    - Fret target error 증가
+    - active string readiness 손실
+    - sustain dropout
+    - Strike entry/lane error 증가
+    - strike timing boundary가 가까움
+    - residual cap/rate 반복 도달
+    - contact force가 불안정하거나 과도함
+
+19.3 Hard safety veto/termination
+
+    - 기타 hard pose envelope 이탈
+    - drop/tipping
+    - 위험한 slip이 연속 유지
+    - 필수 support 상실
+    - 기타 또는 신체 penetration
+    - contact over-force
+    - strap over-tension 또는 과신장
+    - pelvis/신체 safety envelope 이탈
+    - NaN/Inf 또는 velocity blow-up
+
+우선순위는 다음과 같다.
+
+    hard safety
+        > Fret/Strike 기술 보존
+        > 기타 안정화 품질
+        > residual 최소화와 자세 편안함
+
+
+20. 내부 시간 상태
+------------------
+
+StabilityAdapter는 feed-forward Actor를 사용하지만 환경은 다음 state를
+시간에 걸쳐 유지해야 한다.
+
+    - episode initial guitar pose in pelvis frame
+    - pre-play phase
+    - elapsed settling frames
+    - stable dwell streak
+    - current assist level lambda
+    - assist promotion/rollback counters
+    - previous accepted residual[51]
+    - previous executed action[51]
+    - support contact hysteresis
+    - slip dwell counter
+    - over-force dwell counter
+    - hard-failure latch
+    - source Fret/Strike baseline metric accumulator
+
+이 값들은 모두 observation에 직접 들어가는 것은 아니다. 그러나 reset,
+reward, termination, checkpoint resume를 정확히 재현하려면 environment
+state로 저장해야 한다.
+
+
+21. Reward와 5개 value channel
+------------------------------
+
+StabilityAdapter reward를 contact force 하나로 만들면 안 된다. 힘을 크게
+주는 것 자체를 보상하면 기타를 몸에 과도하게 누르는 정책이 생긴다.
+
+현재 Critic은 다음 5개 value target을 분리한다.
+
+21.1 guitar_stability
+
+    position error quality
+    rotation error quality
+    linear velocity quality
+    angular velocity quality
+    settling/recovery quality
+
+Reference 주변에는 작은 dead-zone을 둔다. dead-zone 안에서는 정확히
+초기 pose 한 점으로 되돌리기 위해 계속 흔들지 않게 한다.
+
+21.2 support_quality
+
+    strap tension band
+    body support load band
+    arm support load band
+    tangential/normal force ratio
+    slip margin
+    contact continuity
+
+목표는 최대 force가 아니라 안전한 [Fmin, Fmax] band다.
+
+21.3 fret_retention
+
+    sounding-fret readiness
+    wrong press
+    sustain hold
+    chord readiness
+    G0 Fret baseline 대비 저하
+
+21.4 strike_retention
+
+    valid crossing
+    timing error
+    traversal order/direction
+    recovery completion
+    G0 Strike baseline 대비 저하
+
+21.5 regularization
+
+    residual magnitude
+    residual rate
+    residual jerk
+    source-action deviation
+    lower-body initial-pose deviation outside dead-zone
+    artificial assist force/work/dependency
+
+Actor는 하나이고 Critic value만 5개다. 이것을 5개 policy로 해석하면 안 된다.
+
+
+22. 하체 자세 reward
+--------------------
+
+하체는 큰 연주 동작을 만들기보다 초기 자세 근처에서 작은 안정화 보정을
+하는 역할이다.
+
+권장 reward는 joint-angle dead-zone 방식이다.
+
+    r_posture = - sum_j w_j * max(
+        0,
+        abs(q_j - q_initial_j) - deadzone_j
+    )^2
+
+의미는 다음과 같다.
+
+    dead-zone 안
+        작은 움직임을 허용하고 penalty를 주지 않음
+
+    dead-zone 밖
+        초기 seated pose에서 멀어질수록 penalty 증가
+
+기타를 안정화하기 위해 필요한 작은 하체 움직임까지 막지 않으면서,
+걷거나 다리를 크게 휘두르는 불필요한 해를 방지한다.
+
+하체 posture reward는 기타 안정성 reward를 대신하지 않는다. 기타가
+떨어지는 상황에서 하체를 꼼짝하지 않는 것이 높은 점수를 받아서는 안 된다.
+
+
+23. 첫 학습 curriculum 권장안
+------------------------------
+
+23.1 S0: pre-play static stabilization
+
+    music playback      off
+    score clock         stopped
+    Fret/Strike         seated/preparation hold
+    guitar              free
+    strap               on
+    artificial assist   strong
+    disturbance         none 또는 매우 작음
+
+목표는 기타를 초기 pelvis-relative envelope 안에 유지하는 것이다.
+
+23.2 S1: static stabilization with perturbation
+
+    - 기타에 작은 위치/회전 또는 force perturbation
+    - 원래 pose envelope로 복구
+    - support force와 slip 제한
+
+23.3 S2: frozen Fret/Strike short event
+
+    - 짧은 단음 또는 짧은 phrase
+    - source policies frozen
+    - StabilityAdapter만 학습
+    - 음악 이벤트 성공과 기타 안정성 동시 평가
+
+23.4 S3: assist reduction
+
+    strong assist
+        -> reduced assist
+        -> randomized assist
+        -> zero-assist probes
+
+승급은 iteration 수가 아니라 metric gate로 결정한다.
+
+23.5 S4: G2 full song
+
+    - artificial assist exactly zero
+    - full song
+    - 여러 reset/physics/disturbance seed
+    - strap 유지
+    - unstrapped는 별도 ablation
+
+
+24. Fret·Strike 동결과 해제
+---------------------------
+
+초기 G1에서는 다음을 동결한다.
+
+    - Fret actor
+    - Fret observation RMS
+    - Strike actor
+    - Strike observation RMS
+    - source-specific action transforms
+    - rule Synchronizer
+
+StabilityAdapter만으로 실패가 지속된다는 증거가 있을 때 다음 순서로
+제한적으로 해제한다.
+
+    observation adapter
+        -> proximal arm output rows
+        -> final hidden block
+        -> wrist
+        -> fingers는 별도 승인
+
+해제 조건은 다음을 모두 요구한다.
+
+    - residual cap saturation이 반복됨
+    - cap만 키워도 문제가 해결되지 않음
+    - source adaptation 필요성이 ablation에서 확인됨
+    - G0 rehearsal에서 기존 기술을 유지할 수 있음
+
+
+25. 하체 활성화 시 남아 있는 구현 과제
+---------------------------------------
+
+현재 코드는 결정에 따라 43D StabilityActionManifest로 변경되었다. 그러나 실제
+`GuitarEnvBase`는 Hip/Knee/Ankle/Toe를 모두 `LOCK_KEYWORDS`로 분류한다.
+
+하체에는 다음 세 가지 강제 고정이 적용된다.
+
+    - joint limit을 initial pose +/- 1e-4로 pinching
+    - 높은 armature/damping
+    - 매 physics step마다 initial PD target과 zero velocity 재주입
+
+또한 MJCF에서 다음 8개 축은 authored range 자체가 0이다.
+
+    L_Knee_y, L_Knee_z
+    R_Knee_y, R_Knee_z
+    L_Toe_y,  L_Toe_z
+    R_Toe_y,  R_Toe_z
+
+따라서 현재 코드 그대로는 다음 문제가 발생한다.
+
+    - 가동 가능한 하체 16D residual도 아직 실제 physics에 영향을 주지 않음
+    - policy가 하체를 제어하려면 현재의 전체 하체 hard lock을 분리해야 함
+    - 43D q/qdot 중 하체 state가 현재는 거의 상수임
+    - G1에서 하체를 trainable하게 한다는 Master Plan과 불일치
+
+확정된 계약은 다음과 같다.
+
+    - lower body 16D
+      (Hip 3 + Knee_x 1 + Ankle 3 + Toe_x 1) x 2
+    - body 15D
+    - shoulder/elbow 12D
+    - 총 43D residual
+    - observation은 proprio 86D, action context 129D
+    - 전체 observation은 264D
+    - 8개 zero-range 축은 initial-pose fixed hold
+
+다음 구현 단계에서는 `LOCK_KEYWORDS`를 그대로 제거하지 않는다. 8개 zero-range
+축은 영구 hold하고, 나머지 하체 16축만 작은 residual cap과 initial-pose reward를
+적용하여 G1부터 활성화한다. 그 전에 chair/floor contact와 seated hold의 안정성을
+1-env 물리 검증으로 확인해야 한다.
+
+단, 최종 FullBody action ABI 105D 자체는 유지할 수 있다. 105D manifest에는
+모든 authored joint 이름을 보존하고, StabilityAdapter만 43개의 실제
+trainable slot에 residual을 scatter하면 된다.
+
+
+26. 현재 observation 계약의 추가 한계
+--------------------------------------
+
+26.1 Support geometry가 없음
+
+264D에는 contact force와 slip 요약은 있지만, 잠재 support site가 기타에서
+얼마나 떨어져 있는지 나타내는 명시적 relative geometry가 없다.
+
+현재 guitar pose + q/qdot으로 이를 간접 추론할 수는 있지만, body/arm이
+기타에 접촉하기 전에는 어디로 움직여야 하는지 학습하기 어려울 수 있다.
+
+첫 G1a 실험에서 contact 형성이 실패하면 다음 block을 추가하는 것을
+고려해야 한다.
+
+    body support relative vector and gap
+    arm support relative vector and gap
+    relative support-site velocity
+
+Observation dimension을 바꾸면 기존 checkpoint와 호환되지 않으므로,
+가능하면 첫 학습 전에 micro-environment로 필요성을 판단해야 한다.
+
+26.2 support-need/confidence head 불일치
+
+Master Plan에는 Actor가 residual과 support-need/confidence를 출력한다고
+기록되어 있지만 현재 `StabilityAdapterActorCritic`은 43D residual만
+출력한다.
+
+초기 버전에서는 외부 rule gate가 authority를 결정하므로 confidence head를
+제외하고 43D residual만 사용하는 편이 단순하다. Learned confidence가
+필요하면 별도 model/action schema version을 만들어야 한다.
+
+26.3 Artificial assist 미구현
+
+현재 `strapped-v1`은 구현되어 있지만 G1 curriculum용 artificial
+hand/root assist는 아직 없다. Strap 강도를 artificial assist처럼 줄이면
+G2의 실제 장비 조건 자체가 바뀌므로 두 물리를 분리해야 한다.
+
+26.4 One-simulator Full task 미구현
+
+FretTask와 StrikeTask를 각각 생성해 두 simulator를 돌리는 것은 올바른
+FullBody 학습이 아니다. 하나의 humanoid, 하나의 guitar, 한 번의 physics
+step에서 두 source observation과 StabilityAdapter observation을 생성해야 한다.
+
+
+27. 첫 학습 전에 필요한 구현 순서
+----------------------------------
+
+    1. StabilityAdapter action dimension 확정 (완료)
+       가동 가능한 43D와 264D observation v2 사용
+
+    2. FullG1Task 작성
+       하나의 free guitar와 하나의 humanoid simulator
+
+    3. 하체 actuator 변경
+       trainable axis와 permanently locked axis 분리
+
+    4. combined collision configuration
+       Fret thumb proxy, Strike pluck range, body/arm support proxy 통합
+
+    5. support attribution 작성
+       strap/body/arm의 load, slip, contact flag 생성
+
+    6. artificial assist 작성
+       force cap, dead-zone, rate limit, equal-and-opposite force
+
+    7. FretTaskSummary와 StrikeTaskSummary field manifest 봉인
+
+    8. Stability reward와 termination 작성
+
+    9. PPO entry point와 checkpoint contract 작성
+
+    10. 1-env GPU finite/reset test
+
+    11. 15D pre-play micro-environment 학습 또는 baseline 측정
+
+    12. frozen source short-event G1 학습
+
+
+28. 첫 실험의 통과 조건
+-----------------------
+
+첫 실험에서는 곧바로 전체 곡을 목표로 하지 않는다.
+
+환경:
+
+    - 1~64 env로 시작
+    - 기타 free root
+    - gravity on
+    - strapped-v1 on
+    - 강한 artificial assist
+    - 음악 재생 없음
+    - initial seated/source hold
+
+필수 통과 조건:
+
+    - 모든 observation/action/reward가 finite
+    - 기타 mass/inertia/CoM이 finite이고 양수
+    - strap force가 기타와 신체에 equal-and-opposite로 적용
+    - reset 직후 stale strap impulse 없음
+    - 기타가 hard-failure envelope를 벗어나지 않음
+    - 안정 조건을 연속 dwell 동안 만족
+    - residual cap과 action range를 위반하지 않음
+    - support force가 과도한 최대값에 붙지 않음
+    - checkpoint resume 후 phase/history가 동일하게 복원
+
+이 통과 후에만 Fret·Strike source를 붙인다.
+
+
+29. 최종 평가 지표
+------------------
+
+29.1 기타 안정성
+
+    guitar position error RMS/p95
+    guitar rotation error RMS/p95
+    linear/angular velocity RMS/p95
+    settling time
+    slip distance와 slip episode rate
+    drop/tipping rate
+    hard envelope termination rate
+
+29.2 Support
+
+    strap tension/extension
+    body/arm contact continuity
+    support load band success
+    tangential-to-normal load ratio
+    assist force, impulse, work
+    zero-assist success rate
+
+29.3 기술 보존
+
+    Fret press/no-press/wrong-press
+    Fret sustain/chord readiness
+    Strike precision/recall/F1
+    Strike timing MAE/p95/bias
+    joint event success
+    G0 baseline 대비 절대 성능 저하
+
+29.4 Action quality
+
+    residual norm
+    residual rate/jerk
+    per-group authority usage
+    cap saturation fraction
+    lower-body posture deviation
+    source action distribution drift
+
+
+30. Checkpoint에 저장해야 할 계약
+--------------------------------
+
+StabilityAdapter checkpoint에는 최소 다음을 저장해야 한다.
+
+    task/schema version
+    observation dimension과 named field manifest
+    action dimension과 exact joint-name order
+    encoder/fusion architecture ID
+    five value-head manifest
+    observation scale/clip/normalization state
+    per-joint residual cap
+    group authority mask와 schedule
+    source Fret checkpoint SHA-256
+    source Strike checkpoint SHA-256
+    canonical timeline SHA-256
+    full 105D action manifest SHA-256
+    guitar/humanoid asset hashes
+    free-guitar mass/inertia profile
+    strap config/route hash
+    support proxy/contact attribution version
+    assist configuration과 current curriculum level
+    pre-play stability config hash
+    reward/termination manifest
+    previous-action/residual state
+
+다른 source weight 또는 다른 action ordering으로 resume하는 것을 허용하면
+같은 residual 숫자가 다른 동작 의미를 가지게 된다. 따라서 contract는
+shape만 비교하지 않고 source checkpoint hash와 joint 이름까지 비교해야 한다.
+
+
+31. 실제 파일별 역할
+--------------------
+
+    master_plan/06_stability_adapter.md
+        StabilityAdapter의 책임, 관측, 권한, 물리 지원 정본
+
+    master_plan/09_curriculum_and_evaluation.md
+        G0/G1/G2 curriculum, 동결/해제, 평가 gate
+
+    master_plan/08_shared_contracts.md
+        좌표계, observation/action/checkpoint 공동 계약
+
+    tab2body/full/stability.py
+        15D pre-play 관측과 tracker
+        264D block 크기와 packer
+        43D StabilityActionManifest
+
+    tab2body/learning/stability_model.py
+        264D block encoder Actor
+        43D residual head
+        5D Critic
+
+    tab2body/full/action.py
+        최종 105D FullActionManifest
+        Fret/Strike/hold action의 name-based scatter
+
+    tab2body/env/base.py
+        Isaac Gym simulator
+        free/fixed guitar 선택
+        EMA, PD, torque, physics
+        현재 하체 hard lock
+        main-environment strap force 적용
+
+    tab2body/env/strap.py
+        tension-only routed strap 물리식
+        guitar와 guide body의 equal-and-opposite force
+
+    strap_sim/config.json
+        strap button, body guide, stiffness, damping, tension cap
+
+    tab2body/tools/audit_stability_startup.py
+        learned adapter 없는 strap-only pre-play GPU 점검
+
+    tab2body/tests/test_stability_contract.py
+        15D/264D/43D/model/strap CPU 계약 테스트
+
+    tab2body/train_full.py
+        현재 G0 source assembly와 CPU interface probe만 제공
+        StabilityAdapter PPO는 아직 제공하지 않음
+
+
+32. 핵심 요약
+-------------
+
+현재 제안된 StabilityAdapter는 다음 형태다.
+
+    입력
+        기타 pose/twist/gravity
+        strap/body/arm support
+        Fret/Strike authoritative summary
+        residual 대상 관절 q/qdot
+        source/hold action과 history
+        assist/playback phase
+
+    현재 observation
+        264D
+
+    model
+        block encoders
+        432D fused feature
+        512 -> 256 fusion trunk
+
+    현재 출력
+        43D compact named residual candidate
+
+    실제 실행
+        rule gate와 cap
+        source/hold action에 residual 합성
+        105D named action으로 scatter
+        common EMA/PD/PhysX
+
+    학습 목표
+        기타 안정성 향상
+        support 품질 향상
+        Fret 성능 보존
+        Strike 성능 보존
+        residual/assist 의존 최소화
+
+가장 중요한 현재 결론은 다음 두 가지다.
+
+    1. 모델 계약은 있지만 실제 G1 PPO task는 아직 없다.
+
+    2. 43D/264D v2 계약을 확정했다. zero-range 8축은 출력과 관측에서
+       제외하지만 FullBody 105D slot은 유지한다. 다음 과제는 현재 환경의
+       전체 하체 hard lock을 영구 고정 8축과 G1 trainable 16축으로 분리하고,
+       seated hold가 물리적으로 안정적인지 먼저 검증하는 것이다.

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="800" viewBox="0 0 1120 800" role="img" aria-labelledby="title desc">
+  <title id="title">기타 줄 인덱스 변환</title>
+  <desc id="desc">음악 데이터에서는 낮은 E가 0, 높은 e가 5이며 Isaac 물리 인덱스는 반대로 높은 e가 0, 낮은 E가 5임을 보여주는 표</desc>
+  <defs>
+    <style>
+      text { font-family: "Noto Sans CJK KR", NanumGothic, sans-serif; fill: #172338; }
+      .title { font-size: 32px; font-weight: 700; }
+      .sub { font-size: 16px; fill: #53647a; }
+      .head { font-size: 18px; font-weight: 700; }
+      .body { font-size: 16px; fill: #3f5067; }
+      .small { font-size: 14px; fill: #53647a; }
+      .index { font-size: 22px; font-weight: 700; }
+    </style>
+  </defs>
+  <rect width="1120" height="800" fill="#f7f9fc"/>
+  <text x="64" y="72" class="title">줄 번호는 데이터와 물리 환경에서 반대입니다</text>
+  <text x="64" y="104" class="sub">같은 물리적 줄을 가리키도록 bundle → Isaac 경계에서 변환해야 합니다.</text>
+
+  <rect x="64" y="148" width="992" height="74" rx="14" fill="#eaf0fa" stroke="#aabbd6" stroke-width="1.5"/>
+  <text x="92" y="178" class="head">음악 / CSV source index</text>
+  <text x="92" y="204" class="small">낮은 E부터 높은 e 방향으로 번호 증가</text>
+  <rect x="64" y="238" width="992" height="74" rx="14" fill="#e5f4f0" stroke="#8bbeb0" stroke-width="1.5"/>
+  <text x="92" y="268" class="head">Isaac physical goal index</text>
+  <text x="92" y="294" class="small">높은 e부터 낮은 E 방향으로 번호 증가</text>
+
+  <text x="312" y="366" class="small">실제 기타 줄 (높은 e → 낮은 E)</text>
+  <text x="92" y="406" class="head">줄 이름</text>
+  <text x="452" y="406" class="head">Source index</text>
+  <text x="782" y="406" class="head">Isaac index</text>
+  <g>
+    <rect x="64" y="416" width="992" height="50" rx="10" fill="#ffffff" stroke="#d7dee8"/>
+    <text x="92" y="448" class="body">높은 e · 1번 줄</text><text x="500" y="450" class="index">5</text><text x="834" y="450" class="index">0</text>
+    <rect x="64" y="472" width="992" height="50" rx="10" fill="#f0f3f8" stroke="#d7dee8"/>
+    <text x="92" y="504" class="body">B · 2번 줄</text><text x="500" y="506" class="index">4</text><text x="834" y="506" class="index">1</text>
+    <rect x="64" y="528" width="992" height="50" rx="10" fill="#ffffff" stroke="#d7dee8"/>
+    <text x="92" y="560" class="body">G · 3번 줄</text><text x="500" y="562" class="index">3</text><text x="834" y="562" class="index">2</text>
+    <rect x="64" y="584" width="992" height="50" rx="10" fill="#f0f3f8" stroke="#d7dee8"/>
+    <text x="92" y="616" class="body">D · 4번 줄</text><text x="500" y="618" class="index">2</text><text x="834" y="618" class="index">3</text>
+    <rect x="64" y="640" width="992" height="50" rx="10" fill="#ffffff" stroke="#d7dee8"/>
+    <text x="92" y="672" class="body">A · 5번 줄</text><text x="500" y="674" class="index">1</text><text x="834" y="674" class="index">4</text>
+    <rect x="64" y="696" width="992" height="50" rx="10" fill="#f0f3f8" stroke="#d7dee8"/>
+    <text x="92" y="728" class="body">낮은 E · 6번 줄</text><text x="500" y="730" class="index">0</text><text x="834" y="730" class="index">5</text>
+  </g>
+  <text x="64" y="778" class="small">규칙: Isaac index = 5 − source index · 낮은 E(6번 줄)는 source 0 / Isaac 5</text>
+</svg>

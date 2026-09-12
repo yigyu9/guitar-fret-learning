@@ -61,14 +61,14 @@ G0·G1·G2 학습 순서
         Synchronizer 검증
     G1
         기타 자유
-        physical strap 적용
+        가상 strap 물리 제약 적용
         강한 artificial assist 적용
         하체와 Neck/Head trainable
     G1 후반
         assist 감소·무작위화
         source 기술 보존 여부 확인
     G2
-        physical strap만 유지
+        가상 strap 물리 제약만 유지
         artificial assist를 0으로 설정
 
 
@@ -87,9 +87,12 @@ G0·G1·G2 학습 순서
 
 ----
 
-기타를 잘 잡은 상태 -> 기타연주
-시뮬레이션 시작 후 기타 안정화에 들어가는 시간을 주고 audio play
-시작 guitar position과 strap에 걸린 상태에서 원하는 goal 로 가져
-
-허욱 학생, 
-
+Reset
+    episode 시작 시점의 pelvis 대비 guitar pose를 이번 단계의 안정화 목표로 저장
+    가상 strap 물리 제약과 StabilityAdapter를 활성화하고 Fret·Strike는 hold
+Stabilizing
+    score와 audio를 시작하지 않은 상태에서 기타 위치·회전·속도를 안정화
+    안정 조건을 연속으로 만족하면 common pre-roll 시작, timeout이면 실패 종료
+Play
+    pre-roll 동안 Fret·Strike가 첫 event를 준비
+    score frame 0에서 audio를 시작하고 이후 score clock은 멈추지 않음

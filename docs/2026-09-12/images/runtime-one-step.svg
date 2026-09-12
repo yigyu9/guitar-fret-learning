@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1240" viewBox="0 0 1280 1240" role="img" aria-labelledby="title desc">
+  <title id="title">기타 연주 runtime의 한 control step</title>
+  <desc id="desc">상태와 event를 읽고 Fret과 Strike 정책을 실행 감독 및 action 조립을 거쳐 물리 step을 한 번 진행하고 결과를 기록하는 순서</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#53647a"/></marker>
+    <style>
+      text { font-family: "Noto Sans CJK KR", NanumGothic, sans-serif; fill: #172338; }
+      .title { font-size: 32px; font-weight: 700; }
+      .sub { font-size: 16px; fill: #53647a; }
+      .num { font-size: 16px; font-weight: 700; fill: #fff; }
+      .head { font-size: 19px; font-weight: 700; }
+      .body { font-size: 15px; fill: #3f5067; }
+      .small { font-size: 13px; fill: #53647a; }
+      .box { rx: 16; stroke-width: 1.5; }
+      .arrow { stroke: #53647a; stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1280" height="1240" fill="#f7f9fc"/>
+  <text x="64" y="68" class="title">한 control step에서 실제로 일어나는 일</text>
+  <text x="64" y="98" class="sub">60Hz score/runtime 경계 · 한 step에 physics는 정확히 한 번</text>
+
+  <circle cx="98" cy="158" r="20" fill="#62738a"/><text x="93" y="164" class="num">1</text>
+  <rect x="136" y="128" width="1008" height="74" class="box" fill="#edf1f6" stroke="#b2bfce"/>
+  <text x="164" y="159" class="head">현재 상태와 score cursor 읽기</text>
+  <text x="164" y="184" class="body">관절·속도·기타 pose·직전 실행 action · 현재 Canonical event / score frame</text>
+  <path d="M640 202 V225" class="arrow"/>
+
+  <circle cx="98" cy="266" r="20" fill="#62738a"/><text x="93" y="272" class="num">2</text>
+  <rect x="136" y="236" width="1008" height="74" class="box" fill="#eaf0fa" stroke="#aabbd6"/>
+  <text x="164" y="267" class="head">현재 event와 source observation 구성</text>
+  <text x="164" y="292" class="body">각 policy native contract 유지 · Fret 420D / Strike 303D · 같은 공통 시간축</text>
+  <path d="M640 310 V334" class="arrow"/>
+
+  <circle cx="98" cy="385" r="20" fill="#62738a"/><text x="93" y="391" class="num">3</text>
+  <rect x="136" y="344" width="480" height="110" class="box" fill="#eaf1ff" stroke="#91acd8"/>
+  <text x="164" y="382" class="head">Fret-v2 제안</text>
+  <text x="164" y="411" class="body">왼팔·왼손 30D action</text>
+  <text x="164" y="436" class="small">press · sustain · 다음 목표 접근</text>
+  <rect x="664" y="344" width="480" height="110" class="box" fill="#fff1e8" stroke="#e5b18f"/>
+  <text x="692" y="382" class="head">Strike-v2 제안</text>
+  <text x="692" y="411" class="body">오른팔·오른손 30D action</text>
+  <text x="692" y="436" class="small">pick/strum 접근 · crossing · recovery</text>
+  <path d="M376 454 V496" class="arrow"/>
+  <path d="M904 454 V496" class="arrow"/>
+
+  <circle cx="98" cy="542" r="20" fill="#62738a"/><text x="93" y="548" class="num">4</text>
+  <rect x="136" y="506" width="1008" height="94" class="box" fill="#fff5d9" stroke="#dfc16d"/>
+  <text x="164" y="540" class="head">물리 상태에서 readiness와 crossing 확인</text>
+  <text x="164" y="568" class="body">Fret ready dwell · Strike ready / detector · 기타 안정성 · timing window</text>
+  <path d="M640 600 V624" class="arrow"/>
+
+  <circle cx="98" cy="672" r="20" fill="#62738a"/><text x="93" y="678" class="num">5</text>
+  <rect x="136" y="634" width="1008" height="94" class="box" fill="#f0ebff" stroke="#b6a4e2"/>
+  <text x="164" y="668" class="head">Synchronizer가 event 결정을 내림</text>
+  <text x="164" y="696" class="body">PREPARE / WAIT / EXECUTE / SKIP · 안전 delay 0–3 frame · Synchronizer는 joint를 제어하지 않음</text>
+  <path d="M640 728 V752" class="arrow"/>
+
+  <circle cx="98" cy="800" r="20" fill="#62738a"/><text x="93" y="806" class="num">6</text>
+  <rect x="136" y="762" width="1008" height="94" class="box" fill="#edf1f6" stroke="#b2bfce"/>
+  <text x="164" y="796" class="head">이름 기반으로 action 조립</text>
+  <text x="164" y="824" class="body">Fret 30D + Strike 30D + hold slots → 105-slot ABI (97 movable DOF)</text>
+  <text x="164" y="846" class="small">필요한 경우 Stability residual을 겹쳐 적용 · hold는 숫자 0으로 대체하지 않음</text>
+  <path d="M640 856 V880" class="arrow"/>
+
+  <circle cx="98" cy="928" r="20" fill="#62738a"/><text x="93" y="934" class="num">7</text>
+  <rect x="136" y="890" width="1008" height="94" class="box" fill="#e5f4f0" stroke="#8bbeb0"/>
+  <text x="164" y="924" class="head">공통 제어 후 physics 한 번 진행</text>
+  <text x="164" y="952" class="body">rate/safety → EMA smoothing → PD → PhysX control step</text>
+  <path d="M640 984 V1008" class="arrow"/>
+
+  <circle cx="98" cy="1056" r="20" fill="#62738a"/><text x="93" y="1062" class="num">8</text>
+  <rect x="136" y="1018" width="1008" height="94" class="box" fill="#eaf0fa" stroke="#aabbd6"/>
+  <text x="164" y="1052" class="head">실행 결과 기록 후 cursor/phase 갱신</text>
+  <text x="164" y="1080" class="body">executed post-EMA action · press/crossing · event outcome · reward/metrics</text>
+  <path d="M1144 1065 H1190 V164 H1154" class="arrow"/>
+
+  <text x="64" y="1176" class="small">중요: policy output은 제안이고, 성공 여부는 physics 결과와 event contract로 판정합니다.</text>
+</svg>

@@ -1,0 +1,975 @@
+기타 연주 전신 제어 연구 관련 선행연구 비교
+===============================================
+
+작성 목적
+---------
+
+이 문서는 현재 프로젝트의 연구 구조를 기존 연구와 비교하기 위한 문서다.
+단순히 비슷한 논문 목록을 나열하지 않고, 각 연구가 실제로 무엇을
+기여했는지, 우리 구조와 어떤 부분이 겹치는지, 어떤 부분이 아직
+차별화 가능한지를 정리한다.
+
+현재 프로젝트의 중심 구조는 다음과 같다.
+
+    오디오/tablature
+        -> finger mapping과 picking plan
+        -> Fret skill prior
+        -> Strike skill prior
+        -> 공통 음악 시간축 기반 Synchronizer
+        -> StabilityAdapter
+        -> FullBodyPlayer
+
+연구 목표는 단순히 기타를 연주하는 캐릭터를 만드는 것이 아니다.
+고정된 기타에서 학습한 양손 연주 기술을 유지하면서, 기타가 신체와
+함께 움직이고 스트랩·허벅지·몸통·양손이 기타를 지지해야 하는 환경으로
+확장하는 것이다.
+
+
+1. 먼저 확인해야 할 결론
+------------------------
+
+현재 구조의 다음 주장은 이미 선행연구와 직접 겹친다.
+
+    "왼손 Fret 정책과 오른손 Strike 정책을 독립적으로 학습하고,
+     Synchronizer로 결합한다."
+
+특히 2024년 SIGGRAPH Asia의
+`Synchronize Dual Hands for Physics-Based Dexterous Guitar Playing`은
+왼손·오른손을 별도로 학습한 뒤, 사전 학습된 정책을 고정하고
+latent-space Synchronizer를 학습해 기타 연주를 생성한다.
+
+따라서 Fret/Strike 분리 자체, 고정 정책의 결합 자체, 양손
+Synchronizer 자체를 논문의 핵심 신규성으로 주장하면 약하다.
+
+반대로 현재 프로젝트에서 차별화 가능성이 가장 큰 지점은 다음이다.
+
+    1. 기타가 고정되지 않은 물리 환경에서의 기타 연주
+    2. 기타를 안정화하는 전신 제어
+    3. 기존 Fret·Strike 기술을 보존하는 StabilityAdapter
+    4. 단순 action blending이 아닌 음악 event/readiness 기반 supervisor
+    5. 기타 안정성과 음악적 성능 저하를 함께 측정하는 평가 체계
+
+즉 논문의 중심 질문은 다음과 같이 좁히는 것이 적절하다.
+
+    "고정된 악기에서 습득한 양손 음악 기술을 보존하면서,
+     악기 자체가 움직이는 물리 환경으로 전신 제어를 확장할 수 있는가?"
+
+
+2. 가장 직접적인 기타 선행연구
+------------------------------
+
+2.1 Synchronize Dual Hands for Physics-Based Dexterous Guitar Playing
+    Pei Xu, Ruocheng Wang, SIGGRAPH Asia 2024
+
+공식 페이지:
+    https://pei-xu.github.io/guitar
+
+논문:
+    https://arxiv.org/abs/2409.16629
+
+DOI:
+    https://doi.org/10.1145/3680528.3687692
+
+이 연구가 현재 프로젝트와 가장 가깝다.
+
+### 연구 문제
+
+기타 연주는 왼손과 오른손이 서로 다른 역할을 수행하지만,
+높은 시간 정밀도로 함께 동작해야 한다.
+
+    왼손: fret pressing
+    오른손: string picking/strumming
+
+두 손을 하나의 joint policy로 처음부터 학습하면 상태·action 차원이
+커지고, 양손이 동시에 무작위 탐색을 해야 하므로 학습이 비효율적이라는
+문제를 제기했다.
+
+### 제안 방법
+
+    단계 1: 왼손 policy 독립 학습
+    단계 2: 오른손 policy 독립 학습
+    단계 3: 두 policy의 network parameter를 고정
+    단계 4: latent space에 offset을 추가하는 Synchronizer 학습
+    단계 5: 중앙화된 환경에서 두 손의 행동을 조정
+
+Synchronizer는 기존 policy의 action을 직접 다시 학습하지 않고,
+각 policy의 latent representation을 수정한다. 따라서 기존 손 기술을
+완전히 버리지 않고 양손 협응을 학습한다.
+
+### 연구 기여
+
+    - 양손을 하나의 고차원 policy로 학습하지 않는 bimanual control
+    - 독립 policy의 재사용과 latent-space synchronization
+    - tablature에 존재하는 음악 패턴을 물리적으로 시뮬레이션
+    - motion capture 데이터와 기타 연주 결과 제공
+    - unseen rhythm과 complex chord/picking pattern에 대한 평가
+
+### 현재 프로젝트와 겹치는 부분
+
+    - Fret과 Strike를 별도 기술로 분리
+    - 고정된 기타에서 각 손을 먼저 학습
+    - 이후 두 손을 하나의 연주 시스템으로 결합
+    - 기존 policy를 최대한 보존
+    - 기타 연주에서 공간·시간 협응을 평가
+
+### 현재 프로젝트가 달라질 수 있는 부분
+
+    - 기존 연구의 Synchronizer는 learned latent-space adapter다.
+    - 현재 프로젝트의 Synchronizer는 공통 음악 시간축,
+      readiness, event cursor, release gate를 관리하는 rule-based
+      timing supervisor다.
+    - 기존 연구의 핵심 대상은 물리적으로 시뮬레이션된 양손이다.
+    - 현재 프로젝트는 몸통·골반·하체·목·머리까지 포함하는
+      FullBodyPlayer를 목표로 한다.
+    - 기존 연구는 기타를 안정화하는 별도 module을 제안하지 않는다.
+    - 현재 프로젝트는 스트랩, 허벅지, 몸통, 양손의 contact를 통해
+      움직이는 기타를 안정화한다.
+
+### 이 연구로부터 얻는 경고
+
+"분리된 두 손 policy와 Synchronizer"는 이미 강한 선행연구가 있으므로,
+우리 논문의 핵심 기여를 이 문장으로 끝내면 안 된다.
+
+우리 연구에서는 다음을 명확히 보여야 한다.
+
+    - latent Synchronizer가 아닌 event/readiness supervisor가 필요한 이유
+    - 고정 기타에서는 잘 되던 손 기술이 움직이는 기타에서 왜 실패하는지
+    - StabilityAdapter가 기존 손 기술을 어떻게 보존하는지
+    - full-body stabilization이 단순히 관절 수를 늘리는 것보다
+      어떤 물리적 문제를 해결하는지
+
+
+2.2 Learning to Play Guitar with Robotic Hands
+    Chaoyi Luo, Pengbin Tang, Yuqi Ma, Dongjin Huang, SCA 2024
+
+논문 페이지:
+    https://diglib.eg.org/items/4cf380af-ba2a-4efa-9ea9-239474ff94c3
+
+논문 PDF:
+    https://mrxuanl.github.io/papers/GuitarPlaySimulation.pdf
+
+이 연구는 tablature에서 직접 기타 연주를 생성하는 구조를 제안했다.
+
+### 전체 흐름
+
+    input tablature
+        -> 사람다운 fingering 생성
+        -> 왼손 finger control을 deep RL로 학습
+        -> 오른손 plucking motion을 IK로 생성
+
+### 연구 기여
+
+    - motion capture 없이 tablature에서 기타 연주 생성
+    - 인간 연주 습관을 고려한 fingering 생성
+    - 왼손의 fretting을 강화학습으로 제어
+    - 오른손 plucking을 inverse kinematics로 생성
+    - precision, recall, F1로 음표 연주 정확도 평가
+    - 사용자 평가를 통한 시각·청각 결과 검증
+
+### 우리와의 겹침
+
+    - tablature와 fingering을 핵심 입력으로 사용
+    - 왼손 fretting을 학습 정책으로 다룸
+    - 기타 연주를 note-level precision/recall/F1로 평가
+    - 물리 시뮬레이션 기반 손 제어
+
+### 우리와의 차이
+
+    - 오른손은 별도의 learned Strike policy가 아니라 IK 기반이다.
+    - 기타 고정 상태를 중심으로 한다.
+    - 전신 자세나 기타 지지 contact를 다루지 않는다.
+    - 스트랩과 악기 움직임이 없다.
+    - Fret·Strike·Synchronizer·StabilityAdapter의 단계적 재사용
+      구조를 연구하지 않는다.
+
+이 연구는 우리 시스템에서 G0 고정 기타 연주 성능의 직접적인 baseline으로
+사용하기 좋다.
+
+
+3. 피아노 연주 연구에서 얻는 관련 아이디어
+--------------------------------------------
+
+3.1 RoboPianist: Dexterous Piano Playing with Deep Reinforcement Learning
+    Zakka et al., 2023
+
+논문:
+    https://arxiv.org/abs/2304.04150
+
+프로젝트 페이지:
+    https://kzakka.com/robopianist/
+
+### 연구 기여
+
+RoboPianist는 MIDI를 입력으로 받아 의인화된 손이 피아노를 연주하는
+시뮬레이션 환경과 benchmark를 제안했다.
+
+    - 높은 자유도의 손가락 제어
+    - 음악 시간축에 따른 key press
+    - 약 150개 피아노 곡에 대한 평가
+    - 재현 가능한 환경과 해석 가능한 metric
+    - 음악 연주를 dexterous control benchmark로 정립
+
+### 우리에게 주는 의미
+
+우리 Fret·Strike도 기타를 단순한 animation 장면이 아니라,
+정확한 시간·공간·접촉을 요구하는 dexterous manipulation benchmark로
+설명할 수 있다.
+
+### 한계와 차이
+
+피아노는 보통 고정되어 있으므로, 손가락은 키를 누르기만 하면 된다.
+연주자가 악기를 몸으로 지지하거나, 악기 pose가 변하는 문제는 없다.
+
+따라서 RoboPianist는 Fret/Strike의 음악적 정밀도와 평가 체계를
+참조할 수 있지만 StabilityAdapter의 선행연구로 직접 사용하기는 어렵다.
+
+
+3.2 FürElise: Capturing and Physically Synthesizing Hand Motions of Piano Performance
+    Wang et al., SIGGRAPH Asia 2024
+
+프로젝트 페이지:
+    https://pei-xu.github.io/ForElise
+
+논문:
+    https://arxiv.org/abs/2410.05791
+
+### 연구 기여
+
+    - 15명의 전문 피아니스트
+    - 153곡
+    - 약 10시간의 3D hand motion, audio, key event 데이터
+    - multi-view pose estimation과 IK를 이용한 motion reconstruction
+    - diffusion model로 자연스러운 reference motion 생성
+    - imitation learning과 RL을 결합한 물리적 bimanual control
+    - 학습 데이터에 없는 음악에 대한 generalization
+
+### 우리에게 주는 의미
+
+이 연구는 음악 정보와 손 동작을 연결하는 reference representation의
+중요성을 보여준다. 우리 프로젝트의 finger mapping과 picking plan도
+단순한 note list가 아니라, 정책이 실제로 사용할 수 있는 시간·손가락·
+접촉 target representation이어야 한다.
+
+### 우리와의 차이
+
+FürElise는 자연스러운 손 동작 데이터와 piano score generalization이
+중심이다. 우리 프로젝트는 다음을 추가로 다룬다.
+
+    - 기타 줄·프렛이라는 비정형 접촉 구조
+    - 왼손 압현과 오른손 타현의 비대칭 역할
+    - 기타 pose 변화
+    - 기타 지지 contact
+    - 전신 안정화와 기존 기술 보존
+
+
+3.3 PianoMime: Learning a Generalist, Dexterous Piano Player from Internet Demonstrations
+    Qian et al., CoRL 2025
+
+논문:
+    https://proceedings.mlr.press/v270/qian25a.html
+
+### 연구 기여
+
+PianoMime은 인터넷 피아노 영상에서 동작 정보를 추출한 뒤,
+곡별 expert 정책을 학습하고 하나의 generalist 정책으로 distillation한다.
+
+    데이터 준비
+        -> 곡별 expert policy
+        -> generalist policy distillation
+        -> 보지 못한 곡에 대한 평가
+
+논문은 unseen song에서 최대 57% F1을 보고한다.
+
+### 우리에게 주는 의미
+
+우리도 각 곡별 checkpoint를 학습하고 있지만, 논문 관점에서는
+"곡별 policy만 학습한다"는 점이 일반화의 약점으로 보일 수 있다.
+따라서 다음 중 어느 방향을 택할지 명확히 해야 한다.
+
+    A. 곡별 policy를 연구 대상으로 명시하고,
+       물리 조건 변화와 기술 보존에 집중한다.
+
+    B. 여러 곡의 finger mapping/picking plan을 하나의 policy가 처리하도록
+       goal-conditioned generalization을 추가한다.
+
+현재 프로젝트에는 A가 현실적이다. 곡 일반화까지 동시에 주장하면
+StabilityAdapter와 연구 질문이 분산될 가능성이 크다.
+
+
+3.4 Learning to Play Piano in the Real World
+    Zeulner, Selvaraj, Calandra, 2025
+
+논문:
+    https://arxiv.org/abs/2503.15481
+
+### 연구 기여
+
+    - 학습 기반 피아노 연주 정책의 실제 로봇 배치
+    - simulation에서 RL 학습
+    - 실제 동작을 사용한 simulator 보정
+    - Sim2Real2Sim 반복 과정
+    - domain randomization과 simulator accuracy의 비교
+    - 여러 곡에 대한 실제 성능 평가
+
+### 우리에게 주는 의미
+
+이 연구는 악기 물리와 simulation mismatch를 논문에서 어떻게 평가할지
+보여준다. 그러나 피아노는 고정되어 있으므로, 우리 StabilityAdapter는
+단순한 Sim2Real 문제가 아니라 악기 자체의 state와 contact를 제어하는
+문제로 정의해야 한다.
+
+
+4. 일반 물리 기반 캐릭터 제어 연구
+----------------------------------
+
+4.1 DeepMimic
+    Peng et al., 2018
+
+프로젝트 페이지:
+    https://xbpeng.github.io/projects/DeepMimic/index.html
+
+### 연구 기여
+
+DeepMimic은 reference motion imitation reward와 task reward를 결합하여
+물리적으로 반응하는 캐릭터 skill을 학습하는 대표적인 기반 연구다.
+
+    - motion capture 또는 keyframed motion을 imitation target으로 사용
+    - 물리 시뮬레이션 안에서 동작을 재현
+    - task 목표와 imitation 목표를 함께 최적화
+    - perturbation과 morphology 변화에 대한 적응
+    - 여러 motion clip을 하나의 multi-skill system에 통합
+
+### 우리와의 관계
+
+Fret과 Strike를 재사용 가능한 skill prior로 보는 관점은 DeepMimic의
+skill 기반 physics control과 연결된다. 다만 우리 연구의 skill은
+일반적인 걷기·점프가 아니라 음악 이벤트를 수행하는 손 기술이다.
+
+
+4.2 Composite Motion Learning with Task Control
+    Xu et al., TOG 2023
+
+프로젝트 페이지:
+    https://pei-xu.github.io/CompositeMotion
+
+### 연구 기여
+
+이 연구는 여러 reference motion과 task objective를 신체 부위별로
+분리하고, 하나의 composite control policy로 결합한다.
+
+    - 신체 부위별 motion decoupling
+    - 여러 motion source를 동시에 학습
+    - 여러 task reward를 multi-objective 방식으로 처리
+    - 기존 policy를 meta-policy로 재사용
+    - 새로운 composite task를 scratch보다 빠르게 학습
+
+### 우리와의 관계
+
+우리의 Fret·Strike·StabilityAdapter 분해는 이 연구와 개념적으로
+유사하다. 따라서 다음은 독창적인 기여로 주장하기 어렵다.
+
+    "기존 policy를 재사용하여 새로운 복합 task를 학습한다."
+
+우리의 차별점은 복합 task가 음악 연주와 악기 안정화를 동시에 요구하고,
+기존 손 기술의 성능을 보존해야 한다는 점에 있어야 한다.
+
+
+4.3 AdaptNet: Policy Adaptation for Physics-Based Character Control
+    Xu et al., TOG 2023
+
+논문:
+    https://arxiv.org/abs/2310.00239
+
+### 연구 기여
+
+AdaptNet은 기존 RL controller를 동결한 뒤 새로운 latent-space branch와
+내부 adaptation branch를 추가하여 새로운 환경과 동작에 빠르게 적응한다.
+
+    - 기존 policy를 완전히 재학습하지 않음
+    - latent injection으로 작은 변화부터 적응
+    - 더 큰 변화에는 내부 control-layer adapter 사용
+    - adapter를 zero initialization하여 초기에는 원래 policy 보존
+    - 환경, morphology, motion style 변화에 적용
+    - scratch training과 직접 fine-tuning보다 빠른 adaptation
+
+### StabilityAdapter와의 관계
+
+우리 StabilityAdapter의 다음 아이디어는 AdaptNet과 매우 관련이 깊다.
+
+    - source policy 동결
+    - residual branch 우선 학습
+    - 필요할 때 제한적 fine-tuning
+    - 원래 정책과 adapter의 변화량을 제한
+
+따라서 residual adapter 자체를 새로운 방법이라고 주장해서는 안 된다.
+
+우리의 독자적인 문제 정의는 다음이어야 한다.
+
+    "악기 안정화를 위해 policy를 바꾸되,
+     기존 음악 기술의 성능을 보존해야 한다."
+
+이를 위해 StabilityAdapter reward에는 단순한 기타 pose 안정성만 아니라,
+다음의 preservation term이 필요하다.
+
+    - Fret press F1 preservation
+    - Strike timing preservation
+    - sustain preservation
+    - chord readiness preservation
+    - source policy action deviation 제한
+    - fixed-guitar baseline 대비 성능 저하 제한
+
+
+4.4 InterMimic: Towards Universal Whole-Body Control for Physics-Based Human-Object Interactions
+    Xu et al., CVPR 2025
+
+논문:
+    https://openaccess.thecvf.com/content/CVPR2025/papers/Xu_InterMimic_Towards_Universal_Whole-Body_Control_for_Physics-Based_Human-Object_Interactions_CVPR2025_paper.pdf
+
+### 연구 기여
+
+InterMimic은 다양한 사람-물체 상호작용을 하나의 whole-body physics
+policy로 학습하기 위해 teacher policy와 student policy를 사용한다.
+
+    - 다양한 동적·이종 object와의 full-body interaction
+    - 불완전한 motion capture 접촉 오류 보정
+    - 여러 teacher policy를 통한 interaction refinement
+    - teacher rollout을 student policy 학습의 supervision으로 사용
+    - physics refinement와 policy distillation 결합
+    - 여러 interaction에 대한 zero-shot 일반화
+
+### 우리와의 관계
+
+InterMimic은 우리 FullBodyPlayer가 단순한 upper-body animation이
+아니라 whole-body human-object interaction 문제라는 점을 뒷받침한다.
+
+### 우리와의 차이
+
+InterMimic은 일반적인 다양한 object interaction이 중심이다.
+우리 기타 문제는 다음을 동시에 요구한다.
+
+    - 왼손의 지속 압현
+    - 오른손의 타현 순서와 방향
+    - 두 손의 음악적 시간 정렬
+    - 악기 pose 안정화
+    - 스트랩과 신체 접촉
+    - 기존 음악 skill 보존
+
+따라서 InterMimic보다 문제 범위는 좁지만, 음악 이벤트와 물리 안정화가
+결합된 특수한 whole-body interaction benchmark를 제안할 수 있다.
+
+
+4.5 PDP: Physics-Based Character Animation via Diffusion Policy
+    Truong et al., SIGGRAPH Asia 2024
+
+프로젝트 페이지:
+    https://tml.stanford.edu/PDP.github.io/
+
+### 연구 기여
+
+PDP는 diffusion policy의 다양성과 RL policy의 물리적 오류 보정 능력을
+결합한다.
+
+    1. task별 RL expert 학습
+    2. noisy state에서 expert의 clean action 수집
+    3. 해당 데이터를 이용한 diffusion policy 학습
+
+핵심은 물리적 오차나 외란이 있는 상태에서 복구 action을 학습하는 것이다.
+
+### 우리와의 관계
+
+PDP는 기타 자체보다, StabilityAdapter가 움직이는 기타에서 발생하는
+물리적 오차를 복구해야 한다는 점과 관련된다. 다만 현재 프로젝트는
+우선 residual PPO와 제한적 fine-tuning을 사용하고, diffusion은
+필요성이 확인된 뒤 고려하는 것이 적절하다.
+
+
+5. 연구 분야별로 본 현재 프로젝트의 위치
+-----------------------------------------
+
+5.1 기타 연주 animation
+
+기존 기타 연구의 중심은 다음이었다.
+
+    - tablature에서 fingering 생성
+    - 왼손·오른손 hand policy 분리
+    - 두 손 동기화
+    - 시각·청각적으로 자연스러운 기타 연주
+
+우리도 이 문제를 포함하지만, 기존 연구와 동일한 주장에 머물러서는
+안 된다.
+
+5.2 음악 기반 dexterous manipulation
+
+피아노 연구는 음악 score를 손가락 움직임과 정확한 시간 제어 문제로
+정식화했다. 우리 연구는 여기에 기타의 비대칭 양손 작업과 물리적으로
+움직이는 악기라는 조건을 추가한다.
+
+5.3 Physics-based character animation
+
+DeepMimic, Composite Motion, AdaptNet, InterMimic은 각각 다음을 보여준다.
+
+    - 물리 기반 skill 학습
+    - 여러 동작의 분해와 조합
+    - 기존 policy의 효율적인 적응
+    - whole-body object interaction
+
+우리 연구의 질문은 이 기술들을 단순히 조합하는 것이 아니라,
+음악적 성공 조건을 보존해야 하는 object interaction에 적용할 때
+어떤 구조가 필요한지에 있다.
+
+
+6. 우리 연구와 선행연구의 비교표
+---------------------------------
+
+    연구                         입력                  제어 대상             핵심 기여
+    ------------------------------------------------------------------------------------------------
+    Learning to Play Guitar      tablature              손·손가락             tablature 기반 기타 연주
+    Robotic Hands                + fingering                                   RL 왼손 + IK 오른손
+
+    Synchronize Dual Hands      guitar tab +          양손                  독립 policy + latent
+                                 motion reference                            Synchronizer
+
+    RoboPianist                 MIDI                   양손                  피아노 RL benchmark
+
+    FürElise                    score + motion/audio  양손                  대규모 손동작 데이터와
+                                                                                diffusion/RL
+
+    PianoMime                   인터넷 영상           양손                  expert-to-generalist
+                                                                                distillation
+
+    AdaptNet                   기존 policy +          physics character      frozen policy adaptation
+                                새 환경/목표
+
+    InterMimic                  MoCap + objects        full body              teacher-student whole-body
+                                                                                object interaction
+
+    현재 프로젝트              tablature, finger      전신 + 기타            skill-preserving
+                                mapping, picking      + 기타 contact          movable-instrument
+                                plan                                          control
+
+
+7. 현재 구조에서 독창성이 약한 주장
+-------------------------------------
+
+다음 항목은 다른 연구와 겹치므로 단독 기여로 제시하면 약하다.
+
+    1. Fret과 Strike를 독립 학습한다.
+    2. 두 손 policy를 나중에 결합한다.
+    3. 기존 policy를 동결한다.
+    4. adapter 또는 residual policy를 추가한다.
+    5. tablature를 입력으로 사용한다.
+    6. F1, precision, recall로 연주를 평가한다.
+    7. 물리 시뮬레이션과 PD controller를 사용한다.
+    8. 여러 curriculum stage를 사용한다.
+
+이 항목들은 모두 필요하지만, 각각을 새로운 방법이라고 표현해서는 안 된다.
+
+
+8. 현재 구조에서 차별화 가능한 연구 기여
+-----------------------------------------
+
+8.1 Movable-instrument guitar performance
+
+기존 기타 연구의 대부분은 기타가 고정되거나, 기타 pose를 직접
+제어 대상으로 보지 않는다. 우리 연구에서는 기타가 다음 상태를 가진다.
+
+    - root position
+    - root rotation
+    - linear velocity
+    - angular velocity
+    - strap tension/contact
+    - thigh/torso/hand support contact
+    - slip and penetration state
+
+연주자는 기타를 조작하는 동시에 기타가 떨어지거나 회전하지 않도록
+지지해야 한다. 이것은 fixed-instrument dexterous control과 다른 문제다.
+
+8.2 Skill-preserving stability adaptation
+
+StabilityAdapter는 단순히 안정성을 최대화하지 않는다.
+
+    안정성 증가
+        + 기타 위치/회전 유지
+        + 접촉 안정
+        + 미끄러짐 감소
+
+    동시에 보존
+        + Fret 정확도
+        + Strike timing
+        + sustain
+        + chord readiness
+
+따라서 최적화 목표는 단일 reward가 아니라 안정성-연주성 trade-off다.
+
+8.3 Event/readiness supervisor
+
+우리 Synchronizer는 joint action을 출력하는 모델이 아니다.
+공통 음악 이벤트에 대해 다음을 결정한다.
+
+    - 현재 event cursor
+    - 압현이 준비되었는가
+    - 타현을 허용할 것인가
+    - 몇 frame까지 지연 가능한가
+    - 일부 음만 준비되었을 때 실행할 것인가
+    - 지연으로 다음 이벤트와 충돌하는가
+    - 현재 이벤트를 정확히 한 번만 resolve했는가
+
+이 구조는 음악적 성공을 관절 action의 평균값이 아니라
+event-level state machine으로 다룬다는 점에서 차별화할 수 있다.
+
+8.4 Full-body stabilization under asymmetric bimanual roles
+
+일반적인 whole-body object interaction과 기타 연주의 차이는
+두 손의 역할이 대칭적이지 않다는 점이다.
+
+    왼손: 넥의 줄·프렛에 지속 접촉
+    오른손: strike zone을 통과하는 순간 타현
+    몸통·골반·하체: 기타의 pose와 지지력 유지
+
+한쪽 손의 안정화 행동이 다른 손의 음악적 timing을 방해할 수 있다.
+이 trade-off를 정량화하는 것이 전신 기타 연구의 중요한 부분이다.
+
+
+9. 논문에서 피해야 할 과장
+----------------------------
+
+다음과 같은 표현은 피하는 것이 좋다.
+
+    "최초의 양손 기타 연주 policy"
+        이미 2024년 SIGGRAPH Asia에 직접적인 양손 기타 연구가 있다.
+
+    "최초의 policy adaptation"
+        AdaptNet과 여러 physics-based adaptation 연구가 있다.
+
+    "최초의 full-body object interaction"
+        InterMimic과 관련 연구가 있다.
+
+    "Synchronizer를 처음 제안했다"
+        기타 양손 Synchronizer가 이미 있다.
+
+더 정확한 표현은 다음과 같다.
+
+    "기존 양손 기타 연주 skill을 기반으로,
+     움직이는 기타와 신체 접촉이 있는 전신 연주 조건으로 확장한다."
+
+또는 다음과 같이 표현할 수 있다.
+
+    "음악 이벤트의 정확한 실행과 악기 안정화를 분리한
+     skill-preserving hierarchical control framework를 제안한다."
+
+
+10. 논문에서 증명해야 할 핵심 가설
+-----------------------------------
+
+가설 H1: 독립 Fret·Strike prior가 full-body scratch policy보다
+         더 적은 sample로 안정적인 연주를 달성한다.
+
+가설 H2: event/readiness supervisor가 단순 action blending보다
+         두 손 timing과 event F1을 개선한다.
+
+가설 H3: StabilityAdapter가 없는 full-body policy는 기타 안정성은
+         부족하거나, 손 동작을 크게 왜곡한다.
+
+가설 H4: residual-first adaptation은 unrestricted fine-tuning보다
+         기존 Fret·Strike 성능을 더 잘 보존한다.
+
+가설 H5: 하체와 몸통을 trainable하게 허용하되 joint-angle soft constraint를
+         사용하면, 상체 기술을 훼손하지 않으면서 기타 안정성이 향상된다.
+
+가설 H6: G0 -> G1 -> G2 curriculum이 곧바로 G2에서 학습하는 것보다
+         안정성과 수렴 속도에서 유리하다.
+
+
+11. 필요한 ablation 실험
+-------------------------
+
+11.1 Synchronizer ablation
+
+    A. Synchronizer 없음
+    B. action-level blending
+    C. latent-space learned Synchronizer
+    D. 제안한 rule-based event/readiness supervisor
+
+측정:
+
+    - event timing error
+    - Fret readiness-to-strike delay
+    - premature strike count
+    - missed event count
+    - partial chord rate
+    - overall musical event F1
+
+11.2 StabilityAdapter ablation
+
+    A. upper-body만 제어
+    B. full-body scratch policy
+    C. full-body + source policy unrestricted fine-tuning
+    D. residual-only StabilityAdapter
+    E. residual-first + limited fine-tuning
+
+측정:
+
+    - guitar position error
+    - guitar rotation error
+    - slip distance
+    - support/contact continuity
+    - fret F1 degradation
+    - strike timing degradation
+    - training samples to convergence
+
+11.3 Physical support ablation
+
+    A. strap 없음
+    B. strap만 있음
+    C. strap + thigh support
+    D. strap + thigh + torso support
+    E. 실제 G2 contact configuration
+
+측정:
+
+    - fall/unstable termination rate
+    - guitar pose variance
+    - support force distribution
+    - hand action compensation magnitude
+    - musical performance preservation
+
+11.4 Curriculum ablation
+
+    A. G0에서만 학습
+    B. G0 -> G1 -> G2
+    C. G2 direct training
+    D. G0 source policy + G2 adapter
+
+
+12. 권장 논문 기여 패키지
+--------------------------
+
+현재 프로젝트에서 가장 설득력 있는 논문 구성은 다음 세 가지 기여다.
+
+### Contribution 1: Problem formulation
+
+움직이는 악기와 신체 접촉을 포함하는 전신 기타 연주 문제를 정의한다.
+
+단순한 upper-body guitar playing이 아니라, 악기 pose를 유지하면서
+양손 음악 이벤트를 실행해야 하는 coupled human-instrument interaction
+문제로 정식화한다.
+
+### Contribution 2: Method
+
+Fret·Strike skill prior를 보존하고, Synchronizer가 공통 음악 시간축과
+readiness를 관리하며, StabilityAdapter가 기타 안정화 residual을
+학습하는 계층 구조를 제안한다.
+
+중요한 점은 각 module의 책임을 분리하는 것이다.
+
+    Fret
+        압현 기술
+
+    Strike
+        타현 기술
+
+    Synchronizer
+        event timing과 readiness
+
+    StabilityAdapter
+        기타 pose와 신체 contact 안정화
+
+    FullBodyPlayer
+        최종 실행
+
+### Contribution 3: Evaluation protocol
+
+기존 연구처럼 단순 note F1만 사용하지 않고, 다음을 함께 평가한다.
+
+    - 음악 이벤트 성공
+    - 두 손 timing
+    - 기타 pose 안정성
+    - 접촉과 미끄러짐
+    - source skill 보존
+    - adaptation sample efficiency
+
+이 평가 체계가 있어야 “안정화는 되었지만 연주가 나빠졌다”는 문제를
+정량적으로 드러낼 수 있다.
+
+
+13. 논문 제목 후보와 포지셔닝
+------------------------------
+
+현재 구조에 가장 적합한 제목 방향은 다음과 같다.
+
+    Skill-Preserving Whole-Body Control for Physics-Based Guitar Playing
+
+    Hierarchical Bimanual Guitar Playing with Movable-Instrument Stabilization
+
+    From Fixed-Instrument Skills to Whole-Body Guitar Performance
+
+    Event-Synchronized and Stability-Aware Control for Physics-Based Guitar Playing
+
+한국어로 해석하면 핵심은 다음이다.
+
+    "고정 기타에서 배운 양손 연주 기술을 보존하면서,
+     움직이는 기타를 전신으로 안정화하는 물리 기반 기타 연주"
+
+논문의 주어는 Fret이나 Strike가 아니라,
+"fixed-instrument skill을 movable-instrument full-body setting으로
+확장하는 문제"가 되어야 한다.
+
+
+14. 이 연구가 현재 어느 수준의 독창성을 가지는가
+------------------------------------------------
+
+현재 구현만 놓고 보면 독창성은 module별로 다르다.
+
+    Fret policy                   기존 연구와 유사
+    Strike policy                 기존 연구와 유사
+    두 정책의 독립 학습           직접적인 선행연구 존재
+    Synchronizer                  선행연구와 직접 겹침
+    rule-based readiness          차별화 가능하지만 실험 필요
+    StabilityAdapter              일반적인 adapter 연구와 관련
+    movable guitar                차별화 가능성 높음
+    whole-body support            차별화 가능성 높음
+    preservation metric           차별화 가능성 높음
+    G0-G1-G2 curriculum           문제 정의와 결합하면 기여 가능
+
+따라서 최종 논문에서 독창성을 강하게 주장할 수 있는 부분은
+다음 세 가지의 결합이다.
+
+    movable instrument
+        + full-body support
+        + preservation-constrained musical control
+
+이 세 조건을 동시에 다루는 것이 현재 연구의 핵심 공백이다.
+
+단, "검색한 범위에서 찾지 못했다"는 사실만으로 관련 연구가 전혀
+없다고 단정해서는 안 된다. 최종 논문 작성 전에는 ACM, IEEE, arXiv,
+Google Scholar에서 `guitar humanoid whole-body control`,
+`movable musical instrument physics animation`,
+`instrument stabilization humanoid`,
+`skill preserving policy adaptation`을 추가 검색해야 한다.
+
+
+15. 연구 진행 순서에 대한 권장안
+---------------------------------
+
+선행연구와 직접 겹치는 부분을 먼저 완성하는 것보다, 차별화 핵심을
+먼저 검증하는 것이 좋다.
+
+### 단계 1: G0 고정 기타 baseline
+
+    - Fret 단독 성능
+    - Strike 단독 성능
+    - 두 손 동시 성능
+    - event F1과 timing
+
+목적은 기존 기타 연구와 비교 가능한 baseline을 만드는 것이다.
+
+### 단계 2: 기타 pose perturbation
+
+기타에 작은 위치·회전 perturbation을 주고, 손 정책이 얼마나 쉽게
+성능을 잃는지 측정한다.
+
+이 단계에서 다음을 보여야 한다.
+
+    - fixed-guitar policy가 movable-guitar 조건에서 붕괴한다.
+    - 붕괴 원인이 Fret, Strike, timing, support 중 어디에 있는지 구분된다.
+
+### 단계 3: G1 StabilityAdapter
+
+강한 strap과 support를 둔 상태에서 residual-only adapter를 학습한다.
+
+검증 조건:
+
+    - 기타 pose variance 감소
+    - Fret/Strike 성능 저하 제한
+    - source action과 adapter residual이 제한 범위 안에 있음
+
+### 단계 4: G2 full-body support
+
+하체·몸통·목·머리까지 trainable하게 열고, joint-angle constraint와
+기타 안정성 reward를 함께 사용한다.
+
+### 단계 5: ablation과 cross-song 평가
+
+기존 기타 논문과 같은 고정 조건 결과뿐 아니라, G1/G2 조건의 결과를
+핵심 표로 제시한다.
+
+
+16. 최종 결론
+-------------
+
+현재 연구는 기존 모델을 단순히 조합한 것처럼 보일 위험이 실제로 있다.
+특히 Fret·Strike 분리와 양손 Synchronizer는 이미 직접적인 선행연구가
+있다.
+
+그러나 다음과 같이 연구 질문을 다시 정의하면 충분한 연구적 의미가
+생긴다.
+
+    기존 양손 기타 연주 연구:
+        고정된 기타에서 두 손을 정확히 동기화한다.
+
+    현재 연구:
+        고정된 기타에서 습득한 두 손 연주 기술을 보존하면서,
+        기타가 움직이고 신체와 접촉하는 전신 물리 환경으로 확장한다.
+
+이때 논문의 진짜 기여는 Fret network나 Strike network의 구조가 아니라,
+다음의 시스템 원리와 실험적 증명이다.
+
+    1. 음악적 기술과 악기 안정화를 분리한다.
+    2. Synchronizer는 event/readiness supervisor로 제한한다.
+    3. StabilityAdapter는 기존 기술을 보존하는 residual부터 학습한다.
+    4. 필요할 때만 제한적 fine-tuning을 허용한다.
+    5. 음악 성능과 기타 안정성을 동시에 평가한다.
+
+따라서 이 연구를 논문으로 발전시키려면,
+"우리가 여러 모델을 잘 연결했다"가 아니라,
+
+    "왜 이 분해가 움직이는 악기 환경에서 필요한가?"
+
+를 실험으로 답해야 한다.
+
+
+17. 참고문헌 및 링크
+---------------------
+
+    [1] Xu and Wang. Synchronize Dual Hands for Physics-Based Dexterous
+        Guitar Playing. SIGGRAPH Asia 2024.
+        https://doi.org/10.1145/3680528.3687692
+
+    [2] Luo et al. Learning to Play Guitar with Robotic Hands.
+        Computer Graphics Forum, 2024.
+        https://doi.org/10.1111/cgf.15166
+
+    [3] Zakka et al. RoboPianist: Dexterous Piano Playing with Deep
+        Reinforcement Learning. IROS 2023.
+        https://arxiv.org/abs/2304.04150
+
+    [4] Wang et al. FürElise: Capturing and Physically Synthesizing Hand
+        Motions of Piano Performance. SIGGRAPH Asia 2024.
+        https://doi.org/10.1145/3680528.3687703
+
+    [5] Qian et al. PianoMime: Learning a Generalist, Dexterous Piano
+        Player from Internet Demonstrations. CoRL 2025.
+        https://proceedings.mlr.press/v270/qian25a.html
+
+    [6] Zeulner et al. Learning to Play Piano in the Real World. 2025.
+        https://arxiv.org/abs/2503.15481
+
+    [7] Peng et al. DeepMimic: Example-Guided Deep Reinforcement Learning
+        of Physics-Based Character Skills. TOG 2018.
+        https://xbpeng.github.io/projects/DeepMimic/index.html
+
+    [8] Xu et al. Composite Motion Learning with Task Control. TOG 2023.
+        https://doi.org/10.1145/3592447
+
+    [9] Xu et al. AdaptNet: Policy Adaptation for Physics-Based Character
+        Control. TOG 2023.
+        https://arxiv.org/abs/2310.00239
+
+    [10] Xu et al. InterMimic: Towards Universal Whole-Body Control for
+         Physics-Based Human-Object Interactions. CVPR 2025.
+         https://openaccess.thecvf.com/content/CVPR2025/papers/Xu_InterMimic_Towards_Universal_Whole-Body_Control_for_Physics-Based_Human-Object_Interactions_CVPR2025_paper.pdf
+
+    [11] Truong et al. PDP: Physics-Based Character Animation via
+         Diffusion Policy. SIGGRAPH Asia 2024.
+         https://doi.org/10.1145/3680528.3687683
+

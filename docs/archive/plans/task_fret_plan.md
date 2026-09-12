@@ -1,6 +1,6 @@
 # task_fret — 왼손 Fret 압현 학습 환경 설계·구현 계획 (2026-07-16)
 
-> **상태: HISTORICAL.** 최초 Fret 구현 계획과 결정 근거를 보존한다. 현재 정본은 [`master_plan/03_fret.md`](../../master_plan/03_fret.md)다.
+> **상태: HISTORICAL.** 최초 Fret 구현 계획과 결정 근거를 보존한다. 현재 정본은 [`master_plan/03_fret.md`](../../../master_plan/03_fret.md)다.
 
 > 상태: **역사적 구현 계획**. 현재 정본은 `task_fret_design.md`, 실행 상태는 `PROJECT_CONTEXT.md`와
 > `fret/WORK_REPORT.md`를 따른다. 아래 내용은 초기 결정 근거를 보존한다.
@@ -182,7 +182,7 @@ reward/value, named termination, terminal observation과 자동 reset 다음 관
 | 이식 원본 보상 | `related_work/guitar/env.py:1471-1687` |
 | 이식 원본 goal | `related_work/guitar/env.py:1045-1432` |
 | base 코어·근거 | `tab2body/env/base.py`, `tab2body/env/README.md` |
-| 운지 모듈 | `tab2fingermapping/fingermapping/` (ALGORITHM.md), 설계 `docs/finger-mapping-design.md` |
+| 운지 모듈 | `tab2fingermapping/fingermapping/` (ALGORITHM.md), 설계 `docs/archive/finger-mapping-design.md` |
 | 도메인 통계 | `docs/guitar-basics-notes.md` (1~12프렛 91.8%) |
 | 함정·결정 | `PROJECT_CONTEXT.md` §3·§4·§7 |
 | 안티패턴 | 과거 DIGIT 18차 실패 기록의 요약 (소스 디렉터리는 정리됨) |

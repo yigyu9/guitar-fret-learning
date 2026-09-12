@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1180" viewBox="0 0 1600 1180" role="img" aria-labelledby="title desc">
+  <title id="title">Tab2Body 기타 프로젝트 전체 아키텍처</title>
+  <desc id="desc">음원 데이터 처리에서 Fret과 Strike 정책, Canonical event와 Synchronizer, 전신 action, 물리 시뮬레이션 및 G1 안정화 목표까지의 흐름</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#53647a"/></marker>
+    <style>
+      text { font-family: "Noto Sans CJK KR", NanumGothic, sans-serif; fill: #172338; }
+      .title { font-size: 34px; font-weight: 700; }
+      .subtitle { font-size: 17px; fill: #53647a; }
+      .section { font-size: 15px; font-weight: 700; letter-spacing: .08em; fill: #62738a; }
+      .head { font-size: 20px; font-weight: 700; }
+      .body { font-size: 15px; fill: #3f5067; }
+      .small { font-size: 13px; fill: #53647a; }
+      .box { stroke-width: 1.5; rx: 16; }
+      .arrow { stroke: #53647a; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .dashed { stroke-dasharray: 8 7; }
+    </style>
+  </defs>
+  <rect width="1600" height="1180" fill="#f7f9fc"/>
+  <text x="72" y="72" class="title">Tab2Body | 오디오에서 전신 기타 연주까지</text>
+  <text x="72" y="104" class="subtitle">음악 의미, 손 skill, 실행 감독, 물리 결과를 분리한 모듈형 구조</text>
+
+  <text x="72" y="158" class="section">1 · OFFLINE MUSIC DATA</text>
+  <rect x="72" y="178" width="250" height="100" class="box" fill="#eaf0fa" stroke="#aabbd6"/>
+  <text x="94" y="218" class="head">음원 / 주석</text>
+  <text x="94" y="246" class="body">audio · annotation</text>
+  <path d="M322 228 H358" class="arrow"/>
+  <rect x="366" y="178" width="390" height="100" class="box" fill="#eaf0fa" stroke="#aabbd6"/>
+  <text x="390" y="218" class="head">Stage 1</text>
+  <text x="390" y="246" class="body">음표 · tablature · 코드 · 운지 후보</text>
+  <path d="M756 228 H792" class="arrow"/>
+  <rect x="800" y="178" width="728" height="100" class="box" fill="#e5f4f0" stroke="#8bbeb0"/>
+  <text x="824" y="218" class="head">검토된 song bundle</text>
+  <text x="824" y="246" class="body">mapping · training · manifest · hashes</text>
+
+  <text x="72" y="330" class="section">2 · EVENT COMPILATION AND SOURCE SKILLS</text>
+  <rect x="72" y="350" width="1456" height="82" class="box" fill="#f0f3f8" stroke="#b8c3d1"/>
+  <text x="98" y="384" class="head">Canonical Event Compiler</text>
+  <text x="98" y="412" class="body">song bundle → FretEvent + StrikeEvent → 공통 시간축의 Canonical PlayEvent</text>
+  <path d="M1164 278 V320 H800 V342" class="arrow"/>
+  <path d="M800 432 V454 H412 V466" class="arrow"/>
+  <path d="M800 454 H1188 V466" class="arrow"/>
+
+  <rect x="72" y="474" width="680" height="140" class="box" fill="#eaf1ff" stroke="#91acd8"/>
+  <text x="98" y="516" class="head">Fret-v2 · 왼손 압현</text>
+  <text x="98" y="550" class="body">입력 420D observation · 출력 30D 왼팔/왼손</text>
+  <text x="98" y="582" class="small">press · sustain · fret readiness · 다음 목표 전환</text>
+  <rect x="848" y="474" width="680" height="140" class="box" fill="#fff1e8" stroke="#e5b18f"/>
+  <text x="874" y="516" class="head">Strike-v2 · 오른손 타현</text>
+  <text x="874" y="550" class="body">입력 303D observation · 출력 30D 오른팔/오른손</text>
+  <text x="874" y="582" class="small">pick/strum · swept crossing · recovery</text>
+  <path d="M412 614 V646" class="arrow"/>
+  <path d="M1188 614 V646" class="arrow"/>
+
+  <rect x="72" y="654" width="1456" height="102" class="box" fill="#f0ebff" stroke="#b6a4e2"/>
+  <text x="98" y="694" class="head">Rule Synchronizer · 관절 소유권 없이 event 실행을 감독</text>
+  <text x="98" y="726" class="body">공통 clock/cursor · Fret readiness · Strike detector · 기타 안정성 · timing window → EXECUTE / WAIT / SKIP / safe delay</text>
+
+  <text x="72" y="804" class="section">3 · NAMED ACTION, CONTROL, PHYSICAL RESULT</text>
+  <path d="M800 756 V820" class="arrow"/>
+  <rect x="72" y="830" width="360" height="132" class="box" fill="#edf1f6" stroke="#b2bfce"/>
+  <text x="96" y="870" class="head">105-slot named action ABI</text>
+  <text x="96" y="902" class="body">Fret 30 + Strike 30 + hold 45</text>
+  <text x="96" y="932" class="small">8 fixed slots 포함 · 97 movable DOF</text>
+  <path d="M432 896 H466" class="arrow"/>
+  <rect x="474" y="830" width="300" height="132" class="box" fill="#edf1f6" stroke="#b2bfce"/>
+  <text x="498" y="870" class="head">공통 제어</text>
+  <text x="498" y="902" class="body">EMA smoothing</text>
+  <text x="498" y="932" class="small">joint limit · PD target/torque</text>
+  <path d="M774 896 H808" class="arrow"/>
+  <rect x="816" y="830" width="330" height="132" class="box" fill="#e5f4f0" stroke="#8bbeb0"/>
+  <text x="840" y="870" class="head">Isaac Gym / PhysX</text>
+  <text x="840" y="902" class="body">사람 · 기타 · 의자 · 접촉</text>
+  <text x="840" y="932" class="small">control 60Hz · 4 physics substeps</text>
+  <path d="M1146 896 H1180" class="arrow"/>
+  <rect x="1188" y="830" width="340" height="132" class="box" fill="#fff5d9" stroke="#dfc16d"/>
+  <text x="1212" y="870" class="head">물리 결과 판정</text>
+  <text x="1212" y="902" class="body">press · crossing · stability</text>
+  <text x="1212" y="932" class="small">metrics · reward · event outcome</text>
+
+  <rect x="72" y="1000" width="1456" height="132" rx="18" fill="#f1efff" stroke="#b6a4e2" stroke-width="1.5"/>
+  <text x="98" y="1040" class="section">4 · G1/G2 STABILITY LAYER</text>
+  <text x="98" y="1076" class="head">Stability Adapter · 관찰 264D → residual 43D</text>
+  <text x="98" y="1106" class="body">몸통 15 + 움직이는 하체 16 + proximal arm support 12 · free guitar/strap에서 source 연주를 보존하도록 보정</text>
+  <text x="1100" y="1048" class="small">G0: one-simulator physical rollout 미구현</text>
+  <text x="1100" y="1080" class="small">G1/G2: 자유 기타 전곡 연주 미완료</text>
+  <text x="72" y="1164" class="small">점선의 안정화 계층은 G0 action ABI에 별도 slot을 추가하는 뜻이 아니라, 해당 joint에 residual을 적용하는 설계입니다.</text>
+</svg>

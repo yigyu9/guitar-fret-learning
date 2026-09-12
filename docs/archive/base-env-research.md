@@ -1,7 +1,7 @@
 # base.py 참조연구 종합 분석 (자동 생성, 2026-07-09)
 
 > **상태: HISTORICAL RESEARCH SNAPSHOT.** AdaptNet·spring-damper·과거 action partition은
-> 초기 검토 내용이다. 현재 구조는 [`master_plan`](../master_plan/README.md)을 따른다.
+> 초기 검토 내용이다. 현재 구조는 [`master_plan`](../../master_plan/README.md)을 따른다.
 
 > 최종 갱신: 2026-08-03. 이 문서는 base 환경의 연구 근거와 과거 검증을 보존한다. 과거
 > `env_base_smoke` 명칭은 현재 파일로 제공되지 않으며, 현재 검증은 공용

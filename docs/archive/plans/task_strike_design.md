@@ -1,21 +1,21 @@
 # task_strike (오른손 스트라이크/pluck) 설계 — §2 규칙 명세 (rule set)
 
-> **상태: SUPERSEDED.** Xu 기반 Strike 초기 이식안을 보존한 역사 문서다. 현재 정본은 [`master_plan/04_strike.md`](../../master_plan/04_strike.md)이며 Strike-v2 실행 계약은 코드와 최신 학습 문서를 따른다.
+> **상태: SUPERSEDED.** Xu 기반 Strike 초기 이식안을 보존한 역사 문서다. 현재 정본은 [`master_plan/04_strike.md`](../../../master_plan/04_strike.md)이며 Strike-v2 실행 계약은 코드와 최신 학습 문서를 따른다.
 
 > 최종 갱신: 2026-08-03. 이 문서는 역사적 설계 초안이며, 현재 Strike 실행 계약은
 > `30 action / 263 observation / scalar reward-value`다. 실제 실행·smoke·checkpoint 규칙은
-> [`strike/03_training/README.md`](../../strike/03_training/README.md)를 따른다.
+> [`strike/03_training/README.md`](../../../strike/03_training/README.md)를 따른다.
 
 > **상태 안내(2026-07-23): 이 문서는 Xu `ICCGANRightHand` 이식 당시의 역사적 분석 초안이다.**
 > 구현 계약으로 직접 사용하지 않는다. 현행 정본은
-> [`strike/02_physical_control/rules.md`](../../strike/02_physical_control/rules.md)로 승계됐다.
+> [`strike/02_physical_control/rules.md`](../../../strike/02_physical_control/rules.md)로 승계됐다.
 > 특히 자동 string-span 채움, 무기한 goal 소비, `t`만 확인하는 무한선 교차, 1채널 보상,
 > thumb-index 접촉 grip과 즉시 `G:pluck_range` 벌점은 새 정본의 결정을 따른다. 현재 pick S0는
 > `READY→APPROACH→RELEASE→RECOVER` 정책 phase와
 > `ARMED→RELEASE pulse→WAIT_REARM→ARMED` detector state를 분리하며 CONTACT/LOAD를 성공 조건으로
 > 요구하지 않는다. 입력도 raw goal을 직접 쓰지 않고
 > `SourceNote→StrikeIntent→StrikePlan→RuntimeGoal`을 따른다. 레거시 구현의 실제 범위와 이식 금지는
-> [`LEGACY_GUITAR_PICK_ANALYSIS.md`](../../strike/90_references/LEGACY_GUITAR_PICK_ANALYSIS.md)에 있다.
+> [`LEGACY_GUITAR_PICK_ANALYSIS.md`](../../../strike/90_references/LEGACY_GUITAR_PICK_ANALYSIS.md)에 있다.
 
 > 백지 재설계 당시의 **역사적 작업 기록**. 오른손이 fingermapping을 보고 정해진 타이밍에 정확한 줄을
 > 픽(또는 지정 손끝)으로 **타현(pluck)** 하는 것을 학습하기 위한 **규칙 명세**. 각 규칙은 실제로
@@ -23,7 +23,7 @@
 > (= 그 파일들의 사양서). 이식원본은 `related_work/guitar/env.py`(Xu `ICCGANRightHand`, 1733–2069)와
 > cfg `right`. 파일 지도는 `tab2body/STRUCTURE.md`, 결정·함정은 `PROJECT_CONTEXT.md §3·§4`.
 > 최종 갱신 2026-07-17. 상태: 규칙 초안(달성 S1~S6 + 사실성 S7~S10 + 안전 S11~S13 + 타이밍 S14~S16 +
-> 관측 S17~S19 + 메커니즘 M1~M3). 짝 문서 = `docs/plans/task_fret_design.md`(왼손 압현).
+> 관측 S17~S19 + 메커니즘 M1~M3). 짝 문서 = `docs/archive/plans/task_fret_design.md`(왼손 압현).
 
 ## 0. 관통하는 프레임 — 누가 무엇을 책임지나
 
@@ -219,4 +219,4 @@
 
 ---
 
-작성 근거 파일(모두 절대경로): 템플릿 `/home/ajou/yigyu/3/docs/plans/task_fret_design.md`, 파일 규약 `/home/ajou/yigyu/3/tab2body/STRUCTURE.md`, 결정·함정·규약 `/home/ajou/yigyu/3/PROJECT_CONTEXT.md`, 이식원본(검증한 라인 1857~1975, 1990~2069) `/home/ajou/yigyu/3/related_work/guitar/env.py`.
+작성 근거 파일(모두 절대경로): 템플릿 `/home/ajou/yigyu/3/docs/archive/plans/task_fret_design.md`, 파일 규약 `/home/ajou/yigyu/3/tab2body/STRUCTURE.md`, 결정·함정·규약 `/home/ajou/yigyu/3/PROJECT_CONTEXT.md`, 이식원본(검증한 라인 1857~1975, 1990~2069) `/home/ajou/yigyu/3/related_work/guitar/env.py`.

@@ -1,6 +1,6 @@
 # 학습 환경 정의 — 알고리즘·네트워크·하이퍼파라미터·I/O (fret · strike · full 공통)
 
-> **상태: SUPERSEDED.** 초기 학습 구조를 보존한 역사 문서다. 현재 정본은 [`master_plan`](../../master_plan/README.md)이며, 아래의 차원·하이퍼파라미터·Full 구조를 현행 계약으로 사용하지 않는다.
+> **상태: SUPERSEDED.** 초기 학습 구조를 보존한 역사 문서다. 현재 정본은 [`master_plan`](../../../master_plan/README.md)이며, 아래의 차원·하이퍼파라미터·Full 구조를 현행 계약으로 사용하지 않는다.
 
 > 최종 갱신: 2026-09-01. 현재 Fret 계약은 `30 action / 425 observation / 6 reward-value`다. 아래의
 > `341 observation` 표기는 당시 설계 상태이며, 이 문서의
@@ -243,5 +243,5 @@ done.shape = (512,)   bool    # timeout | NaN | vel-blow | 태스크 종료(R7·
 
 ## 8. 참고
 - 이식원본 수치: `related_work/guitar/main.py`(하이퍼·루프)·`models.py`(망)·`env.py`(주파수·ob_horizon·goal/fret/timer 정규화)·`cfg/{left_demo,right,two_demo}.py`.
-- 규칙(무엇을 보상): `docs/plans/task_{fret,strike,full,hold}_design.md`.
+- 규칙(무엇을 보상): `docs/archive/plans/task_{fret,strike,full,hold}_design.md`.
 - 파일 지도: `tab2body/STRUCTURE.md`. 결정·함정: `PROJECT_CONTEXT.md §3·§4`.

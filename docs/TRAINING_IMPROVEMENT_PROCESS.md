@@ -9,7 +9,7 @@
 
 | 환경 | 누적 이력 정본 | 역할 |
 |---|---|---|
-| Fret | [`FRET_EXPERIMENT_HISTORY.md`](2026-08-24/FRET_EXPERIMENT_HISTORY.md) | 왼손 압현 실험과 중복 방지 결정 |
+| Fret | [`FRET_EXPERIMENT_HISTORY.md`](archive/dated/2026-08-24/FRET_EXPERIMENT_HISTORY.md) | 왼손 압현 실험과 중복 방지 결정 |
 | Strike | [`EXPERIMENT_HISTORY.md`](../strike/03_training/EXPERIMENT_HISTORY.md) | 오른손 타현 실험과 중복 방지 결정 |
 
 실행 폴더의 `ANALYSIS.md`는 한 run의 자동 분석 결과이고, 위 이력 문서는 여러 run을

@@ -2,7 +2,7 @@
 
 이 디렉터리는 초기 구현 과정에서 작성한 설계안과 체크리스트를 보존하는 역사 기록이다.
 
-현재 연구 구조와 모듈 책임의 정본은 [`master_plan`](../../master_plan/README.md)이다. 이 디렉터리의 수치, action/observation 차원, 네트워크 구조, G0/G1/G2 책임을 현재 구현 계약으로 사용하지 않는다.
+현재 연구 구조와 모듈 책임의 정본은 [`master_plan`](../../../master_plan/README.md)이다. 이 디렉터리의 수치, action/observation 차원, 네트워크 구조, G0/G1/G2 책임을 현재 구현 계약으로 사용하지 않는다.
 
 ## 문서 상태
 

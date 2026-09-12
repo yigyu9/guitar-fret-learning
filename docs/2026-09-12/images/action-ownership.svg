@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="880" viewBox="0 0 1500 880" role="img" aria-labelledby="title desc">
+  <title id="title">105-slot action ABI의 소유권과 Stability residual</title>
+  <desc id="desc">Full action 105개 slot은 Fret 30, Strike 30, reserved hold 45로 나뉘며 Stability Adapter의 43개 residual은 일부 slot에 중첩되는 것을 보여주는 다이어그램</desc>
+  <defs>
+    <style>
+      text { font-family: "Noto Sans CJK KR", NanumGothic, sans-serif; fill: #172338; }
+      .title { font-size: 32px; font-weight: 700; }
+      .sub { font-size: 16px; fill: #53647a; }
+      .head { font-size: 19px; font-weight: 700; }
+      .body { font-size: 15px; fill: #3f5067; }
+      .small { font-size: 13px; fill: #53647a; }
+    </style>
+  </defs>
+  <rect width="1500" height="880" fill="#f7f9fc"/>
+  <text x="64" y="70" class="title">105-slot Full action ABI · 실제 이동축 97개</text>
+  <text x="64" y="102" class="sub">위 막대는 G0 action ABI의 disjoint partition · 아래 Stability 43D는 별도 slot을 더하는 것이 아니라 선택한 joint에 겹쳐짐</text>
+
+  <text x="82" y="174" class="head">Full action ABI · 105 named slots</text>
+  <rect x="82" y="198" width="400" height="112" rx="14" fill="#dce8ff" stroke="#91acd8" stroke-width="1.5"/>
+  <text x="106" y="238" class="head">Fret source</text>
+  <text x="106" y="270" class="body">30D · 왼쪽 어깨 / 팔꿈치 / 손목 / 손</text>
+  <text x="106" y="296" class="small">왼손 press · sustain</text>
+  <rect x="482" y="198" width="400" height="112" rx="14" fill="#ffe7d9" stroke="#e5b18f" stroke-width="1.5"/>
+  <text x="506" y="238" class="head">Strike source</text>
+  <text x="506" y="270" class="body">30D · 오른쪽 어깨 / 팔꿈치 / 손목 / 손</text>
+  <text x="506" y="296" class="small">pick/strum · recovery</text>
+  <rect x="882" y="198" width="600" height="112" rx="14" fill="#e9edf3" stroke="#b2bfce" stroke-width="1.5"/>
+  <text x="906" y="238" class="head">Reserved hold</text>
+  <text x="906" y="270" class="body">45D · G0에서 source가 소유하지 않는 슬롯</text>
+  <text x="906" y="296" class="small">실제 hold pose를 넣음 · 숫자 0은 seated hold와 같지 않음</text>
+  <text x="82" y="342" class="small">30 + 30 + 45 = 105 slots</text>
+
+  <text x="82" y="414" class="head">Stability Adapter · residual layer · 43D</text>
+  <rect x="82" y="438" width="240" height="108" rx="14" fill="#eee8ff" stroke="#b6a4e2" stroke-width="1.5"/>
+  <text x="104" y="478" class="head">Body · 15D</text>
+  <text x="104" y="510" class="body">몸통 / thorax</text>
+  <rect x="342" y="438" width="260" height="108" rx="14" fill="#eee8ff" stroke="#b6a4e2" stroke-width="1.5"/>
+  <text x="364" y="478" class="head">Lower body · 16D</text>
+  <text x="364" y="510" class="body">움직일 수 있는 하체 축</text>
+  <rect x="622" y="438" width="300" height="108" rx="14" fill="#eee8ff" stroke="#b6a4e2" stroke-width="1.5"/>
+  <text x="644" y="478" class="head">Arm support · 12D</text>
+  <text x="644" y="510" class="body">shoulder / elbow support</text>
+  <rect x="942" y="438" width="540" height="108" rx="14" fill="#f0f3f8" stroke="#b8c3d1" stroke-width="1.5"/>
+  <text x="966" y="478" class="head">43D = 15 + 16 + 12</text>
+  <text x="966" y="510" class="body">source 연주 action을 보존하며 더하는 보정</text>
+
+  <text x="82" y="574" class="small">43D residual은 joint name으로 해당 full-ABI 슬롯에 겹쳐 적용합니다. 별도 43개 슬롯을 추가하지 않습니다.</text>
+
+  <rect x="82" y="594" width="1400" height="204" rx="18" fill="#fff5d9" stroke="#dfc16d" stroke-width="1.5"/>
+  <text x="108" y="636" class="head">고정 축과 실제 움직임</text>
+  <rect x="108" y="662" width="1260" height="34" rx="8" fill="#dce8ff"/>
+  <rect x="108" y="662" width="360" height="34" rx="8" fill="#7fa1dc"/>
+  <rect x="468" y="662" width="360" height="34" fill="#e9a47b"/>
+  <rect x="828" y="662" width="540" height="34" rx="8" fill="#b7c1ce"/>
+  <text x="108" y="728" class="body">30 Fret + 30 Strike + 45 hold = 105 named slots</text>
+  <text x="108" y="766" class="small">이 중 8개 zero-range 축은 ABI에 남지만 고정됩니다 → 97 effective movable DOF</text>
+</svg>
