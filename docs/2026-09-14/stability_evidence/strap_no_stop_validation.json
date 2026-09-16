@@ -1,0 +1,50 @@
+{
+  "scope": "injected safety measurements; physical strap forces unchanged",
+  "retained_failures": {
+    "nonfinite_action": true,
+    "drop": true
+  },
+  "sustained_limits": {
+    "frames": 80,
+    "early_terminations": 0,
+    "tension_and_extension_reported": true,
+    "nonzero_passive_strap_force": true
+  },
+  "episode_budget": {
+    "frames": 600,
+    "completed": 4,
+    "unsafe_rows_timeout": 2,
+    "physical_failures": 0
+  },
+  "cpu_tests_passed": 67,
+  "gpu_tests_passed": 3,
+  "unchanged_physics_sha256": {
+    "tab2body/env/strap.py": "dd1011cb006ce34da05f0f127a31e90cbeeb466b82820137c89a2ad61c12b59e",
+    "tab2body/stability_strap.py": "81488f296edebf1c9fc74b15080d86414fcdf442338139d883295a77ca717dfe",
+    "tab2body/env/base.py": "abd405dbc3a2edacd7a566cd88dc0c00c44a0081ac054d1e75db917deb14c05f",
+    "stability_adapter/strap_config.json": "5b1a4d58347ed80cf6f540771315aab602e03cb55967abe2d93020fc7d312df4"
+  },
+  "implementation": {
+    "source_workspace": "/home/ajou/yigyu/3",
+    "baseline_implementation": "/home/ajou/yigyu/3/stability_adapter/development/pinch_curriculum",
+    "reason": "Preserve running source; remove only strap-limit early termination",
+    "changed_files": [
+      {
+        "path": "tab2body/env/tasks/task_stability_support_hold.py",
+        "original_sha256": "9ed8f8638e49881335a9d624d459b22fed2f2a010b68a77c958b5d97c7b13b8f",
+        "implementation_sha256": "86d335f771c6badb3da89c2fc02b2058bdf8f86165ebc9721a00a3cd99005c38"
+      },
+      {
+        "path": "tab2body/train_stability.py",
+        "original_sha256": "528b3e12b759a77918ccd31b6024fc2f58df523b791b90bd11f0a8fc9956da6d",
+        "implementation_sha256": "fe85ce289563948a4034de67b5ccd6ddfb110b9ff8129075d1fd64f02e86b670"
+      },
+      {
+        "path": "tab2body/tests/test_stability_strap_no_stop_runtime.py",
+        "original_sha256": null,
+        "implementation_sha256": "f68459521b8e5c03a1d73d832e5cf59eced782db21b9d8f3436f5ac0bc0c54dc"
+      }
+    ]
+  },
+  "scope_note": "Only early termination removed; success safety gates retained; prior running process unchanged"
+}

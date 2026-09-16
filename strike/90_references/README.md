@@ -3,7 +3,7 @@
 - [Xu guitar 오른손 pick 구현 분석과 이식 결정](LEGACY_GUITAR_PICK_ANALYSIS.md):
   물리 피크 부재, swept marker detector의 재사용/수정 범위, reference·checkpoint 한계와 S0/V2 경계.
 - `../../PROJECT_CONTEXT.md`: 프로젝트 결정과 최신 상태.
-- `../../docs/plans/task_strike_design.md`: Xu 오른손 환경을 해설한 기존 이식 초안.
+- `../../docs/archive/plans/task_strike_design.md`: Xu 오른손 환경을 해설한 기존 이식 초안.
 - `../../related_work/guitar/env.py`: `ICCGANRightHand` 원본 구현.
 - `../../related_work/guitar/cfg/right.py`: Xu 오른손 goal/style 가중치와 discriminator 설정.
 - `../../related_work/guitar/assets/right_hand_guitar.xml`: 27DOF 부유손, 빈 `RH:pick` marker와 string endpoint.

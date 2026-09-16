@@ -1,1 +1,0 @@
-../../docs/plans/task_fret_checklist.md

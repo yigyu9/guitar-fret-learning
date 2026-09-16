@@ -1,6 +1,6 @@
 # Fret 학습 실행 폴더
 
-> 최종 갱신: 2026-08-03
+> 최종 갱신: 2026-09-07 — Fret-v2 기본 계약
 
 실행 결과는 `runs/<run-name>/` 아래에서 학습·평가·checkpoint 단위로 분리합니다.
 `runs/`는 학습 명령이 자동으로 만들며, 실행 기록이 있는 폴더에 새 학습을 덮어쓰지 않습니다.
@@ -45,15 +45,17 @@ python -m tab2body.train \
 - checkpoint 저장: 500 iteration마다 및 종료 시 마지막 iteration
 - resource guard: 최대 1,024 환경, 시작 시 여유 VRAM/RAM/디스크 확인
 
-현재 Fret 계약은 33 action, 428 observation, 6 reward/value입니다.
+현재 기본 Fret 계약은 30 action, 420 observation, 6 reward/value입니다.
 
 ```text
-observation = base180 + goal128 + previous EMA action33 + thumb geometry12
-              + future goal context75
+observation = proprio60 + arm_anchor18 + hand_geometry60 + current_event45
+              + target_geometry24 + finger_transition52 + lookahead72
+              + readiness_contact45 + phase12 + synchronizer2 + history30
 ```
 
-이전 353-observation 정책은 `--initialize-from`으로만 확장하며, 구 37-action 또는
-341-observation checkpoint는 strict resume하지 않습니다.
+`L_Thorax`를 제어하던 기존 33-action checkpoint는 재개·초기화하지 않습니다. 새 학습과 재개에는
+30-action/420-observation Fret-v2 계약이 일치하는 checkpoint만 사용합니다. 425D Fret-v1은
+명시적 호환 실행에만 사용하고 v2와 checkpoint를 섞지 않습니다.
 
 ## 산출물 구조
 

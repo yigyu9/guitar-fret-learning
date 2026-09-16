@@ -1,0 +1,87 @@
+{
+  "created_at": "2026-09-14T12:55:33.430449+09:00",
+  "status": "implementation_and_short_runtime_validation_complete_policy_not_converged",
+  "implementation": "stability_adapter/development/pinch_curriculum",
+  "final_contact_controller_audit": {
+    "schema": "pinch_scale_audit.v2",
+    "arguments": {
+      "config": "stability_adapter/pinch_grasp.json",
+      "num_envs": 1024,
+      "frames": 600,
+      "controller": "contact",
+      "depenetration_speed": null,
+      "spacing": null,
+      "disable_chair_contact": false,
+      "disable_pinch_proxies": false,
+      "solver_type": null,
+      "position_iterations": null,
+      "cold_pinch_start": false,
+      "physics_substeps": 4,
+      "capture_boundary": false,
+      "mass_floor": null,
+      "explicit_substep_creation": false,
+      "contact_offset": null,
+      "no_strap": false,
+      "root_before_dof": false,
+      "ground_distance": null,
+      "disable_leg_guitar_contact": false,
+      "out": "/tmp/pinch_grasp_final_contact_1024.json"
+    },
+    "completed": 1024,
+    "physical_failures": 0,
+    "learning_successes": 1024,
+    "grasp_seen": 1024
+  },
+  "ppo": {
+    "num_envs": 1024,
+    "iterations": 24,
+    "samples": 786432,
+    "completed_episodes": 1024,
+    "learning_success": 0,
+    "timeout": 1004,
+    "physical_failure": 20,
+    "failure_nonfinite_or_blowup": 0,
+    "failure_drop": 0,
+    "failure_strap": 20
+  },
+  "evaluation": {
+    "completed_episodes": 8,
+    "success_count": 0,
+    "success_rate": 0.0,
+    "target_success_count": 0,
+    "target_success_rate": 0.0,
+    "maintain_success_rate": 0.0,
+    "physical_failure_rate": 0.0,
+    "missing_perturbation_count": 0,
+    "learning_success_count": 0,
+    "learning_success_rate": 0.0,
+    "grasp_success_rate": 0.0,
+    "grasp_acquisition_rate": 0.0,
+    "grip_diagnostic_episodes": 8,
+    "method_success_rate": 0.0,
+    "grip_left_proxy_used_rate": 0.0,
+    "grip_right_proxy_used_rate": 0.0
+  },
+  "transport_actor_initialization": {
+    "num_envs": 1024,
+    "iterations": 2,
+    "completed": true
+  },
+  "same_lesson_resume": {
+    "num_envs": 1024,
+    "start_iteration": 24,
+    "end_iteration": 26,
+    "completed": true
+  },
+  "cpu_regressions": {
+    "passed": 67,
+    "independent_review_passed": 47,
+    "review_warning": "nonfinite JSON serialization fixed and regression-tested"
+  },
+  "limits": [
+    "contact controller success is not learned PPO success",
+    "single fixed pinch reset distribution",
+    "Full Fret/Strike virtual-frame lookup not yet integrated",
+    "24-iteration model is not a qualified grasp initializer"
+  ]
+}

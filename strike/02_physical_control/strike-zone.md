@@ -109,8 +109,5 @@ sampled lane 폭이다. x/z의 3D gate 크기와 agent별 attack angle은 합성
 clip하고, allowed/preferred/current lane 및 `RH:pick` 가상점을 remembered/current 카메라 PNG에
 투영한다. Isaac Gym 물리·충돌 geometry는 추가하지 않으며 기존 기본 영상도 덮어쓰지 않는다.
 
-5,000-iteration 정책의 실제 결과는 다음 두 영상과 별도 metadata에 있다.
-
-- [remembered zone/pick 영상](../training/runs/strike_5000_20260727_v2_fixed_a1/videos/strike_005000_rollout_remembered_zone_pick.mp4)
-- [current zone/pick 영상](../training/runs/strike_5000_20260727_v2_fixed_a1/videos/strike_005000_rollout_current_zone_pick.mp4)
-- [zone/pick metadata](../training/runs/strike_5000_20260727_v2_fixed_a1/videos/strike_005000_rollout_zone_pick.json)
+당시 5,000-iteration 영상과 metadata는 현재 저장소에 없으며 역사적 결과 문서에서만
+실험 경로를 보존한다. 현재 시각화는 새 checkpoint에서 도구를 다시 실행해 생성해야 한다.

@@ -1,1 +1,0 @@
-../../tab2body/TRAINING.md

@@ -1,5 +1,9 @@
 # 1. 운지 결정 — 탭을 왼손 동작으로 바꾸기
 
+> **현재 범위 — 2026-09-07:** 구현된 v0 finger mapping의 역할 설명이다. 현재 Full event의
+> sounding target은 `mapping/fingering.json`의 note를 정본으로 사용한다. 바레·특수 주법과
+> finger가 없는 fretted note는 지원되는 것으로 추정하지 않고 compiler에서 fail-closed 한다.
+
 ## 이 단계가 하는 일
 
 탭은 어느 줄의 몇 프렛을 연주할지는 알려주지만, **어느 손가락으로 누를지**는 알려주지 않는다. 이 단계는 각 음에 손가락을 배정하고 손의 포지션, 바레, 누름·해제 시각을 결정한다.
@@ -56,6 +60,6 @@
 
 ## 상세 문서
 
-- [운지 알고리즘 설계 정본](design.md)
-- [현재 구현과 비용 가중치](implementation.md)
-- [기타 기초 용어](../90_references/guitar-basics.md)
+- [운지 알고리즘 설계 정본](../../docs/archive/finger-mapping-design.md)
+- [현재 구현과 비용 가중치](../../tab2fingermapping/fingermapping/ALGORITHM.md)
+- [기타 기초 용어](../../docs/guitar-basics-notes.md)

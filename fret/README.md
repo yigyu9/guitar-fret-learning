@@ -1,6 +1,6 @@
 # fret — 왼손 운지 연구 안내서
 
-> 최종 갱신: 2026-08-03
+> 최종 갱신: 2026-09-07 — Fret-v2 기본 계약 반영
 
 이 디렉터리는 왼손 운지 연구의 결정, 학습 방식, 현재 결과를 정리한 문서 허브다.
 
@@ -25,7 +25,10 @@
 
 ## 읽는 순서
 
-처음 읽는다면 아래 세 문서만 순서대로 보면 된다.
+fret 학습이 처음이라면 이 문서와 [현재 학습·실행 계약](03_training/README.md)을 먼저 읽는다.
+`archive/FRET_LEARNING_GUIDE.md`는 Fret-v1 당시의 상세 학습 설명을 보존한 역사 문서다.
+
+그 뒤 연구의 세 영역을 아래 순서로 보면 된다.
 
 1. [운지 결정 이해하기](01_finger_mapping/README.md)
 2. [물리 압현 이해하기](02_physical_control/README.md)
@@ -33,25 +36,31 @@
 
 결정을 미룬 항목은 [보류 항목](04_deferred/README.md)에 따로 모아 두었다.
 
-각 디렉터리의 `README.md`는 사람이 읽는 요약이고, 그 안의 `design.md`, `rules.md` 같은 문서는 수식·상수·구현 계약을 확인할 때 보는 상세 정본이다.
+각 현재 디렉터리의 `README.md`가 안내와 계약의 진입점이다. 과거 설계·실험 문서는 `archive/`에 보관하며 현재 계약으로 사용하지 않는다.
 
 ## 현재 상태
 
 | 단계 | 상태 | 의미 |
 |---|---|---|
 | 운지 결정 | v0 구현 완료 | 교본 운지·앵커·바레·선행 계획을 처리하며 rock3에서 생체역학 위반 0 |
-| 단음 물리 학습 | 진행 중 | 현재 호환 run은 2026-08-03 생성분이며 장시간 품질 결과는 아직 확정하지 않음 |
+| Fret-v2 물리 학습 | 진행 중 | 30-action/420-observation 환경 구현, 곡별 커리큘럼 checkpoint 생성 |
 | 물리 안전 검증 | 핵심 조건 구현 | checkpoint contract와 안전 진단을 사용하며, 구 smoke·구 checkpoint는 제거함 |
 | 곡별 반복 커리큘럼 | 구현 완료 | 같은 곡 내부 coverage → integration → 전체곡 연주 |
 | 화음·바레 | 후속 단계 | 현재 S0는 암묵 바레와 동일 손가락 다중 줄 목표를 로딩 단계에서 거부하며, 명시적 바레 확장 흔적만 보존 |
 
-현재 인터페이스는 `33 action / 428 observation / 6 reward-value`다. observation은 base180 + goal128 +
-직전 EMA action33 + thumb geometry12 + 미래 goal75로 구성된다. 정책은 bounded action과 EMA를
-사용한다. 체크포인트는 제어 순서, 보상, 안전 설정, 곡 데이터와 코드 지문이 모두 맞아야 로드된다.
+현재 기본 인터페이스는 `Fret-v2: 30 action / 420 observation / 6 reward-value`다. 관측은
+`O_proprio60 + O_arm_anchor18 + O_hand_geometry60 + O_current_event45 + O_target_geometry24 +
+O_finger_transition52 + O_lookahead72 + O_readiness_contact45 + O_phase12 + O_synchronizer2 +
+O_history30`의 named block으로 봉인한다. Fret-v1 425D는 명시적 호환 baseline일 뿐 새 주 학습의
+기본값이 아니다. 정책은 block encoder actor-critic, bounded action과 EMA를 사용한다.
+체크포인트는 제어 순서, 관측 manifest, 보상, 안전 설정, 곡 데이터와 코드 지문이 모두 맞아야 로드된다.
 R22 손가락 capsule 겹침은 아직 진단 전용이다.
 
-현재 호환 실행은 `fret/training/runs/20260803_*`에 보존되어 있다. 500 iteration 배관·초기 학습
-기록을 위한 것이며, 장시간 품질 기준을 통과한 공식 모델로 해석하지 않는다. 다른 곡은 같은 규칙으로
+2026-09-01부터 `L_Thorax` 3DOF는 정책 행동에서 제외하고 초기 자세의 PD target으로 유지한다.
+따라서 기존 33-action checkpoint는 호환하지 않으며 새 정책을 처음부터 학습한다.
+
+`fret/training/runs/20260803_*`는 이전 33-action 배관의 역사 기록으로만 보존한다. Fret-v2에서는
+재개·평가하지 않는다. 새 30-action 학습은 별도 run으로 생성한다. 다른 곡은 같은 규칙으로
 별도 정책을 반복 학습한다. 새 곡의 즉시 일반화는 목표가 아니다.
 
 ## 디렉터리 구조
@@ -64,7 +73,7 @@ fret/
 ├── 03_training/                 PPO 학습·평가·현재 결과
 ├── 04_deferred/                 학습 결과를 기다리는 보류 항목
 ├── training/                    실제 곡별 학습 실행 산출물과 보관 규칙
-├── 90_references/               프로젝트 결정·기타 기초·코드 구조
+├── archive/                      Fret-v1 과거 설계·실험 기록
 └── renders/                     프렛 작업에서 생성한 이미지·영상
 ```
 
@@ -81,19 +90,16 @@ fret/
 
 ## 상세 참고
 
-- [프로젝트 결정과 현재 상태](90_references/project-context.md)
-- [간단 작업 보고서](WORK_REPORT.md)
-- [기타 연주 기초](90_references/guitar-basics.md)
-- [코드 구조](90_references/code-structure.md)
+- [Fret 압현 학습: 처음부터 끝까지](archive/FRET_LEARNING_GUIDE.md)
+- [Fret 학습 실험 이력과 중복 방지표](../docs/archive/dated/2026-08-24/FRET_EXPERIMENT_HISTORY.md)
+- [프로젝트 결정과 현재 상태](../PROJECT_CONTEXT.md)
+- [간단 작업 보고서](archive/WORK_REPORT.md)
+- [기타 연주 기초](../docs/guitar-basics-notes.md)
+- [코드 구조](../tab2body/STRUCTURE.md)
 - [학습 실행 폴더와 산출물 관리](training/README.md)
-- [프렛 위치와 압현 범위 캡처](renders/fretboard_reference.png)
-- [프렛 위치·압현 범위·6줄 표시 캡처](renders/fretboard_reference_with_strings.png)
-- [R7 손목 안전 유효 영역 캡처](renders/wrist_safety_envelope_preview.png)
-- [R7 손목 안전 유효 영역 6방향 비교](renders/wrist_safety_envelope_multiview.png)
-- [R8 손가락 기타 뒤 이탈 경계 평면 비교](renders/finger_back_limit_plane_multiview.png)
-- [R13 손바닥 법선과 세계 바닥 방향 비교](renders/palm_world_direction_multiview.png)
+- 과거 `fret/renders/` 진단 이미지는 현재 저장소에 없으므로 현재 성능 근거로 링크하지 않는다.
 
-문서가 충돌하면 `project-context → checklist/training/current-results → rules → implementation-plan → 과거 설계` 순서로 최신 상태를 판단한다.
+문서가 충돌하면 `master_plan → 현재 코드·자동 계약 검사 → 03_training → 역사 문서` 순서로 판단한다.
 
 학습 실행 명령은 [Fret 학습 문서](03_training/README.md)와
 [`tab2body/TRAINING.md`](../tab2body/TRAINING.md)를 따른다.

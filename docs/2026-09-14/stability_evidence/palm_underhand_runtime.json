@@ -1,0 +1,58 @@
+{
+  "schema": "tab2body.stability_palm_underhand_runtime.v1",
+  "date": "2026-09-14",
+  "scope": "Isaac Gym GPU, pinch_transport, two environments, passive hold controller, 60 frames",
+  "criteria": {
+    "entry_below_neck_m": 0.005,
+    "entry_facing_neck_dot": 0.5,
+    "entry_dwell_s": 0.15,
+    "retained_below_neck_m": -0.005,
+    "retained_facing_neck_dot": 0.25
+  },
+  "initial_after_two_warmup_frames": {
+    "valid": true,
+    "entry": false,
+    "retained": true,
+    "palm_below_neck_m": -0.00313645601272583,
+    "palm_facing_neck_dot": 0.8016383647918701
+  },
+  "frame_30": {
+    "phase": 1,
+    "entry": true,
+    "retained": true,
+    "palm_below_neck_m": 0.0060770511627197266,
+    "palm_facing_neck_dot": 0.6939704418182373
+  },
+  "runtime": {
+    "fk_max_position_error_m": 7.602486054313239e-07,
+    "completed_environments": 0,
+    "observation_per_frame": 551,
+    "history_frames": 8,
+    "policy_input": 4408
+  },
+  "ppo_smoke": {
+    "environments": 8,
+    "iterations": 1,
+    "samples": 256,
+    "checkpoint_schema": "stability_task.pinch.v3",
+    "pinch_schema": "tab2body.stability_pinch.v3",
+    "checkpoint_saved": true
+  },
+  "termination_probe": {
+    "requested_frames": 600,
+    "terminal_frame": 263,
+    "maximum_phase": 0,
+    "sampled_entry_true_rows": 0,
+    "sampled_retained_true_rows": 15,
+    "sampled_contact_grip_rows": 9,
+    "grasp_success_rows": 0,
+    "terminal_palm_below_neck_m": -0.005398869514465332,
+    "terminal_palm_facing_neck_dot": 0.7831388711929321,
+    "terminal_reasons": [
+      "failure_palm_down",
+      "failure_underhand_lost"
+    ],
+    "interpretation": "The legacy diagnostic controller acquired relaxed contact but never held strict entry for 0.15 s, earned no grasp success, and was terminated with both named palm causes after crossing the retained height boundary. This confirms that the former success bypass is closed; it is not evidence of learned task success."
+  },
+  "interpretation": "The reset begins inside the relaxed retained region, but phase 0 advances only after the strict palm entry condition is continuously satisfied. This is an environment/runtime check, not PPO convergence evidence."
+}

@@ -2,7 +2,7 @@
 
 > 현재 최상위 실행 정본은 [`RIGHT_HAND_RULES.md`](../RIGHT_HAND_RULES.md)다. 이 문서는 goal·검출·
 > 확장 주법의 세부 invariant와 과거 ID 추적을 유지한다. 상위 정본과 충돌하면 상위 정본을 따른다.
-> `docs/plans/task_strike_design.md`의 Xu 이식 초안을 검토해
+> `docs/archive/plans/task_strike_design.md`의 Xu 이식 초안을 검토해
 > 이벤트 의미, 타현 주체(agent), 유한 선분 판정, debounce, 명시적 timing window, 동시 손가락 타현,
 > 스트럼 순서, 평가 gate를 보강했다.
 > 최종 갱신: 2026-07-23. 구현 상태는 [status.md](status.md)에서 관리한다.

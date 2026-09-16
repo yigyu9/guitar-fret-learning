@@ -1,14 +1,15 @@
 # 1. strike goal — 음향 onset 후보를 실행 가능한 오른손 계획으로 만들기
 
-> **현재 실행 v1:** 아래의 풍부한 `StrikeIntent/StrikePlan`은 손가락·strum·hybrid 확장
-> 설계다. 지금 구현된 pick-only 단현 학습 입력은 의도적으로 다음 최소 계약만 사용한다.
+> **현재 source v3 / compiled plan v4:** 손가락·hybrid는 확장 설계지만 pick-only single/strum과 phrase down/up 계획은
+> 구현되어 있다. 원본은 다음 최소 사건 계약을 사용하고 실행 전 `strike_plan.v4`로 컴파일한다.
+> 원속도 traversal-edge 전이가 물리 계약을 만족하지 않으면 학습 전에 차단한다.
 
 ```json
 {
-  "schema": "tab2body.strike_training.v1",
+  "schema": "tab2body.strike_training.v3",
   "metadata": {
     "fps": 60,
-    "profile": "pick_monophonic_v1",
+    "profile": "pick_gesture_compiler_v3",
     "string_convention": "Isaac 0=high-e, 5=low-E"
   },
   "events": [
@@ -17,15 +18,27 @@
 }
 ```
 
-- event의 필수 키는 정확히 `time`, `frame`, `string`; 선택 키는 `event_id`뿐이다.
+- event의 필수 키는 `time`, `frame`, `string`이다. v3 선택 키는 `event_id`, `source_time`,
+  `time_uncertainty_s`, `source_ref`이며 v1/v2도 계속 읽는다.
 - `time`이 정본이다. `frame`은 nearest 60 Hz 값이며 오차가 0.5 frame을 넘으면 거부한다.
-- 시간과 frame은 엄격히 증가하며 한 frame의 복수 타현은 v1에서 거부한다.
-- 외부 입력에는 방향이 없으므로 실행 profile은 명시적인 `down_only_v1`이다.
-- A0~A3는 grip/6줄 motor skill을 배우는 curriculum이고, A4에서 원래 timeline을 사용한다.
+- 시간과 frame은 감소하지 않는다. 같은 onset의 이종 줄 사건은 strum 후보로 보존한다.
+- 외부 원본에는 방향이 없지만 `phrase_dp_microtiming_v3` 계획기가 곡 전체를 본 뒤 각 사건의
+  `down/up`을 확정한다. RL은 `strike_plan.json`의 방향을 그대로 실행한다.
+- A0~A3는 single motor skill, A4는 실제 strum 문맥의 clean recovery, S0~S2는 2~6줄 strum
+  기술을 배우며 S3에서 원래 timeline을 사용한다.
 - builder는 fingering `0=low-E`를 경계에서 정확히 한 번 `5-string`으로 변환한다.
+- plan은 사건 중심 간격 대신 이전 traversal의 마지막 offset과 다음 traversal의 첫 offset 사이를
+  검사한다. 방향 반전 경로가 방금 친 줄을 다시 지나면 clearance가 필요한 전이로 기록한다.
+- 자동 묶음이 source evidence와 충돌할 때는 원본 시각을 덮어쓰지 않는다. 연속 source ID,
+  `merge|separate`, 이유와 JSON evidence가 모두 있는 reviewed override만 허용한다.
+- `audit_strike_goal_quality.py --all`로 bundle 전체를 먼저 검사하고, `INFEASIBLE`은 full-song
+  학습 전에 해결한다. `AMBIGUOUS`는 진단을 보존하되 자동 정답으로 취급하지 않는다.
 
-구현 정본은 `tab2body/env/strike_goals.py`와
-`tab2body/tools/build_strike_training_data.py`다.
+구현 정본은 `tab2body/env/strike_goal_compiler.py`, `tab2body/env/strike_goals.py`와
+`tab2body/tools/build_strike_plan.py`다.
+
+정책의 현재 기본 관측은 `strike.observation.v2` 303D다. 이 문서 뒤쪽의 263D와
+`strike-plan.v1` 예시는 삭제된 pilot 계약을 설명하는 역사 절이며 현재 실행에 사용하지 않는다.
 
 ## 책임 경계
 
@@ -271,7 +284,7 @@ detector는 현재 goal 유무와 관계없이 모든 물리 release/crossing을
 time_to_close, hand_setup, phrase_lane, target별 onset offset, valid`를 포함하고, 현재
 strum/multi-pluck에는 `remaining_mask(6)`도 제공한다. 별도 상태 필드로
 `motor_phase(READY/APPROACH/RELEASE_RECOVER)`와 `(agent,string)`별 re-arm 상태를 제공한다.
-현재 pick-only v1은 이 풍부한 확장 필드의 일부만 사용해 전체 actor observation을 263D로 봉인한다.
+역사적 pick-only pilot v1은 이 풍부한 확장 필드의 일부만 사용해 actor observation을 263D로 봉인했다.
 정확한 field 순서와 dimension은 환경 observation manifest와 checkpoint contract에 저장한다.
 
 ## 2026-07-23 pilot 계약 기록
@@ -283,7 +296,7 @@ strum/multi-pluck에는 `remaining_mask(6)`도 제공한다. 별도 상태 필�
 3. matcher: exact target 일대일 소비와 배타적 오류 class.
 4. detector: finite swept `t/s`, direction/speed/depth와 ARMED/WAIT_REARM.
 
-이 pilot 계약과 checkpoint는 제거됐고 새 263D 환경과 호환되지 않는다. 새 loader도 이름이 다른
+이 pilot 계약과 checkpoint는 제거됐고 이후 계약과 호환되지 않는다. 새 loader도 이름이 다른
 예시를 암묵적으로 받아들이거나 tensor 차원을 임의로 바꾸지 않는다.
 
 ## loader 필수 검사

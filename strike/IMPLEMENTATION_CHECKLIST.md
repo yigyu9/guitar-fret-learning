@@ -1,26 +1,33 @@
 # task_strike 구현 판정표 — 규칙을 코드·진단·보류로 내리는 방법
 
-> 최상위 실행 규칙은 [RIGHT_HAND_RULES.md](RIGHT_HAND_RULES.md), strum·양손 확장은
-> [RIGHT_HAND_EXTENSIONS.md](RIGHT_HAND_EXTENSIONS.md)다. 이 표의 S/N 항목은 하위 상세 추적 ID다.
+> **현재 상태 — 2026-09-07:** 실행 기준은 Strike-v2 303D/30D와 state v14다. 아래 체크리스트의
+> 593D·263D·327D 및 이전 단계 번호는 구현 이력을 추적하기 위한 역사 항목이다. 현재 계약과
+> 승급 상태는 [`02_physical_control/status.md`](02_physical_control/status.md),
+> [`03_training/README.md`](03_training/README.md)를 우선한다.
+>
+> 최상위 실행 규칙은 [RIGHT_HAND_RULES.md](RIGHT_HAND_RULES.md)다. 과거 strum·양손 확장안인
+> [RIGHT_HAND_EXTENSIONS.md](archive/RIGHT_HAND_EXTENSIONS.md)는 현재 FullBody 계약이 아니다.
+> 이 표의 S/N 항목은 하위 상세 추적 ID다.
 
-> **현재 상태 갱신 — 2026-07-27:** 이 표의 과거 S0/593D/4채널 항목은 역사 기록이다.
-> 새 실행 정본은 최소 `[time,frame,string]`, 281D observation, scalar reward,
-> `A0_PICK_GRIP→A4_ZONE_CONTROL`이다. 현재 파일별 판정은
+> **현재 상태 갱신 — 2026-08-24:** 이 표의 과거 S0/593D/4채널 항목은 역사 기록이다.
+> 새 실행 정본은 최소 `[time,frame,string]`, manifest로 검증되는 고정 observation, scalar reward,
+> `A0_PICK_GRIP→A3_TIMED_SINGLE→A4_STRUM_CONTEXT_RECOVERY→S0_TWO_STRING_STRUM→S3_SONG_INTEGRATION`이다. 현재 파일별 판정은
 > [status.md](02_physical_control/status.md)와 [학습 문서](03_training/README.md)를 우선한다.
 
 새 재설계에서 완료한 구현 단위:
 
 1. `[x]` 최소 goal schema/42-event builder/time authority/string conversion.
 2. `[x]` finite swept detector, subframe time, direction/depth/speed, release/re-arm, zone quality.
-3. `[x]` 30-DOF StrikeTask, 281D fixed observation, A0 arm mask, stale-reset 방지.
-4. `[x]` pick-grip/ready/crossing/timing/zone stage-masked scalar reward.
-5. `[x]` 성능 기반 A0~A4와 100→67→50 ms 저장·복원 curriculum.
+3. `[x]` 30-DOF StrikeTask, 공유 8-skill descriptor를 포함한 고정 observation, A0 arm mask, stale-reset 방지.
+4. `[x]` persistent residual pick-grip/ready/crossing/clean-recovery/strum/timing/zone stage-masked scalar reward.
+5. `[x]` 성능 기반 A0~A4 single→strum-context recovery, S0~S3 strum, 폭 2→6, timing 100→67→50 ms 저장·복원 curriculum.
 6. `[x]` strike checkpoint schema, PPO 로그, 평가 gate, plot, 분석, remembered/current recorder.
-7. `[x]` CPU tests, 실제 CUDA detector 동등성, A0~A4 GPU runtime audit, PPO smoke.
-   - A0~A4 승급은 완료 episode의 exact 지표와 failure=0만 사용하고 no-evidence rollout은 streak을 보존한다.
+7. `[x]` CPU tests와 artifact/checkpoint 정적 계약. 새 schema의 CUDA runtime audit와 PPO smoke는 재실행 필요.
+   - A0~S3 승급은 완료 episode의 exact 지표와 failure=0만 사용하고 no-evidence rollout은 streak을 보존한다.
    - timing p95는 tolerance/zone gate 전 target crossing 전체를 pooling한다.
    - A4 global zone과 sampled lane band의 attempt/hit 저장공간을 분리한다.
    - checkpoint 재평가의 saved PPO/task RNG 복원과 1600×900 이중 MP4를 GPU에서 재검증했다.
+   - recovery completion/reset/blocked-before-rearm rate를 승급·최종 평가·plot에 연결했다.
 8. `[ ]` 새 환경 500회 학습 및 로그·두 영상 기반 수정.
 9. `[ ]` 충분히 학습된 분포로 detector/안전/naturalness 후보 수치 재보정.
 10. `[ ]` up/alternate, fingerstyle, hybrid 확장. down-strum은 2026-08-10 구현.
@@ -35,18 +42,20 @@
 6. `[x]` original-tempo gate 전 curriculum 완료 금지, 전체곡 평가는 원본 시간 강제.
 7. `[x]` `00_SS1-68-E_comp` v2 goal 생성: source 176, compiled 104, strum 43, unsupported 0.
 8. `[x]` CPU strike 회귀 검사 전체 통과.
-9. `[ ]` CUDA/Isaac Gym smoke와 새 checkpoint 학습. 현재 세션은 CUDA가 없어 preflight에서 중단됨.
-10. `[ ]` same-string alternate restrike와 upstroke detector/controller.
+9. `[x]` strum 부분 RELEASE 뒤 motor target을 다음 미완료 줄로 이동하고 potential 기준을 재설정.
+10. `[x]` 중복 없는 줄별 부분 진행 보상과 S1 `2→3→4→5→6` span curriculum.
+11. `[ ]` CUDA/Isaac Gym smoke와 새 checkpoint 학습. 기존 실행은 수정 전 코드를 사용하므로 종료 후 별도 실행한다.
+12. `[ ]` same-string alternate restrike와 upstroke detector/controller.
 
 2026-08-03 정리에서는 Strike 전용 중복 설정·학습 배관·recorder fallback을 합치고, 실제 RELEASE 기반
 회복·A4 READY miss·중복 crossing·종료 시 회복 gate를 CPU 회귀로 다시 닫았다. 현재 CUDA device가 없어
 위 7번의 과거 GPU 증거를 최신 코드 증거로 재사용하지 않는다. 변경 내역과 재검증 명령은
-[`CODE_AUDIT_2026-08-03.md`](CODE_AUDIT_2026-08-03.md)에 있다.
+[`CODE_AUDIT_2026-08-03.md`](archive/CODE_AUDIT_2026-08-03.md)에 있다.
 
 2026-08-04에는 제공 R1~R28을 다시 판정해 R7·R8·R11~R16의 motion/safety 진단을 구현했다.
 학습 종료 시 `motion_diagnostics.json`이 자동 저장되며, R16 오른팔 관통 monitor는 분포 보정 전까지
 termination을 비활성으로 유지한다. R18~R28은 누락이 아니라 공통 event/full-task 선행조건이 있는
-명시 보류다. 항목별 최종 판정은 [`RULE_TRACEABILITY.md`](RULE_TRACEABILITY.md)를 따른다.
+명시 보류다. 항목별 최종 판정은 [`RULE_TRACEABILITY.md`](archive/RULE_TRACEABILITY.md)를 따른다.
 
 > 아래 `0~5` 절은 2026-07-23 pilot의 역사적 판정표다. 현재 구현 여부는 위 1~10과
 > `status.md`를 따른다.
@@ -247,7 +256,7 @@ loader가 중단한다.
 profile: pick_only_v1
 hand_setup: plectrum
 supported event: single pick
-direction policy: alternate_v1 — phrase 첫 음 down, 이후 attack event마다 up/down 교대
+direction policy: phrase_dp_microtiming_v3 — 전체 phrase 방향과 strum 줄별 시각을 고정하고 불필요한 줄 재통과를 비용화
 stroke position: allowed ribbon + phrase lane
 detector: swept finite pick crossing and physical re-arm
 policy phase: READY→APPROACH→RELEASE_RECOVER

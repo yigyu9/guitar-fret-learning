@@ -1,0 +1,61 @@
+{
+  "schema": "stability_adapter.unified_implementation.v2",
+  "workspace": "/home/ajou/yigyu/3/stability_adapter/development/pinch_underhand",
+  "public_task": "stability-adapter",
+  "checkpoint_contract": "tab2body.stability_adapter_checkpoint_contract.v8",
+  "phases": [
+    "wait_settle",
+    "underhand_reach",
+    "grasp",
+    "transport",
+    "maintain"
+  ],
+  "wait_settle": {
+    "minimum_frames": 60,
+    "dwell_frames": 15,
+    "linear_speed_m_s": 0.1,
+    "angular_speed_rad_s": 0.5,
+    "strap_is_entry_gate": false
+  },
+  "approach": {
+    "initial_left_palm_distance_m": 0.10985162109136581,
+    "finger_control_distance_m": 0.05,
+    "far_target_speed_rad_s": 0.5,
+    "near_target_speed_rad_s": 0.25
+  },
+  "observation": {
+    "raw": 551,
+    "history_frames": 8,
+    "model_input": 4408
+  },
+  "action_axes": 97,
+  "default_training": {
+    "num_envs": 1024,
+    "iterations": 30000
+  },
+  "files": {
+    "tab2body/train.py": "af33aa6daf6f367fab0964716b8686dca56c7e939fa76239bb1af7932f661524",
+    "tab2body/train_stability.py": "395de68650d835f61a00321251a362e87f10c991035795f173bdddc041c60502",
+    "tab2body/stability_task.py": "ff73c72490ace99bd177a3e27ea7e6b02a117b214ab40740f7aad2f49b4db51f",
+    "tab2body/stability_pinch.py": "d14f5f9468b0d31062fcf7ab4b8ef4a84fad4f29427e54975317ef4196d1d4a3",
+    "tab2body/stability_underhand.py": "02ea49837ec4989f3b5f7da438ad5208bc596831a0563596458440141a82b47a",
+    "tab2body/stability_grip_geometry.py": "4e815427cb7bb2c0cc5da2c2354f0c15bb4c3f0326e2bf33bfabcdbad2e325d4",
+    "tab2body/env/tasks/task_stability.py": "a43a67847a7629c1020f6c19a73b58f30285b196a397d3585f9d5c0c841ac708",
+    "tab2body/env/tasks/task_stability_support_hold.py": "caee0eeec7ea0a1efb16e521b2463a7fdca055eac941fa85284c24f1db72fc00",
+    "tab2body/stability_termination.py": "50fdf8a2da3d883178446af942ace992c4a88159821d7d3bd11b48d3437e239f",
+    "tab2body/tools/evaluate_stability.py": "37cbb9f92d2980dd6149d3d93e59af5f2a58c4fb001b6521d0e0997ecef0463c",
+    "tab2body/tools/stability_audit_rows.py": "ac0841066a920d3fa637dd06587117b453c78b830b56a5faaf042cbc3db0a249",
+    "tab2body/learning/checkpoint_contract.py": "a21bb816c22a6972553a0f26d155a187ea350b5f4fb147a5c9104b306ea9238b",
+    "stability_adapter/config.json": "e445116706872c7c8c32f933a3862168c707c170356b5094a49b8f3c92d311d9",
+    "stability_adapter/task.json": "bfc74f8e21ab9111294917db850c550312b585a747a99324298634bc4f79a6ef",
+    "stability_adapter/reference.json": "dd8725c6fc1362b2b2544894d907a4ad0d05d2f5ee50047110e24b509d98c111",
+    "stability_adapter/strap_config.json": "5b1a4d58347ed80cf6f540771315aab602e03cb55967abe2d93020fc7d312df4"
+  },
+  "validation": {
+    "cpu": "284 stability tests passed; 22 explicit GPU tests skipped",
+    "gpu_sequence": "2 environments; entered RECOVER at frame 75, policy activated at frame 76; finger gate and motion-only settle tests passed",
+    "gpu_smoke": "8 environments, 48 PPO iterations, 12,288 samples, checkpoint and bounded logs saved",
+    "report": "/home/ajou/yigyu/3/docs/2026-09-15/STABILITY_DROP_SETTLE_REACH.md",
+    "gpu_sequence_report": "/home/ajou/yigyu/3/docs/2026-09-15/stability_sequence_gpu.json"
+  }
+}

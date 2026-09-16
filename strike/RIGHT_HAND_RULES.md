@@ -1,14 +1,19 @@
 # 오른손 구현 규칙 — 현재 실행 정본
 
-> 최종 갱신: 2026-08-10  
-> 범위: geometry-less pick, 고정 string marker, single/strum downstroke, Isaac Gym  
-> 이 문서는 **현재 실행 코드가 따라야 하는 최상위 규칙**이다. upstroke·양손 결합은
-> [확장 규칙](RIGHT_HAND_EXTENSIONS.md), 기존 S/N 번호의 세부 근거는
+> 최종 갱신: 2026-09-07
+> 현재 실행 계약: Strike-v2 303D, 30D action, `strike_plan.v4`, checkpoint/curriculum/
+> environment state v14. FullBody에서의 readiness·permission·공통 cursor는 이 문서가 아니라
+> [`master_plan/05_synchronizer.md`](../master_plan/05_synchronizer.md)가 소유한다.
+>
+> 범위: geometry-less pick, 고정 string marker, single/strum down/up, Isaac Gym
+> 이 문서는 **현재 실행 코드가 따라야 하는 최상위 규칙**이다. alternate same-string·양손 결합은
+> [확장 규칙](archive/RIGHT_HAND_EXTENSIONS.md), 기존 S/N 번호의 세부 근거는
 > [물리 규칙 S1~S60](02_physical_control/rules.md)과
 > [자연스러운 운동 N1~N90](02_physical_control/NATURAL_MOTION_RULES.md)을 따른다.
 
-> 이 문서는 목표 계약도 함께 포함한다. 2026-08-03 현재 코드와 정확히 일치하는 범위 및 아직 진단·보류인
-> 항목은 [코드 정리·검증 보고서](CODE_AUDIT_2026-08-03.md)를 함께 읽는다.
+> 이 문서는 목표 계약도 함께 포함한다. 구현 상태는
+> [`02_physical_control/status.md`](02_physical_control/status.md)를 우선하며,
+> [2026-08-03 코드 정리·검증 보고서](archive/CODE_AUDIT_2026-08-03.md)는 역사적 근거로만 읽는다.
 
 ## 1. 먼저 고정하는 현재 범위
 
@@ -16,14 +21,14 @@
 
 | 항목 | 현재 계약 |
 |---|---|
-| 입력 | v1/v2 `[time, frame, string]`; v2는 동시 onset 허용, 원본 `time`이 정본 |
+| 입력 | v3 `[time, frame, string]` + 선택적 provenance/reviewed override; v1/v2도 읽으며 원본 `time`이 정본 |
 | 타현 주체 | 검지에 고정된 질량·충돌 없는 `RH:pick` 기준점 |
 | 줄 | 탄성·접촉력이 없는 고정 유한 선분 6개 |
-| 주법 | pick-only, single pick/strum, downstroke |
+| 주법 | pick-only, single pick/strum, phrase-planned down/up |
 | 제어 | 오른쪽 어깨 3 + 팔꿈치 3 + 손목 3 + 손 21 = 30 DOF |
 | 타현 판정 | 두 control frame 사이의 유한 swept crossing 직후 one-shot `RELEASE` |
 | 공개 운동 phase | `READY → APPROACH → RELEASE_RECOVER` |
-| 현재 제외 | up/alternate, fingerstyle, 물리 pick, 접촉력·음향, 왼손 결합 |
+| 현재 제외 | alternate same-string restrike, fingerstyle, 물리 pick, 접촉력·음향, 왼손 결합 |
 
 따라서 이 환경에서 “피크가 줄에 접촉하여 소리를 낸다”는 표현은 물리적 사실이 아니다. 현재 측정
 가능한 것은 `RH:pick` 경로가 줄 선분을 언제·어디서·어느 방향으로 통과했는가이다.
@@ -34,7 +39,8 @@
 - **TASK**: 올바른 타현과 오타현을 나누는 판정 규칙.
 - **SOFT**: 정확한 타현을 보존하면서 자연스러운 해법을 선호하는 작은 비용/보상.
 - **DIAG**: 먼저 분포만 저장한다. 사람/실패 궤적이 분리된 뒤에만 gate로 승격한다.
-- **PLAN**: 학습 전에 mapper/coordinator가 문맥으로 결정하고 runtime이 임의로 바꾸지 않는다.
+- **PLAN**: S3에서는 학습 전에 mapper/coordinator가 문맥으로 결정하고 runtime이 임의로 바꾸지 않는다.
+  기술 습득용 A0~S2는 곡 분포와 무관하게 양방향을 균형 연습한다.
 - **SAFETY**: 음악적 실수와 별개인 관통·비유한·폭주 등의 물리 실패.
 - **DEFER**: 현재 물리나 입력으로 측정할 수 없어 구현하지 않는다.
 
@@ -44,11 +50,17 @@
   현재 v1에서는 이를 임의의 “정확한 박 위치”로 재해석하지 않는다.
 - **release time**: swept interpolation으로 얻은 실제 유효 crossing의 subframe 시각.
 - **strike**: 한 agent가 한 string에서 만든 one-shot RELEASE 하나.
-- **stroke/strum**: 한 agent가 `traversal_mask`의 여러 줄을 down 방향으로 연속 통과한 RELEASE 묶음.
+- **stroke/strum**: 한 agent가 `traversal_mask`의 여러 줄을 계획된 down/up 방향으로 연속 통과한 RELEASE 묶음.
 - **wrong release**: wrong string/direction/zone 또는 window 밖에서 발생한 유효 물리 crossing.
-- **duplicate**: 같은 `(agent,string)`이 re-arm 전 다시 만든 crossing.
+- **duplicate**: 같은 event에서 이미 수락한 줄을 재무장 뒤 다시 만든 RELEASE.
+- **blocked-before-rearm**: `WAIT_REARM`인 줄을 다시 가로지른 물리 crossing. RELEASE로 수락하지
+  않지만 false-positive, recovery reset과 진단에는 포함한다.
 - **miss**: 허용창이 닫힐 때까지 target과 매칭된 RELEASE가 없음.
 - **rest**: 현재 eligible target이 없는 구간. detector는 rest에도 계속 동작한다.
+- **physical completion**: timing·zone 판정 전, `traversal_mask`의 마지막 줄까지 올바른 순서와
+  방향으로 RELEASE한 one-shot 사건.
+- **terminal progress**: 마지막 줄만 남았을 때 final-string→exit 선분에 투영한 진행도. 지금까지의
+  최대 진행 증가분만 인정해 정지·후퇴·왕복으로 다시 수집할 수 없다.
 
 ## 4. 입력과 좌표 규칙
 
@@ -59,7 +71,7 @@
 | RH-C03 | MUST | Isaac 줄 번호는 `0=high-e … 5=low-E`이며 source 경계에서 정확히 한 번만 뒤집는다. |
 | RH-C04 | MUST | v1은 한 frame 한 target을 유지한다. v2의 동시·근접 이종 줄 onset은 임의 단현으로 줄이지 않고 strum으로 컴파일한다. |
 | RH-C05 | TASK | `down`은 연주자 기준 6→1번 줄, Isaac `5→0`, 기타 로컬 `+x_g`다. |
-| RH-C06 | MUST | 방향 필드가 없는 v1은 `down_only_v1`로 명시하고 up/alternate를 추측하지 않는다. |
+| RH-C06 | MUST | 원본 v2에는 방향을 쓰지 않고, versioned 전체-phrase 계획기가 down/up을 확정해 v4 plan에 provenance와 함께 기록한다. S3의 RL은 이를 변경하지 않는다. A0~S2 연습은 양방향을 균형 생성한다. |
 
 ## 5. 운동 phase와 detector state
 
@@ -74,10 +86,11 @@ READY → APPROACH → RELEASE_RECOVER
 | ID | 수준 | 규칙 |
 |---|---|---|
 | RH-C07 | SOFT | `READY`는 한 pose가 아니라 다음 target의 진입측에 도달 가능한 편안한 준비 범위다. |
-| RH-C08 | TASK | `APPROACH`는 목표 줄, down 진입측, 목표 lane과 body clearance를 향한다. |
+| RH-C08 | TASK | `APPROACH`는 목표 줄, 계획 방향의 진입측, 목표 lane과 body clearance를 향한다. |
 | RH-C09 | TASK/SOFT | `RELEASE_RECOVER`는 one-shot crossing, 짧은 follow-through, separation과 다음 접근 연결을 포함한다. event index가 먼저 진행돼도 최소 follow-through 동안 직전 줄·lane·방향 문맥을 보존한다. |
+| RH-C09A | TASK | A0~S2와 S3 마지막 사건은 12-frame full recovery와 detector 재무장을 요구한다. S3의 다음 접근까지 12 frame을 확보할 수 없는 사건은 확보 가능한 `1~11` frame의 handoff recovery 뒤 다음 접근으로 연결한다. 서로 다른 줄 handoff는 직전 줄 재무장을 기다리지 않지만 같은 줄 handoff는 반드시 재무장을 기다린다. |
 | RH-C10 | MUST | `CONTACT`와 `LOAD`를 현재 공개 phase 또는 성공 조건으로 만들지 않는다. |
-| RH-C11 | SOFT | 빠른 반복에서는 이전 recovery와 다음 approach가 겹칠 수 있으며 매 음 home pose로 복귀하지 않는다. |
+| RH-C11 | SOFT | 빠른 반복에서는 이전 recovery와 다음 approach가 겹칠 수 있으며 매 음 home pose로 복귀하지 않는다. 고정 12-frame completion은 이때 승급 gate가 아니라 별도 진단값으로 남긴다. |
 
 중복 방지 detector는 정책 phase와 독립이다.
 
@@ -96,24 +109,30 @@ ARMED → RELEASE pulse → WAIT_REARM → ARMED
 | RH-C12 | TASK | 타현은 위치 겹침이나 접촉 상태가 아니라 유효한 swept crossing의 RELEASE pulse다. |
 | RH-C13 | TASK | 교차 파라미터는 pick frame 경로 `0<t≤1`과 string 선분 `0≤s≤1` 안에 있어야 한다. |
 | RH-C14 | TASK | 평행/정지 경로, 최소 displacement 미만, 최소 depth 미만, 최소 횡속도 미만은 RELEASE가 아니다. |
-| RH-C15 | TASK | crossing 순간의 기타 로컬 x 속도 부호가 down 방향이어야 한다. |
+| RH-C15 | TASK | crossing 순간의 기타 로컬 x 속도 부호가 현재 목표의 down/up 방향과 같아야 한다. |
 | RH-C16 | MUST | detector는 현재 goal을 읽지 않고 모든 유효 RELEASE를 기록한다. |
 | RH-C17 | MUST | matcher만 시간·줄·방향·zone을 이용해 RELEASE 하나를 target 하나에 배정한다. |
 | RH-C18 | TASK | window 밖, wrong string/direction, rest 중 RELEASE는 성공이 아니라 false positive다. |
 | RH-C19 | TASK | 한 물리 RELEASE는 target/wrong/extra 중 배타적으로 한 class만 갖는다. |
-| RH-C20 | TASK | down-only v1의 같은 줄은 물리 separation과 최소 frame을 모두 만족해야 다시 ARMED가 된다. up/alternate에서는 직전 방향 이력도 추가한다. |
+| RH-C20 | TASK | 같은 줄은 물리 separation과 최소 frame을 모두 만족해야 다시 ARMED가 된다. alternate same-string이 추가되면 직전 방향 이력도 matcher 계약에 포함한다. |
 | RH-C21 | MUST | 새 target이 나타났다는 이유만으로 re-arm하지 않는다. |
 
-### RH-C21A~F — goal compiler와 빠른 사건
+### RH-C21A~H — goal compiler와 빠른 사건
 
 | ID | 수준 | 규칙 |
 |---|---|---|
 | RH-C21A | MUST | source `time`은 불변 정본으로 보존하고 easy/runtime time은 파생값으로만 만든다. |
-| RH-C21B | TASK | 물리 최소 간격보다 가까운 서로 다른 줄 사건은 down 방향의 단일 strum으로 묶는다. |
-| RH-C21C | TASK | strum 성공은 `traversal_mask` 전체의 올바른 방향 RELEASE가 모인 직후이며, 일부 통과는 아직 hit도 FP도 아니다. |
+| RH-C21B | TASK | 물리 최소 간격보다 가까운 서로 다른 줄 사건은 단일 strum으로 묶고 전체 phrase 계획기가 down/up을 결정한다. |
+| RH-C21C | TASK | strum 성공은 현재 curriculum의 `traversal_mask` 전체의 올바른 방향 RELEASE가 모인 직후다. 일부 통과는 hit나 FP가 아니지만 새 줄에 한해 부분 진행 shaping을 받을 수 있다. |
 | RH-C21D | MUST | 가까운 같은 줄 재타현은 alternate/upstroke가 구현되기 전까지 지원되는 척하지 않고 fail-fast한다. |
 | RH-C21E | TASK | 각 사건의 early/late 허용치는 전역 허용치와 인접 간격 45% 중 작은 값으로 정해 창 중첩을 막는다. |
-| RH-C21F | MUST | A4 완료와 전체곡 평가는 `tempo_lambda=1`의 원래 시각에서만 인정한다. |
+| RH-C21F | MUST | S3 완료와 전체곡 평가는 `tempo_lambda=1`의 원래 시각에서만 인정한다. |
+| RH-C21G | TASK | strum APPROACH 목표는 첫 줄에 고정하지 않고 각 유효 RELEASE 뒤 다음 미완료 줄로 이동한다. 마지막 줄 하나만 남으면 방향별 exit를 목표로 해 줄을 지나가는 연속 운동을 만들고, 완주 뒤 recovery로 전환한다. |
+| RH-C21H | TASK | A4는 실제 strum 문맥의 진입측 1줄과 clean recovery, S0은 실제 2줄, S1은 `3→4→5→6줄`, S2는 6줄 timing을 양방향으로 연습한다. S3에서는 원래 traversal과 계획 방향을 축약·변경하지 않는다. |
+| RH-C21I | MUST | 목표 RELEASE 뒤 추가 RELEASE나 blocked-before-rearm crossing이 생기면 clean recovery frame count를 0으로 되돌린다. |
+| RH-C21J | MUST | recovery 진행·완료 shaping은 지금까지의 최대 clean frame을 기준으로 one-shot 지급해 reset 반복으로 재수집할 수 없게 한다. |
+| RH-C21K | SOFT | 마지막 줄→exit 진행 shaping은 선분 투영의 최대값 증가분만 지급한다. down/up은 같은 방향대칭 수식을 사용하며 후퇴·왕복으로 누적 이득을 만들 수 없다. |
+| RH-C21L | TASK | strum physical-completion pulse는 마지막 올바른 RELEASE 직후 one-shot으로 기록하고 timing 성공과 독립적으로 보존한다. |
 
 현재 초기값은 최소 depth `1 mm`, 최소 횡속도 `0.05 m/s`, re-arm 거리 `3 mm`, 대기 `2 frame`이다.
 이 수치는 checkpoint 계약에 포함하지만 사람 궤적에 근거한 최종값은 아니므로 재보정 대상이다.
@@ -135,17 +154,19 @@ false positive로 바꾸거나 timing 표본에서 지우지 않는다.
 |---|---|---|
 | RH-C22 | MUST | 유한 줄 선분과 global allowed의 교집합만 release ribbon으로 사용한다. |
 | RH-C23 | SOFT | preferred 내부 위치들은 동등하게 유효하며 고정 중앙 한 점을 정답으로 만들지 않는다. |
-| RH-C24 | TASK | A4는 sampled lane outer band와 global allowed를 모두 만족해야 target hit다. |
+| RH-C24 | TASK | A3, S2의 zone-active profile, S3는 sampled lane outer band와 global allowed를 모두 만족해야 target hit다. S2 E0~T6은 lane을 진단·soft 보상으로만 사용한다. |
 | RH-C25 | MUST | 영역 밖 crossing도 detector record에서 삭제하지 않고 wrong release로 남긴다. |
 
-A2/A3에서는 zone을 진단하고 A4부터 성공 판정에 사용한다. 영역 실패는 음악적 오류이지 그 자체로
-안전 종료는 아니다.
+A2에서는 zone을 진단하고 A3, S2의 Z0~Z2, S3에서 성공 판정에 사용한다. 영역 실패는 음악적
+오류이지 그 자체로 안전 종료는 아니다.
 
 ## 8. 피크 자세와 자연스러운 운동
 
 | ID | 수준 | 규칙 |
 |---|---|---|
-| RH-C26 | SOFT | 초기 엄지·검지와 자유 손가락 자세는 `pick-grip-reference.json`의 21-DOF 목표를 따른다. |
+| RH-C26 | MUST | `pick-grip-reference.json`의 21-DOF 목표를 A0~S3에서 유지한다. 엄지·검지는 작은 residual만 허용하고 자유 손가락은 더 넓은 soft residual을 허용한다. |
+| RH-C26A | MUST | grip 평균만으로 통과시키지 않고 하위 5%, 엄지·검지/자유 손가락 품질, 낮은 품질 frame 비율과 연속 붕괴 길이를 함께 gate한다. |
+| RH-C26B | MUST | grip 기준이나 residual 범위를 바꾸면 피크 끝 운동학도 바뀌므로 기존 policy checkpoint를 재사용하지 않고 A0부터 다시 검증한다. |
 | RH-C27 | DIAG | 실제 rigid pick이 없으므로 피크 면 각도·파지력·미끄러짐을 측정했다고 주장하지 않는다. |
 | RH-C28 | SOFT | 단현 미세 attack은 손목·전완을 우선하고 어깨·팔꿈치는 줄 이동과 사전 배치에 주로 쓴다. |
 | RH-C29 | SOFT | release 가까이에서는 큰 proximal jerk를 줄이되 손목만 고정적으로 쓰도록 강제하지 않는다. |
@@ -181,7 +202,7 @@ DIAG이며 성공/실패 정책 분포가 분리되기 전에는 C33·C34·C37�
 StrikeSuccess =
     matched_RELEASE
   ∧ correct_string
-  ∧ down_direction
+  ∧ planned_direction
   ∧ inside_time_window
   ∧ required_zone_gate
   ∧ no_safety_failure
@@ -198,6 +219,10 @@ StrikeEpisodeSuccess = StrikeSuccess ∧ valid_follow_through ∧ rearm_or_safe_
 | RH-C43 | MUST | `ChordReady`는 독립 오른손 `StrikeSuccess`에 넣지 않는다. |
 | RH-C44 | MUST | timing p95에는 허용창 밖의 올바른 target attempt도 포함한다. |
 | RH-C45 | MUST | precision, recall, F1, wrong rate, timing, zone과 safety를 서로 숨기지 않고 병기한다. |
+| RH-C45A | MUST | S2/S3 strum은 줄별 timing RMS와 계획 대비 sweep-duration 오차를 별도로 병기하고 승급에 사용한다. |
+| RH-C45B | MUST | A0~S2의 down/up 연습 표본 수를 균형 유지하고 방향별 completion rate를 분리 기록한다. |
+| RH-C45C | MUST | S2 승급률은 episode별 비율의 평균이 아니라 down/up completed/event raw count를 각각 합쳐 계산하며, 둘 중 낮은 방향 완주율을 gate한다. |
+| RH-C45D | MUST | recovery는 물리 완료 뒤의 conditional completion과 예정된 전체 사건 기준 end-to-end completion을 모두 기록해 마지막 줄 미완료가 분모에서 사라지지 않게 한다. |
 | RH-C46 | DIAG | 자연스러움은 정확도·안전과 별도 feature/영상 gate로 평가한다. |
 | RH-C47 | MUST | reference가 없으면 “human-like”가 아니라 “운동학적으로 타당한 virtual strike”까지만 주장한다. |
 
@@ -206,18 +231,37 @@ StrikeEpisodeSuccess = StrikeSuccess ∧ valid_follow_through ∧ rearm_or_safe_
 ```text
 A0_PICK_GRIP
 → A1_TIP_READY
-→ A2_FREE_CROSSING
-→ A3_TIMED_CROSSING (100 → 67 → 50 ms)
-→ A4_ZONE_CONTROL
+→ A2_SINGLE_CROSSING
+→ A3_TIMED_SINGLE (100 → 67 → 50 ms)
+→ A4_STRUM_CONTEXT_RECOVERY (실제 strum 문맥 1줄 + clean recovery)
+→ S0_TWO_STRING_STRUM (실제 2줄)
+→ S1_STRUM_SPAN (3 → 4 → 5 → 6줄)
+→ S2_TIMED_STRUM (E0 endpoint → 400 → 250 → 225 → 200 → 175 → 150 → 100 → zone 100 → 67 → 50 ms, 성공 기반)
+→ S3_SONG_INTEGRATION (원곡 tempo 복원)
 ```
+
+S3 tempo는 `0→0.25→0.5→0.75→0.9→0.95→0.975→1` 순으로 복원한다. S2의 E0는 timing
+gate를 적용하기 전에 양방향 마지막 줄·exit 완주를 회복한다. 부분 진행은 즉시 반환되는
+gamma-correct potential과 최대 terminal progress로 제한하며, 시간창 종료 뒤 보상을 환수하는 지연
+clawback은 사용하지 않는다. E0/T0 동안 어깨·팔꿈치·손목 첫 9개 action의 정책 표준편차는
+`0.03` 아래로 줄지 않는다. 완료된 sweep은 이후 profile에서 줄별 timing RMS와 전체 duration
+오차에 따라 추가 shaping을 받는다.
 
 | ID | 수준 | 규칙 |
 |---|---|---|
 | RH-C48 | MUST | 각 단계는 이전 단계의 자세·ready·crossing 정확도를 계속 유지한다. |
 | RH-C49 | MUST | 최소 iteration 이후 완료 episode의 성능 gate를 연속 통과해야 승급한다. |
-| RH-C50 | MUST | 최대 iteration에 도달해도 자동 승급하지 않고 `stalled`로 남긴다. |
+| RH-C50 | MUST | 최대 stage iteration에 도달해도 자동 승급·자동 종료하지 않는다. `stalled` 진단과 checkpoint를 남기고 전체 `--iterations`까지 계속하며, 이후 gate 통과 시 해제한다. |
+| RH-C51 | MUST | single에서 strum으로 넘어갈 때 공유 기술 관측을 유지하고, A4에서 실제 strum 문맥의 1줄 clean recovery를 확보한 뒤 S0에서 실제 2줄을 요구한다. |
+| RH-C52 | SOFT | 초기 strum은 다음 줄을 향한 접근 운동과 부분 통과를 조밀하게 보상하고, 정확도 비용은 뒤 단계에서 점진적으로 강화한다. |
+| RH-C53 | MUST | A2 이후 승급은 recovery completion과 reset/blocked rate를 독립 gate로 검사하고 실패 원인을 로그에 남긴다. |
+| RH-C54 | MUST | S3 안전 실패는 모든 tempo에서 0을 요구하고, 음악적 wrong 종료·blocked rate·F1은 tempo별 gate로 원곡 속도까지 강화한다. |
+| RH-C55 | MUST | S3 승급 증거는 완료 episode의 TP/FP/FN 및 blocked/recovery raw count를 합친 뒤 계산하며 episode별 비율을 다시 평균하지 않는다. |
+| RH-C56 | SOFT | S3가 최대 체류를 넘으면 15% exposure-normalized failure-window와 85% 전곡 uniform sampling을 병행하고, 승급은 uniform evidence만 사용한다. |
+| RH-C57 | TASK | S2 E0에서 최저 방향 완주율이 0.60 미만인 evidence가 3회 연속이면 그 방향을 70%로 집중한다. 강제 focus가 아닌 60% 표본은 down/up 30/30 balanced holdout으로 남기고 승급 evidence는 holdout만 사용한다. |
+| RH-C58 | MUST | S0~S2 주기 진단 영상은 같은 checkpoint에서 down/up을 각각 강제하고 두 고정 카메라로 저장하며, 실제 실행 방향과 runtime/RNG 복원을 report로 검증한다. |
 
-A4는 실제 곡의 `[time,frame,string]` source 사건을 사용한다. v2의 동시 onset과 물리 최소 간격보다
+S3는 실제 곡의 `[time,frame,string]` source 사건을 사용한다. v2의 동시 onset과 물리 최소 간격보다
 가까운 이종 줄 사건은 goal compiler가 down-strum으로 묶고, 가까운 동줄 재타현은 명시적으로 거부한다.
 
 ## 11. 양손 통합과의 경계
@@ -231,7 +275,7 @@ LeftHandReadyResult      # 목표 음의 압현·해제·안정화
 CombinedPerformance     # 두 결과와 공통 event 정렬의 결합
 ```
 
-양손 규칙과 strum 입력은 [RIGHT_HAND_EXTENSIONS.md](RIGHT_HAND_EXTENSIONS.md)에 정의한다.
+양손 규칙과 strum 입력은 [archive/RIGHT_HAND_EXTENSIONS.md](archive/RIGHT_HAND_EXTENSIONS.md)에 정의한다.
 
 ## 12. 구현 연결과 필수 검증
 
@@ -242,7 +286,7 @@ CombinedPerformance     # 두 결과와 공통 event 정렬의 결합
 | RH-C12~21 검출·re-arm | `env/strike_detector.py`, `env/strike_events.py` | finite segment, subframe, 방향/depth/speed, goal-independent detector |
 | RH-C22~25 zone | `task_strike.py`, `rewards/strike.py` | allowed/preferred/lane 경계와 wrong release 보존 |
 | RH-C26~42 운동·보상·안전 | `rewards/strike.py`, `env/base.py`, strike audit 도구 | 보조 return 상한, 관절군/jerk/depth 분포, adversarial policy |
-| RH-C43~50 평가·curriculum | `learning/strike_curriculum.py`, `learning/strike_evaluation.py` | 완료 episode gate, timing tail, stalled, checkpoint 복원 |
+| RH-C43~58 평가·curriculum | `strike_metrics.py`, `learning/strike_curriculum.py`, `learning/strike_evaluation.py` | raw-count 방향/recovery gate, balanced holdout, timing tail, stalled, checkpoint 복원 |
 
 PPO 장시간 실행 전에 최소 다음 반례를 통과해야 한다.
 
@@ -252,6 +296,8 @@ PPO 장시간 실행 전에 최소 다음 반례를 통과해야 한다.
 4. release 직후 다음 target이 바뀌어도 직전 줄의 follow-through가 유지된다.
 5. recovery 중 반대 방향 crossing은 다음 upstroke로 오인되지 않는다.
 6. allowed 밖 crossing도 detector에서는 사라지지 않는다.
+7. 마지막 줄 앞에서 멈춘 down/up은 completion이 아니며, 마지막 줄→exit 왕복으로 terminal 보상을 반복 수집할 수 없다.
+8. 한쪽 방향만 성공하면 전체 평균이 높아도 S2 E0를 통과하지 못한다.
 
 ## 13. 다음 작업 순서
 

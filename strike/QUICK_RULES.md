@@ -1,17 +1,23 @@
 # 오른손 strike 규칙 — 사람이 먼저 읽는 짧은 버전
 
+> 갱신: 2026-09-07. 현재는 pick-only single과 ordered strum, phrase-planned down/up을
+> `strike_plan.v4`와 Strike-v2 303D 정책으로 실행한다.
+
 이 문서는 전체 규칙을 빠르게 이해하기 위한 요약이다. 구현 충돌이 생기면
 [현재 구현 규칙 정본](RIGHT_HAND_RULES.md), [goal 계약](01_goal_contract/README.md),
 [구현 판정표](IMPLEMENTATION_CHECKLIST.md)를 따른다.
 
-코드 스트로크, Protected String과 왼손 `FretReady`는
-[Strum·양손 확장 규칙](RIGHT_HAND_EXTENSIONS.md)에 분리되어 있으며 현재 단현 v1의 구현 완료 항목이 아니다.
+Ordered strum과 protected traversal은 구현되어 있다. 왼손 `FretReady`와 공통 타이밍 gate는
+Strike 정책 내부가 아니라 [`master_plan/05_synchronizer.md`](../master_plan/05_synchronizer.md)의
+FullBody Synchronizer가 담당한다.
 
-## 현재 v1 전제
+## 현재 pick-only 전제
 
-현재 학습 입력은 이미 오른손 타현 대상으로 선택된 pick 단현 사건
-`[time, frame, string]`이다. `time`이 정본이고 `frame`은 60 Hz 일치 검사용이다.
-방향 필드가 없으므로 조용히 alternate를 추측하지 않고 `down_only_v1`로 고정한다.
+현재 학습의 원본 입력은 이미 오른손 타현 대상으로 선택된 pick 사건
+`[time, frame, string]`이다. 가까운 이종 줄 사건은 compiler가 strum으로 묶는다. `time`이 정본이고
+`frame`은 60 Hz 일치 검사용이다.
+원본에는 방향 필드를 추가하지 않는다. 결정론적 `phrase_dp_microtiming_v3`가 전체 phrase에서
+down/up을 계획하고, 결과와 판단 근거를 `strike_plan.json`에 고정한다.
 손가락 타현과 방향 입력은 schema를 확장할 때 추가한다.
 
 ## 1. 일반 확장에서는 음표가 생겼다고 항상 오른손으로 치는 것은 아니다
@@ -58,9 +64,10 @@ READY → APPROACH → RELEASE_RECOVER
 ARMED → RELEASE pulse → WAIT_REARM → ARMED
 ```
 
-현재 down-only v1은 한 줄을 친 뒤 충분한 3-D separation과 최소 대기 frame을 모두 만족해야 같은
-`(agent,string)`이 다시 ARMED가 된다. 새 goal이 생겼다는 이유만으로 re-arm하지 않는다. 방향이 둘인
-up/alternate 확장에서는 직전 방향 이력까지 추가한다. 그래야 쉼 중 떨림과 반복 오타도 숨지 않는다.
+현재 detector는 한 줄을 친 뒤 충분한 3-D separation과 최소 대기 frame을 모두 만족해야 같은
+`(agent,string)`이 다시 ARMED가 된다. 새 goal이 생겼다는 이유만으로 re-arm하지 않는다. 향후
+same-string alternate 확장에서는 직전 방향 이력까지 추가한다. 그래야 쉼 중 떨림과 반복 오타도
+숨지 않는다.
 
 ## 5. 유효한 pick RELEASE의 조건
 
@@ -72,8 +79,8 @@ up/alternate 확장에서는 직전 방향 이력까지 추가한다. 그래야 
 4. 최소 depth를 만족하고 심한 기타 관통 shortcut이 아니다.
 5. 해당 detector가 ARMED다.
 
-zone quality는 모든 RELEASE에 기록한다. A2/A3에서는 진단이고, A4에서는 allowed 밖 crossing을
-일반 false positive로 세며 zone/lane 진단값으로 원인을 구분한다.
+zone quality는 모든 RELEASE에 기록한다. A2와 S2 E0~T6에서는 진단이고, A3·S2 Z0~Z2·S3에서는
+allowed/lane 밖 crossing을 목표 실패로 세며 진단값으로 원인을 구분한다.
 
 detector는 goal을 보지 않고 모든 RELEASE를 기록한다. matcher만 시간·줄·agent·방향을 보고 목표 하나에
 배정한다. 목표에 배정되지 않은 RELEASE는 쉼 중에도 false positive다.
@@ -83,16 +90,16 @@ detector는 goal을 보지 않고 모든 RELEASE를 기록한다. matcher만 시
 - allowed: guitar local `y=[-0.385,-0.255] m`
 - preferred: `y=[-0.355,-0.295] m`
 
-preferred 안의 모든 위치는 target lane 중심으로 뽑힐 자격이 동등하다. A4 학습은 이 구간에서
+preferred 안의 모든 위치는 target lane 중심으로 뽑힐 자격이 동등하다. zone 단계는 이 구간에서
 중심을 샘플링하므로 고정된 중앙 한 점만 외울 수 없다. 한 event의 정답은 sampled lane 주변
-`±6 mm` 만점, `±12.5 mm` 성공 경계의 띠다. allowed 밖은 A4 목표 불일치이지 안전 종료는 아니다.
+`±6 mm` 만점, `±12.5 mm` 성공 경계의 띠다. allowed 밖은 목표 불일치이지 안전 종료는 아니다.
 
 ## 7. 자연스러움은 정확도 위에 쌓는다
 
 - 단현 attack은 주로 손목·전완, 큰 줄 이동은 팔꿈치·어깨가 미리 돕는다.
 - release 직전의 큰 어깨 jerk와 매 음마다 home pose로 돌아가는 동작을 피한다.
 - 줄 위 hover, 전 줄 sweep, 왕복 jitter, 과도한 침투로 reward를 얻지 못하게 한다.
-- 정확한 타현과 안전을 먼저 통과한 뒤 jerk, grip 자세, inactive finger, style prior를 켠다.
+- 피크를 쥔 grip은 처음부터 끝까지 유지한다. jerk와 추가 style prior만 정확한 타현·안전 근거 뒤 켠다.
 - reference가 없는 주법은 “사람과 동일”이 아니라 “안전하고 운동학적으로 타당”하다고만 평가한다.
 
 ## 8. 기존 guitar 연구에서 가져오는 것과 버리는 것
@@ -107,12 +114,29 @@ preferred 안의 모든 위치는 target lane 중심으로 뽑힐 자격이 동�
 ```text
 A0_PICK_GRIP
 → A1_TIP_READY
-→ A2_FREE_CROSSING
-→ A3_TIMED_CROSSING (100→67→50 ms)
-→ A4_ZONE_CONTROL
+→ A2_SINGLE_CROSSING
+→ A3_TIMED_SINGLE (100→67→50 ms)
+→ A4_STRUM_CONTEXT_RECOVERY (실제 strum 문맥 1줄 + clean recovery)
+→ S0_TWO_STRING_STRUM (실제 2줄)
+→ S1_STRUM_SPAN (3→4→5→6줄)
+→ S2_TIMED_STRUM (E0 endpoint→400→250→225→200→175→150→100→zone 100→67→50 ms)
+→ S3_SONG_INTEGRATION
 ```
 
-각 승급은 최소 iteration과 연속 성능 gate가 모두 필요하다. 물리 pick, 실제 grasp/slip,
-string 탄성, up/alternate, strum, fingerstyle와 hybrid는 A4 이후 별도 계약으로 다룬다.
+각 승급은 최소 iteration과 연속 성능 gate가 모두 필요하다. A0~S2와 S3 마지막 사건은 목표 RELEASE
+뒤 추가 RELEASE나 재무장 전 crossing이 생기면 12-frame full recovery를 처음부터 다시 센다. S3의
+짧은 사건 간격은 다음 접근 전 확보 가능한 1~11 frame의 handoff recovery를 사용하며, 같은 줄 재타현은
+재무장을 생략하지 않는다. scheduled/full/handoff completion, reset rate, blocked crossing rate는
+별도 로그와 승급 gate로 남고, 고정 12-frame completion은 S3 진단으로 유지한다. 물리 pick, 실제 grasp/slip,
+string 탄성, same-string alternate, fingerstyle와 hybrid는 별도 계약으로 다룬다.
 시간 p95에는 허용창 밖의 올바른 target crossing도 포함하며, A0~A4는 완료 episode가 없는
 rollout을 승급 성공이나 실패로 세지 않는다.
+S2 E0에서는 마지막 줄만 남으면 final-string→exit를 목표로 연속 운동을 만들고, 최대 투영 증가분과
+timing 독립 physical-completion pulse로 양방향 끝줄 완주를 먼저 학습한다. down/up raw count 중 낮은
+완주율과 conditional/end-to-end recovery를 함께 gate한다. 한쪽이 3개 evidence window 연속 0.60
+미만이면 그 방향을 70%로 학습하되 승급은 down/up 30/30 balanced holdout만 사용한다.
+S3의 안전 실패는 항상 0이어야 한다. 음악적 wrong-crossing 종료와 blocked crossing은 tempo별
+gate를 사용해 `0.75`에서 학습 가능한 범위를 허용한 뒤 원곡 속도에서 각각 `≤0.01`로 줄인다.
+승급 F1과 rate는 episode 평균의 평균이 아니라 TP/FP/FN와 raw count를 합쳐 계산한다. S3가
+정체되면 15%는 노출 보정 실패 구간, 85%는 전곡 균일 시작으로 학습하고 승급은 uniform evidence만
+사용한다.

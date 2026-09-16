@@ -1,9 +1,14 @@
 # Strike 입력 아키텍처 — raw goal을 그대로 정책에 넣지 않는 이유
 
-> **현재 실행 v1:** 아래 문서의 풍부한 Intent/Mapper/593D 계약은 후속 fingerstyle·strum
-> 확장안과 2026-07-23 pilot 기록을 함께 보존한다. 지금 실행 코드는
-> `tab2body.strike_training.v1`의 `[time,frame,string]`, `down_only_v1`, 263D actor observation,
-> `READY/APPROACH/RELEASE_RECOVER` 3단계를 사용한다. 정본은
+> **현재 실행 v4 (2026-08-30):** 원본 `tab2body.strike_training.v3`의 필수
+> `[time,frame,string]`을 보존하고, compiler가 가까운 사건을 single/strum으로 묶은 뒤
+> 곡 전체 동적 계획으로 down/up을 확정한다. 결과 `tab2body.strike_plan.v4`의
+> `[time,frame,gesture,strings,direction]`을 RL이 실행한다. 정책은 실행 중 방향을 다시 고르지 않는다.
+> strum은 원본 onset 평균을 중심으로 삼고 방향 순서에 맞는 줄별 offset과 sweep duration을 추가한다.
+> v3 raw는 선택적으로 원본 시각·불확실성·출처와 근거가 필수인 reviewed `merge/separate`를
+> 보존한다. plan은 사건 중심 간격이 아니라 이전 traversal의 마지막 줄부터 다음 traversal의 첫 줄까지
+> 남은 시간을 검사하며, 원속도에서 실행 불가능하면 GPU 생성 전에 중단한다.
+> 아래의 fingerstyle/agent 확장 모델은 후속 설계로 보존한다. 실행 정본은
 > [README.md](README.md) 첫 절과 [학습 문서](../03_training/README.md)다.
 
 ## 결론
@@ -13,9 +18,8 @@ strike라는 뜻은 아니다. 먼저 `StrikeIntent`가 실제 오른손 공격 
 mapping 단계가 물리 실행용 `StrikePlan`으로 확장한 뒤 60 Hz `RuntimeGoal`로 래스터화한다.
 
 ```text
-SourceNote          StrikeIntent             StrikeMapper             StrikePlan            RuntimeGoal
-새 음향 onset 후보 → 오른손 공격 여부 해결 → 어떻게 칠지 결정     → 곡 전체 운동 의도  → 정책 관측
-t_on,string,effect    true/false/unknown        setup/agent/direction     phase/zone/relation   60 Hz tensor
+SourceNote → 출처·불확실성 감사 → StrikeIntent → StrikeMapper → 물리 전이 검사 → StrikePlan → RuntimeGoal
+onset 후보   JAMS/raw 차이·묶음 경계   공격 여부      주법·방향       edge gap·재통과     운동 의도     60 Hz 관측
 ```
 
 raw와 plan은 서로 대체 관계가 아니다.
@@ -24,6 +28,21 @@ raw와 plan은 서로 대체 관계가 아니다.
 - **StrikeIntent**: 그 onset에 오른손 공격이 필요한지 명시한다.
 - **StrikePlan**: 동일한 음악을 수행하는 여러 가능한 오른손 해법 중 하나를 명시한다.
 - **RuntimeGoal**: plan의 의미를 잃지 않고 정책이 매 frame 사용할 수 있게 만든다.
+
+## 현재 일반 품질 게이트
+
+`audit_strike_goal_quality.py`는 한 곡 또는 전체 bundle을 읽기 전용으로 검사한다. fingering과 raw의
+손실 없는 대응, 선택적 JAMS onset 차이, 애매한 single/strum 경계, 근거 없는 중간 줄 확장,
+traversal edge 간 실제 시간, 방향 반전 때 재통과하는 줄을 함께 보고 `PASS`, `AMBIGUOUS`,
+`INFEASIBLE`로 분류한다.
+
+- `AMBIGUOUS`는 자동으로 정답을 발명하지 않고 검수 대상으로 남긴다.
+- `INFEASIBLE`은 full-song 학습을 시작하지 않는다. 먼저 upstream을 고치거나, source ID·이유·근거가
+  들어간 reviewed `merge`/`separate`로 해결한 뒤 plan을 다시 만든다.
+- tempo curriculum은 학습을 쉽게 시작하기 위한 수단일 뿐이다. 원속도 plan 자체의 불가능한 경계를
+  숨기는 용도로 사용하지 않는다.
+- 기존 plan에 새 `transitions` 배열이 없어도 loader가 같은 규칙으로 파생 계산한다. 새 plan은
+  `entry_side_edge_gap_v2` 결과를 직렬화하고 다시 읽을 때 무결성을 검증한다.
 
 ## 왜 raw strike만으로 부족한가
 
@@ -251,7 +270,7 @@ schema를 올려야 한다.
 RECOVER는 실제 RELEASE pulse에서 시작한다. event가 miss이면 가짜 RELEASE를 만들지 않고 miss용
 reposition plan으로 넘어간다.
 
-S0의 `entry_side`, `exit_side`, `next_recovery_target`은 별도 JSON key가 아니다.
+현재 pick curriculum의 `entry_side`, `exit_side`, `next_recovery_target`은 별도 JSON key가 아니다.
 `stroke_direction/release_intent/relation_next`, target string과 다음 event에서 mapper가 결정론적으로
 유도해 RuntimeGoal에 넣는다. K-1 fixture가 이 유도 결과를 검사한다. 물리 pick/fingerstyle에서 이
 정보를 독립 annotation으로 보존해야 할 때만 schema version을 올려 직렬화한다.
@@ -324,7 +343,7 @@ loader는 물리 환경 생성 전에 다음을 전수 검사한다.
 - matcher는 exact pending target을 한 번만 소비하고 error는 배타적으로 분류한다.
 - pick crossing은 `0<t≤1`, `0≤s≤1`, 최소 속도/깊이와 물리 separation/time re-arm을 쓴다.
 
-이 593D 계약과 checkpoint는 제거됐으며 새 263D v1에 로드하지 않는다. 과거 예시의
+이 593D 계약과 checkpoint는 제거됐으며 이후 263D pilot이나 현재 303D v2에 로드하지 않는다. 과거 예시의
 `direction/pick_free/timing.prepare_start` 같은 별칭도 새 최소 loader가 조용히 허용하지 않는다.
 
 ## 선택 결론

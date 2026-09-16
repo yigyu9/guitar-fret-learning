@@ -1,1 +1,0 @@
-../../docs/finger-mapping-design.md
