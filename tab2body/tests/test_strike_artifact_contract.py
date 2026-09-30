@@ -63,14 +63,14 @@ def metric_fixture():
         },
         {
             "steps": 300,
-            "curriculum_stage": "A2_FREE_CROSSING",
+            "curriculum_stage": "A2_SINGLE_CROSSING",
             "reward": 0.3,
             "release_recall": 0.80,
             "strike_false_positive_rate": 0.10,
         },
         {
             "steps": 400,
-            "curriculum_stage": "A3_TIMED_CROSSING",
+            "curriculum_stage": "A3_TIMED_SINGLE",
             "reward": 0.4,
             "strike_precision": 0.85,
             "strike_recall": 0.83,
@@ -81,7 +81,27 @@ def metric_fixture():
         },
         {
             "steps": 500,
-            "curriculum_stage": "A4_ZONE_CONTROL",
+            "curriculum_stage": "A4_STRUM_CONTEXT_RECOVERY",
+            "reward": 0.43,
+        },
+        {
+            "steps": 600,
+            "curriculum_stage": "S0_TWO_STRING_STRUM",
+            "reward": 0.45,
+        },
+        {
+            "steps": 700,
+            "curriculum_stage": "S1_STRUM_SPAN",
+            "reward": 0.46,
+        },
+        {
+            "steps": 800,
+            "curriculum_stage": "S2_TIMED_STRUM",
+            "reward": 0.48,
+        },
+        {
+            "steps": 900,
+            "curriculum_stage": "S3_SONG_INTEGRATION",
             "reward": 0.5,
             "curriculum_strike_f1": 0.91,
             "curriculum_timing_p95_ms": 49.0,
@@ -116,7 +136,7 @@ def main():
         failure_series = dict(PANEL_SERIES[-1][1])
         wrong_x, wrong_y = available_series(
             loaded, x, failure_series["wrong crossing"])
-        assert wrong_x == [300.0, 500.0]
+        assert wrong_x == [300.0, 900.0]
         assert wrong_y == [0.10, 0.03]
         precedence_rows = [{
             "steps": 1,
@@ -174,6 +194,15 @@ def main():
         override = root / "custom.mp4"
         assert recorder.resolve_video_paths(
             checkpoint_path, remembered=override)["remembered"] == override
+        assert recorder.resolve_video_paths(
+            checkpoint_path, full_song=True) == {
+                "remembered": (
+                    root / "run" / "videos"
+                    / "strike_000500_full_song_remembered.mp4"),
+                "current": (
+                    root / "run" / "videos"
+                    / "strike_000500_full_song_current.mp4"),
+            }
         assert resolve_motion_audit_path(checkpoint_path) == (
             root / "run" / "evaluations"
             / "strike_000500.motion_diagnostics.json")
@@ -185,29 +214,116 @@ def main():
         assert summary["maximum"] == 3.0
         assert summarize_samples([])["p95"] is None
 
+        trace_summary = recorder.summarize_strike_event_trace([
+            {
+                "gesture": "single_pick",
+                "traversal_strings_0_based": [0],
+                "crossings": [{
+                    "string_0_based": 0,
+                    "accepted": True,
+                    "blocked_wait_rearm": False,
+                }],
+                "target_hit": True,
+                "wrong_crossing_count": 0.0,
+                "timing_error_ms": [10.0],
+            },
+            {
+                "gesture": "strum",
+                "traversal_strings_0_based": [1, 2],
+                "crossings": [
+                    {"string_0_based": 1, "accepted": True,
+                     "blocked_wait_rearm": False},
+                    {"string_0_based": 2, "accepted": False,
+                     "blocked_wait_rearm": True},
+                ],
+                "target_hit": False,
+                "wrong_crossing_count": 1.0,
+                "timing_error_ms": [-20.0],
+            },
+        ])
+        assert trace_summary["planned_event_count"] == 2
+        assert trace_summary["completed_event_count"] == 1
+        assert trace_summary["traversal_true_positive_count"] == 2
+        assert trace_summary["traversal_false_positive_count"] == 1
+        assert trace_summary["traversal_false_negative_count"] == 1
+        assert trace_summary["blocked_crossing_count"] == 1
+        assert trace_summary["timing_abs_p95_ms"] == 20.0
+
         checkpoint = {
             "environment_state": {
-                "schema": "tab2body.strike_environment_state.v2",
-                "curriculum_stage": "A3_TIMED_CROSSING",
+                "schema": "tab2body.strike_environment_state.v12",
+                "curriculum_stage": "A3_TIMED_SINGLE",
                 "timing_tolerance_ms": 67,
                 "tempo_lambda": 1.0,
+                "strum_span": 1,
+                "s2_profile_name": "T0_400MS",
+                "zone_gate_active": True,
+                "timing_reward_core_ms": 20.0,
+                "duration_reward_core_ms": 15.0,
+                "approach_lead_s": 0.25,
+                "timing_early_grace_ms": 13.4,
+                "timing_early_penalty_scale_ms": 40.2,
+                "song_f1_gate": 0.98,
             },
             "training_context": {
-                "curriculum_stage": "A3_TIMED_CROSSING",
+                "curriculum_stage": "A3_TIMED_SINGLE",
                 "curriculum_timing_tolerance_ms": 67,
             },
         }
         assert recorder.restore_stage_and_tolerance(checkpoint) == (
-            "A3_TIMED_CROSSING", 67.0, 1.0)
+            "A3_TIMED_SINGLE", 67.0, 1.0, 1,
+            "T0_400MS", False, "balanced", 0.5,
+            True, 20.0, 15.0, 0.25, 13.4, 40.2, 0.98)
+        checkpoint_v13 = {
+            "environment_state": dict(
+                checkpoint["environment_state"],
+                schema="tab2body.strike_environment_state.v13"),
+            "training_context": dict(checkpoint["training_context"]),
+        }
+        assert recorder.restore_stage_and_tolerance(checkpoint_v13) == (
+            "A3_TIMED_SINGLE", 67.0, 1.0, 1,
+            "T0_400MS", False, "balanced", 0.5,
+            True, 20.0, 15.0, 0.25, 13.4, 40.2, 0.98)
+        checkpoint_v14 = {
+            "environment_state": dict(
+                checkpoint["environment_state"],
+                schema="tab2body.strike_environment_state.v14",
+                s2_endpoint_recovery_active=True,
+                s2_focus_direction="down",
+                s2_focus_fraction=0.7),
+            "training_context": dict(checkpoint["training_context"]),
+        }
+        assert recorder.restore_stage_and_tolerance(checkpoint_v14) == (
+            "A3_TIMED_SINGLE", 67.0, 1.0, 1,
+            "T0_400MS", True, "down", 0.7,
+            True, 20.0, 15.0, 0.25, 13.4, 40.2, 0.98)
+        invalid_v14 = {
+            "environment_state": dict(
+                checkpoint["environment_state"],
+                schema="tab2body.strike_environment_state.v14"),
+            "training_context": dict(checkpoint["training_context"]),
+        }
+        expect_error(
+            "S2 endpoint recovery state",
+            lambda: recorder.restore_stage_and_tolerance(invalid_v14))
         mismatch = {
             "environment_state": {
-                "schema": "tab2body.strike_environment_state.v2",
-                "curriculum_stage": "A3_TIMED_CROSSING",
+                "schema": "tab2body.strike_environment_state.v12",
+                "curriculum_stage": "A3_TIMED_SINGLE",
                 "timing_tolerance_ms": 67,
                 "tempo_lambda": 1.0,
+                "strum_span": 1,
+                "s2_profile_name": "T0_400MS",
+                "zone_gate_active": True,
+                "timing_reward_core_ms": 20.0,
+                "duration_reward_core_ms": 15.0,
+                "approach_lead_s": 0.25,
+                "timing_early_grace_ms": 13.4,
+                "timing_early_penalty_scale_ms": 40.2,
+                "song_f1_gate": 0.98,
             },
             "training_context": {
-                "curriculum_stage": "A4_ZONE_CONTROL",
+                "curriculum_stage": "S3_SONG_INTEGRATION",
                 "curriculum_timing_tolerance_ms": 50,
             },
         }
@@ -215,10 +331,10 @@ def main():
             "curriculum state mismatch",
             lambda: recorder.restore_stage_and_tolerance(mismatch))
         expect_error(
-            "environment_state.v2",
+            "environment_state.v12/v13/v14",
             lambda: recorder.restore_stage_and_tolerance({
                 "training_context": {
-                    "curriculum_stage": "A4_ZONE_CONTROL",
+                    "curriculum_stage": "S3_SONG_INTEGRATION",
                     "curriculum_timing_tolerance_ms": 50,
                 },
             }))
@@ -226,7 +342,7 @@ def main():
             "timing tolerance",
             lambda: recorder.restore_stage_and_tolerance({
                 "environment_state": {
-                    "schema": "tab2body.strike_environment_state.v2",
+                    "schema": "tab2body.strike_environment_state.v12",
                     "curriculum_stage": "A0_PICK_GRIP",
                 },
                 "training_context": {
@@ -238,10 +354,19 @@ def main():
             "valid strike curriculum stage",
             lambda: recorder.restore_stage_and_tolerance({
                 "environment_state": {
-                    "schema": "tab2body.strike_environment_state.v2",
+                    "schema": "tab2body.strike_environment_state.v12",
                     "curriculum_stage": "UNKNOWN",
                     "timing_tolerance_ms": 50,
                     "tempo_lambda": 1.0,
+                    "strum_span": 1,
+                    "s2_profile_name": "T0_400MS",
+                    "zone_gate_active": False,
+                    "timing_reward_core_ms": 20.0,
+                    "duration_reward_core_ms": 15.0,
+                    "approach_lead_s": 0.25,
+                    "timing_early_grace_ms": 10.0,
+                    "timing_early_penalty_scale_ms": 30.0,
+                    "song_f1_gate": 0.98,
                 },
                 "training_context": {
                     "curriculum_stage": "UNKNOWN",

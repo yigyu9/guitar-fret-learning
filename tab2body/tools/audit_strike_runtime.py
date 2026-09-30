@@ -1,4 +1,4 @@
-"""Fail-closed Isaac Gym runtime audit for all five strike stages."""
+"""Fail-closed Isaac Gym runtime audit for all eight strike stages."""
 from __future__ import annotations
 
 import argparse
@@ -19,7 +19,9 @@ import torch
 from tab2body.env.config import configured_kwargs
 from tab2body.env.tasks import StrikeTask
 from tab2body.strike_cfg import STRIKE
-from tab2body.strike_contract import STRIKE_STAGES as STAGES
+from tab2body.strike_contract import (
+    A3_TIMED_SINGLE, S2_TIMED_STRUM, S3_SONG_INTEGRATION,
+    STRIKE_STAGES as STAGES)
 
 
 def build_parser():
@@ -103,9 +105,11 @@ def main(argv=None):
             raise RuntimeError("strike reset observation is non-finite")
 
         for stage in STAGES:
-            tolerance = 50.0 if stage == STAGES[-1] else 100.0
+            tolerance = 50.0 if stage == S3_SONG_INTEGRATION else 100.0
+            span = 6 if stage in (S2_TIMED_STRUM, S3_SONG_INTEGRATION) \
+                else 2
             obs = env.set_curriculum_stage(
-                stage, tolerance, reset=True)
+                stage, tolerance, strum_span=span, reset=True)
             reward_min = float("inf")
             reward_max = float("-inf")
             failure_count = 0
@@ -113,7 +117,7 @@ def main(argv=None):
             max_swept_penetration_depth = 0.0
             for _ in range(args.steps):
                 obs, reward, _done, info = env.step(
-                    env.grip_hold_action.clone())
+                    env.policy_neutral_action.clone())
                 if not torch.isfinite(obs).all():
                     raise RuntimeError(f"{stage}: non-finite observation")
                 if not torch.isfinite(reward).all():
@@ -150,7 +154,7 @@ def main(argv=None):
                 "max_right_guitar_swept_penetration_depth_m":
                     max_swept_penetration_depth,
             }
-            if stage == STAGES[3]:
+            if stage in (A3_TIMED_SINGLE, S2_TIMED_STRUM):
                 target_time = env.practice_target_time_s
                 if (float(target_time.min()) < 0.75
                         or float(target_time.max()) > 1.5):
@@ -159,24 +163,26 @@ def main(argv=None):
                     target_time.min())
                 stage_report["practice_target_time_max_s"] = float(
                     target_time.max())
-            if stage == STAGES[4]:
+            if stage == S3_SONG_INTEGRATION:
                 if (float(env.target_lane_y.min()) < env.preferred_y[0]
                         or float(env.target_lane_y.max()) > env.preferred_y[1]):
-                    raise RuntimeError("A4 lane left the preferred strike zone")
+                    raise RuntimeError("S3 lane left the preferred strike zone")
             report["stages"][stage] = stage_report
 
-        env.set_curriculum_stage(STAGES[4], 50.0, reset=False)
+        env.set_curriculum_stage(
+            S3_SONG_INTEGRATION, 50.0,
+            tempo_lambda=1.0, strum_span=6, reset=False)
         full_obs = env.set_evaluation_mode(full_song=True, reset=True)
         if full_obs is None:
             full_obs = env.reset()
         if not torch.isfinite(full_obs).all():
-            raise RuntimeError("A4 full-song reset observation is non-finite")
+            raise RuntimeError("S3 full-song reset observation is non-finite")
         first_event_s = float(env.goals.time[0])
         start_s = float(env.song_time_s[0])
         pre_roll_frames = (first_event_s - start_s) * env.SIM_HZ
         if pre_roll_frames + 1e-6 < env.ready_hold_frames:
             raise RuntimeError(
-                "A4 full-song pre-roll is shorter than READY hold")
+                "S3 full-song pre-roll is shorter than READY hold")
         report["full_song"] = {
             "first_event_time_s": first_event_s,
             "start_time_s": start_s,

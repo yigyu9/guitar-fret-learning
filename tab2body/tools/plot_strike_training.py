@@ -31,9 +31,13 @@ STAGES = STRIKE_STAGES
 STAGE_COLORS = {
     "A0_PICK_GRIP": "#d9edf7",
     "A1_TIP_READY": "#dff0d8",
-    "A2_FREE_CROSSING": "#fcf8e3",
-    "A3_TIMED_CROSSING": "#f2dede",
-    "A4_ZONE_CONTROL": "#e8ddf2",
+    "A2_SINGLE_CROSSING": "#fcf8e3",
+    "A3_TIMED_SINGLE": "#f2dede",
+    "A4_STRUM_CONTEXT_RECOVERY": "#c8e6c9",
+    "S0_TWO_STRING_STRUM": "#ffe0b2",
+    "S1_STRUM_SPAN": "#ffcc80",
+    "S2_TIMED_STRUM": "#ce93d8",
+    "S3_SONG_INTEGRATION": "#e8ddf2",
 }
 
 STEP_KEYS = ("steps", "global_step", "samples", "iteration")
@@ -51,8 +55,13 @@ PANEL_SERIES = (
         "Pick grip",
         (
             ("grip quality", (
-                "curriculum_grip_quality", "grip_quality",
+                "strike_grip_quality_mean", "curriculum_grip_quality",
+                "grip_quality",
                 "mean_grip_quality")),
+            ("grip quality p05", ("strike_grip_quality_p05",)),
+            ("pinch quality", ("strike_grip_pinch_quality_mean",)),
+            ("free-finger quality", (
+                "strike_grip_free_quality_mean",)),
             ("grip success", (
                 "strike_grip_success_rate",
                 "curriculum_grip_success_rate", "grip_success_rate")),
@@ -114,6 +123,69 @@ PANEL_SERIES = (
         None,
     ),
     (
+        "Signed timing",
+        (
+            ("mean (ms)", ("strike_timing_signed_mean_ms",)),
+            ("P10 (ms)", ("strike_timing_signed_p10_ms",)),
+            ("P50 (ms)", ("strike_timing_signed_p50_ms",)),
+            ("P90 (ms)", ("strike_timing_signed_p90_ms",)),
+            ("mean |gate| (ms)", (
+                "curriculum_timing_center_mean_abs_gate_ms",)),
+            ("tail |gate| (ms)", (
+                "curriculum_timing_center_tail_abs_gate_ms",)),
+        ),
+        None,
+    ),
+    (
+        "S2 timing outcome rates",
+        (
+            ("pass", ("strike_timing_pass_rate",
+                       "curriculum_timing_pass_rate")),
+            ("early", ("strike_timing_early_rate",
+                        "curriculum_timing_early_rate")),
+            ("late", ("strike_timing_late_rate",
+                       "curriculum_timing_late_rate")),
+            ("premature", ("strike_premature_release_rate",
+                            "curriculum_premature_release_rate")),
+            ("profile index", ("curriculum_s2_profile_index",)),
+            ("adaptation remaining", (
+                "curriculum_s2_adaptation_remaining",)),
+        ),
+        None,
+    ),
+    (
+        "Strum completion / direction",
+        (
+            ("completion", (
+                "strike_strum_completion_rate",
+                "curriculum_strum_completion_rate")),
+            ("traversal recall", (
+                "strike_strum_traversal_recall",
+                "curriculum_strum_traversal_recall")),
+            ("down completion", (
+                "strike_down_completion_rate",)),
+            ("up completion", (
+                "strike_up_completion_rate",)),
+        ),
+        (0.0, 1.02),
+    ),
+    (
+        "Strum microtiming",
+        (
+            ("timing RMS (ms)", (
+                "strike_strum_timing_rms_ms",
+                "curriculum_strum_timing_rms_ms")),
+            ("timing RMS P95 (ms)", (
+                "strike_strum_timing_p95_ms",)),
+            ("sweep duration MAE (ms)", (
+                "strike_strum_sweep_duration_mae_ms",
+                "curriculum_strum_sweep_duration_error_ms")),
+            ("sweep duration P95 (ms)", (
+                "strike_strum_sweep_duration_p95_ms",)),
+        ),
+        None,
+    ),
+    (
         "Strike zone",
         (
             ("zone success", (
@@ -122,6 +194,46 @@ PANEL_SERIES = (
             ("zone quality", (
                 "strike_zone_mean_quality", "curriculum_zone_quality",
                 "zone_quality", "mean_zone_quality")),
+            ("raw zone success", (
+                "strike_raw_zone_success_rate",
+                "curriculum_raw_zone_success_rate")),
+            ("raw zone quality", (
+                "strike_raw_zone_mean_quality",
+                "curriculum_raw_zone_mean_quality")),
+        ),
+        (0.0, 1.02),
+    ),
+    (
+        "S2 objective reward returns",
+        (
+            ("timing", ("strike_reward_timing_return",)),
+            ("ready wait", ("strike_reward_timing_wait_return",)),
+            ("strum progress", (
+                "strike_reward_strum_progress_return",)),
+            ("premature penalty", (
+                "strike_penalty_premature_release_return",)),
+            ("early-center penalty", (
+                "strike_penalty_early_timing_return",)),
+            ("miss penalty", ("strike_penalty_miss_return",)),
+            ("alignment warning", ("reward_alignment_warning",)),
+        ),
+        None,
+    ),
+    (
+        "Clean recovery",
+        (
+            ("fixed 12-frame diagnostic", (
+                "strike_recovery_completion_rate",)),
+            ("scheduled completion", (
+                "strike_scheduled_recovery_completion_rate",)),
+            ("full completion", (
+                "strike_full_recovery_completion_rate",)),
+            ("handoff completion", (
+                "strike_handoff_recovery_completion_rate",)),
+            ("reset rate", (
+                "strike_recovery_reset_rate",)),
+            ("blocked crossing rate", (
+                "strike_blocked_crossing_rate",)),
         ),
         (0.0, 1.02),
     ),
@@ -346,7 +458,7 @@ def render_plot(metrics, out=None):
 
 def parser():
     ap = argparse.ArgumentParser(
-        description="plot A0-A4 virtual-pick strike training diagnostics")
+        description="plot A0-A4 and S0-S3 virtual-pick training diagnostics")
     ap.add_argument("metrics", type=Path)
     ap.add_argument("--out", type=Path, default=None)
     return ap

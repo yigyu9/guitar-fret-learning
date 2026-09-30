@@ -223,7 +223,7 @@ def main():
     polyphonic_built = build_strike_training_data(polyphonic)
     assert len(polyphonic_built["events"]) == 2
     assert polyphonic_built["validation"]["profile"] == (
-        "pick_gesture_compiler_v2")
+        "pick_gesture_compiler_v3")
 
     subframe_double = {
         "notes": [

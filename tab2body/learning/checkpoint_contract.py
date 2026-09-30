@@ -19,14 +19,46 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 
-CHECKPOINT_CONTRACT_SCHEMA = "tab2body.fret_checkpoint_contract.v1"
-STRIKE_CHECKPOINT_CONTRACT_SCHEMA = "tab2body.strike_checkpoint_contract.v1"
+CHECKPOINT_CONTRACT_SCHEMA = "tab2body.fret_checkpoint_contract.v2"
+LEGACY_FRET_CHECKPOINT_CONTRACT_SCHEMA = (
+    "tab2body.fret_checkpoint_contract.v1")
+STRIKE_CHECKPOINT_CONTRACT_SCHEMA = "tab2body.strike_checkpoint_contract.v14"
+LEGACY_STRIKE_CHECKPOINT_CONTRACT_SCHEMA = (
+    "tab2body.strike_checkpoint_contract.v13")
+OLDER_STRIKE_CHECKPOINT_CONTRACT_SCHEMA = (
+    "tab2body.strike_checkpoint_contract.v12")
+OLDEST_STRIKE_CHECKPOINT_CONTRACT_SCHEMA = (
+    "tab2body.strike_checkpoint_contract.v11")
 SUPPORTED_CHECKPOINT_CONTRACT_SCHEMAS = {
     CHECKPOINT_CONTRACT_SCHEMA,
+    LEGACY_FRET_CHECKPOINT_CONTRACT_SCHEMA,
     STRIKE_CHECKPOINT_CONTRACT_SCHEMA,
+    LEGACY_STRIKE_CHECKPOINT_CONTRACT_SCHEMA,
+    OLDER_STRIKE_CHECKPOINT_CONTRACT_SCHEMA,
+    OLDEST_STRIKE_CHECKPOINT_CONTRACT_SCHEMA,
 }
 SCALAR_ADVANTAGE_VERSION = (
     "reward_weighted_value_heads_then_single_global_standardization.v1")
+STRIKE_POLICY_TRANSFER_ALLOWED_DIFFERENCE_PREFIXES = (
+    "schema",
+    "objective",
+    "model.policy_init_std",
+    "config.model.policy_init_std",
+    "config.objective",
+    "config.strike.reward",
+    "config.strike.curriculum",
+    "config.strike.evaluation",
+    "config.strike.timing_reward_contract",
+    "config.strike.strum_motion_contract",
+    "config.strike.metric_contract",
+    "config.strike.curriculum_contract",
+    "config.strike.success_event",
+    "fingerprints.implementation",
+    "fingerprints.config_sha256",
+)
+STRIKE_POLICY_TRANSFER_ALLOWED_EXACT_DIFFERENCE_PATHS = (
+    "config.ppo.completed_strike_lr_multiplier",
+)
 
 
 def _json_value(value: Any) -> Any:
@@ -121,7 +153,12 @@ def build_fret_contract_payload(*, controlled_dof_names: Iterable[str],
                                 hand_targets_sha256: str | None,
                                 asset_fingerprint: Mapping[str, Any],
                                 implementation_fingerprint: Mapping[str, Any],
-                                policy_distribution_version: str) -> dict[str, Any]:
+                                policy_distribution_version: str,
+                                observation_contract: str =
+                                "fret.observation.v1",
+                                observation_manifest: Iterable[str] | None = None,
+                                model_architecture_version: str =
+                                "actor_critic.mlp.v1") -> dict[str, Any]:
     """Build the semantic payload later sealed into a checkpoint contract."""
     names = [str(name) for name in controlled_dof_names]
     raw_weights = [float(value) for value in raw_reward_weights]
@@ -138,6 +175,12 @@ def build_fret_contract_payload(*, controlled_dof_names: Iterable[str],
     sim_hz = int(sim_hz)
     sim_substeps = int(sim_substeps)
     policy_distribution_version = str(policy_distribution_version)
+    observation_contract = str(observation_contract)
+    model_architecture_version = str(model_architecture_version)
+    manifest = ([str(field) for field in observation_manifest]
+                if observation_manifest is not None
+                else [f"fret_v1.legacy_index.{index:03d}"
+                      for index in range(num_obs)])
     if num_obs <= 0 or num_actions <= 0 or value_dim <= 0:
         raise ValueError("model dimensions must be positive")
     if not math.isfinite(action_scale) or action_scale <= 0.0:
@@ -153,6 +196,14 @@ def build_fret_contract_payload(*, controlled_dof_names: Iterable[str],
         raise ValueError("timing values must be non-negative/positive")
     if not policy_distribution_version:
         raise ValueError("policy_distribution_version must be non-empty")
+    if observation_contract not in (
+            "fret.observation.v1", "fret.observation.v2"):
+        raise ValueError("unsupported fret observation contract")
+    if not model_architecture_version:
+        raise ValueError("model_architecture_version must be non-empty")
+    if len(manifest) != num_obs or len(set(manifest)) != num_obs:
+        raise ValueError(
+            "observation manifest must contain num_obs unique fields")
     if len(names) != num_actions:
         raise ValueError("controlled DOF name count must equal num_actions")
     if len(set(names)) != len(names):
@@ -180,6 +231,13 @@ def build_fret_contract_payload(*, controlled_dof_names: Iterable[str],
         "value_dim": value_dim,
         "policy_distribution_version": policy_distribution_version,
         "policy_init_std": policy_init_std,
+        "model_architecture_version": model_architecture_version,
+    }
+    observation_contract_payload = {
+        "schema": observation_contract,
+        "dimension": num_obs,
+        "manifest": manifest,
+        "manifest_sha256": canonical_sha256(manifest),
     }
     control_contract = {
         "controlled_dof_names": names,
@@ -195,6 +253,7 @@ def build_fret_contract_payload(*, controlled_dof_names: Iterable[str],
     }
     semantic_config = {
         "model": model_contract,
+        "observation": observation_contract_payload,
         "control": control_contract,
         "objective": objective_contract,
         "reward_safety": reward_safety_config,
@@ -209,6 +268,7 @@ def build_fret_contract_payload(*, controlled_dof_names: Iterable[str],
         "schema": CHECKPOINT_CONTRACT_SCHEMA,
         "task": "fret",
         "model": model_contract,
+        "observation": observation_contract_payload,
         "control": control_contract,
         "objective": objective_contract,
         "inputs": {
@@ -431,6 +491,266 @@ def verify_checkpoint_contract(checkpoint: Mapping[str, Any],
         detail += f"; ... and {len(differences) - 8} more"
     raise ValueError(
         f"checkpoint contract mismatch; refusing to {purpose}. {detail}")
+
+
+def verify_strike_policy_initialization_contract(
+        checkpoint: Mapping[str, Any],
+        expected_contract: Mapping[str, Any]) -> None:
+    """Verify a policy-only strike transfer without weakening strict resume.
+
+    A policy transfer deliberately starts a new optimizer, critic, curriculum
+    and environment trajectory, so reward/curriculum/metric semantics may
+    change.  Everything that determines how the copied actor interprets its
+    observations and actions remains exact.  Unknown differences fail closed;
+    adding a new exception requires extending the documented prefix list
+    below rather than silently broadening this check.
+    """
+    if "checkpoint_contract" not in checkpoint:
+        raise ValueError(
+            "policy initialization requires a checkpoint_contract")
+    saved = validate_contract_document(checkpoint["checkpoint_contract"])[
+        "payload"]
+    expected = validate_contract_document(expected_contract)["payload"]
+    required_paths = (
+        ("task",),
+        ("model", "num_obs"),
+        ("model", "num_actions"),
+        ("model", "value_dim"),
+        ("model", "policy_distribution_version"),
+        ("control",),
+        ("inputs", "goal_sha256"),
+        ("inputs", "grip_reference_sha256"),
+        ("config", "observation_manifest"),
+        ("config", "timing"),
+        ("config", "strike", "grip_control"),
+        ("config", "strike", "direction_profile"),
+        ("config", "strike", "transition_profile"),
+        ("config", "strike", "recovery_contract"),
+        ("config", "strike", "pick_representation"),
+        ("config", "strike", "string_representation"),
+        ("fingerprints", "asset"),
+    )
+
+    missing = object()
+
+    def value_at(payload, path):
+        value = payload
+        for key in path:
+            if not isinstance(value, Mapping) or key not in value:
+                return missing
+            value = value[key]
+        return value
+
+    differences = []
+    for path in required_paths:
+        source = value_at(saved, path)
+        target = value_at(expected, path)
+        if source is missing or target is missing:
+            differences.append(
+                f"{'.'.join(path)}: required policy interface field is missing")
+        elif source != target:
+            differences.append(
+                f"{'.'.join(path)}: checkpoint={source!r}, live={target!r}")
+
+    maintenance_lr_path = (
+        "config", "ppo", "completed_strike_lr_multiplier")
+    source_maintenance_lr = value_at(saved, maintenance_lr_path)
+    if (source_maintenance_lr is not missing
+            and (isinstance(source_maintenance_lr, bool)
+                 or not isinstance(source_maintenance_lr, (int, float))
+                 or not math.isfinite(float(source_maintenance_lr)))):
+        differences.append(
+            ".".join(maintenance_lr_path)
+            + ": must be a finite number when present")
+
+    def allowed(path):
+        return (
+            path in STRIKE_POLICY_TRANSFER_ALLOWED_EXACT_DIFFERENCE_PATHS
+            or any(
+                path == prefix
+                or path.startswith(prefix + ".")
+                or path.startswith(prefix + "[")
+                for prefix in STRIKE_POLICY_TRANSFER_ALLOWED_DIFFERENCE_PREFIXES))
+
+    for difference in contract_differences(saved, expected):
+        path = difference.split(":", 1)[0]
+        if not allowed(path):
+            differences.append(difference)
+    if differences:
+        differences = list(dict.fromkeys(differences))
+        detail = "; ".join(differences[:8])
+        if len(differences) > 8:
+            detail += f"; ... and {len(differences) - 8} more"
+        raise ValueError(
+            "strike policy initialization interface mismatch; "
+            + detail)
+
+
+def strike_s2_policy_transfer_spec(
+        checkpoint: Mapping[str, Any],
+        expected_contract: Mapping[str, Any],
+        *, required_source_iteration: int | None = None) -> dict[str, Any]:
+    """Return the audited policy-only transfer plan for an S2 checkpoint.
+
+    The returned tensor list is intentionally limited to the actor,
+    observation normalizer and learned exploration standard deviation.  It is
+    suitable for logging beside a new run; it is not a resume operation.
+    """
+    verify_strike_policy_initialization_contract(checkpoint, expected_contract)
+    if not isinstance(checkpoint, Mapping):
+        raise TypeError("S2 policy initialization checkpoint must be a mapping")
+    source_iteration = checkpoint.get("iteration")
+    if isinstance(source_iteration, bool):
+        raise ValueError("S2 policy initialization iteration must be an integer")
+    try:
+        source_iteration = int(source_iteration)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "S2 policy initialization checkpoint lacks an iteration") from exc
+    if source_iteration < 1:
+        raise ValueError("S2 policy initialization iteration must be positive")
+    if (required_source_iteration is not None
+            and source_iteration != int(required_source_iteration)):
+        raise ValueError(
+            "S2 policy initialization source iteration mismatch: "
+            f"checkpoint={source_iteration}, "
+            f"required={int(required_source_iteration)}")
+
+    context = checkpoint.get("training_context")
+    environment = checkpoint.get("environment_state")
+    if not isinstance(context, Mapping) or not isinstance(environment, Mapping):
+        raise ValueError(
+            "S2 policy initialization requires training_context and "
+            "environment_state")
+    source_stage = context.get("curriculum_stage")
+    environment_stage = environment.get("curriculum_stage")
+    if (source_stage not in ("S1_STRUM_SPAN", "S2_TIMED_STRUM")
+            or environment_stage != source_stage):
+        raise ValueError(
+            "S2 policy initialization requires aligned S1-final or S2-entry state; "
+            f"training_context={source_stage!r}, "
+            f"environment_state={environment_stage!r}")
+    raw_span = environment.get(
+        "strum_span", context.get("curriculum_strum_span"))
+    if isinstance(raw_span, bool):
+        raise ValueError("S2 policy initialization strum span must be 6")
+    try:
+        source_span = int(raw_span)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "S2 policy initialization checkpoint lacks strum span") from exc
+    if source_span != 6:
+        raise ValueError(
+            "S2 policy initialization requires a learned six-string span")
+    stalled = bool(
+        context.get("curriculum_stalled", False)
+        or environment.get("curriculum_stalled", False))
+    if stalled:
+        raise ValueError(
+            "S2 policy initialization refuses a stalled source checkpoint")
+    if source_stage == "S2_TIMED_STRUM":
+        stage_iteration = context.get("curriculum_stage_iteration")
+        evidence_episodes = context.get("curriculum_evidence_episodes")
+        if (isinstance(stage_iteration, bool)
+                or isinstance(evidence_episodes, bool)):
+            raise ValueError(
+                "S2 entry checkpoint has invalid stage/evidence counters")
+        try:
+            stage_iteration = int(stage_iteration)
+            evidence_episodes = int(evidence_episodes)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "S2 entry checkpoint lacks stage/evidence counters") from exc
+        if stage_iteration != 0 or evidence_episodes != 0:
+            raise ValueError(
+                "S2 policy initialization refuses a later S2 checkpoint; "
+                "source must have stage_iteration=0 and no S2 evidence")
+    elif context.get("curriculum_last_evidence_passed") is not True:
+        raise ValueError(
+            "S1 policy initialization source must be a final passed S1 checkpoint")
+
+    model = checkpoint.get("model")
+    if not isinstance(model, Mapping):
+        raise ValueError("S2 policy initialization checkpoint lacks model state")
+    selected = tuple(sorted(
+        key for key in model
+        if key == "log_std"
+        or key.startswith("actor.")
+        or key.startswith("obs_rms.")))
+    required_groups = {
+        "actor": any(key.startswith("actor.") for key in selected),
+        "obs_rms.mean": "obs_rms.mean" in selected,
+        "obs_rms.var": "obs_rms.var" in selected,
+        "obs_rms.count": "obs_rms.count" in selected,
+        "log_std": "log_std" in selected,
+    }
+    missing_groups = [name for name, present in required_groups.items()
+                      if not present]
+    if missing_groups:
+        raise ValueError(
+            "S2 policy initialization checkpoint is missing policy tensors: "
+            + ", ".join(missing_groups))
+    if any(key.startswith("critic.") for key in selected):
+        raise AssertionError("critic tensors entered the policy transfer plan")
+    for key in selected:
+        tensor = model[key]
+        try:
+            finite = bool(tensor.detach().isfinite().all().item())
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"S2 policy initialization tensor {key!r} is not a tensor") from exc
+        if not finite:
+            raise ValueError(
+                f"S2 policy initialization tensor {key!r} is nonfinite")
+    try:
+        expected_payload = validate_contract_document(expected_contract)[
+            "payload"]
+        expected_num_obs = int(expected_payload["model"]["num_obs"])
+        expected_num_actions = int(expected_payload["model"]["num_actions"])
+        log_std_size = int(model["log_std"].numel())
+        obs_mean_size = int(model["obs_rms.mean"].numel())
+        obs_var_size = int(model["obs_rms.var"].numel())
+        obs_count_size = int(model["obs_rms.count"].numel())
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "S2 policy initialization tensor dimensions are invalid") from exc
+    if log_std_size != expected_num_actions:
+        raise ValueError(
+            "S2 policy initialization source std size does not match actions")
+    if (obs_mean_size != expected_num_obs
+            or obs_var_size != expected_num_obs
+            or obs_count_size != 1):
+        raise ValueError(
+            "S2 policy initialization observation normalizer shape mismatch")
+    if not bool((model["obs_rms.var"] > 0).all().item()):
+        raise ValueError(
+            "S2 policy initialization observation variance must be positive")
+    if not bool((model["obs_rms.count"] > 0).all().item()):
+        raise ValueError(
+            "S2 policy initialization observation count must be positive")
+
+    return {
+        "schema": "tab2body.strike_policy_transfer.v1",
+        "mode": "s2_actor_obs_rms_source_std",
+        "source_iteration": source_iteration,
+        "source_stage": source_stage,
+        "source_strum_span": source_span,
+        "source_contract_sha256": checkpoint[
+            "checkpoint_contract"]["sha256"],
+        "target_contract_sha256": validate_contract_document(
+            expected_contract)["sha256"],
+        "allowed_semantic_difference_prefixes": list(
+            STRIKE_POLICY_TRANSFER_ALLOWED_DIFFERENCE_PREFIXES),
+        "copied_model_tensors": list(selected),
+        "copied_source_log_std": True,
+        "reset_critic": True,
+        "reset_optimizer": True,
+        "reset_curriculum": True,
+        "reset_environment_state": True,
+        "reset_environment_rng": True,
+        "ignored_checkpoint_sections": [
+            "optimizer", "training_context", "environment_state"],
+    }
 
 
 def copy_validated_contract(contract: Mapping[str, Any]) -> dict[str, Any]:

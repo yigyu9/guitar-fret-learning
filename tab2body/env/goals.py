@@ -17,6 +17,14 @@ MAX_ASSET_FRET = 22
 MAX_WRIST_TARGET_ABS_COORD_M = 2.0
 MAX_WRIST_TARGET_RADIUS_M = 1.0
 
+# Recovery must keep every source-song finger in the quota while still making
+# the less reliable fingers visible often enough to recover.  These are
+# fractions of the finger-assignment stream (not of all environments; a
+# source transition without an incoming finger has no finger to assign).
+GOAL_PAIR_RECOVERY_MIN_FINGER_FRACTION = 0.15
+GOAL_PAIR_RECOVERY_MAX_FOCUS_FRACTION = 0.40
+GOAL_PAIR_RECOVERY_FINGER_WEIGHTS = (0.15, 0.15, 0.30, 0.40)
+
 
 def _is_integer(value):
     return isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_))
@@ -498,6 +506,85 @@ def goal_pair_finger_action_routing(
     return current_active.bool() | imminent_move | release_active.bool()
 
 
+def integrated_press_action_permissions(
+        action_finger_ids, is_wrist, is_elbow, is_shoulder,
+        target_finger, phase):
+    """통합 압현에서 손가락부터 상위 관절까지 순차적으로 연다."""
+    phase = int(phase)
+    if not 0 <= phase <= 3:
+        raise ValueError("integrated press phase must be in [0, 3]")
+    action_finger_ids = torch.as_tensor(action_finger_ids).reshape(-1)
+    masks = tuple(
+        torch.as_tensor(value, dtype=torch.bool,
+                        device=action_finger_ids.device).reshape(-1)
+        for value in (is_wrist, is_elbow, is_shoulder))
+    if any(value.shape != action_finger_ids.shape for value in masks):
+        raise ValueError("integrated press action metadata must share shape [A]")
+    target_finger = torch.as_tensor(
+        target_finger, dtype=torch.long,
+        device=action_finger_ids.device).reshape(-1)
+    if phase == 3:
+        return torch.ones(
+            target_finger.numel(), action_finger_ids.numel(),
+            dtype=torch.bool, device=action_finger_ids.device)
+    allowed = ((action_finger_ids[None] == 0)
+               | (action_finger_ids[None] == target_finger[:, None]))
+    allowed |= masks[0][None]
+    if phase >= 1:
+        allowed |= masks[1][None]
+    if phase >= 2:
+        allowed |= masks[2][None]
+    return allowed
+
+
+def fine_reach_action_scales(
+        action_finger_ids, is_wrist, is_elbow, is_shoulder,
+        target_finger, stage_iteration, warmup_iterations=200,
+        ramp_iterations=300, non_target_scale=0.15,
+        proximal_scale=0.15, recovery_proximal_scale=0.35,
+        recovery=False):
+    """기존 정책을 깨뜨리지 않도록 fine-reach 제어 범위를 부드럽게 줄인다."""
+    action_finger_ids = torch.as_tensor(action_finger_ids).reshape(-1)
+    masks = tuple(
+        torch.as_tensor(value, dtype=torch.bool,
+                        device=action_finger_ids.device).reshape(-1)
+        for value in (is_wrist, is_elbow, is_shoulder))
+    if any(value.shape != action_finger_ids.shape for value in masks):
+        raise ValueError("fine-reach action metadata must share shape [A]")
+    target_finger = torch.as_tensor(
+        target_finger, dtype=torch.long,
+        device=action_finger_ids.device).reshape(-1)
+    warmup_iterations = int(warmup_iterations)
+    ramp_iterations = int(ramp_iterations)
+    if warmup_iterations < 0 or ramp_iterations < 1:
+        raise ValueError("fine-reach action schedule requires warmup >= 0 and ramp > 0")
+    endpoints = (
+        float(non_target_scale), float(proximal_scale),
+        float(recovery_proximal_scale))
+    if any(not 0.0 <= value <= 1.0 for value in endpoints):
+        raise ValueError("fine-reach action scales must be in [0, 1]")
+    progress = min(max(
+        (int(stage_iteration) - warmup_iterations) / float(ramp_iterations),
+        0.0), 1.0)
+    non_target = 1.0 + progress * (float(non_target_scale) - 1.0)
+    proximal_end = (
+        float(recovery_proximal_scale)
+        if recovery else float(proximal_scale))
+    proximal = 1.0 + progress * (proximal_end - 1.0)
+    scales = torch.ones(
+        target_finger.numel(), action_finger_ids.numel(),
+        dtype=torch.float32, device=action_finger_ids.device)
+    non_target_finger = (
+        (action_finger_ids[None] > 0)
+        & (action_finger_ids[None] != target_finger[:, None]))
+    scales = torch.where(
+        non_target_finger, torch.full_like(scales, non_target), scales)
+    proximal_mask = masks[2]
+    scales = torch.where(
+        proximal_mask[None], torch.full_like(scales, proximal), scales)
+    return scales
+
+
 class FretGoalSequence:
     """한 곡의 고정 60 Hz goal을 병렬 반복 연습 환경에 공급한다."""
 
@@ -545,6 +632,22 @@ class FretGoalSequence:
                                    dtype=torch.long, device=self.device)
         self.barre = torch.tensor([f["barre_goal"] for f in frames],
                                   dtype=torch.bool, device=self.device)
+        event_starts = [0]
+        for frame_idx in range(1, self.n_frames):
+            if _frame_state_key(
+                    self.fret, self.finger, self.barre,
+                    frame_idx) != _frame_state_key(
+                        self.fret, self.finger, self.barre, frame_idx - 1):
+                event_starts.append(frame_idx)
+        frame_event_index = torch.empty(
+            self.n_frames, dtype=torch.long, device=self.device)
+        for event_index, start in enumerate(event_starts):
+            end = (event_starts[event_index + 1]
+                   if event_index + 1 < len(event_starts) else self.n_frames)
+            frame_event_index[start:end] = event_index
+        self.event_start_frame = torch.tensor(
+            event_starts, dtype=torch.long, device=self.device)
+        self.frame_event_index = frame_event_index
         self.anchor = torch.tensor([f["hand_anchor_fret"] for f in frames],
                                    dtype=torch.float32, device=self.device)
         self.allowed = torch.tensor([f["hand_allowed_fret_range"] for f in frames],
@@ -580,6 +683,17 @@ class FretGoalSequence:
             (self.num_envs,), -1, dtype=torch.long, device=self.device)
         self.frozen_context_focus_finger = None
         self.frozen_context_focus_probability = 1.0
+        self.frozen_context_finger_weights = None
+        self.frozen_context_mix_weights = (0.60, 0.30, 0.10)
+        self.frozen_context_evaluation_fraction = 0.25
+        self.frozen_context_calibration_mask = (
+            self._frozen_context_evaluation_mask(
+                self.frozen_context_evaluation_fraction))
+        self.frozen_context_eval_mask = self.frozen_context_calibration_mask
+        self.frozen_context_calibration_sample = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device)
+        self.frozen_context_anchor_finger = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device)
         self.goal_pair_previous_frame = torch.zeros(
             self.num_envs, dtype=torch.long, device=self.device)
         self.goal_pair_next_frame = torch.zeros(
@@ -620,6 +734,9 @@ class FretGoalSequence:
             self.num_envs, dtype=torch.long, device=self.device)
         self.practice_chord_focus_index = None
         self.practice_chord_focus_probability = 1.0
+        self.practice_focus_finger = None
+        self.practice_focus_probability = 1.0
+        self.practice_finger_weights = None
         events_by_finger = []
         event_groups_by_finger = []
         for finger in range(1, 5):
@@ -639,6 +756,15 @@ class FretGoalSequence:
         self.practice_event_groups_by_finger = tuple(event_groups_by_finger)
         self.practice_available_fingers = tuple(
             index for index, rows in enumerate(events_by_finger) if rows.numel())
+        self._practice_focus_quota_signature = None
+        self._practice_focus_quota_total = 0
+        self._practice_focus_quota_counts = {
+            index: 0 for index in self.practice_available_fingers}
+        self._practice_focus_quota_tie_cursor = 0
+        self._practice_focus_reset_calls = 0
+        self._practice_focus_reset_batch_total = 0
+        self._practice_focus_reset_batch_max = 0
+        self._practice_focus_singleton_resets = 0
 
         # Static chords are sampled evenly by the number of active fingers.
         # The bridge catalogs retain only source-song states and transitions.
@@ -786,6 +912,12 @@ class FretGoalSequence:
             torch.tensor(
                 frozen_groups[key], dtype=torch.long, device=self.device)
             for key in self.practice_frozen_context_group_keys)
+        self.frozen_context_available_fingers = tuple(sorted({
+            finger_number
+            for finger_set in self.practice_frozen_context_group_keys
+            for finger_number in finger_set
+        }))
+        self._reset_frozen_context_sampler_quotas()
         self.frozen_context_group_slot_by_frame = torch.full(
             (self.n_frames,), -1, dtype=torch.long, device=self.device)
         for slot, catalog in enumerate(self.practice_frozen_context_groups):
@@ -860,6 +992,15 @@ class FretGoalSequence:
         self.practice_goal_pair_incoming_group_fraction = (
             incoming_group_count / len(self.practice_goal_pair_group_keys)
             if self.practice_goal_pair_group_keys else 0.0)
+        # Goal-pair recovery uses its own persistent quota.  The quota is
+        # intentionally independent from the frozen-context and practice
+        # quotas: a recovery episode may mix rehearsal, sequence, and full-song
+        # modes without one mode starving another.  Setters only update this
+        # sampler state; active episode tensors are changed on the next reset.
+        self.goal_pair_recovery_active = False
+        self.goal_pair_finger_weights = None
+        self._goal_pair_recovery_quota = self._empty_weighted_quota(
+            self.practice_goal_pair_available_incoming_fingers)
 
         # per-lookahead: fret6 + finger6 + barre6 + anchor1 + allowed2 + wrist3 + dt1
         self.per_lookahead_dim = 25
@@ -941,14 +1082,640 @@ class FretGoalSequence:
         return values[torch.randperm(
             int(count), generator=self.generator, device=self.device)]
 
+    def _reset_practice_focus_quota(self):
+        self._practice_focus_quota_signature = None
+        self._practice_focus_quota_total = 0
+        self._practice_focus_quota_counts = {
+            index: 0 for index in self.practice_available_fingers}
+        self._practice_focus_quota_tie_cursor = 0
+        self._practice_focus_reset_calls = 0
+        self._practice_focus_reset_batch_total = 0
+        self._practice_focus_reset_batch_max = 0
+        self._practice_focus_singleton_resets = 0
+
+    @staticmethod
+    def _empty_weighted_quota(options):
+        return {
+            "signature": None,
+            "total": 0,
+            "counts": {int(option): 0 for option in options},
+            "tie_cursor": 0,
+            "calls": 0,
+            "batch_total": 0,
+            "batch_max": 0,
+            "singleton_calls": 0,
+        }
+
+    def _reset_frozen_context_sampler_quotas(self):
+        options = self.frozen_context_available_fingers
+        self._frozen_context_adaptive_quota = (
+            self._empty_weighted_quota(options))
+        self._frozen_context_calibration_quota = (
+            self._empty_weighted_quota(options))
+        self._frozen_context_mix_quotas = {
+            finger: self._empty_weighted_quota(
+                self._frozen_context_categories_for_finger(finger))
+            for finger in options
+        }
+
+    def _frozen_context_category_slots(self, finger):
+        finger = int(finger)
+        containing = tuple(
+            slot for slot, finger_set in enumerate(
+                self.practice_frozen_context_group_keys)
+            if finger in finger_set)
+        return {
+            0: tuple(
+                slot for slot in containing
+                if len(self.practice_frozen_context_group_keys[slot]) == 1),
+            1: tuple(
+                slot for slot in containing
+                if len(self.practice_frozen_context_group_keys[slot]) > 1),
+            2: tuple(range(len(self.practice_frozen_context_group_keys))),
+        }
+
+    def _frozen_context_categories_for_finger(self, finger):
+        slots = self._frozen_context_category_slots(finger)
+        return tuple(
+            category for category in range(3) if slots[category])
+
+    @staticmethod
+    def _weighted_quota_choices(
+            count, options, weights, counts, total, tie_cursor):
+        options = tuple(int(value) for value in options)
+        if not options:
+            raise ValueError("weighted quota sampling requires an option")
+        weights = {value: float(weights[value]) for value in options}
+        total_weight = sum(weights.values())
+        if (not math.isfinite(total_weight) or total_weight <= 0.0
+                or any(not math.isfinite(value) or value < 0.0
+                       for value in weights.values())):
+            raise ValueError("sampler weights must be finite and positive")
+        weights = {
+            value: weight / total_weight for value, weight in weights.items()}
+        count = int(count)
+        values = []
+        counts = {value: int(counts.get(value, 0)) for value in options}
+        total = int(total)
+        tie_cursor = int(tie_cursor) % len(options)
+        for _ in range(count):
+            next_total = total + 1
+            ordered = tuple(
+                options[(tie_cursor + offset) % len(options)]
+                for offset in range(len(options)))
+            selected = ordered[0]
+            best_deficit = (
+                weights[selected] * next_total - counts[selected])
+            for option in ordered[1:]:
+                deficit = weights[option] * next_total - counts[option]
+                if deficit > best_deficit + 1e-12:
+                    selected = option
+                    best_deficit = deficit
+            counts[selected] += 1
+            total = next_total
+            tie_cursor = (options.index(selected) + 1) % len(options)
+            values.append(selected)
+        return values, counts, total, tie_cursor
+
+    def _normalize_goal_pair_finger_weights(self, weights):
+        """Normalize recovery finger weights over incoming-finger sources.
+
+        A goal-pair transition may not contain every finger in a particular
+        song.  As with the other curriculum samplers, unavailable fingers must
+        carry zero mass and the available entries are normalized after that
+        check.  Recovery-specific floors and focus capping are applied when the
+        effective weights are requested, leaving this setter predictable and
+        backwards-compatible with ordinary normalized weight tuples.
+        """
+        if weights is None:
+            return None
+        values = tuple(float(value) for value in weights)
+        if len(values) != 4:
+            raise ValueError(
+                "goal-pair finger weights must have four entries")
+        if any(not math.isfinite(value) or value < 0.0 for value in values):
+            raise ValueError(
+                "goal-pair finger weights must be finite and non-negative")
+        available = self.practice_goal_pair_available_incoming_fingers
+        if not available:
+            # A goal file without an incoming transition cannot consume a
+            # finger quota.  Keep the setter harmless for compatibility with
+            # curriculum bridges that apply their recovery state before the
+            # source catalog has been populated.
+            return (0.0, 0.0, 0.0, 0.0)
+        unavailable = set(range(1, 5)) - set(available)
+        if any(values[finger - 1] > 1e-12 for finger in unavailable):
+            raise ValueError(
+                "unavailable goal-pair fingers must have zero weight")
+        total = sum(values[finger - 1] for finger in available)
+        if total <= 0.0:
+            raise ValueError(
+                "goal-pair finger weights must have positive mass")
+        return tuple(
+            values[finger - 1] / total if finger in available else 0.0
+            for finger in range(1, 5))
+
+    @staticmethod
+    def _raise_quota_floor(values, options, floor):
+        """Raise entries below ``floor`` while preserving their total mass."""
+        values = {int(option): float(values[option]) for option in options}
+        deficit = sum(max(0.0, float(floor) - value)
+                      for value in values.values())
+        if deficit <= 1e-12:
+            return values
+        for option in options:
+            values[option] = max(values[option], float(floor))
+        donors = {
+            option: max(0.0, value - float(floor))
+            for option, value in values.items()
+            if value > float(floor)}
+        surplus = sum(donors.values())
+        if surplus <= 1e-12:
+            # This is only possible when the requested floor is infeasible;
+            # callers use a floor whose sum is at most one for four fingers.
+            raise ValueError("goal-pair recovery finger floor is infeasible")
+        for option, amount in donors.items():
+            values[option] -= deficit * amount / surplus
+        return values
+
+    def _goal_pair_recovery_effective_weights(self):
+        """Return recovery weights with all-finger coverage and focus cap."""
+        options = tuple(
+            int(value) for value in
+            self.practice_goal_pair_available_incoming_fingers)
+        if not options:
+            return {finger: 0.0 for finger in range(1, 5)}
+        configured = self.goal_pair_finger_weights
+        if configured is None:
+            configured = GOAL_PAIR_RECOVERY_FINGER_WEIGHTS
+        total = sum(float(configured[finger - 1]) for finger in options)
+        if total <= 0.0:
+            raise ValueError(
+                "goal-pair recovery finger weights have no available mass")
+        values = {
+            finger: float(configured[finger - 1]) / total
+            for finger in options}
+        values = self._raise_quota_floor(
+            values, options, GOAL_PAIR_RECOVERY_MIN_FINGER_FRACTION)
+
+        focus = self.goal_pair_transition_focus_finger
+        # A song with only one incoming finger cannot satisfy a 40% cap and
+        # normalization simultaneously; retain its sole source mass rather
+        # than making an otherwise valid single-finger goal-pair unrecoverable.
+        if focus in options and len(options) > 1:
+            focus = int(focus)
+            target = GOAL_PAIR_RECOVERY_MAX_FOCUS_FRACTION
+            if values[focus] < target:
+                delta = target - values[focus]
+                donors = {
+                    option: max(
+                        0.0,
+                        values[option]
+                        - GOAL_PAIR_RECOVERY_MIN_FINGER_FRACTION)
+                    for option in options if option != focus}
+                surplus = sum(donors.values())
+                if surplus + 1e-12 < delta:
+                    raise ValueError(
+                        "goal-pair recovery focus cap is infeasible")
+                for option, amount in donors.items():
+                    values[option] -= delta * amount / max(surplus, 1e-12)
+                values[focus] = target
+            elif values[focus] > target:
+                excess = values[focus] - target
+                values[focus] = target
+                others = tuple(option for option in options if option != focus)
+                other_total = sum(values[option] for option in others)
+                if not others or other_total <= 0.0:
+                    raise ValueError(
+                        "goal-pair recovery focus cap is infeasible")
+                for option in others:
+                    values[option] += excess * values[option] / other_total
+
+        # Keep floating-point drift from turning a floor into 0.1499999.
+        values = self._raise_quota_floor(
+            values, options, GOAL_PAIR_RECOVERY_MIN_FINGER_FRACTION)
+        normalization = sum(values.values())
+        values = {
+            option: value / normalization for option, value in values.items()}
+        return {
+            finger: (values.get(finger, 0.0) if finger in options else 0.0)
+            for finger in range(1, 5)}
+
+    def _persistent_goal_pair_finger_choices(self, count):
+        """Draw incoming fingers from a quota that persists across resets."""
+        options = tuple(
+            int(value) for value in
+            self.practice_goal_pair_available_incoming_fingers)
+        count = int(count)
+        if count <= 0:
+            return torch.empty(0, dtype=torch.long, device=self.device)
+        if not options:
+            raise ValueError(
+                "goal-pair recovery sampling requires an incoming finger")
+        weights = self._goal_pair_recovery_effective_weights()
+        signature = (
+            options,
+            tuple(round(weights[finger], 12) for finger in options))
+        quota = self._goal_pair_recovery_quota
+        if signature != quota["signature"]:
+            quota.clear()
+            quota.update(self._empty_weighted_quota(options))
+            quota["signature"] = signature
+        weight_map = {finger: weights[finger] for finger in options}
+        values, counts, total, tie_cursor = self._weighted_quota_choices(
+            count, options, weight_map, quota["counts"], quota["total"],
+            quota["tie_cursor"])
+        quota["counts"] = counts
+        quota["total"] = total
+        quota["tie_cursor"] = tie_cursor
+        quota["calls"] += 1
+        quota["batch_total"] += count
+        quota["batch_max"] = max(quota["batch_max"], count)
+        quota["singleton_calls"] += int(count == 1)
+        result = torch.tensor(values, dtype=torch.long, device=self.device)
+        return result[torch.randperm(
+            count, generator=self.generator, device=self.device)]
+
+    def goal_pair_sampler_diagnostics(self):
+        """Expose recovery quota coverage without changing policy tensors."""
+        weights = self._goal_pair_recovery_effective_weights()
+        quota = self._goal_pair_recovery_quota
+        total = int(quota["total"])
+        options = tuple(int(value) for value in quota["counts"])
+        max_error = max((
+            abs(int(quota["counts"].get(finger, 0))
+                - total * weights[finger])
+            for finger in options), default=0.0)
+        calls = int(quota["calls"])
+        diagnostics = {
+            "goal_pair_sampler_recovery_active": float(
+                self.goal_pair_recovery_active),
+            "goal_pair_sampler_weighted": float(
+                self.goal_pair_finger_weights is not None),
+            "goal_pair_sampler_assignment_total": float(total),
+            "goal_pair_sampler_max_quota_error": float(max_error),
+            "goal_pair_sampler_reset_batch_mean": (
+                quota["batch_total"] / calls if calls else 0.0),
+            "goal_pair_sampler_reset_batch_max": float(quota["batch_max"]),
+            "goal_pair_sampler_singleton_reset_fraction": (
+                quota["singleton_calls"] / calls if calls else 0.0),
+        }
+        for finger in range(1, 5):
+            assignments = int(quota["counts"].get(finger, 0))
+            diagnostics[
+                f"goal_pair_sampler_finger_{finger}_assignments"] = float(
+                    assignments)
+            diagnostics[
+                f"goal_pair_sampler_finger_{finger}_actual_fraction"] = (
+                    assignments / total if total else 0.0)
+            diagnostics[
+                f"goal_pair_sampler_finger_{finger}_target_fraction"] = float(
+                    weights[finger])
+        return diagnostics
+
+    @staticmethod
+    def _focus_choice_weights(options, focus_index, focus_probability):
+        alternatives = tuple(
+            value for value in options if value != focus_index)
+        if not alternatives:
+            return {focus_index: 1.0}
+        alternative_weight = (
+            (1.0 - float(focus_probability)) / len(alternatives))
+        return {
+            value: (float(focus_probability)
+                    if value == focus_index else alternative_weight)
+            for value in options
+        }
+
+    def _persistent_practice_focus_choices(
+            self, count, focus_index, focus_probability):
+        options = tuple(int(value) for value in self.practice_available_fingers)
+        weights = self._focus_choice_weights(
+            options, int(focus_index), float(focus_probability))
+        return self._persistent_practice_weighted_choices(count, weights)
+
+    def _persistent_practice_weighted_choices(self, count, weights):
+        options = tuple(int(value) for value in self.practice_available_fingers)
+        weights = {value: float(weights[value]) for value in options}
+        total_weight = sum(weights.values())
+        if (not math.isfinite(total_weight) or total_weight <= 0.0
+                or any(not math.isfinite(value) or value < 0.0
+                       for value in weights.values())):
+            raise ValueError("practice finger weights must be finite and positive")
+        weights = {
+            value: weight / total_weight for value, weight in weights.items()}
+        count = int(count)
+        signature = (
+            options, tuple(round(weights[value], 12) for value in options))
+        if signature != self._practice_focus_quota_signature:
+            self._reset_practice_focus_quota()
+            self._practice_focus_quota_signature = signature
+        if count <= 0:
+            return torch.empty(0, dtype=torch.long, device=self.device)
+        (values, self._practice_focus_quota_counts,
+         self._practice_focus_quota_total,
+         self._practice_focus_quota_tie_cursor) = (
+            self._weighted_quota_choices(
+                count, options, weights,
+                self._practice_focus_quota_counts,
+                self._practice_focus_quota_total,
+                self._practice_focus_quota_tie_cursor))
+        self._practice_focus_reset_calls += 1
+        self._practice_focus_reset_batch_total += count
+        self._practice_focus_reset_batch_max = max(
+            self._practice_focus_reset_batch_max, count)
+        self._practice_focus_singleton_resets += int(count == 1)
+        result = torch.tensor(
+            values, dtype=torch.long, device=self.device)
+        return result[torch.randperm(
+            count, generator=self.generator, device=self.device)]
+
+    def _persistent_frozen_context_weighted_choices(
+            self, count, weights, calibration=False):
+        options = self.frozen_context_available_fingers
+        weights = {finger: float(weights[finger - 1]) for finger in options}
+        total_weight = sum(weights.values())
+        if (not math.isfinite(total_weight) or total_weight <= 0.0
+                or any(not math.isfinite(value) or value < 0.0
+                       for value in weights.values())):
+            raise ValueError(
+                "frozen-context weights must be finite and positive")
+        weights = {
+            finger: weight / total_weight
+            for finger, weight in weights.items()}
+        signature = (
+            options, tuple(round(weights[finger], 12) for finger in options))
+        quota = (
+            self._frozen_context_calibration_quota
+            if calibration else self._frozen_context_adaptive_quota)
+        if signature != quota["signature"]:
+            quota.clear()
+            quota.update(self._empty_weighted_quota(options))
+            quota["signature"] = signature
+        count = int(count)
+        if count <= 0:
+            return torch.empty(0, dtype=torch.long, device=self.device)
+        values, counts, total, tie_cursor = self._weighted_quota_choices(
+            count, options, weights, quota["counts"], quota["total"],
+            quota["tie_cursor"])
+        quota["counts"] = counts
+        quota["total"] = total
+        quota["tie_cursor"] = tie_cursor
+        quota["calls"] += 1
+        quota["batch_total"] += count
+        quota["batch_max"] = max(quota["batch_max"], count)
+        quota["singleton_calls"] += int(count == 1)
+        result = torch.tensor(
+            values, dtype=torch.long, device=self.device)
+        return result[torch.randperm(
+            count, generator=self.generator, device=self.device)]
+
+    def _persistent_frozen_context_mix_choices(self, count, finger):
+        finger = int(finger)
+        options, weights = self._frozen_context_effective_mix_weights(finger)
+        signature = (
+            options,
+            tuple(round(weights[category], 12) for category in options))
+        quota = self._frozen_context_mix_quotas[finger]
+        if signature != quota["signature"]:
+            quota.clear()
+            quota.update(self._empty_weighted_quota(options))
+            quota["signature"] = signature
+        count = int(count)
+        if count <= 0:
+            return torch.empty(0, dtype=torch.long, device=self.device)
+        values, counts, total, tie_cursor = self._weighted_quota_choices(
+            count, options, weights, quota["counts"], quota["total"],
+            quota["tie_cursor"])
+        quota["counts"] = counts
+        quota["total"] = total
+        quota["tie_cursor"] = tie_cursor
+        quota["calls"] += 1
+        quota["batch_total"] += count
+        quota["batch_max"] = max(quota["batch_max"], count)
+        quota["singleton_calls"] += int(count == 1)
+        result = torch.tensor(
+            values, dtype=torch.long, device=self.device)
+        return result[torch.randperm(
+            count, generator=self.generator, device=self.device)]
+
+    def _frozen_context_effective_mix_weights(self, finger):
+        options = self._frozen_context_categories_for_finger(finger)
+        weights = {
+            category: self.frozen_context_mix_weights[category]
+            for category in options}
+        total_weight = sum(weights.values())
+        if total_weight <= 1e-12:
+            weights = {
+                category: 1.0 / len(options) for category in options}
+        else:
+            weights = {
+                category: weight / total_weight
+                for category, weight in weights.items()}
+        return options, weights
+
+    def practice_sampler_diagnostics(self):
+        total = self._practice_focus_quota_total
+        focus = self.practice_focus_finger
+        focus_index = None if focus is None else int(focus) - 1
+        options = tuple(int(value) for value in self.practice_available_fingers)
+        if self.practice_finger_weights is not None:
+            weights = {
+                value: self.practice_finger_weights[value]
+                for value in options}
+            focus_index = max(options, key=lambda value: weights[value])
+            focus_target = weights[focus_index]
+        elif focus_index in options:
+            weights = self._focus_choice_weights(
+                options, focus_index, self.practice_focus_probability)
+            focus_target = float(self.practice_focus_probability)
+        else:
+            weights = None
+            focus_target = 0.0
+        if weights is not None:
+            max_error = max(
+                abs(self._practice_focus_quota_counts[value]
+                    - total * weights[value])
+                for value in options)
+            focus_actual = (
+                self._practice_focus_quota_counts[focus_index] / total
+                if total else 0.0)
+        else:
+            max_error = 0.0
+            focus_actual = 0.0
+        calls = self._practice_focus_reset_calls
+        diagnostics = {
+            "practice_sampler_assignment_total": float(total),
+            "practice_sampler_focus_target_fraction": focus_target,
+            "practice_sampler_focus_actual_fraction": focus_actual,
+            "practice_sampler_max_quota_error": float(max_error),
+            "practice_sampler_reset_batch_mean": (
+                self._practice_focus_reset_batch_total / calls
+                if calls else 0.0),
+            "practice_sampler_reset_batch_max": float(
+                self._practice_focus_reset_batch_max),
+            "practice_sampler_singleton_reset_fraction": (
+                self._practice_focus_singleton_resets / calls
+                if calls else 0.0),
+        }
+        for finger in range(1, 5):
+            assignments = self._practice_focus_quota_counts.get(
+                finger - 1, 0)
+            diagnostics[
+                f"practice_sampler_finger_{finger}_assignments"] = float(
+                    assignments)
+            diagnostics[
+                f"practice_sampler_finger_{finger}_fraction"] = (
+                    assignments / total if total else 0.0)
+            diagnostics[
+                f"practice_sampler_finger_{finger}_target_fraction"] = (
+                    weights.get(finger - 1, 0.0)
+                    if weights is not None else 0.0)
+        return diagnostics
+
+    def _balanced_frozen_context_weights(self):
+        weight = 1.0 / len(self.frozen_context_available_fingers)
+        return tuple(
+            weight if finger in self.frozen_context_available_fingers else 0.0
+            for finger in range(1, 5))
+
+    @staticmethod
+    def _weighted_quota_diagnostics(prefix, quota, weights):
+        total = int(quota["total"])
+        options = tuple(int(value) for value in quota["counts"])
+        max_error = max((
+            abs(quota["counts"][finger] - total * weights[finger - 1])
+            for finger in options), default=0.0)
+        calls = int(quota["calls"])
+        diagnostics = {
+            f"{prefix}_assignment_total": float(total),
+            f"{prefix}_max_quota_error": float(max_error),
+            f"{prefix}_reset_batch_mean": (
+                quota["batch_total"] / calls if calls else 0.0),
+            f"{prefix}_reset_batch_max": float(quota["batch_max"]),
+            f"{prefix}_singleton_reset_fraction": (
+                quota["singleton_calls"] / calls if calls else 0.0),
+        }
+        for finger in range(1, 5):
+            assignments = int(quota["counts"].get(finger, 0))
+            diagnostics[f"{prefix}_finger_{finger}_assignments"] = float(
+                assignments)
+            diagnostics[f"{prefix}_finger_{finger}_fraction"] = (
+                assignments / total if total else 0.0)
+            diagnostics[f"{prefix}_finger_{finger}_target_fraction"] = float(
+                weights[finger - 1])
+        return diagnostics
+
+    def frozen_context_sampler_diagnostics(self):
+        adaptive_weights = (
+            self.frozen_context_finger_weights
+            if self.frozen_context_finger_weights is not None
+            else self._balanced_frozen_context_weights())
+        calibration_weights = self._balanced_frozen_context_weights()
+        diagnostics = {
+            "frozen_context_sampler_weighted": float(
+                self.frozen_context_finger_weights is not None),
+            "frozen_context_sampler_calibration_env_fraction": float(
+                self.frozen_context_calibration_mask.float().mean().item()),
+            "frozen_context_sampler_calibration_active_fraction": float(
+                self.frozen_context_calibration_sample.float().mean().item()),
+        }
+        diagnostics.update(self._weighted_quota_diagnostics(
+            "frozen_context_sampler_adaptive",
+            self._frozen_context_adaptive_quota, adaptive_weights))
+        diagnostics.update(self._weighted_quota_diagnostics(
+            "frozen_context_sampler_calibration",
+            self._frozen_context_calibration_quota, calibration_weights))
+        mix_counts = {
+            category: sum(
+                quota["counts"].get(category, 0)
+                for quota in self._frozen_context_mix_quotas.values())
+            for category in range(3)}
+        mix_total = sum(mix_counts.values())
+        diagnostics["frozen_context_sampler_mix_assignment_total"] = float(
+            mix_total)
+        for category, name in enumerate((
+                "singleton", "stable_multi", "coverage")):
+            diagnostics[
+                f"frozen_context_sampler_mix_{name}_target_fraction"] = (
+                    float(self.frozen_context_mix_weights[category]))
+            diagnostics[
+                f"frozen_context_sampler_mix_{name}_fraction"] = (
+                    mix_counts[category] / mix_total if mix_total else 0.0)
+        return diagnostics
+
     def _sample_frozen_context_frames(
             self, count, focus_finger=None, focus_probability=0.0,
-            balance_fingers=False, uncovered_probability=0.0):
+            balance_fingers=False, uncovered_probability=0.0,
+            finger_weights=None, calibration=False, chosen_finger=None):
         if not self.practice_frozen_context_groups:
             raise RuntimeError(
                 "frozen-context replay requires at least one source state")
         slots = tuple(range(len(self.practice_frozen_context_groups)))
-        if balance_fingers:
+        fixed_finger = chosen_finger is not None
+        if finger_weights is not None:
+            available = self.frozen_context_available_fingers
+            if chosen_finger is None:
+                chosen_finger = self._persistent_frozen_context_weighted_choices(
+                    count, finger_weights, calibration=calibration)
+            else:
+                chosen_finger = torch.as_tensor(
+                    chosen_finger, dtype=torch.long,
+                    device=self.device).reshape(-1)
+                if chosen_finger.numel() != int(count):
+                    raise ValueError(
+                        "chosen frozen-context finger count does not match "
+                        "the requested sample count")
+                if not bool(torch.isin(
+                        chosen_finger,
+                        torch.as_tensor(
+                            available, dtype=torch.long,
+                            device=self.device)).all()):
+                    raise ValueError(
+                        "chosen frozen-context finger is unavailable")
+            requested_finger = chosen_finger.clone()
+            group_slot = torch.zeros(
+                int(count), dtype=torch.long, device=self.device)
+            for finger in available:
+                selected = requested_finger == finger
+                selected_count = int(selected.sum())
+                if selected_count == 0:
+                    continue
+                category_slots = self._frozen_context_category_slots(finger)
+                if calibration:
+                    containing = tuple(
+                        slot for slot, finger_set in enumerate(
+                            self.practice_frozen_context_group_keys)
+                        if finger in finger_set)
+                    group_slot[selected] = self._stratified_choices(
+                        containing, selected_count)
+                    continue
+                categories = self._persistent_frozen_context_mix_choices(
+                    selected_count, finger)
+                selected_rows = torch.nonzero(
+                    selected, as_tuple=False).squeeze(-1)
+                for category, slots_for_category in category_slots.items():
+                    if category == 2 and fixed_finger:
+                        slots_for_category = tuple(
+                            slot for slot in slots_for_category
+                            if finger in self.practice_frozen_context_group_keys[
+                                slot])
+                    category_rows = selected_rows[categories == category]
+                    if category_rows.numel() == 0:
+                        continue
+                    sampled_slots = self._stratified_choices(
+                        slots_for_category, category_rows.numel())
+                    group_slot[category_rows] = sampled_slots
+                    if category != 2 or fixed_finger:
+                        continue
+                    for slot in slots_for_category:
+                        slot_rows = category_rows[sampled_slots == slot]
+                        if slot_rows.numel() == 0:
+                            continue
+                        chosen_finger[slot_rows] = self._stratified_choices(
+                            self.practice_frozen_context_group_keys[slot],
+                            slot_rows.numel())
+        elif balance_fingers:
             available = tuple(sorted({
                 finger for finger_set in self.practice_frozen_context_group_keys
                 for finger in finger_set
@@ -1011,7 +1778,7 @@ class FretGoalSequence:
                 group_slot[rows] = (
                     self.frozen_context_group_slot_by_frame[choices])
         anchor_finger = (
-            chosen_finger if balance_fingers
+            chosen_finger if balance_fingers or finger_weights is not None
             else torch.zeros(
                 int(count), dtype=torch.long, device=self.device))
         return selected_frames, group_slot, anchor_finger
@@ -1022,6 +1789,8 @@ class FretGoalSequence:
         self.frame_idx[env_ids] = 0
         self.frozen_context_context_blend[env_ids] = 1.0
         self.frozen_context_group_index[env_ids] = -1
+        self.frozen_context_calibration_sample[env_ids] = False
+        self.frozen_context_anchor_finger[env_ids] = 0
         self.goal_pair_previous_frame[env_ids] = 0
         self.goal_pair_next_frame[env_ids] = 0
         self.goal_pair_before_remaining[env_ids] = 0
@@ -1038,12 +1807,22 @@ class FretGoalSequence:
         if self.curriculum_stage in (
                 "coarse_reach", "fine_reach",
                 "isolated_press", "integrated_press"):
-            available = torch.tensor(
-                self.practice_available_fingers, dtype=torch.long, device=self.device)
-            chosen_slot = torch.randint(
-                len(self.practice_available_fingers), (len(env_ids),),
-                generator=self.generator, device=self.device)
-            chosen_fingers = available[chosen_slot]
+            focus = self.practice_focus_finger
+            focus_index = None if focus is None else int(focus) - 1
+            if self.practice_finger_weights is not None:
+                chosen_fingers = self._persistent_practice_weighted_choices(
+                    len(env_ids), {
+                        value: self.practice_finger_weights[value]
+                        for value in self.practice_available_fingers})
+            elif (focus_index is not None
+                    and focus_index in self.practice_available_fingers
+                    and len(self.practice_available_fingers) > 1):
+                chosen_fingers = self._persistent_practice_focus_choices(
+                    len(env_ids), focus_index,
+                    self.practice_focus_probability)
+            else:
+                chosen_fingers = self._stratified_choices(
+                    self.practice_available_fingers, len(env_ids))
             for finger_index in self.practice_available_fingers:
                 selected = env_ids[chosen_fingers == finger_index]
                 if selected.numel() == 0:
@@ -1104,14 +1883,39 @@ class FretGoalSequence:
             self.practice_string[env_ids] = -1
             return
         if self.curriculum_stage == "frozen_context":
-            selected_frames, group_slot, _ = (
-                self._sample_frozen_context_frames(
-                    len(env_ids),
-                    focus_finger=self.frozen_context_focus_finger,
-                    focus_probability=
-                        self.frozen_context_focus_probability))
+            if self.frozen_context_finger_weights is None:
+                selected_frames, group_slot, anchor_finger = (
+                    self._sample_frozen_context_frames(
+                        len(env_ids),
+                        focus_finger=self.frozen_context_focus_finger,
+                        focus_probability=
+                            self.frozen_context_focus_probability))
+                calibration = torch.zeros(
+                    len(env_ids), dtype=torch.bool, device=self.device)
+            else:
+                calibration = self.frozen_context_calibration_mask[env_ids]
+                selected_frames = torch.zeros(
+                    len(env_ids), dtype=torch.long, device=self.device)
+                group_slot = torch.zeros_like(selected_frames)
+                anchor_finger = torch.zeros_like(selected_frames)
+                for selected, weights, is_calibration in (
+                        (~calibration, self.frozen_context_finger_weights,
+                         False),
+                        (calibration, self._balanced_frozen_context_weights(),
+                         True)):
+                    selected_count = int(selected.sum())
+                    if selected_count == 0:
+                        continue
+                    sampled = self._sample_frozen_context_frames(
+                        selected_count, finger_weights=weights,
+                        calibration=is_calibration)
+                    selected_frames[selected] = sampled[0]
+                    group_slot[selected] = sampled[1]
+                    anchor_finger[selected] = sampled[2]
             self.frame_idx[env_ids] = selected_frames
             self.frozen_context_group_index[env_ids] = group_slot
+            self.frozen_context_calibration_sample[env_ids] = calibration
+            self.frozen_context_anchor_finger[env_ids] = anchor_finger
             self.frozen_context_context_blend[env_ids] = (
                 self.frozen_context_real_probability)
             self.practice_remaining[env_ids] = self.practice_duration_frames
@@ -1182,11 +1986,16 @@ class FretGoalSequence:
                 if incoming_rows.numel() > 0:
                     available = (
                         self.practice_goal_pair_available_incoming_fingers)
-                    focus_finger = self.goal_pair_transition_focus_finger
-                    chosen_finger = self._stratified_focus_choices(
-                        available, incoming_rows.numel(),
-                        (() if focus_finger is None else (focus_finger,)),
-                        self.goal_pair_transition_focus_probability)
+                    if self.goal_pair_recovery_active:
+                        chosen_finger = (
+                            self._persistent_goal_pair_finger_choices(
+                                incoming_rows.numel()))
+                    else:
+                        focus_finger = self.goal_pair_transition_focus_finger
+                        chosen_finger = self._stratified_focus_choices(
+                            available, incoming_rows.numel(),
+                            (() if focus_finger is None else (focus_finger,)),
+                            self.goal_pair_transition_focus_probability)
                     incoming_finger[incoming_rows] = chosen_finger
                     for finger in (
                             self.practice_goal_pair_available_incoming_fingers):
@@ -1205,6 +2014,18 @@ class FretGoalSequence:
             rehearsal_rows = torch.nonzero(
                 rehearsal, as_tuple=False).squeeze(-1)
             if rehearsal_rows.numel() > 0:
+                recovery_rehearsal_fingers = None
+                recovery_rehearsal_weights = None
+                if (self.goal_pair_recovery_active
+                        and self.practice_goal_pair_available_incoming_fingers):
+                    recovery_rehearsal_fingers = (
+                        self._persistent_goal_pair_finger_choices(
+                            rehearsal_rows.numel()))
+                    effective_weights = (
+                        self._goal_pair_recovery_effective_weights())
+                    recovery_rehearsal_weights = tuple(
+                        effective_weights[finger]
+                        for finger in range(1, 5))
                 replay_frames, replay_groups, replay_anchor_fingers = (
                     self._sample_frozen_context_frames(
                         rehearsal_rows.numel(),
@@ -1214,7 +2035,9 @@ class FretGoalSequence:
                             self.goal_pair_transition_focus_probability),
                         balance_fingers=True,
                         uncovered_probability=(
-                            self.goal_pair_uncovered_pose_probability)))
+                            self.goal_pair_uncovered_pose_probability),
+                        finger_weights=recovery_rehearsal_weights,
+                        chosen_finger=recovery_rehearsal_fingers))
                 replay_runs = self.frame_run_index[replay_frames]
                 starts = self.practice_run_starts[replay_runs]
                 end_runs = (replay_runs + 1).clamp(
@@ -1454,10 +2277,102 @@ class FretGoalSequence:
                     "frozen-context focus finger has no replay state")
         changed = (
             normalized != self.frozen_context_focus_finger
-            or focus_probability != self.frozen_context_focus_probability)
+            or focus_probability != self.frozen_context_focus_probability
+            or self.frozen_context_finger_weights is not None)
         self.frozen_context_focus_finger = normalized
         self.frozen_context_focus_probability = focus_probability
+        if self.frozen_context_finger_weights is not None:
+            self.frozen_context_finger_weights = None
+            self._reset_frozen_context_sampler_quotas()
         return changed
+
+    def _normalize_frozen_context_finger_weights(self, weights):
+        if weights is None:
+            return None
+        values = tuple(float(value) for value in weights)
+        if len(values) != 4:
+            raise ValueError(
+                "frozen-context finger weights must have four entries")
+        if any(not math.isfinite(value) or value < 0.0 for value in values):
+            raise ValueError(
+                "frozen-context finger weights must be finite and non-negative")
+        unavailable = (
+            set(range(1, 5)) - set(self.frozen_context_available_fingers))
+        if any(values[finger - 1] > 1e-12 for finger in unavailable):
+            raise ValueError(
+                "unavailable frozen-context fingers must have zero weight")
+        total = sum(
+            values[finger - 1]
+            for finger in self.frozen_context_available_fingers)
+        if total <= 0.0:
+            raise ValueError(
+                "frozen-context finger weights must have positive mass")
+        return tuple(
+            values[finger - 1] / total
+            if finger in self.frozen_context_available_fingers else 0.0
+            for finger in range(1, 5))
+
+    def set_frozen_context_finger_weights(self, weights):
+        normalized = self._normalize_frozen_context_finger_weights(weights)
+        changed = normalized != self.frozen_context_finger_weights
+        if not changed:
+            return False
+        self.frozen_context_finger_weights = normalized
+        self.frozen_context_focus_finger = None
+        self.frozen_context_focus_probability = 1.0
+        self._reset_frozen_context_sampler_quotas()
+        return True
+
+    def _frozen_context_evaluation_mask(self, fraction):
+        """환경 번호만으로 고정 평가 cohort를 균등하게 만든다."""
+        index = torch.arange(
+            self.num_envs, dtype=torch.float64, device=self.device)
+        fraction = float(fraction)
+        return (
+            torch.floor(index * fraction)
+            > torch.floor((index - 1.0) * fraction))
+
+    def set_frozen_context_evaluation_fraction(self, fraction):
+        fraction = float(fraction)
+        if not math.isfinite(fraction) or not 0.0 < fraction < 1.0:
+            raise ValueError(
+                "frozen-context evaluation fraction must be in (0, 1)")
+        changed = not math.isclose(
+            fraction, self.frozen_context_evaluation_fraction,
+            rel_tol=0.0, abs_tol=1e-12)
+        if not changed:
+            return False
+        self.frozen_context_evaluation_fraction = fraction
+        self.frozen_context_calibration_mask = (
+            self._frozen_context_evaluation_mask(fraction))
+        self.frozen_context_eval_mask = self.frozen_context_calibration_mask
+        return True
+
+    def set_frozen_context_mix_weights(self, weights):
+        values = tuple(float(value) for value in weights)
+        if len(values) != 3:
+            raise ValueError(
+                "frozen-context mix weights must contain singleton, "
+                "stable-multi, and coverage entries")
+        if any(not math.isfinite(value) or value < 0.0 for value in values):
+            raise ValueError(
+                "frozen-context mix weights must be finite and non-negative")
+        total = sum(values)
+        if total <= 0.0:
+            raise ValueError(
+                "frozen-context mix weights must have positive mass")
+        normalized = (
+            values if math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-12)
+            else tuple(value / total for value in values))
+        if normalized == self.frozen_context_mix_weights:
+            return False
+        self.frozen_context_mix_weights = normalized
+        self._frozen_context_mix_quotas = {
+            finger: self._empty_weighted_quota(
+                self._frozen_context_categories_for_finger(finger))
+            for finger in self.frozen_context_available_fingers
+        }
+        return True
 
     def set_goal_pair_rehearsal_probability(self, probability):
         probability = float(probability)
@@ -1521,6 +2436,33 @@ class FretGoalSequence:
         self.goal_pair_uncovered_pose_probability = probability
         return changed
 
+    def set_goal_pair_recovery_active(self, enabled):
+        """Select recovery quota sampling for the next reset.
+
+        This setter deliberately does not call ``reset`` or mutate any active
+        episode fields.  Curriculum transitions can therefore change recovery
+        policy between iterations without interrupting environments already in
+        flight; the new quota takes effect when those environments next reset.
+        """
+        normalized = bool(enabled)
+        changed = normalized != self.goal_pair_recovery_active
+        self.goal_pair_recovery_active = normalized
+        return changed
+
+    def set_goal_pair_finger_weights(self, weights):
+        """Configure optional recovery finger weights.
+
+        ``None`` selects the built-in recovery distribution
+        ``(0.15, 0.15, 0.30, 0.40)``.  Explicit values are normalized over
+        available incoming fingers and are only consumed while recovery is
+        active.  Changing the setting leaves current episode tensors intact;
+        the quota signature is refreshed lazily on the next sampled reset.
+        """
+        normalized = self._normalize_goal_pair_finger_weights(weights)
+        changed = normalized != self.goal_pair_finger_weights
+        self.goal_pair_finger_weights = normalized
+        return changed
+
     def set_goal_pair_success_pose_valid(self, valid):
         valid = torch.as_tensor(
             valid, dtype=torch.bool, device=self.device).reshape(-1)
@@ -1557,6 +2499,67 @@ class FretGoalSequence:
             != self.goal_pair_transition_focus_probability)
         self.goal_pair_transition_focus_finger = normalized
         self.goal_pair_transition_focus_probability = focus_probability
+        return changed
+
+    def set_practice_focus_finger(self, finger, focus_probability=1.0):
+        focus_probability = float(focus_probability)
+        if not 0.0 < focus_probability <= 1.0:
+            raise ValueError("practice focus probability must be in (0, 1]")
+        normalized = None if finger is None else int(finger)
+        if (normalized is not None
+                and normalized - 1 not in self.practice_available_fingers):
+            raise ValueError(f"unavailable practice focus finger: {normalized}")
+        changed = (
+            normalized != self.practice_focus_finger
+            or focus_probability != self.practice_focus_probability
+            or self.practice_finger_weights is not None)
+        if changed:
+            self._reset_practice_focus_quota()
+        self.practice_focus_finger = normalized
+        self.practice_focus_probability = focus_probability
+        self.practice_finger_weights = None
+        return changed
+
+    def _normalize_practice_finger_weights(self, weights):
+        if weights is None:
+            return None
+        values = tuple(float(value) for value in weights)
+        if len(values) != 4:
+            raise ValueError("practice finger weights must have four entries")
+        if any(not math.isfinite(value) or value < 0.0 for value in values):
+            raise ValueError(
+                "practice finger weights must be finite and non-negative")
+        unavailable = set(range(4)) - set(self.practice_available_fingers)
+        if any(values[index] > 1e-12 for index in unavailable):
+            raise ValueError("unavailable practice fingers must have zero weight")
+        total = sum(values[index] for index in self.practice_available_fingers)
+        if total <= 0.0:
+            raise ValueError("practice finger weights must have positive mass")
+        return tuple(
+            values[index] / total
+            if index in self.practice_available_fingers else 0.0
+            for index in range(4))
+
+    def set_practice_finger_weights(self, weights):
+        normalized = self._normalize_practice_finger_weights(weights)
+        changed = (
+            normalized != self.practice_finger_weights
+            or (normalized is None
+                and (self.practice_focus_finger is not None
+                     or self.practice_focus_probability != 1.0)))
+        if not changed:
+            return False
+        self._reset_practice_focus_quota()
+        self.practice_finger_weights = normalized
+        if normalized is not None:
+            focus_index = max(
+                self.practice_available_fingers,
+                key=lambda index: (normalized[index], -index))
+            self.practice_focus_finger = focus_index + 1
+            self.practice_focus_probability = normalized[focus_index]
+        else:
+            self.practice_focus_finger = None
+            self.practice_focus_probability = 1.0
         return changed
 
     def set_curriculum_stage(self, stage, duration_frames=None):
@@ -1622,13 +2625,252 @@ class FretGoalSequence:
         return changed
 
     def curriculum_sampler_state_dict(self):
-        return {"generator_state": self.generator.get_state().cpu()}
+        return {
+            "generator_state": self.generator.get_state().cpu(),
+            "practice_focus_quota": {
+                "focus_finger": self.practice_focus_finger,
+                "focus_probability": self.practice_focus_probability,
+                "finger_weights": self.practice_finger_weights,
+                "signature": self._practice_focus_quota_signature,
+                "total": self._practice_focus_quota_total,
+                "counts": dict(self._practice_focus_quota_counts),
+                "tie_cursor": self._practice_focus_quota_tie_cursor,
+                "reset_calls": self._practice_focus_reset_calls,
+                "reset_batch_total": self._practice_focus_reset_batch_total,
+                "reset_batch_max": self._practice_focus_reset_batch_max,
+                "singleton_resets": self._practice_focus_singleton_resets,
+            },
+            "frozen_context_sampler": {
+                "finger_weights": self.frozen_context_finger_weights,
+                "mix_weights": self.frozen_context_mix_weights,
+                "evaluation_fraction": (
+                    self.frozen_context_evaluation_fraction),
+                "adaptive_quota": self._weighted_quota_state_dict(
+                    self._frozen_context_adaptive_quota),
+                "calibration_quota": self._weighted_quota_state_dict(
+                    self._frozen_context_calibration_quota),
+                "mix_quotas": {
+                    str(finger): self._weighted_quota_state_dict(quota)
+                    for finger, quota in self._frozen_context_mix_quotas.items()
+                },
+            },
+            "goal_pair_sampler": {
+                "recovery_active": bool(self.goal_pair_recovery_active),
+                "finger_weights": self.goal_pair_finger_weights,
+                "transition_focus_finger": (
+                    self.goal_pair_transition_focus_finger),
+                "transition_focus_probability": (
+                    self.goal_pair_transition_focus_probability),
+                "recovery_quota": self._weighted_quota_state_dict(
+                    self._goal_pair_recovery_quota),
+            },
+        }
+
+    @staticmethod
+    def _weighted_quota_state_dict(quota):
+        return {
+            "total": int(quota["total"]),
+            "counts": {
+                int(key): int(value)
+                for key, value in quota["counts"].items()},
+            "tie_cursor": int(quota["tie_cursor"]),
+            "calls": int(quota["calls"]),
+            "batch_total": int(quota["batch_total"]),
+            "batch_max": int(quota["batch_max"]),
+            "singleton_calls": int(quota["singleton_calls"]),
+        }
+
+    def _restore_weighted_quota(self, saved, options, weights):
+        options = tuple(int(value) for value in options)
+        if not isinstance(saved, dict):
+            return self._empty_weighted_quota(options)
+        if not options:
+            return self._empty_weighted_quota(options)
+        counts = {
+            option: int(saved.get("counts", {}).get(
+                option, saved.get("counts", {}).get(str(option), 0)))
+            for option in options}
+        total = int(saved.get("total", 0))
+        if total < 0 or any(value < 0 for value in counts.values()):
+            raise ValueError("saved weighted quota must be non-negative")
+        if sum(counts.values()) != total:
+            raise ValueError(
+                "saved weighted quota counts do not sum to total")
+        normalized = {option: float(weights[option]) for option in options}
+        weight_total = sum(normalized.values())
+        normalized = {
+            option: value / weight_total
+            for option, value in normalized.items()}
+        quota = self._empty_weighted_quota(options)
+        quota.update({
+            "signature": (
+                options,
+                tuple(round(normalized[option], 12) for option in options)),
+            "total": total,
+            "counts": counts,
+            "tie_cursor": int(saved.get("tie_cursor", 0)) % len(options),
+            "calls": max(0, int(saved.get("calls", 0))),
+            "batch_total": max(0, int(saved.get("batch_total", 0))),
+            "batch_max": max(0, int(saved.get("batch_max", 0))),
+            "singleton_calls": max(
+                0, int(saved.get("singleton_calls", 0))),
+        })
+        return quota
 
     def load_curriculum_sampler_state_dict(self, state):
         generator_state = state.get("generator_state")
         if generator_state is None:
             raise ValueError("curriculum sampler state is missing generator_state")
         self.generator.set_state(generator_state.cpu())
+        saved = state.get("practice_focus_quota")
+        if saved is None:
+            self._reset_practice_focus_quota()
+        else:
+            focus = saved.get("focus_finger")
+            focus = None if focus is None else int(focus)
+            probability = float(saved.get("focus_probability", 1.0))
+            weights = self._normalize_practice_finger_weights(
+                saved.get("finger_weights"))
+            if (focus is not None
+                    and focus - 1 not in self.practice_available_fingers):
+                raise ValueError("saved practice focus finger is unavailable")
+            if not 0.0 < probability <= 1.0:
+                raise ValueError("saved practice focus probability is invalid")
+            counts = {
+                finger: int(saved.get("counts", {}).get(
+                    finger, saved.get("counts", {}).get(str(finger), 0)))
+                for finger in self.practice_available_fingers
+            }
+            total = int(saved.get("total", 0))
+            if total < 0 or any(value < 0 for value in counts.values()):
+                raise ValueError(
+                    "saved practice focus quota must be non-negative")
+            if sum(counts.values()) != total:
+                raise ValueError(
+                    "saved practice focus quota counts do not sum to total")
+            self.practice_focus_finger = focus
+            self.practice_focus_probability = probability
+            self.practice_finger_weights = weights
+            self._practice_focus_quota_counts = counts
+            self._practice_focus_quota_total = total
+            options = tuple(
+                int(value) for value in self.practice_available_fingers)
+            if weights is not None:
+                self._practice_focus_quota_signature = (
+                    options,
+                    tuple(round(weights[value], 12) for value in options))
+            elif focus is not None:
+                focus_weights = self._focus_choice_weights(
+                    options, focus - 1, probability)
+                self._practice_focus_quota_signature = (
+                    options,
+                    tuple(round(
+                        focus_weights[value], 12) for value in options))
+            else:
+                self._practice_focus_quota_signature = None
+            self._practice_focus_quota_tie_cursor = int(
+                saved.get("tie_cursor", 0)) % max(
+                    len(self.practice_available_fingers), 1)
+            self._practice_focus_reset_calls = max(
+                0, int(saved.get("reset_calls", 0)))
+            self._practice_focus_reset_batch_total = max(
+                0, int(saved.get("reset_batch_total", 0)))
+            self._practice_focus_reset_batch_max = max(
+                0, int(saved.get("reset_batch_max", 0)))
+            self._practice_focus_singleton_resets = max(
+                0, int(saved.get("singleton_resets", 0)))
+
+        goal_pair = state.get(
+            "goal_pair_sampler", state.get("goal_pair_recovery_sampler"))
+        if not isinstance(goal_pair, dict):
+            self.goal_pair_recovery_active = False
+            self.goal_pair_finger_weights = None
+            self._goal_pair_recovery_quota = self._empty_weighted_quota(
+                self.practice_goal_pair_available_incoming_fingers)
+        else:
+            self.goal_pair_recovery_active = bool(
+                goal_pair.get("recovery_active", False))
+            self.goal_pair_finger_weights = (
+                self._normalize_goal_pair_finger_weights(
+                    goal_pair.get("finger_weights")))
+            saved_focus = goal_pair.get("transition_focus_finger")
+            saved_focus = (
+                None if saved_focus is None else int(saved_focus))
+            if (saved_focus is not None
+                    and saved_focus
+                    not in self.practice_goal_pair_available_incoming_fingers):
+                raise ValueError(
+                    "saved goal-pair transition focus finger is unavailable")
+            saved_focus_probability = float(
+                goal_pair.get("transition_focus_probability", 1.0))
+            if not 0.0 < saved_focus_probability <= 1.0:
+                raise ValueError(
+                    "saved goal-pair transition focus probability is invalid")
+            self.goal_pair_transition_focus_finger = saved_focus
+            self.goal_pair_transition_focus_probability = (
+                saved_focus_probability)
+            self._goal_pair_recovery_quota = self._empty_weighted_quota(
+                self.practice_goal_pair_available_incoming_fingers)
+            effective = self._goal_pair_recovery_effective_weights()
+            weight_map = {
+                finger: effective[finger]
+                for finger in self.practice_goal_pair_available_incoming_fingers}
+            self._goal_pair_recovery_quota = self._restore_weighted_quota(
+                goal_pair.get("recovery_quota"),
+                self.practice_goal_pair_available_incoming_fingers,
+                weight_map)
+
+        frozen = state.get("frozen_context_sampler")
+        if not isinstance(frozen, dict):
+            self.frozen_context_finger_weights = None
+            self.frozen_context_mix_weights = (0.60, 0.30, 0.10)
+            self.set_frozen_context_evaluation_fraction(0.25)
+            self._reset_frozen_context_sampler_quotas()
+            return
+        self.set_frozen_context_evaluation_fraction(
+            frozen.get("evaluation_fraction", 0.25))
+        self.frozen_context_finger_weights = (
+            self._normalize_frozen_context_finger_weights(
+                frozen.get("finger_weights")))
+        if self.frozen_context_finger_weights is not None:
+            self.frozen_context_focus_finger = None
+            self.frozen_context_focus_probability = 1.0
+        mix = tuple(float(value) for value in frozen.get(
+            "mix_weights", (0.60, 0.30, 0.10)))
+        if (len(mix) != 3
+                or any(not math.isfinite(value) or value < 0.0
+                       for value in mix)
+                or sum(mix) <= 0.0):
+            raise ValueError("saved frozen-context mix weights are invalid")
+        self.frozen_context_mix_weights = (
+            mix if math.isclose(
+                sum(mix), 1.0, rel_tol=0.0, abs_tol=1e-12)
+            else tuple(value / sum(mix) for value in mix))
+        self._reset_frozen_context_sampler_quotas()
+        if self.frozen_context_finger_weights is not None:
+            weights = {
+                finger: self.frozen_context_finger_weights[finger - 1]
+                for finger in self.frozen_context_available_fingers}
+            self._frozen_context_adaptive_quota = (
+                self._restore_weighted_quota(
+                    frozen.get("adaptive_quota"),
+                    self.frozen_context_available_fingers, weights))
+        calibration_weights = {
+            finger: self._balanced_frozen_context_weights()[finger - 1]
+            for finger in self.frozen_context_available_fingers}
+        self._frozen_context_calibration_quota = (
+            self._restore_weighted_quota(
+                frozen.get("calibration_quota"),
+                self.frozen_context_available_fingers,
+                calibration_weights))
+        saved_mix = frozen.get("mix_quotas", {})
+        for finger in self.frozen_context_available_fingers:
+            options, weights = self._frozen_context_effective_mix_weights(
+                finger)
+            self._frozen_context_mix_quotas[finger] = (
+                self._restore_weighted_quota(
+                    saved_mix.get(str(finger), saved_mix.get(finger)),
+                    options, weights))
 
     def advance(self, env_mask=None):
         if self.curriculum_stage in (
@@ -1864,10 +3106,101 @@ class FretGoalSequence:
             "wrist_radius": self.wrist_radius[i],
             "sustain_event_id": sustain_event_id,
             "sustain_eligible": sustain_eligible,
+            "frame_pose_slot": self.frame_pose_slot[i],
             "finger_pose_slot": self.finger_pose_slot[i],
+            "frozen_context_calibration": (
+                self.frozen_context_calibration_sample),
+            "frozen_context_anchor_finger": (
+                self.frozen_context_anchor_finger),
             # Runtime diagnostics may need the structured per-finger relation
             # without changing the flattened policy observation contract.
             "finger_event": finger_event,
+        }
+
+    def current_with_press_advance(self, advance_frames=3):
+        """Return an inference-only goal with bounded early PRESS onset.
+
+        Only an inactive string may borrow a future PRESS target.  An active
+        current PRESS is never replaced, so a direct fret-to-fret transition
+        cannot release or switch the old note early.  Sustain/reward state and
+        the authoritative ``frame_idx`` remain unchanged; callers must use
+        this view only to build the Fret actor observation.
+        """
+        advance_frames = int(advance_frames)
+        if advance_frames < 0:
+            raise ValueError("Fret press advance must be non-negative")
+        goal = self.current()
+        if advance_frames == 0:
+            return goal
+        if self.curriculum_stage not in (
+                "coverage", "integration", "transition_window", "full_song"):
+            raise RuntimeError(
+                "Fret press advance is only valid on a chronological song view")
+
+        future_index = (self.frame_idx + advance_frames).clamp(
+            max=self.n_frames - 1)
+        future_fret = self.fret[future_index]
+        future_finger = self.finger[future_index]
+        future_barre = self.barre[future_index]
+        borrow = (goal["fret"] <= 0) & (future_fret > 0)
+        if not bool(borrow.any().item()):
+            return goal
+
+        advanced = dict(goal)
+        advanced["fret"] = torch.where(borrow, future_fret, goal["fret"])
+        advanced["finger"] = torch.where(
+            borrow, future_finger, goal["finger"])
+        advanced["barre"] = torch.where(
+            borrow, future_barre, goal["barre"])
+        any_borrow = borrow.any(dim=1)
+        # Moving the whole hand toward a future anchor while another note is
+        # sustained can damage the current note.  Advance the coarse hand pose
+        # only from a fully inactive state; per-string targets may still be
+        # prepared early without changing the current release contract.
+        advance_pose = any_borrow & ~(goal["fret"] > 0).any(dim=1)
+        for name, source in (
+                ("anchor", self.anchor), ("allowed", self.allowed),
+                ("wrist", self.wrist), ("wrist_radius", self.wrist_radius),
+                ("finger_pose_slot", self.finger_pose_slot),
+                ("frame_pose_slot", self.frame_pose_slot)):
+            current_value = goal[name]
+            future_value = source[future_index]
+            selector = advance_pose
+            while selector.ndim < current_value.ndim:
+                selector = selector.unsqueeze(-1)
+            advanced[name] = torch.where(
+                selector, future_value, current_value)
+        return advanced
+
+    def canonical_event_lookahead(self, event_offset):
+        """Return the Nth next distinct fret state on the source timeline.
+
+        Static acquisition stages deliberately expose no future event.  This
+        prevents repeated frames inside a long note from masquerading as two
+        separate lookahead events and keeps curriculum-only goals out of the
+        canonical song contract.
+        """
+        event_offset = int(event_offset)
+        if event_offset < 1:
+            raise ValueError("canonical event lookahead offset must be positive")
+        enabled = self.curriculum_stage in (
+            "frozen_context", "transition_window", "coverage",
+            "integration", "full_song")
+        current_event = self.frame_event_index[self.frame_idx]
+        target_event = current_event + event_offset
+        valid = target_event < self.event_start_frame.numel()
+        safe_event = target_event.clamp_max(self.event_start_frame.numel() - 1)
+        target_frame = self.event_start_frame[safe_event]
+        valid &= bool(enabled)
+        return {
+            "valid": valid,
+            "delta_s": torch.where(
+                valid,
+                (target_frame - self.frame_idx).float() / float(self.fps),
+                torch.zeros_like(self.frame_idx, dtype=torch.float32)),
+            "fret": self.fret[target_frame],
+            "finger": self.finger[target_frame],
+            "barre": self.barre[target_frame],
         }
 
     def _observation_delay_seconds(self, clock_delay_frames):

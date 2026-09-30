@@ -10,6 +10,7 @@ import torch
 
 from learning.models import ActorCritic, RunningMeanStd
 from learning.ppo import (PPOConfig, PPOTrainer,
+                          apply_environment_log_std_floor,
                           aggregate_episode_rows,
                           combine_actor_advantages)
 
@@ -92,6 +93,8 @@ def main():
                 "curriculum_chord_set_9_count": 1.0,
                 "press_finger_1_success": 8.0,
                 "press_finger_1_count": 10.0,
+                "curriculum_finger_1_success": 1.0,
+                "curriculum_finger_1_count": 1.0,
             },
             {
                 "sustain_max_dropout_frames": 7.0,
@@ -103,6 +106,8 @@ def main():
                 "curriculum_chord_set_9_count": 1.0,
                 "press_finger_1_success": 9.0,
                 "press_finger_1_count": 10.0,
+                "curriculum_finger_1_success": 0.0,
+                "curriculum_finger_1_count": 1.0,
             },
         ],
         (
@@ -113,6 +118,8 @@ def main():
             "curriculum_chord_set_9_count",
             "press_finger_1_success",
             "press_finger_1_count",
+            "curriculum_finger_1_success",
+            "curriculum_finger_1_count",
         ),
         (),
     )
@@ -130,10 +137,52 @@ def main():
     assert hold["sustain_event_total"] == 5
     assert abs(hold["sustain_event_success_rate_pooled"] - 0.6) < 1e-6
     assert hold["curriculum_success_episodes"] == 1
+    assert hold["curriculum_finger_1_success_episodes"] == 1
+    assert hold["curriculum_finger_1_target_episodes"] == 2
     assert hold["curriculum_episode_total"] == 2
     assert hold["chord_set_9_success_episodes"] == 1
     assert hold["chord_set_9_target_episodes"] == 2
     assert abs(hold["chord_set_9_success_rate"] - 0.5) < 1e-6
+
+    funnel_suffixes = (
+        "precision_evidence_frames", "precision_press_frames",
+        "precision_position_frames", "precision_arch_frames",
+        "precision_precise_frames", "precision_streak_acquired",
+        "precision_fraction_pass")
+    funnel_rows = []
+    for values in (
+            (30, 29, 28, 20, 19, 1, 0),
+            (30, 30, 30, 25, 24, 1, 1)):
+        row = {
+            "press_finger_3_success": 0.0,
+            "press_finger_3_count": 0.0,
+            "curriculum_finger_3_success": float(values[-1]),
+            "curriculum_finger_3_count": 1.0,
+        }
+        row.update({
+            f"curriculum_finger_3_{suffix}": float(value)
+            for suffix, value in zip(funnel_suffixes, values)
+        })
+        funnel_rows.append(row)
+    funnel = aggregate_episode_rows(
+        funnel_rows,
+        (
+            "press_finger_3_success", "press_finger_3_count",
+            "curriculum_finger_3_success", "curriculum_finger_3_count",
+            *(f"curriculum_finger_3_{suffix}"
+              for suffix in funnel_suffixes),
+        ),
+        (),
+    )
+    prefix = "curriculum_finger_3_precision"
+    assert funnel[f"{prefix}_evidence_frames_total"] == 60
+    assert abs(funnel[f"{prefix}_press_rate"] - 59 / 60) < 1e-6
+    assert abs(funnel[f"{prefix}_position_rate"] - 58 / 60) < 1e-6
+    assert abs(funnel[f"{prefix}_arch_rate"] - 45 / 60) < 1e-6
+    assert abs(funnel[f"{prefix}_precise_rate"] - 43 / 60) < 1e-6
+    assert funnel[f"{prefix}_streak_rate"] == 1.0
+    assert funnel[f"{prefix}_fraction_pass_rate"] == 0.5
+    assert funnel[f"{prefix}_final_rate"] == 0.5
 
     active = torch.tensor([
         [1.0, 4.0],
@@ -274,6 +323,25 @@ def main():
     assert torch.allclose(
         recomputed, masked_rollout["logp"].reshape(-1), atol=2e-5)
 
+    floor_env = _EnvStub()
+    floor_env.policy_action_std_floor = lambda: torch.tensor(
+        [0.10, 0.25, 0.05])
+    floor_model = ActorCritic(
+        5, 3, value_dim=6, init_std=0.08, init_mean=torch.zeros(3))
+    changed = apply_environment_log_std_floor(floor_model, floor_env)
+    assert changed == 2
+    assert torch.allclose(
+        floor_model.log_std.exp(), torch.tensor([0.10, 0.25, 0.08]),
+        atol=1e-7)
+    assert apply_environment_log_std_floor(floor_model, floor_env) == 0
+    floor_env.policy_action_std_floor = lambda: torch.tensor([0.1, 0.2])
+    try:
+        apply_environment_log_std_floor(floor_model, floor_env)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("policy std floors must match the action shape")
+
     lifecycle_env = _EnvStub()
     lifecycle_model = ActorCritic(
         5, 3, value_dim=6, init_std=0.2, init_mean=torch.zeros(3))
@@ -307,6 +375,23 @@ def main():
         raise AssertionError("post-iteration stop must propagate")
     assert seen == [1, 2]
     assert lifecycle_trainer.iteration == 2
+
+    clean_env = _EnvStub()
+    clean_model = ActorCritic(
+        5, 3, value_dim=6, init_std=0.2, init_mean=torch.zeros(3))
+    clean_trainer = PPOTrainer(
+        clean_env, clean_model,
+        PPOConfig(horizon=1, epochs=1, minibatch_size=4,
+                  log_interval=100, save_interval=100))
+    clean_trainer.collect = lifecycle_trainer.collect
+    clean_trainer.update = lifecycle_trainer.update
+    clean_trainer.learn(
+        4,
+        stop_iteration_callback=(
+            lambda iteration, _stats: "test_stall"
+            if iteration == 2 else None),
+        history_limit=0)
+    assert clean_trainer.iteration == 2
 
     print("PASS: actor advantages and finite PPO guards")
 

@@ -1,4 +1,4 @@
-"""CPU regression for A4 event advance versus physical follow-through."""
+"""CPU regression for S3 event advance versus physical follow-through."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,7 +14,7 @@ for path in (str(PACKAGE_ROOT), str(PROJECT_ROOT)):
 import torch
 
 from env.strike_events import (
-    strike_a4_continuing_phase,
+    strike_song_continuing_phase,
     strike_completed_recovery_frames,
     strike_motion_target_context,
     strike_recovery_to_approach,
@@ -27,6 +27,7 @@ def main():
     context = strike_motion_target_context(
         torch.tensor([4, 4, 2], dtype=torch.long),
         torch.tensor([-0.30, -0.31, -0.32]),
+        torch.tensor([-1, -1, -1], dtype=torch.long),
         torch.tensor([1, 3, 5], dtype=torch.long),
         torch.tensor([-0.34, -0.35, -0.36]),
         torch.tensor([-1, 1, -1], dtype=torch.long),
@@ -42,9 +43,9 @@ def main():
     assert torch.allclose(
         context["target_lane_y"], torch.tensor([-0.34, -0.31, -0.32]))
     assert torch.equal(
-        context["target_direction"], torch.tensor([-1, 1, 1]))
+        context["target_direction"], torch.tensor([-1, -1, -1]))
 
-    phase_advance = strike_a4_continuing_phase(
+    phase_advance = strike_song_continuing_phase(
         torch.tensor([0, 1, 2, 1], dtype=torch.long),
         torch.tensor([False, False, False, True]),
         torch.tensor([False, False, True, True]),
@@ -110,7 +111,7 @@ def main():
         approach_lead_s=0.20,
     )[0]
 
-    print("PASS: A4 recovery preserves the released string/lane before approach")
+    print("PASS: S3 recovery preserves the released string/lane before approach")
 
 
 if __name__ == "__main__":

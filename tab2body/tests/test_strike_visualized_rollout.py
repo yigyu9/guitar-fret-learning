@@ -15,8 +15,11 @@ for path in (str(PACKAGE_ROOT), str(PROJECT_ROOT)):
         sys.path.insert(0, path)
 
 from tools.record_strike_visualized_rollout import (
+    configure_full_song_diagnostic_replay,
     resolve_visualized_report_path,
     resolve_visualized_video_paths,
+    restored_environment_spec,
+    validate_full_song_capture,
 )
 from tools.strike_visualization import (
     CameraSpec,
@@ -70,6 +73,68 @@ class FakeStrikeEnv:
 
 
 def main():
+    class ReplayEnv:
+        evaluation_full_song = True
+        wrong_crossing_termination_enabled = True
+
+    replay = ReplayEnv()
+    assert configure_full_song_diagnostic_replay(replay)
+    assert not replay.wrong_crossing_termination_enabled
+    replay.evaluation_full_song = False
+    replay.wrong_crossing_termination_enabled = True
+    assert not configure_full_song_diagnostic_replay(replay)
+    assert replay.wrong_crossing_termination_enabled
+
+    full_song_contract = {"minimum_original_song_steps": 10}
+    validate_full_song_capture({
+        "captured_original_song_duration": True,
+        "completed_full_timeline": True,
+        "ended_before_original_song_end": False,
+    }, full_song_contract)
+    for incomplete in (
+            {
+                "captured_original_song_duration": True,
+                "completed_full_timeline": False,
+                "ended_before_original_song_end": False,
+            },
+            {
+                "captured_original_song_duration": False,
+                "completed_full_timeline": False,
+                "ended_before_original_song_end": True,
+            }):
+        try:
+            validate_full_song_capture(incomplete, full_song_contract)
+        except RuntimeError as exc:
+            assert "original song timeline" in str(exc)
+        else:
+            raise AssertionError("incomplete full-song capture must fail")
+
+    class Generation:
+        @staticmethod
+        def numel():
+            return 4
+
+    assert restored_environment_spec({"environment_state": {
+        "schema": "tab2body.strike_environment_state.v13",
+        "reset_generation": Generation(),
+        "random_start": True,
+    }}) == (4, True)
+    assert restored_environment_spec({"environment_state": {
+        "schema": "tab2body.strike_environment_state.v14",
+        "reset_generation": Generation(),
+        "random_start": False,
+    }}) == (4, False)
+    try:
+        restored_environment_spec({"environment_state": {
+            "schema": "tab2body.strike_environment_state.v12",
+            "reset_generation": Generation(),
+            "random_start": True,
+        }})
+    except ValueError as exc:
+        assert "base recorder" in str(exc)
+    else:
+        raise AssertionError("visualized exact replay must reject legacy v12")
+
     checkpoint = Path(
         "/tmp/strike_visual_contract/checkpoints/strike_005000.pt")
     paths = resolve_visualized_video_paths(checkpoint)

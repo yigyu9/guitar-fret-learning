@@ -122,6 +122,10 @@ def main():
         frozen_context_max_iterations=4,
         frozen_context_context_warmup_iterations=0,
         frozen_context_context_ramp_iterations=1,
+        frozen_context_recovery_block_iterations=1,
+        frozen_context_focus_min_evidence=1,
+        frozen_context_recovery_ready_blocks=2,
+        frozen_context_recovery_max_blocks=4,
         goal_pair_min_iterations=1, goal_pair_max_iterations=20,
         goal_pair_retention_min_iterations=1,
         goal_pair_mixed_min_iterations=1,
@@ -251,6 +255,25 @@ def main():
             for finger in range(1, 5)
             for field, value in (("success", 9.5), ("count", 10.0))
         },
+        **{
+            f"curriculum_finger_{finger}_{field}": value
+            for finger in range(1, 5)
+            for field, value in (
+                ("target_active_count", 10.0),
+                ("target_distance", 0.005))
+        },
+        **{
+            f"finger_{finger}_{field}": value
+            for finger in range(1, 5)
+            for field, value in (
+                ("target_distance_active_frames", 10.0),
+                ("target_distance_sum", 0.05))
+        },
+    }
+    frozen_song_stats = {
+        **song_stats,
+        "_frozen_train": dict(song_stats),
+        "_frozen_eval": dict(song_stats),
     }
     static_stats = {
         **song_stats,
@@ -305,7 +328,7 @@ def main():
     assert curriculum.stage == "frozen_context"
     curriculum.apply(env)
     curriculum.recent.extend((1.0, 1.0))
-    curriculum.after_iteration(song_stats)
+    curriculum.after_iteration(frozen_song_stats)
     assert curriculum.stage == "frozen_context"
     assert curriculum.state()["curriculum_frozen_context_final"]
     assert not curriculum.frozen_context_final_applied
@@ -314,9 +337,10 @@ def main():
     assert state["curriculum_frozen_context_final_applied"]
     assert env.goals.frozen_context_real_probability == 1.0
     assert env.reset_count == reset_count + 1
-    assert not curriculum.recent
+    # final-context reset과 승급 평가 증거 초기화는 분리된다.
+    assert list(curriculum.recent) == [1.0, 1.0]
     for _ in range(2):
-        curriculum.after_iteration(song_stats)
+        curriculum.after_iteration(frozen_song_stats)
     assert curriculum.stage == "goal_pair"
     for _ in range(3):
         curriculum.after_iteration(goal_pair_stats)

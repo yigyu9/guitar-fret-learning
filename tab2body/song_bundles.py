@@ -39,8 +39,16 @@ def hand_targets_path(song_id: str = DEFAULT_SONG_ID) -> Path:
     return bundle_path(song_id) / "training" / "hand_position_targets.json"
 
 
-def strike_goal_path(song_id: str = DEFAULT_SONG_ID) -> Path:
+def strike_input_path(song_id: str = DEFAULT_SONG_ID) -> Path:
     return bundle_path(song_id) / "training" / "strike_training.json"
+
+
+def strike_plan_path(song_id: str = DEFAULT_SONG_ID) -> Path:
+    return bundle_path(song_id) / "training" / "strike_plan.json"
+
+
+def strike_goal_path(song_id: str = DEFAULT_SONG_ID) -> Path:
+    return strike_plan_path(song_id)
 
 
 def song_id_from_training_path(path: str | Path, suffix: str) -> str:

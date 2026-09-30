@@ -1,8 +1,8 @@
 """Render one annotated fretboard reference image from the actual training scene.
 
 Example (conda environment ``guitar``):
-  python tools/render_fretboard_reference.py \
-    --out ../fret/renders/fretboard_reference.png --max-fret 12
+  python -m tab2body.tools.render_fretboard_reference \
+    --out fret/renders/fretboard_reference.png --max-fret 12
 """
 from __future__ import annotations
 

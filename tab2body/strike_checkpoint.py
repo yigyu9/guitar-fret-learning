@@ -8,6 +8,8 @@ STRIKE_RUNTIME_IMPLEMENTATION_FILES = (
     "strike_checkpoint.py",
     "strike_contract.py",
     "strike_training_runtime.py",
+    "strike_metrics.py",
+    "strike_v2_contract.py",
     "env/base.py",
     "env/collision.py",
     "env/config.py",
@@ -24,6 +26,8 @@ STRIKE_RUNTIME_IMPLEMENTATION_FILES = (
     "learning/models.py",
     "learning/ppo.py",
     "learning/strike_curriculum.py",
+    "learning/strike_v2_model.py",
+    "learning/strike_repeat_evaluation.py",
 )
 
 STRIKE_ASSET_FILES = (
@@ -35,17 +39,32 @@ STRIKE_ASSET_FILES = (
 )
 
 
-def semantic_strike_config(config):
+def semantic_strike_config(
+        config, *, direction_profile="phrase_dp_microtiming_v3",
+        transition_profile="entry_side_edge_gap_v2"):
     """Keep task semantics in the contract and omit launch-only settings."""
+    for name, value in (
+            ("direction_profile", direction_profile),
+            ("transition_profile", transition_profile)):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
     selected = (
+        "observation_contract",
         "action_scale", "action_alpha", "reset_noise",
         "reset_soft_limit_fraction", "failure_termination_penalty",
-        "zone", "trajectory", "detector", "safety",
+        "grip_control", "zone", "trajectory", "detector", "safety",
         "wrong_crossing_termination", "joint_limits", "reward",
         "episode", "curriculum", "evaluation",
     )
     result = {key: deepcopy(config[key]) for key in selected}
-    result["direction_profile"] = "down_only_v1"
+    result["direction_profile"] = direction_profile
+    result["transition_profile"] = transition_profile
+    result["recovery_contract"] = "path_aware_clearance_handoff.v1"
+    result["timing_reward_contract"] = (
+        "physical_endpoint_then_centered_timing.v2")
+    result["strum_motion_contract"] = (
+        "direction_symmetric_terminal_exit_progress.v1")
+    result["metric_contract"] = "pooled_recovery_physical_event_diagnostics.v3"
     result["pick_representation"] = {
         "body": "RH:pick",
         "tip": "RH:pick origin",
@@ -53,7 +72,10 @@ def semantic_strike_config(config):
         "attachment": "fixed_to_thumb_index_pose",
     }
     result["string_representation"] = "six_fixed_finite_segments"
-    result["success_event"] = "debounced_release_immediately_after_crossing"
+    result["success_event"] = (
+        "ordered_multi_string_release_with_terminal_exit_then_clearance_handoff")
+    result["curriculum_contract"] = (
+        "continuous_quality_maintenance_diagnostics.v16")
     return result
 
 
@@ -84,6 +106,12 @@ def build_runtime_checkpoint_contract(
     controlled_names = [
         env.dof_names[index]
         for index in env.ctrl_idx.detach().cpu().tolist()]
+    semantic_config = semantic_strike_config(
+        config,
+        direction_profile=env.direction_profile,
+        transition_profile=env.transition_profile)
+    semantic_config["model_architecture"] = getattr(
+        model, "MODEL_ARCHITECTURE_VERSION", "monolithic_mlp.v1")
     payload = build_strike_contract_payload(
         controlled_dof_names=controlled_names,
         num_obs=env.num_obs,
@@ -93,7 +121,7 @@ def build_runtime_checkpoint_contract(
         action_alpha=env.action_alpha,
         reset_soft_limit_fraction=env.reset_soft_limit_fraction,
         policy_init_std=float(initial_std[0]),
-        strike_config=semantic_strike_config(config),
+        strike_config=semantic_config,
         ppo_config=deepcopy(
             ppo_config if ppo_config is not None else config["ppo"]),
         observation_manifest=env.observation_manifest,

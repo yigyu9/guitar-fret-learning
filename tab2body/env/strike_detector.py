@@ -191,7 +191,7 @@ def strike_lane_gate(
         core_half_width: float,
         allowed_half_width: float,
 ) -> dict[str, torch.Tensor]:
-    """Apply the A4 longitudinal-area gate without mutating its attempt mask.
+    """Apply the song-stage longitudinal-area gate without mutating its attempt mask.
 
     ``attempt`` intentionally records every otherwise valid target-string
     candidate before either zone restriction is applied.  Keeping it as

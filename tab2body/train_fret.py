@@ -4,7 +4,8 @@
   python -m tab2body.train --task fret --iterations 5000
   python -m tab2body.train --task fret --smoke
 
-사용자는 공용 ``train.py``를 호출한다. 이 모듈과 ``train_strike.py``는
+사용자는 프로젝트 루트에서 공용 ``python -m tab2body.train``을 호출한다.
+이 모듈과 ``train_strike.py``는
 동일한 ``build_parser()``/``main()`` runner 인터페이스를 제공한다.
 """
 from __future__ import annotations
@@ -24,14 +25,39 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from tab2body.learning.checkpoint_contract import file_sha256
+from tab2body.fret_v2_contract import (
+    FRET_V1_OBSERVATION_CONTRACT,
+    FRET_V2_OBSERVATION_CONTRACT,
+)
 
+
+# A structurally exhausted curriculum has no remaining recovery action.  The
+# safe research default is to preserve its checkpoint instead of continuing
+# to update shared weights and forgetting already acquired fingers.
+DEFAULT_STOP_ON_CURRICULUM_STALL = True
+
+
+# def _add_local_isaacgym_path():
+#     local_python = PROJECT_ROOT / "isaacgym" / "python"
+#     package = local_python / "isaacgym" / "__init__.py"
+#     if package.is_file() and str(local_python) not in sys.path:
+#         sys.path.insert(0, str(local_python))
 
 def _add_local_isaacgym_path():
-    local_python = PROJECT_ROOT / "isaacgym" / "python"
+    import os
+
+    isaacgym_root = Path(
+        os.environ.get(
+            "ISAACGYM_ROOT",
+            str(PROJECT_ROOT / "isaacgym"),
+        )
+    ).expanduser()
+
+    local_python = isaacgym_root / "python"
     package = local_python / "isaacgym" / "__init__.py"
+
     if package.is_file() and str(local_python) not in sys.path:
         sys.path.insert(0, str(local_python))
-
 
 def _load_fret_runtime():
     """Load the fret implementation only after public task dispatch.
@@ -127,13 +153,21 @@ FRET_REWARD_SAFETY_KEYS = (
     "chord_bridge_bottleneck_weight",
     "chord_fine_joint_weight", "chord_fine_depth_start",
     "static_chord_bottleneck_weight", "static_chord_joint_weight",
+    "static_chord_auxiliary_gate_floor",
+    "static_chord_completion_gate_floor",
+    "static_chord_completion_gate_power",
     "static_chord_no_press_failure_credit",
     "static_chord_no_press_completion_power",
     "press_hold_full_frames", "press_dropout_penalty",
     "static_chord_min_duration_seconds",
     "press_position_dense_scale", "press_precision_gate_floor",
+    "chord_fine_position_upper", "chord_fine_position_dense_scale",
+    "chord_fine_precision_gate_floor",
+    "chord_multi_region_lower", "chord_multi_region_upper",
+    "chord_multi_point_bonus_weight",
     "next_goal_weight", "goal_pair_transition_next_goal_weight",
     "goal_pair_context_next_goal_weight",
+    "chord_reach_success_pose_guide_weight",
     "chord_fine_success_pose_guide_weight",
     "goal_pair_success_pose_guide_weight",
     "goal_pair_success_pose_focus_weight",
@@ -145,7 +179,9 @@ FRET_REWARD_SAFETY_KEYS = (
     "next_goal_unprotected_progress_scale",
     "goal_pair_transition_time_gate_floor",
     "next_goal_prepress_clearance",
-    "finger_arch_reward_weight",
+    "finger_arch_reward_weight", "fine_reach_finger_arch_reward_weight",
+    "isolated_press_arch_reward_weight",
+    "isolated_press_conjunctive_weight",
     "thumb_weight", "thumb_pad_radius",
     "thumb_approach_scale", "thumb_reach_scale",
     "thumb_contact_on_force", "thumb_contact_off_force",
@@ -155,12 +191,18 @@ FRET_REWARD_SAFETY_KEYS = (
     "thumb_gate_zero_distance", "thumb_press_gate_weight",
     "thumb_base_saturation_threshold",
     "thumb_base_saturation_penalty_weight",
+    "thumb_base_supported_saturation_fraction",
     "thumb_seed_action_limit",
     "thumb_force_termination_threshold",
     "thumb_compression_termination_threshold",
     "thumb_force_termination_frames",
     "proximal_weight", "proximal_transition",
     "isolated_press_lock_after_frames",
+    "fine_reach_action_warmup_iterations",
+    "fine_reach_action_ramp_iterations",
+    "fine_reach_non_target_action_scale",
+    "fine_reach_proximal_action_scale",
+    "fine_reach_recovery_proximal_action_scale",
     "hover_weight", "hover_free_gap", "hover_decay_scale",
     "hover_position_weight", "hover_release_pose_weight",
     "hover_release_blend_time", "hover_release_relaxed_pip_deg",
@@ -173,13 +215,19 @@ FRET_REWARD_SAFETY_KEYS = (
     "reference_motion_prior_weight",
     "reference_motion_prior_finger_fraction",
     "reference_motion_prior_exemplars",
+    "human_joint_range_path", "human_joint_range_weight",
+    "human_joint_range_decay_deg",
+    "human_joint_range_active_finger_fraction",
+    "human_joint_range_thumb_fraction",
+    "human_hard_limits_enabled", "human_hard_limit_path",
     "finger_synergy_coefficients", "finger_synergy_min_driver_delta_deg",
     "finger_synergy_full_driver_delta_deg",
     "finger_synergy_max_induced_delta_deg",
     "slip_weight", "slip_stable_frames", "slip_free_distance",
     "slip_decay_scale",
     "wrist_safety_bounds_min", "wrist_safety_bounds_max", "wrist_safety_frames",
-    "finger_back_soft_limit_z", "finger_back_soft_scale",
+    "finger_back_soft_limit_z", "finger_back_proximal_soft_limit_z",
+    "finger_back_soft_scale",
     "finger_back_soft_penalty", "finger_back_limit_z",
     "finger_back_proximal_limit_z", "finger_back_frames",
     "finger_back_samples_per_segment", "finger_back_min_fraction",
@@ -192,16 +240,22 @@ FRET_REWARD_SAFETY_KEYS = (
     "sustain_max_dropout_frames", "pressed_drag_threshold",
     "success_rsi_probability", "success_rsi_min_quality",
     "success_rsi_min_thumb_quality",
+    "success_discovery_rsi_probability",
+    "success_discovery_min_quality",
+    "success_pose_library_path",
     "success_finger_pose_min_quality",
     "success_finger_pose_guide_scale_fraction",
     "success_action_teacher_min_pose_quality",
     "chord_fine_action_teacher_min_pose_quality",
+    "chord_proximal_action_teacher",
+    "chord_proximal_teacher_max_action_spread",
+    "chord_proximal_teacher_disable_press_completion",
     "success_action_teacher_proximal_fraction",
     "goal_pair_action_routing", "goal_pair_action_release_frames",
     "evaluation_f1_gate", "evaluation_no_press_accuracy_gate",
     "evaluation_wrong_press_rate_gate",
     "evaluation_max_finger_overlap_env_frames",
-    "curriculum_settling_frames",
+    "curriculum_settling_frames", "curriculum_episode_success_fraction",
 )
 
 FRET_IMPLEMENTATION_FILES = (
@@ -211,11 +265,13 @@ FRET_IMPLEMENTATION_FILES = (
     "train_fret.py",
     "assets/guitar_asset.xml",
     "assets/smpl_mpl_hands_body.xml",
+    "assets/fret_human_joint_profile.json",
     "env/__init__.py",
     "env/base.py",
     "env/config.py",
     "env/collision.py",
     "env/goals.py",
+    "env/joint_limits.py",
     "env/metrics.py",
     "env/rewards/__init__.py",
     "env/rewards/common.py",
@@ -226,11 +282,13 @@ FRET_IMPLEMENTATION_FILES = (
     "env/safety.py",
     "env/tasks/__init__.py",
     "env/tasks/task_fret.py",
+    "fret_v2_contract.py",
     "learning/__init__.py",
     "learning/checkpoint_contract.py",
     "learning/curriculum.py",
     "learning/evaluation.py",
     "learning/models.py",
+    "learning/fret_v2_model.py",
     "learning/ppo.py",
     "learning/run_io.py",
     "learning/run_layout.py",
@@ -279,35 +337,170 @@ def finger_exploration_ceiling(
     return initial_std + progress * (target_std - initial_std)
 
 
+FINGER_ACQUISITION_STAGES = {
+    "isolated_press", "integrated_press",
+    "chord_reach", "chord_fine_reach", "static_chord",
+}
+
 FINGER_PRECISION_STAGES = {
-    "chord_fine_reach", "static_chord", "frozen_context", "goal_pair",
+    "frozen_context", "goal_pair",
     "transition_window", "coverage", "integration", "full_song",
 }
 
 
-def finger_precision_schedule(state):
-    """Return whether precision annealing is active, its age, and focus fingers."""
+def finger_acquisition_schedule(state):
+    """Return chord-acquisition state without shrinking exploration."""
     stage = str(state.get("curriculum_stage", ""))
-    if stage not in FINGER_PRECISION_STAGES:
-        return False, 0, ()
-    age = max(0, int(state.get(
-        "curriculum_chord_focus_total_iteration", 0)))
-    if stage != "chord_fine_reach":
-        age += max(0, int(state.get("curriculum_stage_iteration", 0)))
+    recovery_active = state.get(
+        "curriculum_frozen_context_recovery_active")
+    if recovery_active is None:
+        recovery_active = not bool(state.get(
+            "curriculum_frozen_context_evaluation_started", False))
+    frozen_recovery = (
+        stage == "frozen_context"
+        and bool(recovery_active))
+    if stage not in FINGER_ACQUISITION_STAGES and not frozen_recovery:
+        return False, ()
     focus = ()
     if stage == "chord_fine_reach":
         index = int(state.get("curriculum_chord_focus_index", -1))
         catalog = state.get("curriculum_chord_available_sets", ())
         if 0 <= index < len(catalog):
             focus = tuple(int(finger) for finger in catalog[index])
-    elif stage == "frozen_context":
+    elif stage == "isolated_press" and bool(state.get(
+            "curriculum_early_recovery", False)):
         finger = int(state.get(
-            "curriculum_frozen_context_focus_finger", 0))
-        focus = (finger,) if 1 <= finger <= 4 else ()
+            "curriculum_early_recovery_focus_finger", 0))
+        if 1 <= finger <= 4:
+            focus = (finger,)
+    elif frozen_recovery:
+        focus = tuple(
+            int(finger) for finger in state.get(
+                "curriculum_frozen_context_recovery_focus_fingers", ())
+            if 1 <= int(finger) <= 4)
+    return True, focus
+
+
+def finger_precision_schedule(state):
+    """정적 코드 숙련 뒤에만 정밀화를 위한 exploration ceiling을 내린다."""
+    stage = str(state.get("curriculum_stage", ""))
+    if stage not in FINGER_PRECISION_STAGES:
+        return False, 0, ()
+    age = max(0, int(state.get("curriculum_stage_iteration", 0)))
+    focus = ()
+    if stage == "frozen_context":
+        recovery_active = state.get(
+            "curriculum_frozen_context_recovery_active")
+        if recovery_active is None:
+            recovery_active = not bool(state.get(
+                "curriculum_frozen_context_evaluation_started", False))
+        if bool(recovery_active):
+            return False, 0, ()
+        completed = state.get(
+            "curriculum_frozen_context_recovery_completed_iteration")
+        if completed is None:
+            evaluation_age = max(0, int(state.get(
+                "curriculum_frozen_context_evaluation_iteration", 0)))
+            completed = max(0, age - evaluation_age)
+        age = max(0, age - int(completed))
     elif stage == "goal_pair":
         finger = int(state.get("curriculum_goal_pair_focus_finger", 0))
         focus = (finger,) if 1 <= finger <= 4 else ()
     return True, age, focus
+
+
+def frozen_context_runtime_snapshot(state):
+    """Return the compact frozen-context phase shown by the runner."""
+    if str(state.get("curriculum_stage", "")) != "frozen_context":
+        return None
+    recovery_active = bool(state.get(
+        "curriculum_frozen_context_recovery_active",
+        not bool(state.get(
+            "curriculum_frozen_context_evaluation_started", False))))
+    recovery_exhausted = bool(state.get(
+        "curriculum_frozen_context_recovery_exhausted", False))
+    evaluation_started = bool(state.get(
+        "curriculum_frozen_context_evaluation_started", False))
+    settle_iteration = max(0, int(state.get(
+        "curriculum_frozen_context_evaluation_settle_iteration", 0)))
+    settle_target = max(0, int(state.get(
+        "curriculum_frozen_context_evaluation_settle_target", 0)))
+    settle_progress = float(state.get(
+        "curriculum_frozen_context_evaluation_settle_progress",
+        settle_iteration / float(settle_target) if settle_target else 0.0))
+    settle_progress = min(max(settle_progress, 0.0), 1.0)
+    if recovery_active:
+        phase = "recovery_exhausted" if recovery_exhausted else "recovery"
+    elif evaluation_started:
+        phase = "evaluation"
+    else:
+        phase = "teacher_free_settle"
+    _, precision_age, _ = finger_precision_schedule(state)
+    return {
+        "phase": phase,
+        "recovery_active": recovery_active,
+        "recovery_exhausted": recovery_exhausted,
+        "recovery_ready_streak": max(0, int(state.get(
+            "curriculum_frozen_context_recovery_ready_streak", 0))),
+        "recovery_completed_iteration": max(0, int(state.get(
+            "curriculum_frozen_context_recovery_completed_iteration", 0))),
+        "recovery_teacher_scale": float(state.get(
+            "curriculum_frozen_context_recovery_teacher_scale", 0.0)),
+        "sampler_update_count": max(0, int(state.get(
+            "curriculum_frozen_context_sampler_update_count", 0))),
+        "settle_iteration": settle_iteration,
+        "settle_target": settle_target,
+        "settle_progress": settle_progress,
+        "precision_age": precision_age,
+    }
+
+
+def format_frozen_context_runtime(snapshot):
+    """Format an infrequent phase-transition message for the terminal."""
+    if snapshot is None:
+        return ""
+    settle = (
+        f"{snapshot['settle_iteration']}/{snapshot['settle_target']}"
+        if snapshot["settle_target"] > 0 else "n/a")
+    return (
+        "frozen-context: "
+        f"phase={snapshot['phase']} "
+        f"ready={snapshot['recovery_ready_streak']} "
+        f"exhausted={'yes' if snapshot['recovery_exhausted'] else 'no'} "
+        f"sampler-updates={snapshot['sampler_update_count']} "
+        f"teacher={snapshot['recovery_teacher_scale']:.2f} "
+        f"settle={settle} ({100.0 * snapshot['settle_progress']:.0f}%) "
+        f"precision-age={snapshot['precision_age']}")
+
+
+def fret_curriculum_stall_reason(stats):
+    """중단 옵션이 켜졌을 때만 사용하는 명시적 정체 사유다."""
+    stalled = bool(stats.get(
+        "next_curriculum_stalled",
+        stats.get("curriculum_stalled", False)))
+    if not stalled:
+        return None
+    stage = str(stats.get(
+        "next_curriculum_stage",
+        stats.get("curriculum_stage", "unknown")))
+    early_exhausted = bool(stats.get(
+        "next_curriculum_early_recovery_exhausted",
+        stats.get("curriculum_early_recovery_exhausted", False)))
+    if early_exhausted:
+        return f"curriculum_stall:{stage}:early_recovery_exhausted"
+    recovery_exhausted = bool(stats.get(
+        "next_curriculum_frozen_context_recovery_exhausted",
+        stats.get(
+            "curriculum_frozen_context_recovery_exhausted", False)))
+    if stage == "frozen_context" and recovery_exhausted:
+        return "curriculum_stall:frozen_context:recovery_exhausted"
+    evaluation_started = bool(stats.get(
+        "next_curriculum_frozen_context_evaluation_started",
+        stats.get(
+            "curriculum_frozen_context_evaluation_started", False)))
+    if stage == "frozen_context" and evaluation_started:
+        return "curriculum_stall:frozen_context:evaluation_failed"
+    return None
 
 
 def summarize_goal_finger_coverage(goals):
@@ -527,6 +720,12 @@ def build_parser():
                         help="미지정 시 goal 옆의 같은 이름 hand target을 자동 탐색")
     parser.add_argument("--num-envs", type=int, default=FRET["num_envs"])
     parser.add_argument("--device", default=FRET["device"])
+    parser.add_argument(
+        "--observation-contract",
+        choices=(FRET_V1_OBSERVATION_CONTRACT,
+                 FRET_V2_OBSERVATION_CONTRACT),
+        default=FRET["observation_contract"],
+        help="Fret actor observation ABI; new runs default to named 420D v2")
     parser.add_argument("--iterations", type=int, default=FRET["iterations"])
     parser.add_argument("--minibatch-size", type=int,
                         default=FRET["ppo"]["minibatch_size"])
@@ -551,6 +750,9 @@ def build_parser():
     parser.add_argument("--eval-episodes", type=int, default=1)
     parser.add_argument("--eval-out", default=None)
     parser.add_argument("--no-random-start", action="store_true")
+    parser.add_argument(
+        "--no-human-hard-limits", action="store_true",
+        help="런타임 사람 관절 hard limit을 끄고 원본 XML 범위를 사용")
     parser.add_argument("--no-curriculum", action="store_true",
                         help="손끝 접근 및 곡별 시간 커리큘럼 비활성")
     parser.add_argument("--curriculum-stage",
@@ -570,6 +772,16 @@ def build_parser():
     parser.add_argument("--video-interval", type=int,
                         default=FRET["video_interval"],
                         help="rollout 영상을 만들 epoch 간격; 0이면 주기 영상 비활성")
+    parser.add_argument(
+        "--stop-on-curriculum-stall", dest="stop_on_curriculum_stall",
+        action="store_true", default=DEFAULT_STOP_ON_CURRICULUM_STALL,
+        help=("초기 압현 복구 블록을 모두 소진하면 checkpoint를 저장하고 "
+              "정상 종료(기본값)"))
+    parser.add_argument(
+        "--continue-after-curriculum-stall",
+        dest="stop_on_curriculum_stall", action="store_false",
+        help=("복구 계약이 소진된 후에도 학습을 계속; "
+              "망각 진단 실험에서만 명시적으로 사용"))
     return parser
 
 
@@ -620,11 +832,17 @@ def resolve_hand_targets(goal_path, explicit=None):
     return None
 
 
-def resolve_out_dir(song_id, explicit=None, run_name=None, checkpoint=None):
+def resolve_out_dir(
+        song_id, explicit=None, run_name=None, checkpoint=None,
+        migrate_contract=False):
+    resolver = globals().get("resolve_run_dir")
+    if resolver is None:
+        from tab2body.learning.run_layout import resolve_run_dir as resolver
     workspace_root = Path(__file__).resolve().parent.parent
-    return str(resolve_run_dir(
+    resume_checkpoint = None if migrate_contract else checkpoint
+    return str(resolver(
         workspace_root, song_id, explicit=explicit, run_name=run_name,
-        checkpoint=checkpoint))
+        checkpoint=resume_checkpoint))
 
 
 def protect_new_run_output(out_dir, checkpoint=None, evaluating=False):
@@ -641,18 +859,17 @@ def protect_new_run_output(out_dir, checkpoint=None, evaluating=False):
 def generate_training_plots(layout):
     """Render the standard plots from the run's append-only metric log."""
     plot_specs = (
-        ("training_curves", "plot_fret_training.py", "training_curves.png"),
-        ("fingertip_curriculum", "plot_fingertip_curriculum.py",
+        ("training_curves", "tab2body.tools.plot_fret_training", "training_curves.png"),
+        ("fingertip_curriculum", "tab2body.tools.plot_fingertip_curriculum",
          "fingertip_curriculum.png"),
-        ("fret_diagnostics", "plot_fret_diagnostics.py",
+        ("fret_diagnostics", "tab2body.tools.plot_fret_diagnostics",
          "fret_diagnostics.png"),
     )
     generated = {}
     for key, script, filename in plot_specs:
         output = layout.plots / filename
         command = [
-            sys.executable,
-            str(Path(__file__).resolve().parent / "tools" / script),
+            sys.executable, "-m", script,
             str(layout.metrics), "--out", str(output),
         ]
         with layout.artifact_log.open("a") as stream:
@@ -660,7 +877,7 @@ def generate_training_plots(layout):
             stream.flush()
             subprocess.run(
                 command, check=True, stdout=stream,
-                stderr=subprocess.STDOUT)
+                stderr=subprocess.STDOUT, cwd=PROJECT_ROOT)
         generated[key] = str(output.resolve())
         if key == "fret_diagnostics":
             summary = output.with_suffix(".summary.json")
@@ -673,8 +890,7 @@ def generate_training_plots(layout):
 def rollout_video_command(checkpoint, goal_path, hand_targets_path,
                           preparation_frames):
     command = [
-        sys.executable,
-        str(PACKAGE_ROOT / "tools" / "record_fret_rollout.py"),
+        sys.executable, "-m", "tab2body.tools.record_fret_rollout",
         "--checkpoint", str(checkpoint),
         "--goal", str(goal_path),
         "--show-frets", "--view", "closeup",
@@ -695,6 +911,7 @@ def rollout_video_command(checkpoint, goal_path, hand_targets_path,
 
 def generate_rollout_video(layout, checkpoint, goal_path, hand_targets_path,
                            preparation_frames, label):
+    from tab2body.tools.summarize_fret_evaluations import save_summary
     output = default_video_path(checkpoint)
     report = output.with_suffix(".stability.json")
     if output.exists() and report.exists():
@@ -705,6 +922,7 @@ def generate_rollout_video(layout, checkpoint, goal_path, hand_targets_path,
             frames_dir.parent.rmdir()
         except OSError:
             pass
+        save_summary(output.parent)
         return str(output.resolve())
     command = rollout_video_command(
         checkpoint, goal_path, hand_targets_path, preparation_frames)
@@ -714,6 +932,7 @@ def generate_rollout_video(layout, checkpoint, goal_path, hand_targets_path,
         subprocess.run(
             command, check=True, stdout=stream, stderr=subprocess.STDOUT,
             cwd=PROJECT_ROOT)
+    save_summary(output.parent)
     return str(output.resolve())
 
 
@@ -733,9 +952,19 @@ def build_runtime_checkpoint_contract(env, model, trainer, *, goal_sha256,
     implementation_fingerprint = fingerprint_file_set(
         tab2body_root, FRET_IMPLEMENTATION_FILES)
     reward_safety = {key: FRET[key] for key in FRET_REWARD_SAFETY_KEYS}
+    reward_safety["human_hard_limits_enabled"] = bool(
+        env.human_hard_limits_enabled)
+    reward_safety["human_hard_limit_path"] = env.human_hard_limit_path
+    reward_safety["human_hard_limit_profile_sha256"] = (
+        file_sha256(env.human_hard_limit_path)
+        if env.human_hard_limits_enabled else None)
     reward_safety["reference_motion_prior_sha256"] = file_sha256(
         FRET["reference_motion_prior_path"])
     reward_safety["preparation_frames"] = int(preparation_frames)
+    reward_safety["physics_contact_collection"] = (
+        env.contact_collection_contract)
+    reward_safety["physics_max_depenetration_velocity"] = float(
+        env.max_depenetration_velocity)
     reward_safety["fingertip_approach_curriculum"] = FRET["curriculum"]
     controlled_names = [
         env.dof_names[index] for index in env.ctrl_idx.detach().cpu().tolist()]
@@ -772,6 +1001,10 @@ def build_runtime_checkpoint_contract(env, model, trainer, *, goal_sha256,
         policy_distribution_version=getattr(
             model, "POLICY_DISTRIBUTION_VERSION",
             "diagonal_gaussian_policy_implementation_fingerprinted.v1"),
+        observation_contract=env.observation_contract,
+        observation_manifest=env.observation_manifest,
+        model_architecture_version=getattr(
+            model, "MODEL_ARCHITECTURE_VERSION", "actor_critic.mlp.v1"),
     )
     return seal_checkpoint_contract(payload)
 
@@ -822,6 +1055,12 @@ def evaluate(env, model, episodes):
         group: 0.0 for group in joint_limit_group_names}
     joint_limit_near_sum_by_group = {
         group: 0.0 for group in joint_limit_group_names}
+    thorax_hold_error_sum = 0.0
+    thorax_hold_velocity_sum = 0.0
+    thorax_hold_torque_fraction_sum = 0.0
+    thorax_hold_error_max = 0.0
+    thorax_hold_velocity_max = 0.0
+    thorax_hold_torque_fraction_max = 0.0
     proximal_reward_sum = 0.0
     proximal_gate_sum = 0.0
     finger_motion_sum = 0.0
@@ -949,6 +1188,26 @@ def evaluate(env, model, episodes):
                     float(group_max[live.bool()].max().cpu()))
             joint_limit_near_sum_by_group[group] += float(
                 (info[f"joint_limit_{group}_near_rate"] * live).sum().cpu())
+        thorax_hold_error = info["thorax_hold_error_deg"]
+        thorax_hold_velocity = info["thorax_hold_velocity_deg_s"]
+        thorax_hold_torque_fraction = info["thorax_hold_torque_fraction"]
+        thorax_hold_error_sum += float(
+            (thorax_hold_error * live).sum().cpu())
+        thorax_hold_velocity_sum += float(
+            (thorax_hold_velocity * live).sum().cpu())
+        thorax_hold_torque_fraction_sum += float(
+            (thorax_hold_torque_fraction * live).sum().cpu())
+        if live.any():
+            live_mask = live.bool()
+            thorax_hold_error_max = max(
+                thorax_hold_error_max,
+                float(thorax_hold_error[live_mask].max().cpu()))
+            thorax_hold_velocity_max = max(
+                thorax_hold_velocity_max,
+                float(thorax_hold_velocity[live_mask].max().cpu()))
+            thorax_hold_torque_fraction_max = max(
+                thorax_hold_torque_fraction_max,
+                float(thorax_hold_torque_fraction[live_mask].max().cpu()))
         proximal_reward_sum += float(info["proximal_reward"].sum().cpu())
         proximal_gate_sum += float(info["proximal_gate"].sum().cpu())
         finger_motion_sum += float(info["finger_motion"].sum().cpu())
@@ -1197,6 +1456,16 @@ def evaluate(env, model, episodes):
             group: value / max(goal_diagnostic_count, 1)
             for group, value in joint_limit_near_sum_by_group.items()
         },
+        mean_thorax_hold_error_deg=(
+            thorax_hold_error_sum / max(goal_diagnostic_count, 1)),
+        max_thorax_hold_error_deg=thorax_hold_error_max,
+        mean_thorax_hold_velocity_deg_s=(
+            thorax_hold_velocity_sum / max(goal_diagnostic_count, 1)),
+        max_thorax_hold_velocity_deg_s=thorax_hold_velocity_max,
+        mean_thorax_hold_torque_fraction=(
+            thorax_hold_torque_fraction_sum
+            / max(goal_diagnostic_count, 1)),
+        max_thorax_hold_torque_fraction=thorax_hold_torque_fraction_max,
         mean_proximal_reward=proximal_reward_sum / max(diagnostic_count, 1),
         mean_proximal_gate=proximal_gate_sum / max(diagnostic_count, 1),
         mean_finger_motion=finger_motion_sum / max(diagnostic_count, 1),
@@ -1292,6 +1561,11 @@ def main(argv=None):
         raise ValueError("--migrate-contract is training-only")
     if args.eval and args.initialize_from:
         raise ValueError("--initialize-from is training-only")
+    if (args.observation_contract == FRET_V2_OBSERVATION_CONTRACT
+            and args.initialize_from):
+        raise ValueError(
+            "Fret-v1 weights cannot be directly initialized into the 420D "
+            "Fret-v2 block encoder; use a dedicated distillation/transfer run")
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
@@ -1304,8 +1578,12 @@ def main(argv=None):
     hand_targets_sha256 = (file_sha256(hand_targets_path)
                            if hand_targets_path is not None else None)
     out_dir = resolve_out_dir(
-        song_id, args.out, args.run_name, args.checkpoint)
-    protect_new_run_output(out_dir, checkpoint=args.checkpoint, evaluating=args.eval)
+        song_id, args.out, args.run_name, args.checkpoint,
+        migrate_contract=args.migrate_contract)
+    protect_new_run_output(
+        out_dir,
+        checkpoint=None if args.migrate_contract else args.checkpoint,
+        evaluating=args.eval)
     if args.preparation_seconds < 0.0:
         raise ValueError("--preparation-seconds must be non-negative")
     if args.video_interval < 0:
@@ -1343,16 +1621,25 @@ def main(argv=None):
         headless=True,
         seed=args.seed,
         reset_noise=0.0 if args.eval else FRET["reset_noise"],
+        human_hard_limits_enabled=(
+            FRET["human_hard_limits_enabled"]
+            and not args.no_human_hard_limits),
         random_start=(False if args.eval else
                       not args.no_random_start and FRET["random_start"]),
         preparation_frames=preparation_frames,
+        observation_contract=args.observation_contract,
     ))
     goal_finger_coverage = summarize_goal_finger_coverage(env.goals)
     init_action = ((env.init_pose[env.ctrl_idx] - env.ctrl_mid[0]) /
                    (env.action_scale * env.ctrl_half[0]).clamp_min(1e-6)).clamp(-1.0, 1.0)
-    model = ActorCritic(env.num_obs, env.num_actions, env.value_dim,
-                        init_std=FRET["policy_init_std"],
-                        init_mean=init_action).to(args.device)
+    ModelType = ActorCritic
+    if env.observation_contract == FRET_V2_OBSERVATION_CONTRACT:
+        from tab2body.learning.fret_v2_model import fret_actor_critic_class
+        ModelType = fret_actor_critic_class(env.observation_contract)
+    model = ModelType(
+        env.num_obs, env.num_actions, env.value_dim,
+        init_std=FRET["policy_init_std"],
+        init_mean=init_action).to(args.device)
     trainer = PPOTrainer(env, model, PPOConfig(**ppo_kwargs), out_dir=out_dir)
     checkpoint_contract = build_runtime_checkpoint_contract(
         env, model, trainer,
@@ -1505,6 +1792,12 @@ def main(argv=None):
         "hand_targets_path": hand_targets_path,
         "hand_targets_sha256": hand_targets_sha256,
         "preparation_frames": preparation_frames,
+        "observation_contract": env.observation_contract,
+        "observation_manifest": list(env.observation_manifest),
+        "observation_manifest_sha256": checkpoint_contract[
+            "payload"]["observation"]["manifest_sha256"],
+        "model_architecture": getattr(
+            model, "MODEL_ARCHITECTURE_VERSION", "actor_critic.mlp.v1"),
         "goal_finger_coverage": goal_finger_coverage,
         "static_chord_catalog": {
             "min_duration_seconds":
@@ -1560,9 +1853,15 @@ def main(argv=None):
                     FRET["articulation_seed_dip_deg"],
                 "finger_arch_reward_weight":
                     FRET["finger_arch_reward_weight"],
+                "fine_reach_finger_arch_reward_weight":
+                    FRET["fine_reach_finger_arch_reward_weight"],
                 "action_scale": env.action_scale,
                 "action_alpha": env.action_alpha,
                 "reset_soft_limit_fraction": env.reset_soft_limit_fraction,
+                "human_hard_limits_enabled":
+                    env.human_hard_limits_enabled,
+                "human_hard_limit_profile":
+                    env.human_hard_limit_audit,
             },
             "directories": {
                 "checkpoints": "checkpoints",
@@ -1578,6 +1877,7 @@ def main(argv=None):
                     "videos/<final-checkpoint>_rollout.mp4",
                 ],
                 "periodic_rollout_video_interval": args.video_interval,
+                "stop_on_curriculum_stall": args.stop_on_curriculum_stall,
                 "auto_video_camera_distance_scale": 1.25,
                 "delete_source_frames_after_encoding": True,
             },
@@ -1602,6 +1902,7 @@ def main(argv=None):
             "curriculum_disabled": args.no_curriculum,
             "curriculum_stage": args.curriculum_stage,
             "video_interval": args.video_interval,
+            "stop_on_curriculum_stall": args.stop_on_curriculum_stall,
         },
     )
     curriculum = None
@@ -1626,6 +1927,7 @@ def main(argv=None):
         "checkpoints": str(run_layout.checkpoints),
         "metrics": str(run_layout.metrics), "resources": resource_snapshot,
         "goal_finger_coverage": goal_finger_coverage,
+        "human_hard_limits": env.human_hard_limit_audit,
     }
     with run_layout.training_log.open("a") as stream:
         stream.write("startup=" + json.dumps(
@@ -1635,6 +1937,10 @@ def main(argv=None):
         if song_bundle_path is not None else "none (custom --goal)")
     print(f"song={song_id} | song_bundle={bundle_display}")
     print(f"goal={goal_path} | hand_targets={hand_targets_path or 'none'}")
+    print(
+        "human_hard_limits="
+        f"{'on' if env.human_hard_limits_enabled else 'off'}"
+        f" | joints={env.human_hard_limit_audit['applied_joint_count']}")
     print(
         "static_chords="
         f"{[list(values) for values in env.goals.practice_available_chord_finger_sets]} "
@@ -1657,6 +1963,8 @@ def main(argv=None):
           f"epochs={iterations} | detailed_log={run_layout.training_log}")
 
     periodic_video_checkpoints = []
+    curriculum_stall_warning_emitted = False
+    frozen_runtime_signature = None
     controlled_names = [
         env.dof_names[index]
         for index in env.ctrl_idx.detach().cpu().tolist()]
@@ -1681,8 +1989,19 @@ def main(argv=None):
     all_finger_policy_indices = [
         index for indices in finger_policy_indices.values()
         for index in indices]
+    finger_flexion_policy_indices = [
+        index for index, name in enumerate(controlled_names)
+        if any(name == joint for finger_name in (
+                "index", "middle", "ring", "pinky")
+               for joint in (
+                   f"LH:{finger_name}1_x",
+                   f"LH:{finger_name}2",
+                   f"LH:{finger_name}3"))]
+    if len(finger_flexion_policy_indices) != 12:
+        raise RuntimeError("expected twelve fretting-finger flexion actions")
 
     def training_iteration_callback(iteration):
+        nonlocal frozen_runtime_signature
         state = (
             curriculum.apply(env)
             if curriculum is not None else {})
@@ -1710,9 +2029,38 @@ def main(argv=None):
         stage_is_goal_pair = (
             state.get("curriculum_stage") == "goal_pair")
         finger_ceiling = FRET["articulation_flexion_init_std"]
+        acquisition_active, acquisition_focus = (
+            finger_acquisition_schedule(state))
         precision_active, precision_age, focus_fingers = (
             finger_precision_schedule(state))
-        if precision_active:
+        if acquisition_active:
+            lateral_floor = float(FRET[
+                "chord_acquisition_lateral_std"])
+            flexion_floor = float(FRET[
+                "chord_acquisition_flexion_std"])
+            with torch.no_grad():
+                lateral_floor_log = model.log_std.new_tensor(
+                    lateral_floor).log()
+                flexion_floor_log = model.log_std.new_tensor(
+                    flexion_floor).log()
+                model.log_std[all_finger_policy_indices] = torch.maximum(
+                    model.log_std[all_finger_policy_indices],
+                    lateral_floor_log)
+                model.log_std[finger_flexion_policy_indices] = torch.maximum(
+                    model.log_std[finger_flexion_policy_indices],
+                    flexion_floor_log)
+                focus_log = model.log_std.new_tensor(
+                    FRET["chord_focus_finger_exploration_std"]).log()
+                for focus_finger in acquisition_focus:
+                    indices = finger_policy_indices.get(focus_finger, ())
+                    model.log_std[indices] = torch.maximum(
+                        model.log_std[indices], focus_log)
+            focus_fingers = acquisition_focus
+            finger_ceiling = max(
+                flexion_floor,
+                FRET["chord_focus_finger_exploration_std"]
+                if acquisition_focus else flexion_floor)
+        elif precision_active:
             finger_ceiling = finger_exploration_ceiling(
                 precision_age,
                 FRET["articulation_flexion_init_std"],
@@ -1739,9 +2087,17 @@ def main(argv=None):
         state["finger_exploration_ceiling"] = float(finger_ceiling)
         state["finger_exploration_schedule_age"] = int(precision_age)
         state["finger_exploration_focus_fingers"] = list(focus_fingers)
+        state["finger_acquisition_exploration_active"] = bool(
+            acquisition_active)
+        state["finger_acquisition_flexion_floor"] = (
+            float(FRET["chord_acquisition_flexion_std"])
+            if acquisition_active else 0.0)
+        state["finger_acquisition_lateral_floor"] = (
+            float(FRET["chord_acquisition_lateral_std"])
+            if acquisition_active else 0.0)
         state["chord_focus_finger_exploration_floor"] = (
             float(FRET["chord_focus_finger_exploration_std"])
-            if precision_active and not stage_is_goal_pair and focus_fingers
+            if acquisition_active and focus_fingers
             else 0.0)
         state["goal_pair_focus_finger_exploration_floor"] = (
             float(FRET["goal_pair_focus_finger_exploration_std"])
@@ -1759,6 +2115,60 @@ def main(argv=None):
                 model.log_std[lateral_index] = torch.maximum(
                     model.log_std[lateral_index], lateral_floor_log)
         state["goal_pair_focus_lateral_exploration_floor"] = lateral_floor
+        integrated_lateral_floor = 0.0
+        integrated_focus_lateral_floor = 0.0
+        integrated_focus = int(state.get(
+            "curriculum_integrated_recovery_focus_finger", 0))
+        if state.get("curriculum_stage") == "integrated_press":
+            integrated_lateral_floor = float(
+                FRET["integrated_press_lateral_std"])
+            with torch.no_grad():
+                base_log = model.log_std.new_tensor(
+                    integrated_lateral_floor).log()
+                for lateral_index in finger_lateral_policy_indices.values():
+                    model.log_std[lateral_index] = torch.maximum(
+                        model.log_std[lateral_index], base_log)
+                if integrated_focus in finger_lateral_policy_indices:
+                    integrated_focus_lateral_floor = float(
+                        FRET["integrated_press_focus_lateral_std"])
+                    focus_log = model.log_std.new_tensor(
+                        integrated_focus_lateral_floor).log()
+                    lateral_index = finger_lateral_policy_indices[
+                        integrated_focus]
+                    model.log_std[lateral_index] = torch.maximum(
+                        model.log_std[lateral_index], focus_log)
+        state["integrated_press_lateral_exploration_floor"] = (
+            integrated_lateral_floor)
+        state["integrated_press_focus_lateral_exploration_floor"] = (
+            integrated_focus_lateral_floor)
+        frozen_runtime = frozen_context_runtime_snapshot(state)
+        if frozen_runtime is None:
+            frozen_runtime_signature = None
+        else:
+            state["curriculum_frozen_context_exploration_phase"] = (
+                frozen_runtime["phase"])
+            state["curriculum_frozen_context_precision_schedule_age"] = (
+                frozen_runtime["precision_age"])
+            state["curriculum_frozen_context_runtime_recovery_ready"] = (
+                frozen_runtime["recovery_ready_streak"])
+            state["curriculum_frozen_context_runtime_recovery_exhausted"] = (
+                frozen_runtime["recovery_exhausted"])
+            state["curriculum_frozen_context_runtime_sampler_updates"] = (
+                frozen_runtime["sampler_update_count"])
+            state["curriculum_frozen_context_runtime_settle_progress"] = (
+                frozen_runtime["settle_progress"])
+            settle_bucket = min(
+                int(frozen_runtime["settle_progress"] * 4.0), 4)
+            signature = (
+                frozen_runtime["phase"],
+                frozen_runtime["recovery_ready_streak"],
+                frozen_runtime["recovery_exhausted"],
+                frozen_runtime["sampler_update_count"],
+                settle_bucket,
+            )
+            if signature != frozen_runtime_signature:
+                print(format_frozen_context_runtime(frozen_runtime), flush=True)
+                frozen_runtime_signature = signature
         return state
 
     def periodic_video_callback(iteration, _stats):
@@ -1771,6 +2181,26 @@ def main(argv=None):
             trainer.save(iteration)
         periodic_video_checkpoints.append((iteration, checkpoint))
         print(f"artifact: queued epoch {iteration} rollout", flush=True)
+
+    def curriculum_stop_callback(_iteration, stats):
+        nonlocal curriculum_stall_warning_emitted
+        reason = fret_curriculum_stall_reason(stats)
+        if reason is None:
+            return None
+        stage = str(stats.get(
+            "next_curriculum_stage",
+            stats.get("curriculum_stage", "unknown")))
+        if not curriculum_stall_warning_emitted:
+            print(
+                "warning: curriculum stalled at "
+                f"stage={stage} ({reason.rsplit(':', 1)[-1]}); "
+                "training continues unless "
+                "--stop-on-curriculum-stall is set",
+                file=sys.stderr, flush=True)
+            curriculum_stall_warning_emitted = True
+        if args.stop_on_curriculum_stall:
+            return reason
+        return None
 
     auto_video_checkpoint = None
     interrupted = False
@@ -1794,6 +2224,7 @@ def main(argv=None):
                 iteration_result_callback=result_callback,
                 post_iteration_callback=periodic_video_callback,
                 history_limit=0,
+                stop_iteration_callback=curriculum_stop_callback,
             )
             if not args.smoke and not args.no_auto_video:
                 auto_video_checkpoint = (
@@ -1814,6 +2245,20 @@ def main(argv=None):
                 print(
                     f"warning: interrupt checkpoint failed: {exc}",
                     file=sys.stderr, flush=True)
+    except RuntimeError:
+        if not args.eval and trainer.iteration > 0:
+            try:
+                trainer.save(trainer.iteration)
+                print(
+                    "training runtime error: saved last completed epoch "
+                    f"{trainer.iteration}",
+                    file=sys.stderr, flush=True)
+            except (OSError, RuntimeError, ValueError) as save_error:
+                print(
+                    "warning: runtime-error checkpoint failed: "
+                    f"{save_error}",
+                    file=sys.stderr, flush=True)
+        raise
     finally:
         env.close()
 

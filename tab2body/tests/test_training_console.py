@@ -30,9 +30,28 @@ def main():
     assert "reward=0.0383" in concise
     assert "p90=207.2mm" in concise
     assert "value_loss" not in concise
+    strike_s3 = concise_training_line({
+        **stats,
+        "curriculum_stage": "S3_SONG_INTEGRATION",
+        "strike_episode_f1": 0.875,
+        "f1_l": None,
+    }, first=1, last=50000)
+    assert "window-F1=0.875" in strike_s3
+    assert " | F1=" not in strike_s3
     stalled = concise_training_line(
         {**stats, "curriculum_stalled": True}, first=1, last=50000)
     assert "stalled=continue" in stalled
+    strict = concise_training_line({
+        **stats,
+        "curriculum_stage": "isolated_press",
+        "curriculum_early_min_success_rate": 0.395,
+        "curriculum_early_bottleneck_finger": 3,
+        "curriculum_finger_3_precision_press_rate": 0.71,
+        "curriculum_finger_3_precision_position_rate": 0.83,
+        "curriculum_finger_3_precision_arch_rate": 0.50,
+    }, first=1, last=50000)
+    assert "strict-min=f3:39.5%" in strict
+    assert "strict-gate=arch:50.0%" in strict
     forced = concise_training_line({
         **stats,
         "curriculum_forced_advance": True,

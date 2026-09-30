@@ -166,21 +166,24 @@ def main(argv=None):
 
     checkpoint = base._load_checkpoint(
         torch, args.checkpoint, args.device)
-    stage, tolerance, tempo_lambda = base.restore_stage_and_tolerance(checkpoint)
+    restored_curriculum = base.restore_stage_and_tolerance(checkpoint)
+    stage, tolerance, tempo_lambda, strum_span = restored_curriculum[:4]
     env = base._construct_task(StrikeTask, args, STRIKE)
     try:
         contract = base._checkpoint_payload(checkpoint)[1]
         contract_model = base._mapping(contract.get("model"))
         init_std = float(contract_model.get(
             "policy_init_std", STRIKE["policy_init_std"]))
-        model = ActorCritic(
+        from tab2body.learning.strike_v2_model import strike_actor_critic_class
+        ModelType = strike_actor_critic_class(env.observation_contract)
+        model = ModelType(
             env.num_obs, env.num_actions, env.value_dim,
             init_std=init_std).to(args.device)
         base.verify_live_contract(
             checkpoint, env, model, args.goal, args.grip_reference, STRIKE)
         model.load_state_dict(checkpoint["model"])
         model.eval()
-        obs = base._restore_task(env, stage, tolerance, tempo_lambda)
+        obs = base._restore_task(env, *restored_curriculum)
 
         control_names = list(env.controlled_dof_names)
         groups = _group_control_indices(control_names)

@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from tab2body.env.rewards.reference_posture import (
+    HumanJointRangePrior,
     ReferenceHandPosturePrior,
     load_reference_postures,
 )
@@ -48,6 +49,8 @@ class _Env:
             "LH:thumb2", "LH:thumb3"))
         self.n_dof = len(self.dof_names)
         self.dof_state = torch.zeros(self.num_envs * self.n_dof, 2)
+        self.dof_lower = torch.full((self.n_dof,), -math.pi)
+        self.dof_upper = torch.full((self.n_dof,), math.pi)
 
 
 def main():
@@ -75,6 +78,30 @@ def main():
         active[0, 0] = True
         protected, _ = prior.compute(active)
         assert protected[0] > degraded[0]
+
+        profile_path = Path(directory) / "profile.json"
+        profile_path.write_text(json.dumps({
+            "schema": "tab2body.fret-human-joint-profile.v1",
+            "joints": {
+                "LH:index1_x": {"lower_deg": -10.0, "upper_deg": 30.0},
+                "LH:thumb2": {"lower_deg": 0.0, "upper_deg": 45.0},
+            },
+        }))
+        state.zero_()
+        range_prior = HumanJointRangePrior(
+            env, profile_path, decay_scale_deg=10.0,
+            active_finger_fraction=0.25, thumb_fraction=0.10)
+        quality, violation_rate, max_excess = range_prior.compute(
+            torch.zeros(2, 4, dtype=torch.bool))
+        assert torch.allclose(quality, torch.ones(2))
+        assert torch.allclose(violation_rate, torch.zeros(2))
+        assert torch.allclose(max_excess, torch.zeros(2))
+        state[0, env.dof_names.index("LH:index1_x"), 0] = math.radians(50.0)
+        degraded, violation_rate, max_excess = range_prior.compute(
+            torch.zeros(2, 4, dtype=torch.bool))
+        assert degraded[0] < degraded[1]
+        assert violation_rate[0] > 0.0
+        assert torch.allclose(max_excess[0], torch.tensor(20.0), atol=1e-4)
     print("PASS: reference posture prior")
 
 

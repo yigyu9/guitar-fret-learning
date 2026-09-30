@@ -1,7 +1,7 @@
 """PPO metrics.jsonl을 학습 곡선 PNG로 렌더한다.
 
-  python tools/plot_fret_training.py \
-      ../fret/training/runs/jazz1_pilot/logs/metrics.jsonl
+  python -m tab2body.tools.plot_fret_training \
+      fret/training/runs/jazz1_pilot/logs/metrics.jsonl
 """
 import argparse
 from pathlib import Path
@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from learning.run_layout import default_plot_path
-from tools.training_metrics import load_metric_rows
+from tab2body.learning.run_layout import default_plot_path
+from tab2body.tools.training_metrics import load_metric_rows
 
 
 def main(argv=None):

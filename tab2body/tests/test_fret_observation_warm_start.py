@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
 
 from learning.models import ActorCritic
 from train_fret import (
+    finger_acquisition_schedule,
     finger_exploration_ceiling,
     finger_precision_schedule,
     load_fret_initialization_model,
@@ -59,18 +60,34 @@ def main():
         "curriculum_chord_focus_total_iteration": 175,
         "curriculum_chord_focus_index": 1,
         "curriculum_chord_available_sets": [[1, 2], [1, 3]],
-    }) == (True, 175, (1, 3))
+    }) == (False, 0, ())
+    assert finger_acquisition_schedule({
+        "curriculum_stage": "chord_fine_reach",
+        "curriculum_chord_focus_index": 1,
+        "curriculum_chord_available_sets": [[1, 2], [1, 3]],
+    }) == (True, (1, 3))
     assert finger_precision_schedule({
         "curriculum_stage": "static_chord",
         "curriculum_chord_focus_total_iteration": 325,
         "curriculum_stage_iteration": 20,
-    }) == (True, 345, ())
+    }) == (False, 0, ())
+    assert finger_acquisition_schedule({
+        "curriculum_stage": "static_chord",
+    }) == (True, ())
+    assert finger_acquisition_schedule({
+        "curriculum_stage": "isolated_press",
+    }) == (True, ())
+    assert finger_acquisition_schedule({
+        "curriculum_stage": "isolated_press",
+        "curriculum_early_recovery": True,
+        "curriculum_early_recovery_focus_finger": 4,
+    }) == (True, (4,))
     assert finger_precision_schedule({
         "curriculum_stage": "goal_pair",
         "curriculum_chord_focus_total_iteration": 325,
         "curriculum_stage_iteration": 20,
         "curriculum_goal_pair_focus_finger": 4,
-    }) == (True, 345, (4,))
+    }) == (True, 20, (4,))
 
     class FakeGoals:
         fret = torch.tensor([
@@ -253,33 +270,40 @@ def main():
     for key, value in target.state_dict().items():
         assert torch.equal(same_size.state_dict()[key], value), key
 
-    future_context_target = ActorCritic(
-        428, 5, value_dim=2,
+    current_prefix = ActorCritic(
+        350, 5, value_dim=2,
         actor_hidden=(16, 8), critic_hidden=(16, 8), init_std=0.2)
-    future_context_calibration = torch.randn(128, 428)
+    current_prefix_state = {
+        key: value.detach().clone()
+        for key, value in current_prefix.state_dict().items()
+    }
+    future_context_target = ActorCritic(
+        425, 5, value_dim=2,
+        actor_hidden=(16, 8), critic_hidden=(16, 8), init_std=0.2)
+    future_context_calibration = torch.randn(128, 425)
     future_report = load_fret_initialization_model(
-        future_context_target, target.state_dict(),
+        future_context_target, current_prefix_state,
         appended_obs_dim=75,
         calibration_observations=future_context_calibration)
     assert future_report == {
         "expanded": True,
-        "source_obs_dim": 353,
-        "target_obs_dim": 428,
+        "source_obs_dim": 350,
+        "target_obs_dim": 425,
     }
     assert torch.equal(
-        future_context_target.actor[0].weight[:, :353],
-        target.actor[0].weight)
+        future_context_target.actor[0].weight[:, :350],
+        current_prefix.actor[0].weight)
     assert torch.equal(
-        future_context_target.actor[0].weight[:, 353:],
+        future_context_target.actor[0].weight[:, 350:],
         torch.zeros_like(
-            future_context_target.actor[0].weight[:, 353:]))
+            future_context_target.actor[0].weight[:, 350:]))
     with torch.no_grad():
         assert torch.allclose(
             future_context_target.actor(
                 future_context_target.normalized(
                     future_context_calibration)),
-            target.actor(target.normalized(
-                future_context_calibration[:, :353])),
+            current_prefix.actor(current_prefix.normalized(
+                future_context_calibration[:, :350])),
             atol=1e-6, rtol=1e-6)
 
     wrong_size = ActorCritic(

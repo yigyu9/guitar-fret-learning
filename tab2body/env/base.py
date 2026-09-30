@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import numpy as np
 import isaacgym
 from isaacgym import gymapi, gymtorch
@@ -14,6 +15,7 @@ from .collision import (
     THUMB_SUPPORT_PROXY_BODY,
 )
 from .safety import dof_torque_limit
+from .joint_limits import apply_joint_limit_profile
 
 # quaternion helpers (xyzw), defined locally: isaacgym.torch_utils imports fail on this numpy
 # (np.float deprecation). These are the standard Isaac forms.
@@ -24,6 +26,15 @@ def quat_rotate_inverse(q, v):
     b = torch.cross(q_vec, v, dim=-1) * (2.0 * q_w)
     c = q_vec * (torch.sum(q_vec * v, dim=-1, keepdim=True) * 2.0)
     return a - b + c
+
+
+def quat_rotate(q, v):
+    """Rotate vector ``v`` by quaternion ``q`` (xyzw)."""
+    q_w = q[:, 3:4]; q_vec = q[:, 0:3]
+    a = v * (2.0 * q_w * q_w - 1.0)
+    b = torch.cross(q_vec, v, dim=-1) * (2.0 * q_w)
+    c = q_vec * (torch.sum(q_vec * v, dim=-1, keepdim=True) * 2.0)
+    return a + b + c
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -50,7 +61,11 @@ class GuitarEnvBase:
     def __init__(self, num_envs=512, control_dofs=None, device='cuda:0', headless=True,
                  seed=0, max_episode_length=300, action_alpha=0.5, action_scale=1.0,
                  reset_noise=0.0, reset_soft_limit_fraction=0.0,
-                 obs_body_names=('L_Wrist', 'R_Wrist')):
+                 human_hard_limits_enabled=False,
+                 human_hard_limit_path=None,
+                 obs_body_names=('L_Wrist', 'R_Wrist'),
+                 locked_dof_keywords=LOCK_KEYWORDS,
+                 shared_backend=None):
         """control_dofs: dof-name prefixes the policy controls (task decides); the rest are held.
         max_episode_length: control steps per episode. action_alpha: EMA smoothing on actions.
         action_scale: PD-target scale (1.0 maps bounded actions one-to-one to limits).
@@ -64,6 +79,14 @@ class GuitarEnvBase:
         self.action_scale = float(action_scale)
         self.reset_noise = float(reset_noise)
         self.reset_soft_limit_fraction = float(reset_soft_limit_fraction)
+        self.human_hard_limits_enabled = bool(human_hard_limits_enabled)
+        self.human_hard_limit_path = (
+            str(human_hard_limit_path) if human_hard_limit_path is not None
+            else None)
+        self.locked_dof_keywords = tuple(
+            str(value) for value in locked_dof_keywords)
+        if self.human_hard_limits_enabled and self.human_hard_limit_path is None:
+            raise ValueError("human hard limit을 켜려면 profile path가 필요하다")
         if not 0.0 <= self.action_alpha <= 1.0:
             raise ValueError("action_alpha must be in [0, 1]")
         if not np.isfinite(self.action_scale) or self.action_scale <= 0.0:
@@ -75,16 +98,139 @@ class GuitarEnvBase:
             raise ValueError("reset_soft_limit_fraction must be in [0, 0.5)")
         self.obs_body_names = list(obs_body_names)
         self.rng = torch.Generator(device=device); self.rng.manual_seed(seed)
-        self.pose = json.load(open(os.path.join(ASSETS, 'seated_pose.json')))
-        self.P = self.pose['params']
-        self._gains_src = json.load(open(os.path.join(GEN, 'mjcf_gains.json')))
+        self._shared_backend = shared_backend
+        if shared_backend is None:
+            self.pose = json.load(open(os.path.join(ASSETS, 'seated_pose.json')))
+            self.P = self.pose['params']
+            self._gains_src = json.load(open(os.path.join(GEN, 'mjcf_gains.json')))
 
-        self.gym = gymapi.acquire_gym()
-        self._create_sim(headless)
-        self._load_assets()
-        self._create_envs()
-        self.gym.prepare_sim(self.sim)
-        self._init_tensors(control_dofs or [])
+            self.gym = gymapi.acquire_gym()
+            self._create_sim(headless)
+            self._load_assets()
+            self._create_envs()
+            self.gym.prepare_sim(self.sim)
+            self._init_tensors(control_dofs or [])
+        else:
+            self._init_shared_backend(shared_backend, control_dofs or [])
+
+    def _init_shared_backend(self, backend, control_prefixes):
+        """Attach a task-local policy view to an existing physical backend.
+
+        Simulator objects, state tensors, the authoritative pose/PD target and
+        song clock are aliases.  Policy routing, action history, observations
+        and termination bookkeeping are allocated for this view so one hand
+        cannot overwrite the other hand's source-policy state.
+        """
+        if not isinstance(backend, GuitarEnvBase) or backend is self:
+            raise TypeError("shared_backend must be another GuitarEnvBase")
+        if int(self.num_envs) != int(backend.num_envs):
+            raise ValueError(
+                "shared_backend num_envs differs from the task view")
+        if torch.device(self.device) != torch.device(backend.device):
+            raise ValueError(
+                "shared_backend device differs from the task view")
+        if self.locked_dof_keywords != tuple(backend.locked_dof_keywords):
+            raise ValueError(
+                "shared_backend locked DOF contract differs from the task view")
+        if (self.human_hard_limits_enabled
+                != bool(backend.human_hard_limits_enabled)):
+            raise ValueError(
+                "shared_backend human hard-limit profile is already fixed")
+        if self.human_hard_limits_enabled:
+            requested_profile = os.path.realpath(self.human_hard_limit_path)
+            backend_profile = os.path.realpath(
+                backend.human_hard_limit_path)
+            if requested_profile != backend_profile:
+                raise ValueError(
+                    "shared_backend human hard-limit profile path differs "
+                    "from the task view")
+            self.human_hard_limit_path = backend.human_hard_limit_path
+
+        shared_names = (
+            "pose", "P", "_gains_src", "gym", "sim", "asset_human",
+            "asset_guitar", "asset_chair", "envs", "h_actors", "g_actors",
+            "body_names", "gbody_names", "dof_names", "_init_pose_np",
+            "_kp_np", "_kd_np", "_authored_dof_lower_np",
+            "_authored_dof_upper_np", "_dof_props", "human_hard_limit_audit",
+            "collision_audit", "dof_state", "root_state", "body_state",
+            "contact_force", "locked", "_locked_flat", "_zeros_dof", "kp",
+            "tau_limit", "applied_tau", "dof_lower", "dof_upper",
+            "authored_dof_lower", "authored_dof_upper", "raw_init_pose",
+            "init_pose_limit_adjustment", "init_pose", "pd_target",
+            "nonlocked_idx", "root_init", "progress_buf",
+        )
+        for name in shared_names:
+            if not hasattr(backend, name):
+                raise RuntimeError(
+                    f"shared_backend is not initialized: missing {name}")
+            setattr(self, name, getattr(backend, name))
+        for name in (
+                "solver_position_iterations", "solver_velocity_iterations",
+                "contact_collection_contract", "max_depenetration_velocity"):
+            if hasattr(backend, name):
+                setattr(self, name, getattr(backend, name))
+
+        d = self.device
+        self.n_dof = len(self.dof_names)
+        self.n_hbody = len(self.body_names)
+        self._bpe = backend._bpe
+        self.hbody_index = backend.hbody_index
+        self.gbody_index = backend.gbody_index
+        self.n_nonlocked = backend.n_nonlocked
+
+        self.controlled = torch.tensor(
+            [any(name.startswith(prefix) for prefix in control_prefixes)
+             and not any(keyword in name
+                         for keyword in self.locked_dof_keywords)
+             for name in self.dof_names], device=d)
+        self.ctrl_idx = torch.nonzero(self.controlled).squeeze(-1)
+        self.num_actions = int(self.controlled.sum())
+
+        lower = self.dof_lower.view(
+            self.num_envs, self.n_dof)[:, self.ctrl_idx].clone()
+        upper = self.dof_upper.view(
+            self.num_envs, self.n_dof)[:, self.ctrl_idx].clone()
+        self.ctrl_lo, self.ctrl_hi = lower, upper
+        self.ctrl_mid = 0.5 * (lower + upper)
+        self.ctrl_half = 0.5 * (upper - lower)
+        if (not torch.isfinite(self.ctrl_mid).all()
+                or not torch.isfinite(self.ctrl_half).all()
+                or not (self.ctrl_half > 0.0).all()):
+            raise RuntimeError(
+                "shared task view has an invalid controlled DOF range")
+
+        full_lower = self.dof_lower.view(self.num_envs, self.n_dof)
+        full_upper = self.dof_upper.view(self.num_envs, self.n_dof)
+        span = full_upper - full_lower
+        soft_lower = full_lower + self.reset_soft_limit_fraction * span
+        soft_upper = full_upper - self.reset_soft_limit_fraction * span
+        self.reset_ctrl_lo = soft_lower[:, self.ctrl_idx].clone()
+        self.reset_ctrl_hi = soft_upper[:, self.ctrl_idx].clone()
+
+        # Task-local policy/diagnostic state.  In particular, ``prev_action``
+        # must never alias the Strike policy's 30D EMA history.
+        self.prev_action = torch.zeros(
+            self.num_envs, self.num_actions, device=d)
+        self._nonfinite_action_state = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=d)
+        self._nonfinite_dof_pos = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=d)
+        self._nonfinite_dof_vel = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=d)
+        self._nonfinite_root_state = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=d)
+        self._nonfinite_body_state = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=d)
+        self._nonfinite_contact_force = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=d)
+        self.last_nonfinite_observation = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=d)
+        self.obs_body_idx = [
+            self.hbody_index[name] for name in self.obs_body_names]
+        self.num_obs = 2 * self.n_nonlocked + 3 * len(self.obs_body_names)
+        self.obs_buf = torch.zeros(self.num_envs, self.num_obs, device=d)
+        self.reset_buf = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=d)
 
     def _create_sim(self, headless):
         sp = gymapi.SimParams()
@@ -93,10 +239,25 @@ class GuitarEnvBase:
         sp.up_axis = gymapi.UP_AXIS_Z
         sp.gravity = gymapi.Vec3(0, 0, -9.81)
         sp.physx.solver_type = 1
-        sp.physx.num_position_iterations = 4
-        sp.physx.num_velocity_iterations = 2   # damp footrest contact + limit velocity (was 0 -> chatter)
+        self.solver_position_iterations = getattr(self, "PHYSX_POSITION_ITERATIONS", 4)
+        self.solver_velocity_iterations = getattr(self, "PHYSX_VELOCITY_ITERATIONS", 2)
+        sp.physx.num_position_iterations = self.solver_position_iterations
+        sp.physx.num_velocity_iterations = self.solver_velocity_iterations
         sp.physx.contact_offset = 0.002
         sp.physx.rest_offset = 0.0
+        # Net-contact tensors are consumed as an end-of-control-step state
+        # (thumb support, safety and observations).  The Isaac Gym default,
+        # CC_ALL_SUBSTEPS, aggregates impulses from all four substeps and can
+        # report kN-scale values even when the final contact is only a few N.
+        # Sampling the last substep keeps force and end-step geometry on the
+        # same temporal boundary.
+        sp.physx.contact_collection = (
+            gymapi.ContactCollection.CC_LAST_SUBSTEP)
+        # Bound overlap recovery explicitly.  Isaac's 100 m/s default makes a
+        # newly formed fingertip contact unnecessarily impulsive.
+        sp.physx.max_depenetration_velocity = 10.0
+        self.contact_collection_contract = "last_substep"
+        self.max_depenetration_velocity = 10.0
         sp.use_gpu_pipeline = True
         sp.physx.use_gpu = True
         device = torch.device(self.device)
@@ -118,7 +279,8 @@ class GuitarEnvBase:
         self.asset_guitar = self.gym.load_asset(self.sim, ASSETS, 'guitar_asset.xml', og)
         ch = self.P['chair']['half']
         oc = gymapi.AssetOptions(); oc.fix_base_link = True
-        self.asset_chair = self.gym.create_box(self.sim, 2 * ch[0], 2 * ch[1], 2 * ch[2], oc)
+        self.asset_chair = self.gym.create_box(
+            self.sim, 2 * ch[0], 2 * ch[1], 2 * ch[2], oc)
 
     def _compute_gains(self):
         def cap_for(n):
@@ -159,6 +321,9 @@ class GuitarEnvBase:
                                       self._tf(self.P['guitar_pos_computed'],
                                                self.P['guitar_quat_wxyz_computed']),
                                       'guitar', i, GUITAR_COLLISION_FILTER)
+            if i == 0:
+                self.body_names = self.gym.get_actor_rigid_body_names(env, h)
+                self.gbody_names = self.gym.get_actor_rigid_body_names(env, g)
             cp = gymapi.Transform(); cp.p = gymapi.Vec3(ch['center_xy'][0], ch['center_xy'][1], ch['half'][2])
             self.gym.create_actor(env, self.asset_chair, cp, 'chair', i, 0)
             if i == 0:
@@ -169,8 +334,20 @@ class GuitarEnvBase:
                     [self.pose['joints_isaac'][n] for n in self.dof_names], dtype=np.float32)
                 self._kp_np, self._kd_np = self._compute_gains()
                 props = self.gym.get_actor_dof_properties(env, h)
+                self._authored_dof_lower_np = props['lower'].copy()
+                self._authored_dof_upper_np = props['upper'].copy()
+                self.human_hard_limit_audit = {
+                    "enabled": False, "profile_path": self.human_hard_limit_path,
+                    "applied_joint_count": 0, "applied": []}
+                if self.human_hard_limits_enabled:
+                    limited_lower, limited_upper, audit = apply_joint_limit_profile(
+                        self.dof_names, props['lower'], props['upper'],
+                        self.human_hard_limit_path)
+                    props['lower'][:] = limited_lower
+                    props['upper'][:] = limited_upper
+                    self.human_hard_limit_audit = audit
                 for j, n in enumerate(self.dof_names):
-                    if any(k in n for k in LOCK_KEYWORDS):
+                    if any(k in n for k in self.locked_dof_keywords):
                         # furniture lock (see LOCK_KEYWORDS note): pinch limits + drive damping +
                         # high armature. driveMode=POS/stiffness=0 gives solver-side damping only;
                         # the explicit stiffness torque is masked off for these dofs in step_physics.
@@ -201,6 +378,13 @@ class GuitarEnvBase:
                 env, g, self.gbody_names, THUMB_SUPPORT_PROXY_BODY,
                 DISABLED_COLLISION_FILTER)
             self.envs.append(env); self.h_actors.append(h); self.g_actors.append(g)
+        actual = self.gym.get_actor_dof_properties(
+            self.envs[0], self.h_actors[0])
+        if (not np.allclose(actual['lower'], self._dof_props['lower'], atol=1e-7)
+                or not np.allclose(
+                    actual['upper'], self._dof_props['upper'], atol=1e-7)):
+            raise RuntimeError("PhysX actor에 런타임 관절 hard limit이 반영되지 않았다")
+        self.human_hard_limit_audit["physx_verified"] = True
         self._audit_collision_setup()
 
     def _body_shape_indices(self, env, actor, body_names, body_name):
@@ -224,8 +408,23 @@ class GuitarEnvBase:
             properties[shape_index].filter = int(filter_value)
         self.gym.set_actor_rigid_shape_properties(env, actor, properties)
 
-    def enable_thumb_support_collision(self):
-        """Enable only the dedicated thumb-pad/neck-proxy collision pair."""
+    def enable_thumb_support_collision(self, preserve_other_filters=False):
+        """Enable only the dedicated thumb-pad/neck-proxy collision pair.
+
+        A shared Strike backend has already disabled its pluck-range helper.
+        Preserve and audit those unrelated physical filters when attaching the
+        Fret view instead of assuming a pristine standalone scene.
+        """
+        previous_human_filters = previous_guitar_filters = None
+        if preserve_other_filters:
+            previous_human_filters = tuple(
+                int(prop.filter) for prop in
+                self.gym.get_actor_rigid_shape_properties(
+                    self.envs[0], self.h_actors[0]))
+            previous_guitar_filters = tuple(
+                int(prop.filter) for prop in
+                self.gym.get_actor_rigid_shape_properties(
+                    self.envs[0], self.g_actors[0]))
         for env, human, guitar in zip(
                 self.envs, self.h_actors, self.g_actors):
             self._set_body_shape_filter(
@@ -234,9 +433,13 @@ class GuitarEnvBase:
             self._set_body_shape_filter(
                 env, guitar, self.gbody_names, THUMB_SUPPORT_PROXY_BODY,
                 HUMANOID_COLLISION_FILTER)
-        self._audit_thumb_support_collision()
+        self._audit_thumb_support_collision(
+            previous_human_filters=previous_human_filters,
+            previous_guitar_filters=previous_guitar_filters)
 
-    def _audit_thumb_support_collision(self):
+    def _audit_thumb_support_collision(
+            self, previous_human_filters=None,
+            previous_guitar_filters=None):
         env, human, guitar = (
             self.envs[0], self.h_actors[0], self.g_actors[0])
         human_props = self.gym.get_actor_rigid_shape_properties(env, human)
@@ -246,15 +449,21 @@ class GuitarEnvBase:
         proxy_indices = set(self._body_shape_indices(
             env, guitar, self.gbody_names, THUMB_SUPPORT_PROXY_BODY))
         for index, prop in enumerate(human_props):
-            expected = (GUITAR_COLLISION_FILTER if index in pad_indices
-                        else HUMANOID_COLLISION_FILTER)
+            expected = (
+                GUITAR_COLLISION_FILTER if index in pad_indices
+                else previous_human_filters[index]
+                if previous_human_filters is not None
+                else HUMANOID_COLLISION_FILTER)
             if int(prop.filter) != expected:
                 raise RuntimeError(
                     f"unexpected humanoid shape filter at {index}: "
                     f"{int(prop.filter)} != {expected}")
         for index, prop in enumerate(guitar_props):
-            expected = (HUMANOID_COLLISION_FILTER if index in proxy_indices
-                        else GUITAR_COLLISION_FILTER)
+            expected = (
+                HUMANOID_COLLISION_FILTER if index in proxy_indices
+                else previous_guitar_filters[index]
+                if previous_guitar_filters is not None
+                else GUITAR_COLLISION_FILTER)
             if int(prop.filter) != expected:
                 raise RuntimeError(
                     f"unexpected guitar shape filter at {index}: "
@@ -320,12 +529,18 @@ class GuitarEnvBase:
         self.dof_state = gymtorch.wrap_tensor(self.gym.acquire_dof_state_tensor(self.sim))
         self.root_state = gymtorch.wrap_tensor(self.gym.acquire_actor_root_state_tensor(self.sim))
         self.body_state = gymtorch.wrap_tensor(self.gym.acquire_rigid_body_state_tensor(self.sim))
+        if getattr(self, "defer_reset_state_submission", False):
+            self._pending_reset_envs = torch.zeros(self.num_envs, dtype=torch.bool, device=d)
+            self._reset_human_actor_indices = torch.tensor([
+                self.gym.get_actor_index(env, actor, gymapi.DOMAIN_SIM)
+                for env, actor in zip(self.envs, self.h_actors)], dtype=torch.int32, device=d)
+            self._dof_state_refreshed = self._root_state_refreshed = False
         raw_init_pose = torch.tensor(self._init_pose_np, device=d)
 
-        self.locked = torch.tensor([any(k in n for k in LOCK_KEYWORDS) for n in self.dof_names],
+        self.locked = torch.tensor([any(k in n for k in self.locked_dof_keywords) for n in self.dof_names],
                                    device=d)
         self.controlled = torch.tensor(
-            [any(n.startswith(p) for p in control_prefixes) and not any(k in n for k in LOCK_KEYWORDS)
+            [any(n.startswith(p) for p in control_prefixes) and not any(k in n for k in self.locked_dof_keywords)
              for n in self.dof_names], device=d)
         self.ctrl_idx = torch.nonzero(self.controlled).squeeze(-1)
         self.num_actions = int(self.controlled.sum())
@@ -340,6 +555,10 @@ class GuitarEnvBase:
 
         lower_1d = torch.tensor(self._dof_props['lower'].copy(), device=d)
         upper_1d = torch.tensor(self._dof_props['upper'].copy(), device=d)
+        self.authored_dof_lower = torch.tensor(
+            self._authored_dof_lower_np, device=d)
+        self.authored_dof_upper = torch.tensor(
+            self._authored_dof_upper_np, device=d)
         if not torch.isfinite(lower_1d).all() or not torch.isfinite(upper_1d).all():
             raise RuntimeError("all humanoid DOFs must have finite hard limits")
         if not torch.all(lower_1d <= upper_1d):
@@ -354,6 +573,16 @@ class GuitarEnvBase:
             torch.minimum(raw_init_pose, upper_1d), lower_1d)
         self.init_pose_limit_adjustment = hard_clamped_init - self.raw_init_pose
         self.init_pose = hard_clamped_init.clone()
+        adjusted = torch.nonzero(
+            self.init_pose_limit_adjustment.abs() > 1e-6).flatten().tolist()
+        self.human_hard_limit_audit["initial_pose_adjustments"] = [
+            {
+                "name": self.dof_names[index],
+                "adjustment_deg": math.degrees(float(
+                    self.init_pose_limit_adjustment[index].detach().cpu())),
+            }
+            for index in adjusted
+        ]
 
         # A tanh-bounded actor cannot learn away from an initial mean exactly at
         # +/-1 because the transform is saturated there.  A small, explicit
@@ -421,7 +650,7 @@ class GuitarEnvBase:
         self.progress_buf = torch.zeros(self.num_envs, dtype=torch.long, device=d)
         self.reset_buf = torch.zeros(self.num_envs, dtype=torch.bool, device=d)
         # root snapshot (roots are welded in G0; this is the reset target once the guitar frees in G1)
-        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self._refresh_root_state()
         self.root_init = self.root_state.clone()
 
     # ---------- RL loop ----------
@@ -443,7 +672,7 @@ class GuitarEnvBase:
             env_ids, dtype=torch.long, device=self.device).reshape(-1)
         if env_ids.numel() == 0:
             return
-        self.gym.refresh_dof_state_tensor(self.sim)
+        self._refresh_dof_state()
         ds = self.dof_state.view(self.num_envs, self.n_dof, 2)
         q_reset = self.init_pose[None].expand(env_ids.numel(), -1).clone()
         ds[env_ids, :, 1] = 0.0
@@ -463,17 +692,21 @@ class GuitarEnvBase:
             self.reset_ctrl_lo[env_ids])
         q_reset[:, self.ctrl_idx] = reset_ctrl
         ds[env_ids, :, 0] = q_reset
-        self.gym.set_dof_state_tensor(self.sim, gymtorch.unwrap_tensor(self.dof_state))
+        if not getattr(self, "defer_reset_state_submission", False):
+            self.gym.set_dof_state_tensor(self.sim, gymtorch.unwrap_tensor(self.dof_state))
 
         # Restore the complete fixed-scene root snapshot as well.  This is normally a no-op in
         # G0, but it lets a non-finite root state recover instead of immediately poisoning the
         # freshly reset episode.  ``root_init`` is already the documented G1/G2 reset hook.
-        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self._refresh_root_state()
         roots = self.root_state.view(self.num_envs, -1, 13)
         roots_init = self.root_init.view(self.num_envs, -1, 13)
         roots[env_ids] = roots_init[env_ids]
-        self.gym.set_actor_root_state_tensor(
-            self.sim, gymtorch.unwrap_tensor(self.root_state))
+        if getattr(self, "defer_reset_state_submission", False):
+            self._pending_reset_envs[env_ids] = True
+        else:
+            self.gym.set_actor_root_state_tensor(
+                self.sim, gymtorch.unwrap_tensor(self.root_state))
         self.pd_target.view(self.num_envs, self.n_dof)[env_ids] = q_reset
 
         # EMA is part of the actuator state.  Zero means the midpoint of every joint, not the
@@ -490,6 +723,44 @@ class GuitarEnvBase:
                      "_nonfinite_body_state", "_nonfinite_contact_force",
                      "last_nonfinite_observation"):
             getattr(self, name)[env_ids] = False
+
+    def _refresh_dof_state(self):
+        if not getattr(self, "defer_reset_state_submission", False):
+            self.gym.refresh_dof_state_tensor(self.sim)
+        elif not self._dof_state_refreshed:
+            self.gym.refresh_dof_state_tensor(self.sim)
+            self._dof_state_refreshed = True
+
+    def _refresh_root_state(self):
+        if not getattr(self, "defer_reset_state_submission", False):
+            self.gym.refresh_actor_root_state_tensor(self.sim)
+        elif not self._root_state_refreshed:
+            self.gym.refresh_actor_root_state_tensor(self.sim)
+            self._root_state_refreshed = True
+
+    def _submit_pending_reset_state(self):
+        """Submit final reset buffers once, immediately before simulate.
+
+        Higher-level reset methods can finish joint/reference/noise edits first.
+        Keep index tensors alive through simulate and touch only selected actors.
+        """
+        if not getattr(self, "defer_reset_state_submission", False):
+            return
+        ids = self._pending_reset_envs.nonzero(as_tuple=False).flatten()
+        if not ids.numel():
+            return
+        self._submitted_dof_actor_indices = self._reset_human_actor_indices[ids].contiguous()
+        actors = torch.arange(self.root_state.shape[0], device=self.device, dtype=torch.int32)
+        self._submitted_root_actor_indices = actors.view(self.num_envs, -1)[ids].reshape(-1).contiguous()
+        self.gym.set_dof_state_tensor_indexed(
+            self.sim, gymtorch.unwrap_tensor(self.dof_state),
+            gymtorch.unwrap_tensor(self._submitted_dof_actor_indices),
+            self._submitted_dof_actor_indices.numel())
+        self.gym.set_actor_root_state_tensor_indexed(
+            self.sim, gymtorch.unwrap_tensor(self.root_state),
+            gymtorch.unwrap_tensor(self._submitted_root_actor_indices),
+            self._submitted_root_actor_indices.numel())
+        self._pending_reset_envs.zero_()
 
     def actions_for_pd_targets(self, controlled_targets, env_ids=None):
         """Invert the controlled action-to-PD-target mapping.
@@ -668,7 +939,7 @@ class GuitarEnvBase:
           (3) per-step re-inject to the init pose (DIGIT recipe) — removes the slow (~0.7deg/50s)
               settle of the *soft* limit under sustained gravity. Measured: 0.72deg -> ~0deg drift.
         """
-        self.gym.refresh_dof_state_tensor(self.sim)
+        self._refresh_dof_state()
         self._capture_and_sanitize_dof_state()
         q = self.dof_state[:, 0]
         tau = self.kp * (self.pd_target - q)          # damping is implicit (drive damping)
@@ -676,10 +947,15 @@ class GuitarEnvBase:
         tau = torch.maximum(torch.minimum(tau, self.tau_limit), -self.tau_limit)
         self.applied_tau.copy_(tau.view(self.num_envs, self.n_dof))
         self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(tau.contiguous()))
+        self._submit_pending_reset_state()
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
+        if getattr(self, "defer_reset_state_submission", False):
+            self._dof_state_refreshed = self._root_state_refreshed = False
+        if not getattr(self, "reinject_locked_dof_state", True):
+            return
         # (3) freeze locked furniture: overwrite its dof state back to the init pose every step
-        self.gym.refresh_dof_state_tensor(self.sim)
+        self._refresh_dof_state()
         self._capture_and_sanitize_dof_state()
         self.dof_state[:, 0] = torch.where(self._locked_flat, self.pd_target, self.dof_state[:, 0])
         self.dof_state[:, 1] = torch.where(self._locked_flat, self._zeros_dof, self.dof_state[:, 1])
@@ -687,8 +963,8 @@ class GuitarEnvBase:
 
     # ---------- observation helpers ----------
     def refresh(self):
-        self.gym.refresh_dof_state_tensor(self.sim)
-        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self._refresh_dof_state()
+        self._refresh_root_state()
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)   # so contact_force is live for tasks
         self._capture_and_sanitize_dof_state()
@@ -716,6 +992,11 @@ class GuitarEnvBase:
         bs = self.body_state.view(self.num_envs, self._bpe, 13)
         return bs[:, self.hbody_index[name], 0:3]
 
+    def hbody_state(self, name):
+        """World pose and twist of one humanoid rigid body, shape ``[N,13]``."""
+        bs = self.body_state.view(self.num_envs, self._bpe, 13)
+        return bs[:, self.hbody_index[name]]
+
     def hbody_contact_force(self, name):
         """World net contact force on one humanoid rigid body, per environment."""
         force = self.contact_force.view(self.num_envs, self._bpe, 3)
@@ -731,6 +1012,11 @@ class GuitarEnvBase:
         rs = self.root_state.view(self.num_envs, -1, 13)
         return rs[:, 1, 0:3], rs[:, 1, 3:7]
 
+    def guitar_root_state(self):
+        """Guitar world pose and twist, shape ``[N,13]``."""
+        rs = self.root_state.view(self.num_envs, -1, 13)
+        return rs[:, 1]
+
     def to_guitar_frame(self, world_pos):
         """world_pos (num_envs, K, 3) -> the guitar's LOCAL frame (the invariant obs frame).
         G0: the guitar is static, so this is just world-minus-a-constant; the IDENTICAL code path
@@ -743,6 +1029,52 @@ class GuitarEnvBase:
         rel = (world_pos - gp.unsqueeze(1)).reshape(-1, 3)
         q = gq.unsqueeze(1).expand(-1, K, -1).reshape(-1, 4)
         return quat_rotate_inverse(q, rel).reshape(self.num_envs, K, 3)
+
+    def body_pose_twist_in_guitar_frame(self, name):
+        """Return a humanoid body's guitar-relative pose/twist.
+
+        Linear velocity is the derivative in the translating and rotating
+        guitar frame, not merely the body's world velocity rotated into G.
+        Rotation uses the first two body axes (continuous 6D representation).
+        """
+        body = self.hbody_state(name)
+        guitar = self.guitar_root_state()
+        guitar_pos, guitar_quat = guitar[:, 0:3], guitar[:, 3:7]
+        offset_world = body[:, 0:3] - guitar_pos
+        position_g = quat_rotate_inverse(guitar_quat, offset_world)
+
+        local_axes = torch.tensor(
+            ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+            dtype=body.dtype, device=body.device)
+        axes = local_axes[None].expand(self.num_envs, -1, -1)
+        body_quat = body[:, 3:7]
+        body_quat_expanded = body_quat[:, None].expand(-1, 2, -1).reshape(-1, 4)
+        world_axes = quat_rotate(
+            body_quat_expanded, axes.reshape(-1, 3)).reshape(
+                self.num_envs, 2, 3)
+        guitar_quat_expanded = guitar_quat[:, None].expand(
+            -1, 2, -1).reshape(-1, 4)
+        rotation6d_g = quat_rotate_inverse(
+            guitar_quat_expanded, world_axes.reshape(-1, 3)).reshape(
+                self.num_envs, 6)
+
+        guitar_linear = guitar[:, 7:10]
+        guitar_angular = guitar[:, 10:13]
+        body_linear = body[:, 7:10]
+        body_angular = body[:, 10:13]
+        moving_origin_velocity = (
+            guitar_linear
+            + torch.cross(guitar_angular, offset_world, dim=-1))
+        linear_velocity_g = quat_rotate_inverse(
+            guitar_quat, body_linear - moving_origin_velocity)
+        angular_velocity_g = quat_rotate_inverse(
+            guitar_quat, body_angular - guitar_angular)
+        return {
+            "position_g": position_g,
+            "rotation6d_g": rotation6d_g,
+            "linear_velocity_g": linear_velocity_g,
+            "angular_velocity_g": angular_velocity_g,
+        }
 
     def compute_observations(self):
         """Base proprioceptive + guitar-relative observation (num_obs = 2*n_nonlocked + 3*K).

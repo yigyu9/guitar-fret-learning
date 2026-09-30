@@ -6,6 +6,135 @@ import math
 import torch
 
 
+def event_failure_window_scores(event_scores, window_size):
+    if event_scores.ndim != 1 or event_scores.numel() < 1:
+        raise ValueError("event failure scores must have shape [events]")
+    if (isinstance(window_size, bool) or not isinstance(window_size, int)
+            or not 1 <= window_size <= event_scores.numel()):
+        raise ValueError("failure-mining window size is out of range")
+    if event_scores.device.type == "cpu" and (
+            not torch.isfinite(event_scores).all()
+            or bool((event_scores < 0.0).any())):
+        raise ValueError("event failure scores must be finite and non-negative")
+    return event_scores.unfold(0, window_size, 1).sum(dim=1)
+
+
+def event_predecessor_rehearsal_scores(event_scores, window_size):
+    """Assign each failed event to a short window containing its predecessor."""
+    if event_scores.ndim != 1 or event_scores.numel() < 1:
+        raise ValueError("event failure scores must have shape [events]")
+    if (isinstance(window_size, bool) or not isinstance(window_size, int)
+            or not 1 <= window_size <= event_scores.numel()):
+        raise ValueError("failure-rehearsal window size is out of range")
+    if event_scores.device.type == "cpu" and (
+            not torch.isfinite(event_scores).all()
+            or bool((event_scores < 0.0).any())):
+        raise ValueError("event failure scores must be finite and non-negative")
+    num_windows = event_scores.numel() - window_size + 1
+    event_index = torch.arange(
+        event_scores.numel(), device=event_scores.device)
+    starts = (event_index - 1).clamp(0, num_windows - 1)
+    scores = torch.zeros(
+        num_windows, dtype=event_scores.dtype, device=event_scores.device)
+    scores.scatter_add_(0, starts, event_scores)
+    return scores
+
+
+def event_mask_window_scores(event_mask, window_size):
+    """Count selected event attributes in every contiguous training window."""
+    if event_mask.ndim != 1 or event_mask.numel() < 1:
+        raise ValueError("event mask must have shape [events]")
+    if event_mask.dtype != torch.bool:
+        raise TypeError("event mask must use torch.bool")
+    if (isinstance(window_size, bool) or not isinstance(window_size, int)
+            or not 1 <= window_size <= event_mask.numel()):
+        raise ValueError("event-mask window size is out of range")
+    return event_mask.to(dtype=torch.float32).unfold(
+        0, window_size, 1).sum(dim=1)
+
+
+def update_event_failure_statistics(
+        failure_mass, exposure_mass, event_index, exposed, failed, *,
+        decay, prior_exposure=0.0):
+    if failure_mass.ndim != 1 or exposure_mass.shape != failure_mass.shape:
+        raise ValueError("event failure/exposure statistics must have shape [events]")
+    vectors = (event_index, exposed, failed)
+    if any(value.ndim != 1 for value in vectors):
+        raise ValueError("event failure updates must have shape [N]")
+    if any(value.shape != event_index.shape for value in vectors[1:]):
+        raise ValueError("event failure updates must share shape [N]")
+    if exposed.dtype != torch.bool or failed.dtype != torch.bool:
+        raise TypeError("event exposure/failure masks must use torch.bool")
+    decay = float(decay)
+    prior_exposure = float(prior_exposure)
+    if (not math.isfinite(decay) or not 0.0 < decay <= 1.0
+            or not math.isfinite(prior_exposure) or prior_exposure < 0.0):
+        raise ValueError("event failure decay/prior must be finite and valid")
+    if failure_mass.device.type == "cpu" and (
+            not torch.isfinite(failure_mass).all()
+            or not torch.isfinite(exposure_mass).all()
+            or bool((failure_mass < 0.0).any())
+            or bool((exposure_mass < 0.0).any())
+            or bool((failure_mass > exposure_mass + 1e-6).any())):
+        raise ValueError("event failure statistics are invalid")
+    next_failure = failure_mass * decay
+    next_exposure = exposure_mass * decay
+    valid = exposed & (event_index >= 0) & (event_index < failure_mass.numel())
+    if bool(valid.any()):
+        selected = event_index[valid].to(dtype=torch.long)
+        exposure_count = torch.bincount(
+            selected, minlength=failure_mass.numel()).to(failure_mass.dtype)
+        failure_count = torch.bincount(
+            selected,
+            weights=failed[valid].to(failure_mass.dtype),
+            minlength=failure_mass.numel()).to(failure_mass.dtype)
+        next_failure = next_failure + failure_count
+        next_exposure = next_exposure + exposure_count
+    total_exposure = next_exposure.sum()
+    global_rate = next_failure.sum() / total_exposure.clamp_min(1.0)
+    score = (
+        (next_failure + prior_exposure * global_rate)
+        / (next_exposure + prior_exposure).clamp_min(1e-8))
+    score = torch.where(
+        next_exposure > 0.0, score.clamp(0.0, 1.0),
+        torch.zeros_like(score))
+    return {
+        "failure_mass": next_failure,
+        "exposure_mass": next_exposure,
+        "score": score,
+    }
+
+
+def bounded_failure_sampling_probabilities(scores, max_probability):
+    if scores.ndim != 1 or scores.numel() < 1:
+        raise ValueError("failure sampling scores must have shape [windows]")
+    max_probability = float(max_probability)
+    uniform_probability = 1.0 / scores.numel()
+    if (not math.isfinite(max_probability)
+            or not uniform_probability <= max_probability <= 1.0):
+        raise ValueError(
+            "failure sampling probability cap must be in [1/windows, 1]")
+    if scores.device.type == "cpu" and (
+            not torch.isfinite(scores).all()
+            or bool((scores < 0.0).any())):
+        raise ValueError("failure sampling scores must be finite and non-negative")
+    total = scores.sum()
+    if not bool(total > 0.0):
+        return torch.zeros_like(scores)
+    weighted = scores / total
+    peak = weighted.max()
+    if bool(peak <= max_probability):
+        return weighted
+    uniform = torch.full_like(weighted, uniform_probability)
+    denominator = (peak - uniform_probability).clamp_min(1e-8)
+    mixture = max(
+        0.0, min(1.0,
+                 (max_probability - uniform_probability)
+                 / float(denominator)))
+    probabilities = mixture * weighted + (1.0 - mixture) * uniform
+    return probabilities / probabilities.sum().clamp_min(1e-8)
+
+
 def normalized_joint_limit_usage(position, lower, upper):
     """관절 중앙은 0, hard limit은 1이 되는 사용률을 반환한다."""
     if lower.shape != upper.shape or position.shape[-lower.ndim:] != lower.shape:
@@ -42,7 +171,7 @@ def update_wrong_crossing_termination(
         total_wrong, consecutive_wrong_events, event_had_wrong,
         wrong_count, event_resolved, resolved_events, enabled, *,
         minimum_resolved_events, max_count, max_rate,
-        consecutive_event_limit):
+        consecutive_event_limit, terminate_on_rate=True):
     vectors = (
         total_wrong, consecutive_wrong_events, event_had_wrong,
         wrong_count, event_resolved, resolved_events, enabled)
@@ -56,6 +185,8 @@ def update_wrong_crossing_termination(
     if minimum_resolved_events < 0 or max_count < 1 \
             or consecutive_event_limit < 1:
         raise ValueError("wrong-crossing termination counts are invalid")
+    if not isinstance(terminate_on_rate, bool):
+        raise TypeError("terminate_on_rate must be bool")
     max_rate = float(max_rate)
     if not math.isfinite(max_rate) or not 0.0 <= max_rate <= 1.0:
         raise ValueError("wrong-crossing max_rate must be in [0, 1]")
@@ -70,18 +201,28 @@ def update_wrong_crossing_termination(
             torch.zeros_like(consecutive_wrong_events)),
         consecutive_wrong_events)
     next_event_had_wrong = current_had_wrong & ~event_resolved
-    eligible = enabled & (next_resolved >= minimum_resolved_events)
     rate = next_total / next_resolved.clamp_min(1).to(next_total.dtype)
-    termination = eligible & (
-        (next_total >= max_count)
-        | (rate > max_rate)
-        | (next_consecutive >= consecutive_event_limit))
+    count_termination = enabled & (next_total >= max_count)
+    consecutive_termination = enabled & (
+        next_consecutive >= consecutive_event_limit)
+    rate_limit_exceeded = (
+        enabled
+        & event_resolved
+        & (next_resolved >= minimum_resolved_events)
+        & (rate > max_rate))
+    rate_termination = rate_limit_exceeded & terminate_on_rate
+    termination = (
+        count_termination | consecutive_termination | rate_termination)
     return {
         "total_wrong": next_total,
         "resolved_events": next_resolved,
         "consecutive_wrong_events": next_consecutive,
         "event_had_wrong": next_event_had_wrong,
         "wrong_rate": rate,
+        "rate_limit_exceeded": rate_limit_exceeded,
+        "count_termination": count_termination,
+        "rate_termination": rate_termination,
+        "consecutive_termination": consecutive_termination,
         "termination": termination,
     }
 

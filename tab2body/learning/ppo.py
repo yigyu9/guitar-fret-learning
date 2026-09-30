@@ -13,7 +13,12 @@ from .checkpoint_contract import (
     copy_validated_contract,
     verify_checkpoint_contract,
 )
+from .run_io import append_jsonl_atomic, append_text_line_atomic
 from .run_layout import layout_for
+try:
+    from tab2body.strike_metrics import pool_strike_raw_count_rates
+except ModuleNotFoundError:
+    from strike_metrics import pool_strike_raw_count_rates
 
 
 EPISODE_METRIC_KEYS = (
@@ -24,7 +29,7 @@ EPISODE_METRIC_KEYS = (
     "sustain_event_success_count",
     "sustain_min_event_hold_rate", "sustain_max_dropout_frames",
     "sustain_interruption_count", "sustain_event_count",
-    "curriculum_success_rate",
+    "curriculum_success_rate", "curriculum_success_fraction",
     "chord_ready_rate", "chord_hold_quality",
     "press_dropout_rate", "press_max_dropout_frames",
     "curriculum_finger_1_success", "curriculum_finger_1_count",
@@ -35,6 +40,27 @@ EPISODE_METRIC_KEYS = (
     "press_finger_2_success", "press_finger_2_count",
     "press_finger_3_success", "press_finger_3_count",
     "press_finger_4_success", "press_finger_4_count",
+) + tuple(
+    name
+    for finger in range(1, 5)
+    for name in (
+        f"press_finger_{finger}_target_distance_sum",
+        f"press_finger_{finger}_target_distance_count",
+    )
+) + (
+    "thumb_press_readiness_sum", "thumb_press_readiness_count",
+) + tuple(
+    f"curriculum_finger_{finger}_{suffix}"
+    for finger in range(1, 5)
+    for suffix in (
+        "precision_evidence_frames",
+        "precision_press_frames",
+        "precision_position_frames",
+        "precision_arch_frames",
+        "precision_precise_frames",
+        "precision_streak_acquired",
+        "precision_fraction_pass",
+    )
 ) + tuple(
     name
     for signature in range(1, 16)
@@ -62,7 +88,10 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     "mean_target_fraction", "target_min_separation",
     "target_clearance_rate", "mean_dense_position_quality",
     "mean_precision_gate", "mean_arch_quality",
-    "mean_good_position_quality", "press_success_rate",
+    "mean_arch_precision_quality",
+    "mean_isolated_press_conjunctive_quality",
+    "mean_good_position_quality", "reach_frame_success_rate",
+    "physical_press_rate", "press_success_rate", "stable_press_success_rate",
     "mean_press_hold_quality", "press_hold_acquired_rate",
     "frame_press_dropout_rate", "frame_press_near_miss_rate",
     "max_press_dropout_streak",
@@ -73,7 +102,28 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     "mean_fine_distance_reward", "mean_fine_alignment_quality",
     "mean_fine_longitudinal_quality", "mean_fine_lateral_quality",
     "mean_fine_normal_quality",
-    "mean_approach_progress", "isolated_press_active",
+    "mean_target_sample_fraction", "target_region_inside_rate",
+    "mean_approach_progress", "fine_reach_action_scale_min",
+    "fine_reach_proximal_action_scale", "fine_reach_recovery",
+    "practice_sampler_assignment_total",
+    "practice_sampler_focus_target_fraction",
+    "practice_sampler_focus_actual_fraction",
+    "practice_sampler_max_quota_error",
+    "practice_sampler_reset_batch_mean",
+    "practice_sampler_reset_batch_max",
+    "practice_sampler_singleton_reset_fraction",
+    "frozen_context_sampler_weighted",
+    "frozen_context_sampler_calibration_env_fraction",
+    "frozen_context_sampler_calibration_active_fraction",
+    "frozen_context_sampler_mix_assignment_total",
+    "frozen_context_recovery_active",
+    "frozen_context_recovery_teacher_scale",
+    "frozen_context_teacher_cohort",
+    "frozen_context_completion_gate",
+    "frozen_context_recovery_training",
+    "thorax_hold_error_deg", "thorax_hold_velocity_deg_s",
+    "thorax_hold_torque_fraction",
+    "isolated_press_active",
     "isolated_press_restricted",
     "release_pose_reward", "release_pose_error_deg",
     "release_pose_active_rate",
@@ -84,6 +134,9 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     "reference_thumb_posture_quality",
     "reference_posture_quality", "reference_posture_penalty",
     "reference_posture_active",
+    "human_joint_range_quality", "human_joint_range_violation_rate",
+    "human_joint_range_max_excess_deg", "human_joint_range_penalty",
+    "human_joint_range_active",
     "finger_synergy_active_rate", "finger_synergy_induced_deg",
     "goal_pair_action_routing_active",
     "goal_pair_action_release_active",
@@ -108,6 +161,7 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     "effective_press_class_weight",
     "effective_no_press_class_weight", "class_balanced_reward",
     "class_balance_enabled", "chord_joint_quality",
+    "static_chord_completion_gate", "static_chord_auxiliary_gate",
     "chord_bridge_bottleneck_reward", "chord_bridge_mean_reward",
     "chord_bridge_min_reward",
     "chord_fine_joint_reward", "chord_fine_joint_mean_reward",
@@ -129,17 +183,42 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     "thumb_base_action_saturation_z",
     "thumb_base_saturation_penalty",
     "finger_back_soft_penalty", "finger_back_min_local_z",
+    "finger_back_proximal_min_local_z", "finger_back_distal_min_local_z",
     "success_rsi_reset", "success_rsi_reset_quality",
     "success_rsi_cache_fraction",
+    "success_discovery_cache_fraction",
     "success_finger_pose_cache_fraction",
     "success_finger_action_cache_fraction",
     "policy_teacher_proximal_active",
+    "whole_pose_teacher_active",
     "guitar_penetration_soft_cost",
     "guitar_penetration_effective_depth",
     "guitar_penetration_thumb_chain_excluded",
 ) + tuple(
     f"policy_teacher_finger_{finger}_active"
     for finger in range(1, 5)
+) + tuple(
+    f"whole_pose_teacher_weakest_finger_{finger}"
+    for finger in range(1, 5)
+) + tuple(
+    f"weakest_finger_{finger}"
+    for finger in range(1, 5)
+) + tuple(
+    name
+    for signature in range(1, 16)
+    for name in (
+        f"chord_shape_{signature}_target_active",
+        f"chord_shape_{signature}_success",
+        f"chord_shape_{signature}_distance",
+        f"chord_shape_{signature}_alignment",
+    )
+) + tuple(
+    name
+    for category in ("singleton", "stable_multi", "coverage")
+    for name in (
+        f"frozen_context_sampler_mix_{category}_fraction",
+        f"frozen_context_sampler_mix_{category}_target_fraction",
+    )
 ) + tuple(
     name
     for finger in range(1, 5)
@@ -162,6 +241,33 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
     name
     for finger in range(1, 5)
     for name in (
+        f"practice_sampler_finger_{finger}_assignments",
+        f"practice_sampler_finger_{finger}_fraction",
+        f"practice_sampler_finger_{finger}_target_fraction",
+    )
+) + tuple(
+    name
+    for cohort in ("adaptive", "calibration")
+    for name in (
+        f"frozen_context_sampler_{cohort}_assignment_total",
+        f"frozen_context_sampler_{cohort}_max_quota_error",
+        f"frozen_context_sampler_{cohort}_reset_batch_mean",
+        f"frozen_context_sampler_{cohort}_reset_batch_max",
+        f"frozen_context_sampler_{cohort}_singleton_reset_fraction",
+    )
+) + tuple(
+    name
+    for cohort in ("adaptive", "calibration")
+    for finger in range(1, 5)
+    for name in (
+        f"frozen_context_sampler_{cohort}_finger_{finger}_assignments",
+        f"frozen_context_sampler_{cohort}_finger_{finger}_fraction",
+        f"frozen_context_sampler_{cohort}_finger_{finger}_target_fraction",
+    )
+) + tuple(
+    name
+    for finger in range(1, 5)
+    for name in (
         f"finger_{finger}_target_active",
         f"finger_{finger}_target_distance",
         f"finger_{finger}_local_reach_margin",
@@ -169,6 +275,18 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
         f"finger_{finger}_fine_longitudinal_quality",
         f"finger_{finger}_fine_lateral_quality",
         f"finger_{finger}_fine_normal_quality",
+        f"finger_{finger}_target_sample_fraction",
+        f"finger_{finger}_target_region_inside_rate",
+        f"finger_{finger}_precision_press_frame_rate",
+        f"finger_{finger}_precision_position_frame_rate",
+        f"finger_{finger}_precision_arch_frame_rate",
+        f"finger_{finger}_precision_precise_frame_rate",
+        f"finger_{finger}_arch_quality",
+        f"finger_{finger}_arch_precision_quality",
+        f"finger_{finger}_precision_joint_quality",
+        f"finger_{finger}_mcp_flexion_deg",
+        f"finger_{finger}_pip_flexion_deg",
+        f"finger_{finger}_dip_flexion_deg",
     )
 ) + tuple(
     name
@@ -179,6 +297,8 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
         f"goal_pair_{cohort}_finger_{finger}_target_distance",
         f"goal_pair_{cohort}_finger_{finger}_press_success",
         f"goal_pair_{cohort}_finger_{finger}_hold_quality",
+        f"goal_pair_{cohort}_finger_{finger}_hold_acquired_frame_rate",
+        f"goal_pair_{cohort}_finger_{finger}_full_hold_frame_rate",
         f"goal_pair_{cohort}_finger_{finger}_dropout_rate",
         f"goal_pair_{cohort}_finger_{finger}_wrong_press",
     )
@@ -198,6 +318,17 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
         "thumb_support", "penetration",
     )
 ) + tuple(
+    f"goal_pair_sampler_{name}"
+    for name in (
+        "recovery_active", "weighted", "assignment_total",
+        "max_quota_error", "reset_batch_mean", "reset_batch_max",
+        "singleton_reset_fraction",
+    )
+) + tuple(
+    f"goal_pair_sampler_finger_{finger}_{metric}"
+    for finger in range(1, 5)
+    for metric in ("assignments", "actual_fraction", "target_fraction")
+) + tuple(
     name
     for source in range(5)
     for target in range(1, 5)
@@ -209,7 +340,7 @@ ROLLOUT_DIAGNOSTIC_KEYS = (
 ) + tuple(
     f"joint_limit_{group}_{metric}"
     for group in (
-        "thorax", "shoulder", "elbow", "wrist", "thumb",
+        "shoulder", "elbow", "wrist", "thumb",
         "finger_1", "finger_2", "finger_3", "finger_4",
     )
     for metric in ("max_usage", "near_rate")
@@ -230,10 +361,17 @@ def _conditional_diagnostic_active_key(name):
     """Return the per-env evidence mask for a conditional diagnostic."""
     if name == "next_goal_current_press_preservation_quality":
         return "next_goal_current_press_preservation_gate"
+    if (name.startswith("chord_shape_")
+            and name.endswith(("_success", "_distance", "_alignment"))):
+        return name.rsplit("_", 1)[0] + "_target_active"
     if name in (
             "goal_pair_pretransition_current_press_preserved",
             "goal_pair_pretransition_current_press_quality"):
         return "goal_pair_pretransition_active"
+    if name in (
+            "strum_timing_rms_ms",
+            "strum_sweep_duration_error_ms"):
+        return "strum_timing_sample"
     if (name.startswith("goal_pair_transition_finger_")
             and name.endswith(("_next_distance", "_next_progress"))):
         return name.rsplit("_", 1)[0] + "_active"
@@ -247,7 +385,9 @@ def _conditional_diagnostic_active_key(name):
     if (name.startswith("goal_pair_") and "_finger_" in name
             and name.endswith((
                 "_target_distance", "_press_success",
-                "_hold_quality", "_dropout_rate", "_wrong_press"))):
+                "_hold_quality", "_hold_acquired_frame_rate",
+                "_full_hold_frame_rate",
+                "_dropout_rate", "_wrong_press"))):
         prefix, suffix = name.split("_finger_", 1)
         finger = suffix.split("_", 1)[0]
         return f"{prefix}_finger_{finger}_target_active"
@@ -280,6 +420,40 @@ def compact_training_stats(stats):
     }
 
 
+def _fret_strict_bottleneck_fields(stats):
+    if stats.get("curriculum_stage") != "isolated_press":
+        return []
+    finger = int(stats.get("curriculum_early_bottleneck_finger", 0))
+    rate = float(stats.get("curriculum_early_min_success_rate", -1.0))
+    if finger not in range(1, 5) or not 0.0 <= rate <= 1.0:
+        candidates = []
+        for candidate in range(1, 5):
+            value = float(stats.get(
+                f"curriculum_early_finger_{candidate}_success_rate", -1.0))
+            if 0.0 <= value <= 1.0:
+                candidates.append((value, candidate))
+        if len(candidates) != 4:
+            return []
+        rate, finger = min(candidates)
+    fields = [f"strict-min=f{finger}:{100.0 * rate:.1f}%"]
+    gates = []
+    for name in ("press", "position", "arch"):
+        key = f"curriculum_finger_{finger}_precision_{name}_rate"
+        value = stats.get(key)
+        if value is None:
+            value = stats.get(
+                f"curriculum_finger_{finger}_precision_{name}_frame_rate")
+        if value is None:
+            continue
+        value = float(value)
+        if 0.0 <= value <= 1.0:
+            gates.append((value, name))
+    if gates:
+        value, name = min(gates)
+        fields.append(f"strict-gate={name}:{100.0 * value:.1f}%")
+    return fields
+
+
 def concise_training_line(stats, first, last):
     iteration = int(stats["iteration"])
     completed = iteration - int(first) + 1
@@ -289,8 +463,108 @@ def concise_training_line(stats, first, last):
     if stage is not None:
         stage_iteration = int(stats.get("curriculum_stage_iteration", 0))
         fields.append(f"stage={stage}:{stage_iteration}")
+    s2_profile = stats.get("curriculum_s2_profile_name")
+    if stage == "S2_TIMED_STRUM" and s2_profile is not None:
+        fields.append(f"profile={s2_profile}")
+    if stats.get("reward_alignment_warning", False):
+        fields.append("reward-alignment=warning")
     if stats.get("curriculum_stalled", False):
         fields.append("stalled=continue")
+    if stats.get("curriculum_s3_original_tempo_rehearsal_active", False):
+        fields.append("original-tempo-rehearsal")
+        rehearsal_events = stats.get(
+            "curriculum_training_song_events_per_episode")
+        if rehearsal_events is not None:
+            fields.append(f"rehearsal-events={int(rehearsal_events)}")
+    original_tempo_f1 = stats.get(
+        "curriculum_original_tempo_holdout_f1")
+    if original_tempo_f1 is not None:
+        fields.append(f"original-tempo-F1={float(original_tempo_f1):.3f}")
+    if (stats.get("curriculum_original_tempo_retention_passed") is False):
+        drop = float(stats.get(
+            "curriculum_original_tempo_retention_drop", 0.0))
+        fields.append(f"original-tempo-retention=warning:{drop:.3f}")
+    if stats.get("curriculum_integrated_recovery", False):
+        focus = int(stats.get(
+            "curriculum_integrated_recovery_focus_finger", 0))
+        recovery_iteration = int(stats.get(
+            "curriculum_integrated_recovery_iteration", 0))
+        block_iteration = int(stats.get(
+            "curriculum_integrated_recovery_block_iterations", 0))
+        block_count = int(stats.get(
+            "curriculum_integrated_recovery_block_count", 0))
+        max_blocks = int(stats.get(
+            "curriculum_integrated_recovery_max_blocks", 0))
+        fields.append(
+            f"integrated-recovery=f{focus} "
+            f"block={block_count}/{max_blocks}:"
+            f"{recovery_iteration}/{block_iteration}")
+    elif stats.get("curriculum_early_recovery", False):
+        focus = int(stats.get(
+            "curriculum_early_recovery_focus_finger", 0))
+        focus_iteration = int(stats.get(
+            "curriculum_early_recovery_focus_iteration", 0))
+        focus_minimum = int(stats.get(
+            "curriculum_early_recovery_focus_min_iterations", 0))
+        total_blocks = int(stats.get(
+            "curriculum_early_recovery_total_blocks", 0))
+        max_blocks = int(stats.get(
+            "curriculum_early_recovery_max_total_blocks", 0))
+        fields.append(
+            f"early-recovery=f{focus} block={total_blocks}/{max_blocks}:"
+            f"{focus_iteration}/{focus_minimum}")
+        if stats.get("curriculum_early_recovery_adaptive", False):
+            weights = [float(stats.get(
+                f"curriculum_early_recovery_finger_{finger}_weight", 0.0))
+                for finger in range(1, 5)]
+            fields.append(
+                "early-weights=" + "/".join(
+                    f"{100.0 * value:.0f}%" for value in weights))
+    if stats.get("curriculum_early_recovery_exhausted", False):
+        fields.append("early-recovery=exhausted")
+        if stats.get("curriculum_early_recovery_consolidation", False):
+            weights = [float(stats.get(
+                f"curriculum_early_recovery_finger_{finger}_weight", 0.0))
+                for finger in range(1, 5)]
+            fields.append(
+                "consolidation-weights=" + "/".join(
+                    f"{100.0 * value:.0f}%" for value in weights))
+    if stats.get("curriculum_early_evidence_stalled", False):
+        fingers = stats.get(
+            "curriculum_early_evidence_starved_fingers", ())
+        fields.append(
+            "early-evidence=stalled:" + ",".join(
+                f"f{int(finger)}" for finger in fingers))
+    if stage == "frozen_context":
+        weights = [float(stats.get(
+            f"curriculum_frozen_context_recovery_finger_{finger}_weight",
+            0.0)) for finger in range(1, 5)]
+        if any(weight > 0.0 for weight in weights):
+            fields.append(
+                "frozen-weights=" + "/".join(
+                    f"{100.0 * weight:.0f}%" for weight in weights))
+        if stats.get(
+                "curriculum_frozen_context_evaluation_started", False):
+            episodes = int(stats.get(
+                "curriculum_frozen_context_bridge_episode_progress", 0))
+            target = int(stats.get(
+                "curriculum_frozen_context_bridge_episode_target", 0))
+            windows = int(stats.get(
+                "curriculum_frozen_context_bridge_window_count", 0))
+            window_target = int(stats.get(
+                "curriculum_frozen_context_bridge_window_target", 0))
+            fields.append(
+                f"eval={episodes}/{target} win={windows}/{window_target}")
+            candidates = []
+            for finger in range(1, 5):
+                rate = stats.get(
+                    f"frozen_eval_finger_{finger}_press_success_rate")
+                if rate is not None and 0.0 <= float(rate) <= 1.0:
+                    candidates.append((float(rate), finger))
+            if candidates:
+                rate, finger = min(candidates)
+                fields.append(
+                    f"eval-min=f{finger}:{100.0 * rate:.1f}%")
     if stats.get("curriculum_goal_pair_recovery", False):
         reason = stats.get(
             "curriculum_goal_pair_recovery_reason", "recovery")
@@ -309,6 +583,19 @@ def concise_training_line(stats, first, last):
         fields.append(f"forced-advance={previous}")
     if stats.get("curriculum_complete", False):
         fields.append("curriculum=complete")
+    if "curriculum_current_quality_passed" in stats:
+        quality = stats["curriculum_current_quality_passed"]
+        status = "pending" if quality is None else "passed" if quality else "failed"
+        fields.append(f"quality={status}")
+        if stats.get("curriculum_quality_recovery_needed", False):
+            fields.append("quality-recovery=needed")
+    case_quality = stats.get("curriculum_original_tempo_case_quality", {})
+    if isinstance(case_quality, dict) and case_quality.get(
+            "repeated_below_best_warning", False):
+        fields.append("case-quality=below-best")
+    if stats.get("training_stop_requested", False):
+        fields.append(
+            f"stop={stats.get('training_stop_reason', 'requested')}")
     fields.append(f"reward={float(stats.get('reward', 0.0)):.4f}")
     p90 = stats.get("curriculum_p90_target_distance")
     if p90 is not None:
@@ -316,7 +603,12 @@ def concise_training_line(stats, first, last):
     success = stats.get("curriculum_success_rate")
     if success is not None:
         fields.append(f"success={100.0 * float(success):.1f}%")
-    f1 = stats.get("f1_l")
+    fields.extend(_fret_strict_bottleneck_fields(stats))
+    f1 = (
+        stats.get("frozen_eval_f1_l")
+        if stage == "frozen_context" else None)
+    if f1 is None:
+        f1 = stats.get("f1_l")
     if f1 is None:
         f1 = stats.get("strike_f1")
     if f1 is None:
@@ -324,7 +616,10 @@ def concise_training_line(stats, first, last):
     if f1 is None:
         f1 = stats.get("curriculum_strike_f1")
     if f1 is not None:
-        fields.append(f"F1={float(f1):.3f}")
+        label = (
+            "window-F1"
+            if stage == "S3_SONG_INTEGRATION" else "F1")
+        fields.append(f"{label}={float(f1):.3f}")
     tolerance = stats.get("timing_tolerance_ms")
     if tolerance is None:
         tolerance = stats.get("curriculum_timing_tolerance_ms")
@@ -336,6 +631,43 @@ def concise_training_line(stats, first, last):
     failure = stats.get("failure_termination")
     if failure is not None:
         fields.append(f"fail={100.0 * float(failure):.1f}%")
+    recovery = (
+        stats.get("strike_conditional_recovery_completion_rate")
+        if stage in ("S2_TIMED_STRUM", "S3_SONG_INTEGRATION")
+        else stats.get("strike_recovery_completion_rate"))
+    if recovery is not None:
+        fields.append(f"recovery={100.0 * float(recovery):.1f}%")
+    if stage in ("S2_TIMED_STRUM", "S3_SONG_INTEGRATION"):
+        end_to_end = stats.get(
+            "strike_end_to_end_recovery_completion_rate")
+        if end_to_end is not None:
+            fields.append(f"e2e={100.0 * float(end_to_end):.1f}%")
+    if stage == "S2_TIMED_STRUM":
+        down = stats.get("strike_down_completion_rate")
+        up = stats.get("strike_up_completion_rate")
+        if down is not None and up is not None:
+            fields.append(
+                f"down/up={100.0 * float(down):.1f}/"
+                f"{100.0 * float(up):.1f}%")
+    if stage == "S3_SONG_INTEGRATION":
+        full_recovery = stats.get("strike_full_recovery_completion_rate")
+        handoff_recovery = stats.get(
+            "strike_handoff_recovery_completion_rate")
+        if full_recovery is not None:
+            fields.append(
+                f"full={100.0 * float(full_recovery):.1f}%")
+        if handoff_recovery is not None:
+            fields.append(
+                f"handoff={100.0 * float(handoff_recovery):.1f}%")
+    recovery_resets = stats.get("strike_recovery_reset_rate")
+    if recovery_resets is not None:
+        fields.append(f"reset={100.0 * float(recovery_resets):.1f}%")
+    blocked = stats.get("strike_blocked_crossing_rate")
+    if blocked is not None:
+        fields.append(f"blocked={100.0 * float(blocked):.1f}%")
+    gate_failures = stats.get("curriculum_last_gate_failures")
+    if gate_failures not in (None, "none", "not_evaluated"):
+        fields.append(f"gate={gate_failures}")
     return " | ".join(fields)
 
 
@@ -375,13 +707,31 @@ def verify_checkpoint_curriculum_alignment(checkpoint):
     pairs = (
         ("curriculum_stage", "curriculum_stage"),
         ("curriculum_timing_tolerance_ms", "timing_tolerance_ms"),
+        ("curriculum_tempo_lambda", "tempo_lambda"),
+        ("curriculum_strum_span", "strum_span"),
+        ("curriculum_s2_profile_name", "s2_profile_name"),
+        ("curriculum_s2_endpoint_recovery_active",
+         "s2_endpoint_recovery_active"),
+        ("curriculum_s2_focus_direction", "s2_focus_direction"),
+        ("curriculum_s2_focus_fraction", "s2_focus_fraction"),
+        ("curriculum_s2_zone_active", "zone_gate_active"),
+        ("curriculum_timing_reward_core_ms", "timing_reward_core_ms"),
+        ("curriculum_duration_reward_core_ms", "duration_reward_core_ms"),
+        ("curriculum_approach_lead_s", "approach_lead_s"),
+        ("curriculum_timing_early_grace_ms", "timing_early_grace_ms"),
+        ("curriculum_timing_early_penalty_scale_ms",
+         "timing_early_penalty_scale_ms"),
+        ("curriculum_strike_f1_gate", "song_f1_gate"),
+        ("curriculum_stalled", "curriculum_stalled"),
     )
     for context_key, environment_key in pairs:
         if context_key not in context or environment_key not in environment:
             continue
         expected = context[context_key]
         actual = environment[environment_key]
-        if context_key.endswith("_ms"):
+        if (context_key.endswith("_ms")
+                or context_key.endswith("_lambda")
+                or context_key.endswith("_lead_s")):
             try:
                 matches = abs(float(expected) - float(actual)) <= 1e-9
             except (TypeError, ValueError):
@@ -395,7 +745,9 @@ def verify_checkpoint_curriculum_alignment(checkpoint):
                 f"environment_state.{environment_key}={actual!r}")
 
 
-def aggregate_episode_rows(rows, metric_keys, reason_keys):
+def aggregate_episode_rows(
+        rows, metric_keys, reason_keys, *, include_uniform_evidence=True,
+        include_frozen_evidence=True):
     """Aggregate completed episodes, pooling raw strike timing samples."""
     if not rows:
         return {}
@@ -404,6 +756,16 @@ def aggregate_episode_rows(rows, metric_keys, reason_keys):
         float(value)
         for row in rows
         for value in row.get("_timing_abs_ms", [])
+    ]
+    signed_timing_samples = [
+        float(value)
+        for row in rows
+        for value in row.get("_timing_signed_ms", [])
+    ]
+    grip_quality_samples = [
+        float(value)
+        for row in rows
+        for value in row.get("_grip_quality", [])
     ]
     for key in tuple(metric_keys) + tuple(reason_keys):
         values = [row[key] for row in rows]
@@ -416,6 +778,28 @@ def aggregate_episode_rows(rows, metric_keys, reason_keys):
                 torch.tensor(timing_samples), 0.95))
         elif key == "strike_timing_mae_ms" and timing_samples:
             result[key] = sum(timing_samples) / len(timing_samples)
+        elif key == "strike_grip_quality_mean" and grip_quality_samples:
+            result[key] = sum(grip_quality_samples) / len(
+                grip_quality_samples)
+        elif key == "strike_grip_quality_p05" and grip_quality_samples:
+            result[key] = float(torch.quantile(
+                torch.tensor(grip_quality_samples), 0.05))
+        elif key == "strike_grip_quality_min" and grip_quality_samples:
+            result[key] = min(grip_quality_samples)
+        elif key == "strike_grip_bad_streak_max_frames":
+            result[key] = max(values)
+        elif key == "strike_timing_signed_mean_ms" and signed_timing_samples:
+            result[key] = sum(signed_timing_samples) / len(
+                signed_timing_samples)
+        elif (key.startswith("strike_timing_signed_p")
+              and key.endswith("_ms") and signed_timing_samples):
+            quantile = {
+                "strike_timing_signed_p10_ms": 0.10,
+                "strike_timing_signed_p50_ms": 0.50,
+                "strike_timing_signed_p90_ms": 0.90,
+            }[key]
+            result[key] = float(torch.quantile(
+                torch.tensor(signed_timing_samples), quantile))
         else:
             result[key] = total / len(values)
         if key in reason_keys:
@@ -444,6 +828,70 @@ def aggregate_episode_rows(rows, metric_keys, reason_keys):
         count = float(result[count_key])
         result[f"finger_{finger}_press_success_rate"] = (
             float(result[success_key]) / count if count > 0.0 else -1.0)
+        distance_sum_key = (
+            f"press_finger_{finger}_target_distance_sum")
+        distance_count_key = (
+            f"press_finger_{finger}_target_distance_count")
+        if (distance_sum_key in rows[0]
+                and distance_count_key in rows[0]):
+            distance_sum = sum(
+                float(row[distance_sum_key]) for row in rows)
+            distance_count = sum(
+                float(row[distance_count_key]) for row in rows)
+            distance_mean = (
+                distance_sum / distance_count
+                if distance_count > 0.0 else -1.0)
+            result[f"finger_{finger}_target_distance_sum"] = distance_sum
+            result[
+                f"finger_{finger}_target_distance_active_frames"] = (
+                    int(round(distance_count)))
+            result[f"finger_{finger}_target_distance_mean"] = distance_mean
+            # Keep the established diagnostic names available to readers of
+            # top-level and nested cohort statistics.
+            result[
+                f"curriculum_finger_{finger}_target_distance"] = (
+                    distance_mean)
+            result[
+                f"curriculum_finger_{finger}_target_active_count"] = (
+                    int(round(distance_count)))
+        curriculum_success_key = f"curriculum_finger_{finger}_success"
+        curriculum_count_key = f"curriculum_finger_{finger}_count"
+        if (curriculum_success_key in rows[0]
+                and curriculum_count_key in rows[0]):
+            curriculum_success = int(round(sum(
+                float(row[curriculum_success_key]) for row in rows)))
+            curriculum_target = int(round(sum(
+                float(row[curriculum_count_key]) for row in rows)))
+            result[
+                f"curriculum_finger_{finger}_success_episodes"] = (
+                    curriculum_success)
+            result[
+                f"curriculum_finger_{finger}_target_episodes"] = (
+                    curriculum_target)
+        evidence_key = (
+            f"curriculum_finger_{finger}_precision_evidence_frames")
+        if evidence_key not in rows[0]:
+            continue
+        evidence = sum(float(row[evidence_key]) for row in rows)
+        prefix = f"curriculum_finger_{finger}_precision"
+        result[f"{prefix}_evidence_frames_total"] = int(round(evidence))
+        for name in ("press", "position", "arch", "precise"):
+            frames = sum(float(row[f"{prefix}_{name}_frames"])
+                         for row in rows)
+            result[f"{prefix}_{name}_frames_total"] = int(round(frames))
+            result[f"{prefix}_{name}_rate"] = (
+                frames / evidence if evidence > 0.0 else -1.0)
+        target_episodes = sum(float(row[curriculum_count_key]) for row in rows)
+        for source, target in (
+                ("streak_acquired", "streak_rate"),
+                ("fraction_pass", "fraction_pass_rate")):
+            total = sum(float(row[f"{prefix}_{source}"]) for row in rows)
+            result[f"{prefix}_{source}_episodes"] = int(round(total))
+            result[f"{prefix}_{target}"] = (
+                total / target_episodes if target_episodes > 0.0 else -1.0)
+        result[f"{prefix}_final_rate"] = (
+            curriculum_success / target_episodes
+            if target_episodes > 0.0 else -1.0)
     available_fingers = [
         finger for finger in range(1, 5)
         if f"finger_{finger}_press_success_frames" in result]
@@ -458,6 +906,17 @@ def aggregate_episode_rows(rows, metric_keys, reason_keys):
         result["press_success_rate"] = (
             result["press_success_frames"] / target_frames
             if target_frames > 0 else -1.0)
+    if ("thumb_press_readiness_sum" in rows[0]
+            and "thumb_press_readiness_count" in rows[0]):
+        readiness_sum = sum(
+            float(row["thumb_press_readiness_sum"]) for row in rows)
+        readiness_count = sum(
+            float(row["thumb_press_readiness_count"]) for row in rows)
+        result["thumb_press_readiness_sum"] = readiness_sum
+        result["thumb_press_readiness_count"] = int(round(readiness_count))
+        result["curriculum_thumb_press_readiness"] = (
+            readiness_sum / readiness_count
+            if readiness_count > 0.0 else -1.0)
     if ("sustain_event_success_count" in rows[0]
             and "sustain_event_count" in rows[0]):
         result["sustain_event_success_total"] = int(round(sum(
@@ -489,6 +948,89 @@ def aggregate_episode_rows(rows, metric_keys, reason_keys):
         result[f"{prefix}_success_rate"] = success_total / target_total
     if timing_samples:
         result["strike_timing_sample_count"] = len(timing_samples)
+    if "strike_down_event_count" in rows[0]:
+        pool_strike_raw_count_rates(result)
+    eligibility_key = "strike_uniform_evidence_eligible"
+    if include_uniform_evidence and eligibility_key in rows[0]:
+        uniform_rows = [
+            row for row in rows
+            if float(row.get(eligibility_key, 0.0)) >= 0.5]
+        result["uniform_evidence_episodes"] = len(uniform_rows)
+        result["hard_evidence_excluded_episodes"] = (
+            len(rows) - len(uniform_rows))
+        result["uniform_evidence_fraction"] = (
+            len(uniform_rows) / len(rows))
+        result["_uniform_evidence"] = (
+            aggregate_episode_rows(
+                uniform_rows,
+                metric_keys,
+                reason_keys,
+                include_uniform_evidence=False,
+                include_frozen_evidence=False)
+            if uniform_rows else {})
+        for key in (
+                "strike_episode_f1", "strike_false_positive_rate",
+                "strike_blocked_crossing_rate",
+                "wrong_crossing_termination",
+                "irrecoverable_safety_failure"):
+            if key in result["_uniform_evidence"]:
+                result[f"uniform_evidence_{key}"] = (
+                    result["_uniform_evidence"][key])
+    frozen_eval_key = "frozen_context_eval_eligible"
+    if include_frozen_evidence and frozen_eval_key in rows[0]:
+        frozen_eval_rows = [
+            row for row in rows
+            if float(row.get(frozen_eval_key, 0.0)) >= 0.5]
+        frozen_train_rows = [
+            row for row in rows
+            if float(row.get(frozen_eval_key, 0.0)) < 0.5]
+        result["frozen_eval_episodes"] = len(frozen_eval_rows)
+        result["frozen_eval_fraction"] = (
+            len(frozen_eval_rows) / len(rows))
+        result["frozen_train_episodes"] = len(frozen_train_rows)
+        result["frozen_train_fraction"] = (
+            len(frozen_train_rows) / len(rows))
+        result["_frozen_eval"] = (
+            aggregate_episode_rows(
+                frozen_eval_rows,
+                metric_keys,
+                reason_keys,
+                include_uniform_evidence=False,
+                include_frozen_evidence=False)
+            if frozen_eval_rows else {})
+        result["_frozen_train"] = (
+            aggregate_episode_rows(
+                frozen_train_rows,
+                metric_keys,
+                reason_keys,
+                include_uniform_evidence=False,
+                include_frozen_evidence=False)
+            if frozen_train_rows else {})
+        for cohort, nested in (
+                ("eval", result["_frozen_eval"]),
+                ("train", result["_frozen_train"])):
+            for key in (
+                    "f1_l", "no_press_accuracy", "wrong_press_rate",
+                    "sustain_hold_rate", "sustain_event_success_rate",
+                    "sustain_event_success_rate_pooled",
+                    "press_dropout_rate", "failure_termination",
+                    "press_success_rate"):
+                if key in nested:
+                    result[f"frozen_{cohort}_{key}"] = nested[key]
+            for finger in range(1, 5):
+                for key in (
+                        f"finger_{finger}_press_success_rate",
+                        f"finger_{finger}_press_success_frames",
+                        f"finger_{finger}_press_target_frames",
+                        f"finger_{finger}_target_distance_sum",
+                        f"finger_{finger}_target_distance_active_frames",
+                        f"finger_{finger}_target_distance_mean"):
+                    if key in nested:
+                        result[f"frozen_{cohort}_{key}"] = nested[key]
+            if "curriculum_thumb_press_readiness" in nested:
+                result[
+                    f"frozen_{cohort}_thumb_press_readiness"] = nested[
+                        "curriculum_thumb_press_readiness"]
     return result
 
 
@@ -541,7 +1083,8 @@ def action_saturation_regularization(
     return (squared * active).sum() / active_count.clamp_min(1.0)
 
 
-def masked_action_teacher_loss(mean_action, target_action, teacher_mask):
+def masked_action_teacher_loss(
+        mean_action, target_action, teacher_mask, teacher_weight=None):
     """성공 자세가 있는 각 action 차원을 빈도와 무관하게 맞춘다."""
     if not isinstance(mean_action, torch.Tensor):
         raise TypeError("mean_action must be a torch.Tensor")
@@ -556,9 +1099,25 @@ def masked_action_teacher_loss(mean_action, target_action, teacher_mask):
             or not torch.isfinite(target_action).all()):
         raise FloatingPointError("action teacher tensors must be finite")
     active = teacher_mask.bool().to(mean_action.dtype)
+    if teacher_weight is None:
+        weight = torch.ones_like(active)
+    else:
+        weight = torch.as_tensor(
+            teacher_weight, device=mean_action.device,
+            dtype=mean_action.dtype)
+        if weight.ndim == 1 and weight.shape[0] == mean_action.shape[0]:
+            weight = weight[:, None]
+        if weight.shape not in (mean_action.shape, (mean_action.shape[0], 1)):
+            raise ValueError(
+                "action teacher weight must have shape [N] or [N,A]")
+        if (not bool(torch.isfinite(weight).all())
+                or bool((weight < 0.0).any())):
+            raise ValueError(
+                "action teacher weight must be finite and non-negative")
     active_per_action = active.sum(dim=0)
     per_action_loss = (
-        ((mean_action - target_action).square() * active).sum(dim=0)
+        ((mean_action - target_action).square()
+         * active * weight).sum(dim=0)
         / active_per_action.clamp_min(1.0))
     available = (active_per_action > 0).to(mean_action.dtype)
     return (per_action_loss * available).sum() / available.sum().clamp_min(1.0)
@@ -576,13 +1135,39 @@ class PPOConfig:
     entropy_coef: float = 0.001
     actor_learning_rate: float = 3e-6
     learning_rate: float = 3e-4
+    completed_strike_lr_multiplier: float = 1.0
     max_grad_norm: float = 1.0
     target_kl: float = 0.03
     action_saturation_regularization_weight: float = 0.0
     action_saturation_regularization_threshold: float = 0.90
     action_teacher_weight: float = 0.0
+    freeze_observation_normalization: bool = False
     save_interval: int = 500
     log_interval: int = 1
+
+
+def apply_environment_log_std_floor(model, env):
+    """Apply an optional task-owned exploration floor to policy std values."""
+    provider = getattr(env, "policy_action_std_floor", None)
+    if provider is None:
+        return 0
+    floor = provider() if callable(provider) else provider
+    if floor is None:
+        return 0
+    floor = torch.as_tensor(
+        floor, device=model.log_std.device, dtype=model.log_std.dtype)
+    if floor.ndim == 0:
+        floor = floor.expand_as(model.log_std)
+    if floor.shape != model.log_std.shape:
+        raise ValueError(
+            "environment policy std floor must match policy action shape")
+    if not torch.isfinite(floor).all() or torch.any(floor <= 0.0):
+        raise ValueError(
+            "environment policy std floor must be finite and positive")
+    with torch.no_grad():
+        below = model.log_std < floor.log()
+        model.log_std.copy_(torch.maximum(model.log_std, floor.log()))
+    return int(below.sum().item())
 
 
 class PPOTrainer:
@@ -642,6 +1227,9 @@ class PPOTrainer:
                 raise ValueError(
                     "environment action saturation indices contain duplicates")
             self.action_saturation_regularization_indices = indices
+        maintenance_scale = float(config.completed_strike_lr_multiplier)
+        if not math.isfinite(maintenance_scale) or not 0.0 < maintenance_scale <= 1.0:
+            raise ValueError("completed Strike LR multiplier must be in (0, 1]")
         self.optimizer = torch.optim.Adam([
             {"params": actor_parameters, "lr": config.actor_learning_rate},
             {"params": critic_parameters, "lr": config.learning_rate},
@@ -685,13 +1273,18 @@ class PPOTrainer:
 
     @torch.no_grad()
     def collect(self):
+        apply_environment_log_std_floor(self.model, self.env)
         obs_b, act_b, logp_b, value_b, reward_b, done_b = [], [], [], [], [], []
         action_mask_b = []
-        teacher_action_b, teacher_mask_b = [], []
+        sample_mask_b = []
+        teacher_action_b, teacher_mask_b, teacher_weight_b = [], [], []
         episode = []
         diagnostic_chunks = {
             name: [] for name in self.rollout_diagnostic_keys}
         for _ in range(self.cfg.horizon):
+            sample_mask = self._policy_sample_mask()
+            if sample_mask is not None:
+                sample_mask_b.append(sample_mask)
             action_mask_fn = getattr(self.env, "policy_action_mask", None)
             action_mask = (
                 action_mask_fn() if callable(action_mask_fn) else None)
@@ -712,9 +1305,14 @@ class PPOTrainer:
                 action_mask_b.append(action_mask.clone())
             teacher_action = info.get("policy_teacher_action")
             teacher_mask = info.get("policy_teacher_mask")
+            teacher_weight = info.get("policy_teacher_weight")
             if (teacher_action is None) != (teacher_mask is None):
                 raise KeyError(
                     "environment must provide both policy teacher tensors")
+            if teacher_weight is not None and teacher_action is None:
+                raise KeyError(
+                    "environment provided policy teacher weight without "
+                    "teacher tensors")
             if teacher_action is not None:
                 if (teacher_action.shape != action.shape
                         or teacher_mask.shape != action.shape):
@@ -725,6 +1323,18 @@ class PPOTrainer:
                         "policy teacher action contains a non-finite value")
                 teacher_action_b.append(teacher_action.clone())
                 teacher_mask_b.append(teacher_mask.clone())
+                if teacher_weight is not None:
+                    if teacher_weight.shape not in (
+                            action.shape, (action.shape[0],)):
+                        raise ValueError(
+                            "policy teacher weight must have shape [N] or "
+                            "[N,A]")
+                    if (not bool(torch.isfinite(teacher_weight).all())
+                            or bool((teacher_weight < 0.0).any())):
+                        raise ValueError(
+                            "policy teacher weight must be finite and "
+                            "non-negative")
+                    teacher_weight_b.append(teacher_weight.clone())
             episode_trigger = self.episode_metric_keys[0]
             if episode_trigger in info:
                 for key in self.episode_metric_keys:
@@ -748,19 +1358,75 @@ class PPOTrainer:
                 ], dim=1).cpu()
                 timing_count = info.get("episode_timing_count")
                 timing_values = info.get("episode_timing_abs_ms")
+                timing_signed_values = info.get(
+                    "episode_timing_signed_ms")
                 cpu_timing_count = (
                     timing_count.detach().cpu()
                     if timing_count is not None else None)
                 cpu_timing_values = (
                     timing_values.detach().cpu()
                     if timing_values is not None else None)
+                cpu_timing_signed_values = (
+                    timing_signed_values.detach().cpu()
+                    if timing_signed_values is not None else None)
+                grip_count = info.get("episode_grip_quality_count")
+                grip_values = info.get("episode_grip_quality_samples")
+                cpu_grip_count = (
+                    grip_count.detach().cpu()
+                    if grip_count is not None else None)
+                cpu_grip_values = (
+                    grip_values.detach().cpu()
+                    if grip_values is not None else None)
+                strum_count = info.get("episode_strum_microtiming_count")
+                strum_rms_values = info.get("episode_strum_timing_rms_ms")
+                strum_duration_values = info.get(
+                    "episode_strum_duration_error_ms")
+                cpu_strum_count = (
+                    strum_count.detach().cpu()
+                    if strum_count is not None else None)
+                cpu_strum_rms_values = (
+                    strum_rms_values.detach().cpu()
+                    if strum_rms_values is not None else None)
+                cpu_strum_duration_values = (
+                    strum_duration_values.detach().cpu()
+                    if strum_duration_values is not None else None)
+                frozen_eval_eligible = info.get(
+                    "episode_frozen_context_eval_eligible")
+                cpu_frozen_eval_eligible = (
+                    frozen_eval_eligible.detach().reshape(-1).cpu()
+                    if frozen_eval_eligible is not None else None)
+                if (cpu_frozen_eval_eligible is not None
+                        and cpu_frozen_eval_eligible.numel()
+                            != cpu_rows.shape[0]):
+                    raise ValueError(
+                        "frozen-context evaluation episode tag must match "
+                        "the number of completed episodes")
                 for i, values in enumerate(cpu_rows.tolist()):
                     row = dict(zip(row_keys, values))
+                    if cpu_frozen_eval_eligible is not None:
+                        row["frozen_context_eval_eligible"] = float(
+                            cpu_frozen_eval_eligible[i])
                     if (cpu_timing_count is not None
                             and cpu_timing_values is not None):
                         count = int(cpu_timing_count[i])
                         row["_timing_abs_ms"] = (
                             cpu_timing_values[i, :count].tolist())
+                        if cpu_timing_signed_values is not None:
+                            row["_timing_signed_ms"] = (
+                                cpu_timing_signed_values[i, :count].tolist())
+                    if (cpu_grip_count is not None
+                            and cpu_grip_values is not None):
+                        count = int(cpu_grip_count[i])
+                        row["_grip_quality"] = (
+                            cpu_grip_values[i, :count].tolist())
+                    if (cpu_strum_count is not None
+                            and cpu_strum_rms_values is not None
+                            and cpu_strum_duration_values is not None):
+                        count = int(cpu_strum_count[i])
+                        row["_strum_timing_rms_ms"] = (
+                            cpu_strum_rms_values[i, :count].tolist())
+                        row["_strum_duration_error_ms"] = (
+                            cpu_strum_duration_values[i, :count].tolist())
                     episode.append(row)
             active = info.get("diagnostic_active", info.get("active_count"))
             if active is not None:
@@ -775,6 +1441,13 @@ class PPOTrainer:
                 for name in diagnostic_chunks:
                     value = info.get(name)
                     if value is not None:
+                        if name.startswith((
+                                "practice_sampler_",
+                                "frozen_context_sampler_",
+                                "goal_pair_sampler_")):
+                            diagnostic_chunks[name] = [
+                                value.reshape(-1)[:1].detach()]
+                            continue
                         sequence_scope = name.startswith((
                             "goal_pair_sequence_",
                             "goal_pair_full_song_"))
@@ -839,6 +1512,10 @@ class PPOTrainer:
                 if name == "mean_target_distance":
                     diagnostic_tensors["curriculum_p90_target_distance"] = (
                         torch.quantile(mean_values, 0.90))
+                elif (name.startswith("chord_shape_")
+                      and name.endswith("_distance")):
+                    diagnostic_tensors[f"{metric_name}_p90"] = (
+                        torch.quantile(mean_values, 0.90))
                 elif name == "joint_limit_max_usage" or name.endswith(
                         "_max_usage"):
                     diagnostic_tensors[f"{metric_name}_p95"] = (
@@ -870,6 +1547,11 @@ class PPOTrainer:
             "next_value": next_value, "episode": episode,
             "diagnostics": diagnostic_stats,
         }
+        if sample_mask_b:
+            rollout["sample_masks"] = torch.stack(sample_mask_b)
+            rollout["next_sample_mask"] = self._policy_sample_mask()
+            rollout["diagnostics"]["policy_sample_fraction"] = float(
+                rollout["sample_masks"].float().mean().cpu())
         if action_mask_b:
             rollout["action_masks"] = torch.stack(action_mask_b)
             rollout["diagnostics"]["policy_active_action_fraction"] = float(
@@ -877,6 +1559,22 @@ class PPOTrainer:
         if teacher_action_b:
             rollout["teacher_actions"] = torch.stack(teacher_action_b)
             rollout["teacher_masks"] = torch.stack(teacher_mask_b)
+            if teacher_weight_b:
+                if len(teacher_weight_b) != len(teacher_action_b):
+                    raise KeyError(
+                        "environment must provide policy teacher weight on "
+                        "every rollout step or none")
+                rollout["teacher_weights"] = torch.stack(teacher_weight_b)
+                active_rows = rollout["teacher_masks"].any(dim=-1)
+                weights = rollout["teacher_weights"].float()
+                if weights.ndim == rollout["teacher_masks"].ndim:
+                    weights = weights.masked_fill(
+                        ~rollout["teacher_masks"], 0.0).sum(dim=-1)
+                    weights /= rollout["teacher_masks"].sum(
+                        dim=-1).clamp_min(1)
+                rollout["diagnostics"]["policy_teacher_weight_mean"] = float(
+                    (weights * active_rows).sum().float().cpu()
+                    / active_rows.sum().clamp_min(1).float().cpu())
             rollout["diagnostics"]["policy_teacher_action_fraction"] = float(
                 rollout["teacher_masks"].float().mean().cpu())
         # One synchronization per rollout, rather than several GPU->CPU checks
@@ -887,24 +1585,53 @@ class PPOTrainer:
             finite &= torch.isfinite(rollout[key]).all()
         if "teacher_actions" in rollout:
             finite &= torch.isfinite(rollout["teacher_actions"]).all()
+        if "teacher_weights" in rollout:
+            finite &= torch.isfinite(rollout["teacher_weights"]).all()
         if not bool(finite):
             raise FloatingPointError("non-finite value reached the PPO rollout boundary")
         return rollout
+
+    def _policy_sample_mask(self):
+        provider = getattr(self.env, "policy_sample_mask", None)
+        if not callable(provider):
+            return None
+        mask = provider()
+        if (not isinstance(mask, torch.Tensor)
+                or mask.dtype != torch.bool
+                or mask.shape != (self.env.num_envs,)):
+            raise ValueError("policy sample mask must be a bool tensor of shape [N]")
+        # The task may mutate its phase buffer during step().
+        return mask.to(device=self.device).clone()
 
     def advantages(self, rollout):
         rewards, values, dones = rollout["rewards"], rollout["values"], rollout["dones"]
         adv = torch.zeros_like(rewards)
         gae = torch.zeros_like(rollout["next_value"])
         next_value = rollout["next_value"]
+        sample_masks = rollout.get("sample_masks")
+        next_active = rollout.get("next_sample_mask")
         for t in reversed(range(self.cfg.horizon)):
             mask = (~dones[t]).float().unsqueeze(-1)
+            if sample_masks is not None:
+                mask = mask * next_active.unsqueeze(-1)
             delta = rewards[t] + self.cfg.gamma * next_value * mask - values[t]
             gae = delta + self.cfg.gamma * self.cfg.gae_lambda * mask * gae
+            if sample_masks is not None:
+                gae = torch.where(
+                    sample_masks[t].unsqueeze(-1), gae, torch.zeros_like(gae))
+                next_active = sample_masks[t]
             adv[t] = gae
             next_value = values[t]
         returns = adv + values
         flat = adv.reshape(-1, adv.shape[-1])
-        actor_adv = combine_actor_advantages(flat, self.actor_reward_weights)
+        if sample_masks is None:
+            actor_adv = combine_actor_advantages(flat, self.actor_reward_weights)
+        else:
+            active = sample_masks.reshape(-1)
+            actor_adv = torch.zeros(flat.shape[0], device=flat.device, dtype=flat.dtype)
+            if bool(active.any()):
+                actor_adv[active] = combine_actor_advantages(
+                    flat[active], self.actor_reward_weights)
         return returns.reshape(-1, returns.shape[-1]), actor_adv
 
     def update(self, rollout):
@@ -918,13 +1645,32 @@ class PPOTrainer:
             action_masks = action_masks.reshape(-1, self.env.num_actions)
         teacher_actions = rollout.get("teacher_actions")
         teacher_masks = rollout.get("teacher_masks")
+        teacher_weights = rollout.get("teacher_weights")
         if teacher_actions is not None:
             teacher_actions = teacher_actions.reshape(
                 -1, self.env.num_actions)
             teacher_masks = teacher_masks.reshape(
                 -1, self.env.num_actions)
+            if teacher_weights is not None:
+                if teacher_weights.ndim == 2:
+                    teacher_weights = teacher_weights.reshape(-1)
+                else:
+                    teacher_weights = teacher_weights.reshape(
+                        -1, self.env.num_actions)
+        sample_masks = rollout.get("sample_masks")
+        if sample_masks is not None:
+            active = sample_masks.reshape(-1)
+            obs, actions, old_logp, old_values, returns, actor_adv = (
+                tensor[active] for tensor in
+                (obs, actions, old_logp, old_values, returns, actor_adv))
+            if action_masks is not None:
+                action_masks = action_masks[active]
+            if teacher_actions is not None:
+                teacher_actions = teacher_actions[active]
+                teacher_masks = teacher_masks[active]
+                if teacher_weights is not None:
+                    teacher_weights = teacher_weights[active]
         n = obs.shape[0]
-        mb = min(self.cfg.minibatch_size, n)
         stats = {
             "policy_loss": 0.0,
             "value_loss": 0.0,
@@ -933,6 +1679,10 @@ class PPOTrainer:
             "action_saturation_loss": 0.0,
             "action_teacher_loss": 0.0,
         }
+        if n == 0:
+            return dict(stats, ppo_updates=0, ppo_preupdate_kl=0.0,
+                        ppo_early_stop=False, ppo_log_std_floor_interventions=0)
+        mb = min(self.cfg.minibatch_size, n)
         updates = 0
         stop = False
         preupdate_kl = 0.0
@@ -994,7 +1744,9 @@ class PPOTrainer:
                         self.action_teacher_weight
                         * masked_action_teacher_loss(
                             deterministic_mean_action,
-                            teacher_actions[idx], teacher_masks[idx]))
+                            teacher_actions[idx], teacher_masks[idx],
+                            None if teacher_weights is None
+                            else teacher_weights[idx]))
                     loss = loss + action_teacher_loss
 
                 self.optimizer.zero_grad(set_to_none=True)
@@ -1015,13 +1767,17 @@ class PPOTrainer:
             if stop:
                 break
         # old_logp와 update 중 policy가 같은 정규화를 보도록 통계는 update 뒤 갱신한다.
-        with torch.no_grad():
-            self.model.obs_rms.update(obs)
+        if not self.cfg.freeze_observation_normalization:
+            with torch.no_grad():
+                self.model.obs_rms.update(obs)
+        std_floor_interventions = apply_environment_log_std_floor(
+            self.model, self.env)
         averaged = {k: v / max(1, updates) for k, v in stats.items()}
         averaged.update({
             "ppo_updates": updates,
             "ppo_preupdate_kl": preupdate_kl,
             "ppo_early_stop": stop,
+            "ppo_log_std_floor_interventions": std_floor_interventions,
         })
         return averaged
 
@@ -1111,9 +1867,50 @@ class PPOTrainer:
                     f"{tuple(source.shape)} != {tuple(target.shape)}")
         self._restore_checkpoint_state(checkpoint, source_model)
 
+    def initialize_policy(self, checkpoint):
+        if not isinstance(checkpoint, dict):
+            raise TypeError("policy initialization checkpoint must be a mapping")
+        source = checkpoint.get("model")
+        if not isinstance(source, dict):
+            raise ValueError("policy initialization checkpoint lacks model state")
+        target = self.model.state_dict()
+        prefixes = ("actor.", "obs_rms.")
+        selected = {
+            key for key in target
+            if key == "log_std" or key.startswith(prefixes)}
+        missing = sorted(key for key in selected if key not in source)
+        if missing:
+            raise ValueError(
+                "policy initialization checkpoint is missing tensors: "
+                + ", ".join(missing))
+        merged = dict(target)
+        for key in selected:
+            if source[key].shape != target[key].shape:
+                raise ValueError(
+                    f"policy initialization tensor shape mismatch for {key}: "
+                    f"{tuple(source[key].shape)} != {tuple(target[key].shape)}")
+            merged[key] = source[key]
+        self.model.load_state_dict(merged, strict=True)
+        return tuple(sorted(selected))
+
+    def _apply_strike_maintenance_learning_rate(self):
+        context = self.training_context
+        if "curriculum_song_has_strum" not in context:
+            return {}
+        scale = (self.cfg.completed_strike_lr_multiplier
+                 if context.get("curriculum_complete", False) else 1.0)
+        for group, base in zip(self.optimizer.param_groups, (
+                self.cfg.actor_learning_rate, self.cfg.learning_rate)):
+            group["lr"] = float(base) * float(scale)
+        return {
+            "strike_maintenance_lr_multiplier": float(scale),
+            "actor_learning_rate": self.optimizer.param_groups[0]["lr"],
+            "critic_learning_rate": self.optimizer.param_groups[1]["lr"],
+        }
+
     def learn(self, iterations, iteration_callback=None,
               iteration_result_callback=None, post_iteration_callback=None,
-              history_limit=None):
+              history_limit=None, stop_iteration_callback=None):
         if history_limit is not None:
             history_limit = int(history_limit)
             if history_limit < 0:
@@ -1122,6 +1919,7 @@ class PPOTrainer:
         history = []
         first = self.iteration + 1
         last = self.iteration + int(iterations)
+        stop_reason = ""
         for iteration in range(first, last + 1):
             iteration_context = (iteration_callback(iteration)
                                  if iteration_callback is not None else {})
@@ -1131,8 +1929,10 @@ class PPOTrainer:
                 self.obs = reset_observation
             if iteration_context:
                 self.training_context.update(iteration_context)
+            learning_rate_stats = self._apply_strike_maintenance_learning_rate()
             rollout = self.collect()
             stats = self.update(rollout)
+            stats.update(learning_rate_stats)
             stats["iteration"] = iteration
             stats["steps"] = self.global_step
             stats["reward"] = float(rollout["rewards"].mean())
@@ -1151,6 +1951,14 @@ class PPOTrainer:
                         stats[f"next_{key}"] = value
                     else:
                         stats[key] = value
+            if stop_iteration_callback is not None:
+                requested = stop_iteration_callback(iteration, stats)
+                if requested:
+                    stop_reason = (
+                        requested if isinstance(requested, str)
+                        else "iteration callback requested a clean stop")
+                    stats["training_stop_requested"] = True
+                    stats["training_stop_reason"] = stop_reason
             if history_limit is None or history_limit > 0:
                 history.append(stats)
                 if (history_limit is not None
@@ -1164,29 +1972,38 @@ class PPOTrainer:
                 or iteration % self.cfg.log_interval == 0
                 or (self.out_dir
                     and iteration % self.cfg.save_interval == 0)
-                or stage != previous_stage)
+                or stage != previous_stage
+                or bool(stop_reason))
             if self.metrics_path and write_log:
-                with self.metrics_path.open("a") as f:
-                    f.write(json.dumps(
-                        compact_training_stats(stats), sort_keys=True) + "\n")
+                append_jsonl_atomic(
+                    self.metrics_path, compact_training_stats(stats))
                 self._last_logged_stage = stage
             if iteration % self.cfg.log_interval == 0:
-                detailed = detailed_training_line(stats)
+                concise = concise_training_line(stats, first, last)
+                detailed = (
+                    concise if "curriculum_song_has_strum" in stats
+                    else detailed_training_line(stats))
                 if self.training_log_path:
-                    with self.training_log_path.open("a") as stream:
-                        stream.write(detailed + "\n")
-                print(concise_training_line(stats, first, last), flush=True)
+                    append_text_line_atomic(
+                        self.training_log_path, detailed)
+                print(concise, flush=True)
             if self.out_dir and iteration % self.cfg.save_interval == 0:
                 self.save(iteration)
             self.iteration = iteration
             if post_iteration_callback is not None:
                 post_iteration_callback(iteration, stats)
+            if stop_reason:
+                break
         if self.out_dir:
             self.save(self.iteration)
-        message = (f"training finished: {self.global_step} samples "
-                   f"in {time.time()-started:.1f}s")
+        if stop_reason:
+            message = (
+                f"training stopped cleanly: {stop_reason}; "
+                f"{self.global_step} samples in {time.time()-started:.1f}s")
+        else:
+            message = (f"training finished: {self.global_step} samples "
+                       f"in {time.time()-started:.1f}s")
         if self.training_log_path:
-            with self.training_log_path.open("a") as stream:
-                stream.write(message + "\n")
+            append_text_line_atomic(self.training_log_path, message)
         print(message)
         return history

@@ -197,7 +197,8 @@ class FingerBackLimitMonitor:
     FINGERS = ("index", "middle", "ring", "pinky")
 
     def __init__(self, env, limit_z=-0.050, proximal_limit_z=None,
-                 soft_limit_z=-0.035, soft_scale=0.015, frames=3,
+                 soft_limit_z=-0.035, proximal_soft_limit_z=None,
+                 soft_scale=0.015, frames=3,
                  samples_per_segment=5, min_fraction=0.25):
         self.env = env
         self.limit_z = float(limit_z)
@@ -205,13 +206,20 @@ class FingerBackLimitMonitor:
             self.limit_z - 0.010 if proximal_limit_z is None
             else float(proximal_limit_z))
         self.soft_limit_z = float(soft_limit_z)
+        self.proximal_soft_limit_z = (
+            0.5 * (self.proximal_limit_z + self.soft_limit_z)
+            if proximal_soft_limit_z is None
+            else float(proximal_soft_limit_z))
         self.soft_scale = float(soft_scale)
         self.frames = int(frames)
         self.samples_per_segment = int(samples_per_segment)
         self.min_fraction = float(min_fraction)
-        if not (self.proximal_limit_z < self.limit_z < self.soft_limit_z):
+        if not (self.proximal_limit_z < self.proximal_soft_limit_z
+                < self.soft_limit_z
+                and self.proximal_limit_z < self.limit_z
+                < self.soft_limit_z):
             raise ValueError(
-                "R8 limits must satisfy proximal < distal < soft")
+                "R8 hard limits must be behind their soft limits")
         if self.soft_scale <= 0.0:
             raise ValueError("R8 soft scale must be positive")
         if self.frames < 1 or self.samples_per_segment < 2:
@@ -260,14 +268,21 @@ class FingerBackLimitMonitor:
         violation = by_finger.any(dim=-1)
         fraction_by_finger = torch.maximum(
             proximal_fraction, distal_fraction)
+        proximal_depth = (
+            self.proximal_soft_limit_z - local[:, :, :2, :, 2]
+        ).clamp_min(0.0)
         distal_depth = (
             self.soft_limit_z - local[:, :, 2:, :, 2]
         ).clamp_min(0.0)
+        proximal_soft_depth_by_finger = (
+            proximal_depth.square().flatten(2).mean(dim=-1).sqrt())
         soft_depth_by_finger = distal_depth.square().flatten(2).mean(
             dim=-1).sqrt()
+        combined_soft_depth_by_finger = torch.maximum(
+            proximal_soft_depth_by_finger, soft_depth_by_finger)
         soft_penalty_by_finger = (
             1.0 - torch.exp(
-                -((soft_depth_by_finger / self.soft_scale) ** 2))
+                -((combined_soft_depth_by_finger / self.soft_scale) ** 2))
         ).clamp(0.0, 1.0)
         soft_penalty = soft_penalty_by_finger.amax(dim=-1)
         self.streak.copy_(update_consecutive_violation(self.streak, by_finger))
@@ -275,10 +290,16 @@ class FingerBackLimitMonitor:
         termination = termination_by_finger.any(dim=-1)
         return {
             "finger_back_min_local_z": local[..., 2].flatten(2).amin(dim=-1),
+            "finger_back_proximal_min_local_z":
+                local[:, :, :2, :, 2].flatten(2).amin(dim=-1),
+            "finger_back_distal_min_local_z":
+                local[:, :, 2:, :, 2].flatten(2).amin(dim=-1),
             "finger_back_fraction_by_finger": fraction_by_finger,
             "finger_back_proximal_fraction_by_finger": proximal_fraction,
             "finger_back_distal_fraction_by_finger": distal_fraction,
             "finger_back_soft_depth_by_finger": soft_depth_by_finger,
+            "finger_back_proximal_soft_depth_by_finger":
+                proximal_soft_depth_by_finger,
             "finger_back_soft_penalty_by_finger": soft_penalty_by_finger,
             "finger_back_soft_penalty": soft_penalty,
             "finger_back_violation_by_finger": by_finger,
@@ -519,6 +540,19 @@ class GuitarPenetrationMonitor:
                 end = self.env.hbody_pos(end_name)
                 segments.append(start[:, None] + self._spatial_alpha * (end - start)[:, None])
         return torch.cat(segments, dim=1)
+
+    def current_depth_by_chain(self):
+        """Return current analytical penetration depth for every chain.
+
+        This query is side-effect free so actor observations can use a compact
+        safety margin without advancing the monitor's temporal debounce state.
+        """
+        current = self.env.to_guitar_frame(self._sample_world())
+        depth_by_point, _ = guitar_solid_inside_depth(current)
+        return torch.stack([
+            depth_by_point[:, self._point_chain == chain].amax(dim=-1)
+            for chain in range(len(self.CHAINS))
+        ], dim=-1)
 
     def compute(self, progress_buf):
         current = self.env.to_guitar_frame(self._sample_world())

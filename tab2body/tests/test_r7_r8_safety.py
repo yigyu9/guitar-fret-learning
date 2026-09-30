@@ -82,6 +82,24 @@ def main():
     assert layered_result["finger_back_termination"].item()
     assert layered_result["finger_back_distal_fraction_by_finger"][0, 0] >= 0.25
 
+    # Proximal links can remain in front of their hard plane while still
+    # receiving a soft warning before they wrap visibly behind the neck.
+    proximal_soft = FingerBackLimitMonitor(
+        env, limit_z=-0.050, proximal_limit_z=-0.060,
+        soft_limit_z=-0.025, proximal_soft_limit_z=-0.040,
+        frames=3, samples_per_segment=5)
+    for name in {name for chain in proximal_soft.chains for name in chain}:
+        env.positions[name].zero_()
+    env.positions["LH:index1"][0, 2] = -0.045
+    env.positions["LH:index2"][0, 2] = -0.045
+    proximal_result = proximal_soft.compute()
+    assert not proximal_result["finger_back_violation"].item()
+    assert proximal_result["finger_back_soft_penalty"].item() > 0.0
+    assert torch.isclose(proximal_result[
+        "finger_back_proximal_min_local_z"][0, 0], torch.tensor(-0.045))
+    assert proximal_result[
+        "finger_back_distal_min_local_z"][0, 0] == 0.0
+
     # Three different fingers violating once each are not one persistent breach.
     back.reset(torch.tensor([0]))
     for name in {name for chain in back.chains for name in chain}:

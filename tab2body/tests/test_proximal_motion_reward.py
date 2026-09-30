@@ -9,6 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from env.rewards.motion import (
+    GROUP_PREFIXES,
     proximal_priority_reward,
     target_settling_gate,
     wrist_settling_gate,
@@ -16,6 +17,11 @@ from env.rewards.motion import (
 
 
 def main():
+    assert GROUP_PREFIXES["shoulder"] == ("L_Shoulder",)
+    assert all(
+        not prefix.startswith("L_Thorax")
+        for prefixes in GROUP_PREFIXES.values()
+        for prefix in prefixes)
     distance = torch.tensor([0.04, 0.07, 0.11, 0.14])
     radius = torch.full_like(distance, 0.04)
     gate = wrist_settling_gate(distance, radius, transition=0.10)

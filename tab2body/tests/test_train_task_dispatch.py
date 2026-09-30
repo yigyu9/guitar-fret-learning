@@ -1,4 +1,4 @@
-"""CPU-only contract for the unified fret/strike training entry point."""
+"""CPU-only contract for the unified task training entry point."""
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -20,14 +20,18 @@ def main():
     assert train.resolve_task(
         ["--task", "strike", "--timing-tolerance-ms", "50"]) == "strike"
     assert train.resolve_task(["--task=strike", "--smoke"]) == "strike"
-
+    assert train.resolve_task(
+        ["--task", "full", "--fret-checkpoint", "f.pt",
+         "--strike-checkpoint", "s.pt"]) == "full"
     assert train.runner_argv(
         ["--task", "strike", "--iterations", "5"]
     ) == ["--iterations", "5"]
     assert train.runner_argv(
         ["--task=strike", "--smoke"]
     ) == ["--smoke"]
-
+    assert train.runner_argv(
+        ["--task", "full", "--fret-checkpoint", "f.pt"]
+    ) == ["--fret-checkpoint", "f.pt"]
     fake_runner = SimpleNamespace(
         build_parser=lambda: None,
         main=lambda _argv=None: None,
@@ -37,7 +41,7 @@ def main():
         assert train.load_runner("strike") is fake_runner
         importer.assert_called_once_with("tab2body.train_strike")
 
-    print("PASS: unified train.py fret/strike task dispatch")
+    print("PASS: unified train.py task dispatch")
 
 
 if __name__ == "__main__":

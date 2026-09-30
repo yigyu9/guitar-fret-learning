@@ -95,10 +95,11 @@ def main(argv=None):
 
     checkpoint = base._load_checkpoint(
         torch, args.checkpoint, args.device)
-    stage, tolerance, tempo_lambda = base.restore_stage_and_tolerance(checkpoint)
-    if stage != "A4_ZONE_CONTROL":
+    restored_curriculum = base.restore_stage_and_tolerance(checkpoint)
+    stage, tolerance, tempo_lambda, _strum_span = restored_curriculum[:4]
+    if stage != "S3_SONG_INTEGRATION":
         raise ValueError(
-            "string-alignment audit requires an A4 checkpoint")
+            "string-alignment audit requires an S3 checkpoint")
 
     env = construct_evaluation_replay_task(
         StrikeTask, args, STRIKE, checkpoint)
@@ -107,7 +108,9 @@ def main(argv=None):
         contract_model = base._mapping(contract.get("model"))
         init_std = float(contract_model.get(
             "policy_init_std", STRIKE["policy_init_std"]))
-        model = ActorCritic(
+        from tab2body.learning.strike_v2_model import strike_actor_critic_class
+        ModelType = strike_actor_critic_class(env.observation_contract)
+        model = ModelType(
             env.num_obs, env.num_actions, env.value_dim,
             init_std=init_std).to(args.device)
         base.verify_live_contract(
@@ -274,8 +277,8 @@ def main(argv=None):
                         info["strum_order_violation_count"])))),
                     "wrong_direction_count": int(round(float(_scalar(
                         info["strum_wrong_direction_count"])))),
-                    "protected_crossing_count": int(round(float(_scalar(
-                        info["strum_protected_crossing_count"])))),
+                    "unplanned_crossing_count": int(round(float(_scalar(
+                        info["strum_unplanned_crossing_count"])))),
                     "duplicate_crossing_count": int(round(float(_scalar(
                         info["strum_duplicate_crossing_count"])))),
                     "blocked_released_strings": blocked_releases,

@@ -87,6 +87,11 @@ def main():
         actions, torch.tensor([False, True, False]))
     assert torch.isclose(penalty[0], torch.tensor(0.0024), atol=1e-7)
     assert penalty[1] == 0.0 and penalty[2] == 0.0
+    supported_penalty = thumb_base_action_saturation_penalty(
+        actions, torch.tensor([False, True, False]),
+        supported_fraction=0.25)
+    assert torch.isclose(
+        supported_penalty[1], torch.tensor(0.0025), atol=1e-7)
 
     distances = torch.tensor([0.0, 0.015, 0.05, 0.10, 0.20])
     approach = thumb_approach_reward(distances)

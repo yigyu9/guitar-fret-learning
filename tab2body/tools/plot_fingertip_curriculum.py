@@ -6,7 +6,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from training_metrics import load_metric_rows
+from tab2body.tools.training_metrics import load_metric_rows
 
 
 STAGE_NAMES = (

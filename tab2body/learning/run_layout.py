@@ -127,6 +127,16 @@ def default_strike_video_paths(checkpoint):
     }
 
 
+def default_strike_full_song_video_paths(checkpoint):
+    checkpoint = Path(checkpoint).resolve()
+    root = infer_run_dir_from_checkpoint(checkpoint)
+    parent = root / "videos" if checkpoint.parent.name == "checkpoints" else checkpoint.parent
+    return {
+        view: parent / f"{checkpoint.stem}_full_song_{view}.mp4"
+        for view in ("remembered", "current")
+    }
+
+
 def default_plot_path(metrics):
     metrics = Path(metrics).resolve()
     if metrics.parent.name == "logs":

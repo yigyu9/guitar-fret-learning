@@ -5,12 +5,12 @@
   2) frames: 60 Hz에서 바로 텐서화할 수 있는 줄별 goal과 완만한 hand position
 
 실행 예:
-  python3 tab2body/tools/build_fret_training_data.py \
+  python3 -m tab2body.tools.build_fret_training_data \
     guitar_v3/data/moum/annotation/audio_mono-mic/02_Jazz1-200-B_solo.jams \
     --audio guitar_v3/data/moum/audio/audio_mono-mic/02_Jazz1-200-B_solo_mic.wav \
     --out data/song_bundles/02_Jazz1-200-B_solo/training/fret_training.json
 
-  python3 tab2body/tools/build_fret_training_data.py \
+  python3 -m tab2body.tools.build_fret_training_data \
     --fingering data/song_bundles/<song_id>/mapping/fingering.json \
     --audio data/song_bundles/<song_id>/source/audio.wav \
     --out data/song_bundles/<song_id>/training/fret_training.json

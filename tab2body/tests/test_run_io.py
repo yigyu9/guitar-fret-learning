@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 import tempfile
+import threading
 from unittest.mock import patch
 
 
@@ -67,6 +68,136 @@ def main():
         ]
         assert [row["mode"] for row in sessions] == [
             "training", "evaluation"]
+
+        concurrent_log = layout.logs / "concurrent.jsonl"
+        workers = []
+        worker_errors = []
+        for worker_id in range(4):
+            def write_records(identifier=worker_id):
+                try:
+                    for record in range(100):
+                        run_io.append_jsonl_atomic(
+                            concurrent_log,
+                            {"worker": identifier, "record": record})
+                except Exception as exc:
+                    worker_errors.append(exc)
+
+            worker = threading.Thread(
+                target=write_records)
+            worker.start()
+            workers.append(worker)
+        for worker in workers:
+            worker.join()
+        assert not worker_errors, worker_errors
+        assert run_io.validate_jsonl(concurrent_log) == 400
+        concurrent_rows = {
+            (row["worker"], row["record"])
+            for row in (
+                json.loads(line) for line in concurrent_log.read_text(
+                    encoding="utf-8").splitlines())
+        }
+        assert concurrent_rows == {
+            (worker, record)
+            for worker in range(4) for record in range(100)
+        }
+
+        interrupted_log = layout.logs / "interrupted.jsonl"
+        real_pwrite = run_io.os.pwrite
+        pwrite_calls = {"count": 0}
+
+        def interrupt_after_prefix(descriptor, payload, offset):
+            pwrite_calls["count"] += 1
+            if pwrite_calls["count"] == 1:
+                prefix_size = max(1, len(payload) // 2)
+                return real_pwrite(
+                    descriptor, payload[:prefix_size], offset)
+            raise OSError("simulated power loss")
+
+        with patch.object(
+                run_io.os, "pwrite", side_effect=interrupt_after_prefix):
+            expect_error(
+                OSError, "simulated power loss",
+                lambda: run_io.append_jsonl_atomic(
+                    interrupted_log, {"iteration": 1, "valid": True}))
+        pending = interrupted_log.with_name(
+            f".{interrupted_log.name}.append.pending.json")
+        assert pending.exists()
+        assert not interrupted_log.read_bytes().endswith(b"\n")
+        assert run_io.validate_jsonl(interrupted_log) == 1
+        assert not pending.exists()
+        run_io.append_jsonl_atomic(
+            interrupted_log, {"iteration": 2, "valid": True})
+        recovered_rows = [
+            json.loads(line) for line in interrupted_log.read_text(
+                encoding="utf-8").splitlines()
+        ]
+        assert [row["iteration"] for row in recovered_rows] == [1, 2]
+
+        mismatched_log = layout.logs / "mismatched.jsonl"
+        run_io.append_jsonl_atomic(
+            mismatched_log, {"iteration": 1, "valid": True})
+        committed_size = mismatched_log.stat().st_size
+        pwrite_calls["count"] = 0
+        with patch.object(
+                run_io.os, "pwrite", side_effect=interrupt_after_prefix):
+            expect_error(
+                OSError, "simulated power loss",
+                lambda: run_io.append_jsonl_atomic(
+                    mismatched_log, {"iteration": 2, "valid": True}))
+        with mismatched_log.open("r+b") as stream:
+            stream.seek(committed_size)
+            stream.write(b"X")
+            stream.flush()
+        before_validation = mismatched_log.read_bytes()
+        expect_error(
+            ValueError, "does not match its journal",
+            lambda: run_io.validate_jsonl(mismatched_log))
+        assert mismatched_log.read_bytes() == before_validation
+        assert mismatched_log.with_name(
+            f".{mismatched_log.name}.append.pending.json").exists()
+
+        replaced_log = layout.logs / "replaced.jsonl"
+        pwrite_calls["count"] = 0
+        with patch.object(
+                run_io.os, "pwrite", side_effect=interrupt_after_prefix):
+            expect_error(
+                OSError, "simulated power loss",
+                lambda: run_io.append_jsonl_atomic(
+                    replaced_log, {"iteration": 1, "valid": True}))
+        replacement = layout.logs / "replacement.tmp"
+        replacement.write_bytes(replaced_log.read_bytes())
+        replacement.replace(replaced_log)
+        replaced_before = replaced_log.read_bytes()
+        expect_error(
+            ValueError, "target was replaced",
+            lambda: run_io.validate_jsonl(replaced_log))
+        assert replaced_log.read_bytes() == replaced_before
+
+        lease = run_io.acquire_run_writer(layout)
+        expect_error(
+            RuntimeError, "another trainer owns this run",
+            lambda: run_io.acquire_run_writer(layout))
+        lease.close()
+        with run_io.acquire_run_writer(layout):
+            pass
+
+        malformed = layout.logs / "malformed.jsonl"
+        malformed.write_text(
+            '{"valid": true}\n{"broken":\n{"valid": true}\n',
+            encoding="utf-8")
+        malformed_before = malformed.read_bytes()
+        expect_error(
+            ValueError, ":2:", lambda: run_io.validate_jsonl(malformed))
+        assert malformed.read_bytes() == malformed_before
+
+        unterminated = layout.logs / "unterminated.jsonl"
+        unterminated.write_text('{"valid": true}', encoding="utf-8")
+        assert run_io.validate_jsonl(unterminated) == 1
+        expect_error(
+            ValueError, "unterminated log record",
+            lambda: run_io.append_jsonl_atomic(
+                unterminated, {"valid": True}))
+        assert unterminated.read_text(encoding="utf-8") == '{"valid": true}'
 
         changed = dict(manifest, checkpoint_contract_sha256="b" * 64)
         expect_error(

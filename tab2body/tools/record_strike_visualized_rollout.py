@@ -68,6 +68,13 @@ def restored_environment_spec(checkpoint):
     state = checkpoint.get("environment_state")
     if not isinstance(state, dict):
         raise ValueError("checkpoint has no environment_state for exact replay")
+    if state.get("schema") not in {
+            "tab2body.strike_environment_state.v13",
+            "tab2body.strike_environment_state.v14",
+    }:
+        raise ValueError(
+            "visualized exact replay requires strike environment_state.v13/v14; "
+            "use the base recorder for historical v12 checkpoints")
     generation = state.get("reset_generation")
     size = getattr(generation, "numel", None)
     if not callable(size) or int(size()) <= 0:
@@ -110,10 +117,39 @@ def restore_evaluation_replay(env, checkpoint):
     env.reset()
     env.load_curriculum_state_dict(state)
     full_song = bool(
-        env.curriculum_stage == "A4_ZONE_CONTROL"
+        env.curriculum_stage == "S3_SONG_INTEGRATION"
         and abs(float(env.tempo_lambda) - 1.0) <= 1e-9)
     env.set_evaluation_mode(full_song, reset=False)
     return env.reset()
+
+
+def configure_full_song_diagnostic_replay(env):
+    """Match the base full-song recorder's non-destructive termination rule."""
+    full_song = bool(env.evaluation_full_song)
+    suppressed = bool(
+        full_song and env.wrong_crossing_termination_enabled)
+    if full_song:
+        env.wrong_crossing_termination_enabled = False
+    return suppressed
+
+
+def validate_full_song_capture(report, full_song_contract):
+    if full_song_contract is None:
+        return
+    if not (
+            report.get("captured_original_song_duration") is True
+            and report.get("completed_full_timeline") is True
+            and report.get("ended_before_original_song_end") is False):
+        raise RuntimeError(
+            "visualized S3 rollout did not complete the original song timeline")
+
+
+def _staged_artifact_path(target):
+    target = Path(target)
+    with tempfile.NamedTemporaryFile(
+            prefix=f".{target.stem}.pending.", suffix=target.suffix,
+            dir=target.parent, delete=False) as stream:
+        return Path(stream.name)
 
 
 def parser():
@@ -187,7 +223,6 @@ def main(argv=None):
     import torch
 
     from tab2body.env.tasks import StrikeTask
-    from tab2body.learning import ActorCritic
     from tab2body.strike_cfg import STRIKE
     from tab2body.tools import record_strike_rollout as base
     from tab2body.tools.strike_visualization import (
@@ -200,7 +235,8 @@ def main(argv=None):
     ffmpeg = base.require_ffmpeg()
     checkpoint = base._load_checkpoint(
         torch, args.checkpoint, args.device)
-    stage, tolerance, tempo_lambda = base.restore_stage_and_tolerance(checkpoint)
+    restored_curriculum = base.restore_stage_and_tolerance(checkpoint)
+    stage, tolerance, tempo_lambda, _strum_span = restored_curriculum[:4]
     outputs = resolve_visualized_video_paths(
         args.checkpoint, args.out_remembered, args.out_current,
         evaluation_state=True)
@@ -212,6 +248,7 @@ def main(argv=None):
     for output in all_targets:
         output.parent.mkdir(parents=True, exist_ok=True)
 
+    staged_outputs = {}
     env = construct_evaluation_replay_task(
         StrikeTask, args, STRIKE, checkpoint)
     try:
@@ -219,17 +256,27 @@ def main(argv=None):
         contract_model = base._mapping(contract.get("model"))
         init_std = float(contract_model.get(
             "policy_init_std", STRIKE["policy_init_std"]))
-        model = ActorCritic(
+        from tab2body.learning.strike_v2_model import strike_actor_critic_class
+        ModelType = strike_actor_critic_class(env.observation_contract)
+        model = ModelType(
             env.num_obs, env.num_actions, env.value_dim,
             init_std=init_std).to(args.device)
         base.verify_live_contract(
             checkpoint, env, model, args.goal, args.grip_reference, STRIKE)
         model.load_state_dict(checkpoint["model"])
         model.eval()
-        if stage != "A4_ZONE_CONTROL":
+        if stage != "S3_SONG_INTEGRATION":
             raise ValueError(
-                "exact evaluation replay currently requires A4_ZONE_CONTROL")
+                "exact evaluation replay currently requires S3_SONG_INTEGRATION")
         obs = restore_evaluation_replay(env, checkpoint)
+        wrong_crossing_termination_suppressed = (
+            configure_full_song_diagnostic_replay(env))
+        full_song_contract = None
+        if env.evaluation_full_song:
+            from tab2body.learning.periodic_checkpoint_video import (
+                strike_full_song_capture_contract,
+            )
+            full_song_contract = strike_full_song_capture_contract(env)
 
         target_tensor = env.hbody_pos("RH:palm")[0].detach().cpu()
         target = tuple(float(value) for value in target_tensor)
@@ -275,13 +322,14 @@ def main(argv=None):
         else:
             max_steps = int(STRIKE["artifact_max_steps"])
             goal_frames = getattr(getattr(env, "goals", None), "n_frames", 0)
-            if stage == "A4_ZONE_CONTROL":
+            if stage == "S3_SONG_INTEGRATION":
                 max_steps = max(max_steps, int(goal_frames) + 60)
 
         stride = 60 // args.fps
         written = 0
         simulated = 0
         reset_count = 0
+        episode_end = {}
         reward_sum = 0.0
         pick_trail_world = []
         target_strings_seen = set()
@@ -345,21 +393,27 @@ def main(argv=None):
                 with torch.no_grad():
                     action, _log_prob, _value = model.act(
                         obs, deterministic=True)
-                obs, reward, done, _info = env.step(action)
+                obs, reward, done, info = env.step(action)
                 simulated += 1
                 reward_value = base._first_scalar(reward)
                 if reward_value is not None:
                     reward_sum += reward_value
                 if bool(done.reshape(-1)[0].item()):
                     reset_count += 1
+                    for key in getattr(env, "episode_reason_keys", ()):
+                        value = base._first_scalar(info.get(f"episode_{key}"))
+                        if value is not None:
+                            episode_end[key] = bool(value)
                     break
 
             if written == 0:
                 raise RuntimeError(
                     "strike diagnostic replay produced no video frames")
             for view, target_path in outputs.items():
+                staged_path = _staged_artifact_path(target_path)
+                staged_outputs[view] = staged_path
                 base._encode_video(
-                    ffmpeg, frame_dirs[view], args.fps, target_path)
+                    ffmpeg, frame_dirs[view], args.fps, staged_path)
 
         report = {
             "schema":
@@ -386,6 +440,10 @@ def main(argv=None):
             "steps_simulated": simulated,
             "frames_per_view": written,
             "episode_ended": bool(reset_count),
+            "episode_end": episode_end,
+            "wrong_crossing_termination_suppressed": (
+                wrong_crossing_termination_suppressed),
+            "irrecoverable_safety_termination_preserved": True,
             "mean_reward": reward_sum / max(simulated, 1),
             "cameras": camera_report,
             "overlay": {
@@ -422,13 +480,29 @@ def main(argv=None):
                 for view, path in outputs.items()
             },
         }
-        report_path.write_text(
-            json.dumps(report, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        if full_song_contract is not None:
+            from tab2body.learning.periodic_checkpoint_video import (
+                strike_full_song_capture_summary,
+            )
+            report.update(strike_full_song_capture_summary(
+                full_song_contract, report))
+        validate_full_song_capture(report, full_song_contract)
+        for view, staged_path in staged_outputs.items():
+            staged_path.replace(outputs[view])
+        staged_report = _staged_artifact_path(report_path)
+        try:
+            staged_report.write_text(
+                json.dumps(report, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8")
+            staged_report.replace(report_path)
+        finally:
+            staged_report.unlink(missing_ok=True)
         print(json.dumps(report, indent=2, ensure_ascii=False))
         print(f"report: {report_path}")
         return report
     finally:
+        for staged_path in staged_outputs.values():
+            staged_path.unlink(missing_ok=True)
         close = getattr(env, "close", None)
         if callable(close):
             close()

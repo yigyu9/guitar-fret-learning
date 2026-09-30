@@ -224,6 +224,32 @@ def main():
             transfer_goals.frame_pose_slot[1].item())
         assert transfer_goals.finger_pose_slot_count == 3
 
+        advance_frames = [frame(index) for index in range(7)]
+        for index in range(3, 7):
+            advance_frames[index]["fret_goal"][2] = 5
+            advance_frames[index]["finger_goal"][2] = 1
+        advance_path = Path(tmp) / "press_advance.json"
+        advance_path.write_text(json.dumps({
+            "schema": "tab2body.fret_training.v1",
+            "metadata": {"fps": 60},
+            "frames": advance_frames,
+        }))
+        advance_goals = FretGoalSequence(
+            advance_path, num_envs=1, device="cpu")
+        ordinary = advance_goals.current()
+        advanced = advance_goals.current_with_press_advance(3)
+        assert ordinary["fret"][0, 2].item() == 0
+        assert advanced["fret"][0, 2].item() == 5
+        assert advanced["finger"][0, 2].item() == 1
+        assert advance_goals.frame_idx.item() == 0
+
+        # A future target must never overwrite a currently sounding fret.
+        advance_goals.fret[0, 2] = 3
+        advance_goals.finger[0, 2] = 2
+        protected = advance_goals.current_with_press_advance(3)
+        assert protected["fret"][0, 2].item() == 3
+        assert protected["finger"][0, 2].item() == 2
+
         hand_path = Path(tmp) / "valid.hand_position_targets.json"
         hand_payload = {
             "schema": "tab2body.hand_position_targets.v1",

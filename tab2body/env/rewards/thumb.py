@@ -228,8 +228,9 @@ def thumb_geometry_observation(
 
 
 def thumb_base_action_saturation_penalty(
-        actions, valid_support, threshold=0.90, weight=0.01):
-    """Softly discourage unsupported thumb-base commands near hard limits."""
+        actions, valid_support, threshold=0.90, weight=0.01,
+        supported_fraction=0.0):
+    """엄지 지지 여부와 무관하게 hard-limit 명령의 상시 사용을 억제한다."""
     if actions.ndim < 1 or actions.shape[-1] != 3:
         raise ValueError("thumb-base actions must have shape (..., 3)")
     valid_support = torch.as_tensor(
@@ -238,17 +239,24 @@ def thumb_base_action_saturation_penalty(
         raise ValueError("thumb support shape must match the action batch")
     threshold = float(threshold)
     weight = float(weight)
+    supported_fraction = float(supported_fraction)
     if (not math.isfinite(threshold) or not 0.0 <= threshold < 1.0):
         raise ValueError("thumb saturation threshold must be finite and in [0, 1)")
     if not math.isfinite(weight) or weight < 0.0:
         raise ValueError(
             "thumb saturation penalty weight must be finite and non-negative")
-    scale = 1.0 - threshold
-    excess = ((actions.abs() - threshold) / scale).clamp_min(0.0)
+    if (not math.isfinite(supported_fraction)
+            or not 0.0 <= supported_fraction <= 1.0):
+        raise ValueError(
+            "supported thumb saturation fraction must be in [0, 1]")
+    action_scale = 1.0 - threshold
+    excess = ((actions.abs() - threshold) / action_scale).clamp_min(0.0)
     penalty = weight * excess.square().mean(dim=-1)
-    return torch.where(
+    scale = torch.where(
         valid_support.to(dtype=torch.bool),
-        torch.zeros_like(penalty), penalty)
+        torch.full_like(penalty, supported_fraction),
+        torch.ones_like(penalty))
+    return penalty * scale
 
 
 class ThumbSupportReward:

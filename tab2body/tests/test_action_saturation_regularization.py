@@ -138,13 +138,41 @@ def main():
     assert imbalanced_mean.grad[0, 1].abs() > (
         imbalanced_mean.grad[:, 0].abs().sum())
 
+    # Frozen-context teacher subcohort 수로 재정규화되더라도 명시적인
+    # teacher 강도가 실제 손실과 기울기를 1 -> 0.5 -> 0으로 줄인다.
+    weighted_losses = []
+    weighted_gradients = []
+    weighted_target = torch.ones(4, 3)
+    weighted_mask = torch.ones(4, 3, dtype=torch.bool)
+    for scale in (1.0, 0.5, 0.0):
+        weighted_mean = torch.zeros(4, 3, requires_grad=True)
+        weighted_loss = masked_action_teacher_loss(
+            weighted_mean, weighted_target, weighted_mask,
+            torch.full((4,), scale))
+        weighted_loss.backward()
+        weighted_losses.append(float(weighted_loss))
+        weighted_gradients.append(float(weighted_mean.grad.norm()))
+    assert torch.allclose(
+        torch.tensor(weighted_losses), torch.tensor([1.0, 0.5, 0.0]))
+    assert torch.allclose(
+        torch.tensor(weighted_gradients),
+        torch.tensor([
+            weighted_gradients[0], 0.5 * weighted_gradients[0], 0.0,
+        ]), atol=1e-7)
+    _expect(
+        ValueError,
+        lambda: masked_action_teacher_loss(
+            torch.zeros(2, 3), torch.zeros(2, 3),
+            torch.ones(2, 3, dtype=torch.bool), torch.ones(3)))
+
     assert PPOConfig().action_saturation_regularization_weight == 0.0
     assert PPOConfig().action_teacher_weight == 0.0
     strike_ppo = PPOConfig(**STRIKE["ppo"])
-    assert strike_ppo.action_saturation_regularization_weight == 0.0
+    assert strike_ppo.action_saturation_regularization_weight == 0.002
+    assert strike_ppo.action_saturation_regularization_threshold == 0.90
     assert FRET["ppo"]["action_saturation_regularization_weight"] == 0.01
     assert FRET["ppo"]["action_saturation_regularization_threshold"] == 0.80
-    assert FRET["ppo"]["action_teacher_weight"] == 0.05
+    assert FRET["ppo"]["action_teacher_weight"] == 0.15
 
     # Weight 0은 환경 index를 요구하거나 actor mean을 추가 평가하지 않는다.
     legacy_env = _EnvStub(expose_indices=False)
@@ -199,6 +227,7 @@ def main():
     teacher_rollout["teacher_masks"] = torch.zeros(
         1, 4, 3, dtype=torch.bool)
     teacher_rollout["teacher_masks"][..., 1] = True
+    teacher_rollout["teacher_weights"] = torch.full((1, 4), 0.5)
     before_teacher = torch.tanh(
         teacher_model.distribution(teacher_trainer.obs).mean)[0, 1]
     teacher_stats = teacher_trainer.update(teacher_rollout)

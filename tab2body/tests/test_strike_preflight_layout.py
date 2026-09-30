@@ -39,6 +39,7 @@ def main():
                     train_strike.main([
                         "--out", str(run),
                         "--iterations", "1",
+                        "--curriculum-stage", "A0_PICK_GRIP",
                     ])
                 except RuntimeError as exc:
                     assert str(exc) == "resource rejected"

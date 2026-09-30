@@ -7,6 +7,7 @@ builder 경계에서 정확히 한 번 ``5 - string``으로 뒤집어 Isaac 관�
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -47,7 +48,8 @@ def time_to_frame(time_s: float, fps: int = STRIKE_FPS) -> int:
 
 
 def build_strike_training_data(
-        fingering: Mapping[str, Any], source_path=None) -> dict[str, Any]:
+        fingering: Mapping[str, Any], source_path=None,
+        reviewed_overrides=None) -> dict[str, Any]:
     """Convert ordered fingering notes into a gesture-compilable timeline."""
     if not isinstance(fingering, Mapping):
         raise ValueError("fingering document must be an object")
@@ -88,27 +90,46 @@ def build_strike_training_data(
                 f"note {note_index} maps to frame {frame} after "
                 f"{previous_frame}")
 
-        events.append({
+        event = {
             "time": time_s,
             "frame": frame,
             "string": 5 - source_string,
-        })
+        }
+        for field in (
+                "event_id", "source_time", "time_uncertainty_s", "source_ref"):
+            if field in note:
+                event[field] = note[field]
+        events.append(event)
         previous_time = time_s
         previous_frame = frame
 
     source = str(Path(source_path).resolve()) if source_path is not None else None
+    source_sha256 = (
+        hashlib.sha256(Path(source_path).read_bytes()).hexdigest()
+        if source_path is not None else None)
+    embedded_overrides = fingering.get(
+        "strike_reviewed_overrides", fingering.get("reviewed_overrides"))
+    if reviewed_overrides is not None and embedded_overrides is not None:
+        raise ValueError(
+            "reviewed overrides must come from either fingering or the explicit "
+            "argument, not both")
+    selected_overrides = (
+        embedded_overrides if reviewed_overrides is None else reviewed_overrides)
     output = {
         "schema": STRIKE_TRAINING_SCHEMA,
         "metadata": {
             "fps": STRIKE_FPS,
-            "profile": "pick_gesture_compiler_v2",
+            "profile": "pick_gesture_compiler_v3",
             "time_authority": "events[].time copied from fingering.notes[].t_on",
             "source": source,
+            "source_sha256": source_sha256,
             "source_string_convention": "fingering notes 0=low-E, 5=high-e",
             "string_convention": "Isaac 0=high-e, 5=low-E",
         },
         "events": events,
     }
+    if selected_overrides is not None:
+        output["reviewed_overrides"] = selected_overrides
     output["validation"] = validate_strike_training_data(output)
     return output
 
@@ -118,13 +139,24 @@ def build_parser() -> argparse.ArgumentParser:
         description="build a 60 Hz pick gesture timeline from fingering notes")
     parser.add_argument("fingering", type=Path)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--review-overrides", type=Path)
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
     source = json.loads(args.fingering.read_text(encoding="utf-8"))
-    output = build_strike_training_data(source, source_path=args.fingering)
+    reviewed_overrides = None
+    if args.review_overrides is not None:
+        override_document = json.loads(
+            args.review_overrides.read_text(encoding="utf-8"))
+        reviewed_overrides = (
+            override_document.get("reviewed_overrides")
+            if isinstance(override_document, Mapping)
+            else override_document)
+    output = build_strike_training_data(
+        source, source_path=args.fingering,
+        reviewed_overrides=reviewed_overrides)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         json.dumps(output, indent=2, ensure_ascii=False) + "\n",

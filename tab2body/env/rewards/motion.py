@@ -10,7 +10,7 @@ GROUP_PREFIXES = {
     "finger": ("LH:",),
     "wrist": ("L_Wrist",),
     "elbow": ("L_Elbow",),
-    "shoulder": ("L_Thorax", "L_Shoulder"),
+    "shoulder": ("L_Shoulder",),
 }
 
 GROUP_WEIGHTS = {

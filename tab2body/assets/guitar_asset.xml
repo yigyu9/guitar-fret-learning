@@ -6,8 +6,9 @@
   Canonical O4 anchor pose (set via env config, NOT baked here):
     pos  = 0 0 0.89
     quat = 0.5573 -0.18685 0.57969 0.56433   (neck 26.5deg up, bridge z=0.71)
-  NOTE(P7): G:string1-6 / *_end are geometry-less marker bodies (massless).
-  Before G1 (free actor), add inertial to guitar root and verify massless bodies load.
+  NOTE(P7): G:string1-6 / *_end are geometry-less marker bodies in the MJCF.
+  GuitarEnvBase free-guitar mode preserves their names and assigns every body
+  finite runtime mass/inertia before simulation; GPU startup audit is required.
 -->
 <mujoco model="guitar_asset">
   <compiler angle="degree" meshdir="mesh"/>

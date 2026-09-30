@@ -9,7 +9,7 @@ from ..goals import FINGER_EVENT_TIME_SCALE_S
 from ..metrics import PressedDragMonitor
 from .common import smoothstep01
 from .motion import ProximalMotionReward
-from .reference_posture import ReferenceHandPosturePrior
+from .reference_posture import HumanJointRangePrior, ReferenceHandPosturePrior
 from .thumb import (
     ThumbSupportReward,
     thumb_base_action_saturation_penalty,
@@ -20,6 +20,23 @@ from .thumb import (
 
 
 FINGER_NAMES = ("index", "middle", "ring", "pinky")
+PRESS_PRECISION_MIN_POSITION = 0.50
+PRESS_PRECISION_MIN_ARCH = 0.65
+FRET_VALID_REGION_LOWER = 0.10
+FRET_VALID_REGION_UPPER = 0.90
+
+# These stages ask the finger to depress the virtual string.  Their alignment
+# target must therefore accept a pad that has moved through the string plane;
+# using the hover target here creates a direct reward conflict at contact.
+PRESS_COMPATIBLE_ALIGNMENT_STAGES = frozenset({
+    "isolated_press", "integrated_press", "chord_fine_reach",
+    "static_chord", "frozen_context", "goal_pair", "transition_window",
+    "coverage", "integration", "full_song",
+})
+
+
+def uses_press_compatible_alignment(stage):
+    return str(stage) in PRESS_COMPATIBLE_ALIGNMENT_STAGES
 
 
 def soft_interval_quality(angle, lower, upper, softness):
@@ -41,20 +58,45 @@ def finger_arch_quality(mcp, pip, dip):
             + 0.05 * coupling).clamp(0.0, 1.0)
 
 
-def fret_position_quality(x, lower=0.05, optimal=0.20, upper=0.35):
-    """유효 대역 안에서 프렛 와이어 뒤 20% 지점을 연속적으로 선호한다."""
-    if not 0.0 <= lower < optimal < upper <= 1.0:
-        raise ValueError("fret position bounds must satisfy 0 <= lower < optimal < upper <= 1")
-    rising = smoothstep01((x - lower) / (optimal - lower))
-    falling = smoothstep01((upper - x) / (upper - optimal))
-    return torch.where(x <= optimal, rising, falling)
+def fret_position_inside(
+        x, lower=FRET_VALID_REGION_LOWER,
+        upper=FRET_VALID_REGION_UPPER):
+    """Return the exact, uniform correct-position band inside a fret cell."""
+    if not 0.0 < lower < upper < 1.0:
+        raise ValueError("fret position region must satisfy 0 < lower < upper < 1")
+    return (x >= float(lower)) & (x <= float(upper))
 
 
-def dense_fret_position_quality(x, optimal=0.20, scale=0.20):
-    """유효 대역 밖에서도 목표 압점으로 향하는 기울기를 유지한다."""
-    if not 0.0 <= optimal <= 1.0 or scale <= 0.0:
-        raise ValueError("dense fret position requires a valid optimum and positive scale")
-    return torch.exp(-(((x - optimal) / scale) ** 2)).clamp(0.0, 1.0)
+def fret_position_quality(
+        x, lower=FRET_VALID_REGION_LOWER, optimal=0.20,
+        upper=FRET_VALID_REGION_UPPER):
+    """Give every point in the decided 10--90% fret band equal credit.
+
+    ``optimal`` is retained for source compatibility with old analysis tools;
+    it no longer creates a privileged point inside the valid interval.
+    Outside the interval, a smooth margin still supplies a learning signal.
+    """
+    if not 0.0 < lower <= optimal <= upper < 1.0:
+        raise ValueError(
+            "fret position bounds must satisfy 0 < lower <= optimal <= upper < 1")
+    rising = smoothstep01(x / float(lower))
+    falling = smoothstep01((1.0 - x) / float(1.0 - upper))
+    return torch.minimum(rising, falling).clamp(0.0, 1.0)
+
+
+def dense_fret_position_quality(
+        x, optimal=0.20, scale=0.20,
+        lower=FRET_VALID_REGION_LOWER,
+        upper=FRET_VALID_REGION_UPPER):
+    """Keep a dense gradient toward the nearest edge of the valid band."""
+    if (not 0.0 < lower <= optimal <= upper < 1.0
+            or scale <= 0.0):
+        raise ValueError(
+            "dense fret position requires a valid region and positive scale")
+    distance = torch.maximum(
+        (float(lower) - x).clamp_min(0.0),
+        (x - float(upper)).clamp_min(0.0))
+    return torch.exp(-((distance / scale) ** 2)).clamp(0.0, 1.0)
 
 
 def press_precision_gate(dense_quality, floor=0.40):
@@ -64,13 +106,50 @@ def press_precision_gate(dense_quality, floor=0.40):
 
 
 def precise_press_success(press_success, position_quality, arch_quality=None,
-                          min_position=0.50, min_arch=None):
+                          min_position=PRESS_PRECISION_MIN_POSITION,
+                          min_arch=None):
     result = press_success & (position_quality >= float(min_position))
     if min_arch is not None:
         if arch_quality is None:
             raise ValueError("arch quality is required when min_arch is set")
         result &= arch_quality >= float(min_arch)
     return result
+
+
+def press_precision_components(
+        press_success, position_quality, arch_quality,
+        min_position=PRESS_PRECISION_MIN_POSITION,
+        min_arch=PRESS_PRECISION_MIN_ARCH):
+    """엄격 압현 판정의 접촉·위치·아치·결합 통과값을 분리한다."""
+    if (press_success.shape != position_quality.shape
+            or arch_quality.shape != position_quality.shape):
+        raise ValueError("press precision tensors must share shape")
+    position_pass = position_quality >= float(min_position)
+    arch_pass = arch_quality >= float(min_arch)
+    precise_pass = press_success & position_pass & arch_pass
+    return press_success, position_pass, arch_pass, precise_pass
+
+
+def press_arch_shaping_quality(
+        arch_quality, threshold=PRESS_PRECISION_MIN_ARCH):
+    """연속 아치 품질을 엄격 판정 경계까지 직접 유도한다."""
+    threshold = float(threshold)
+    if not 0.0 < threshold <= 1.0:
+        raise ValueError("press arch threshold must be in (0, 1]")
+    gate_margin = smoothstep01(arch_quality / threshold)
+    return (0.50 * arch_quality + 0.50 * gate_margin).clamp(0.0, 1.0)
+
+
+def isolated_press_conjunctive_quality(
+        press_acquisition, position_quality, arch_precision_quality):
+    """접촉·유효 압점·아치를 동시에 만족한 만큼만 정밀 품질을 준다."""
+    tensors = (press_acquisition, position_quality, arch_precision_quality)
+    if any(value.shape != press_acquisition.shape for value in tensors):
+        raise ValueError("isolated press precision tensors must share shape")
+    return (
+        press_acquisition.clamp(0.0, 1.0)
+        * position_quality.clamp(0.0, 1.0)
+        * arch_precision_quality.clamp(0.0, 1.0))
 
 
 def multi_scale_approach_reward(distance):
@@ -95,11 +174,52 @@ def fine_alignment_distance_reward(distance):
     ).clamp(0.0, 1.0)
 
 
+def integrated_press_core_reward(
+        distance_reward, fine_distance_reward, lateral_quality,
+        normal_quality, precision_gate, press_acquisition,
+        press_hold_quality, press_success, good_position_quality):
+    """접촉 전 정렬 기울기를 남기면서 실제 압현과 유지를 우선한다."""
+    values = (
+        distance_reward, fine_distance_reward, lateral_quality,
+        normal_quality, precision_gate, press_acquisition,
+        press_hold_quality, press_success, good_position_quality)
+    if any(value.shape != distance_reward.shape for value in values):
+        raise ValueError("integrated press reward tensors must share shape")
+    alignment = (
+        0.40 * fine_distance_reward
+        + 0.35 * lateral_quality
+        + 0.25 * normal_quality)
+    return (
+        0.25 * distance_reward
+        + 0.15 * alignment
+        + precision_gate * (
+            0.30 * press_acquisition + 0.10 * press_hold_quality)
+        + 0.20 * press_success.float() * good_position_quality)
+
+
+def qualify_curriculum_episode_success(
+        streak_success, success_frames, evidence_frames,
+        minimum_fraction=0.80):
+    minimum_fraction = float(minimum_fraction)
+    if not 0.0 < minimum_fraction <= 1.0:
+        raise ValueError("curriculum success fraction must be in (0, 1]")
+    if (streak_success.shape != success_frames.shape
+            or evidence_frames.shape != success_frames.shape):
+        raise ValueError("curriculum episode tensors must share shape")
+    fraction = success_frames / evidence_frames.clamp_min(1.0)
+    qualified = (
+        streak_success.bool()
+        & (evidence_frames > 0.0)
+        & (fraction >= minimum_fraction))
+    return qualified, fraction
+
+
 def chord_aware_target_fraction(
         fret, active, base_target, usable,
-        optimal=0.20, lower=0.05, upper=0.80,
+        optimal=0.20, lower=FRET_VALID_REGION_LOWER,
+        upper=FRET_VALID_REGION_UPPER,
         fingertip_clearance=0.0155):
-    """같은 프렛의 여러 손끝 목표를 프렛 셀 안에서 앞뒤로 엇갈리게 둔다."""
+    """같은 프렛의 손끝 목표를 10--90% correct region 안에서 엇갈린다."""
     if (fret.ndim != 2 or active.shape != fret.shape
             or usable.shape != fret.shape
             or base_target.shape != (*fret.shape, 3)):
@@ -133,11 +253,10 @@ def chord_aware_target_fraction(
         ) / minimum_usable.clamp_min(1e-6)
         span = (step * (count - 1).clamp_min(0)).clamp(
             max=float(upper - lower))
-        start = torch.maximum(
-            torch.full_like(span, float(lower)),
-            torch.minimum(
-                torch.full_like(span, float(optimal)) - 0.5 * span,
-                torch.full_like(span, float(upper)) - span))
+        start = torch.minimum(
+            float(optimal) - 0.5 * span,
+            float(upper) - span,
+        ).clamp_min(float(lower))
         rank = group.long().cumsum(dim=1) - 1
         fraction = (
             start[:, None]
@@ -322,6 +441,60 @@ def blend_goal_pair_rehearsal_anchor_reward(
     return torch.where(active[:, None], shaped, balanced_reward), anchor_reward, active
 
 
+def gate_static_chord_auxiliary_reward(
+        balanced_reward, press_reward, press_completion, floor=0.15):
+    """압현 미완성 상태에서 보조 채널의 양의 이득만 제한한다."""
+    floor = float(floor)
+    if not 0.0 <= floor <= 1.0:
+        raise ValueError("static chord auxiliary gate floor must be in [0, 1]")
+    if (balanced_reward.ndim != 2
+            or press_reward.shape != balanced_reward.shape[:1]
+            or press_completion.shape != balanced_reward.shape[:1]):
+        raise ValueError("static chord gate tensors have incompatible shapes")
+    delta = balanced_reward - press_reward[:, None]
+    gate = floor + (1.0 - floor) * press_completion.clamp(0.0, 1.0)
+    gated_delta = delta.clamp_max(0.0) + gate[:, None] * delta.clamp_min(0.0)
+    return press_reward[:, None] + gated_delta, gate
+
+
+def gate_incomplete_static_chord_reward(
+        balanced_reward, press_completion, press_count,
+        floor=0.15, power=2.0):
+    """동시 압현이 덜 완성된 코드의 양의 보상만 강하게 제한한다."""
+    if (balanced_reward.ndim != 2
+            or press_completion.shape != balanced_reward.shape[:1]
+            or press_count.shape != balanced_reward.shape[:1]):
+        raise ValueError(
+            "static chord completion tensors have incompatible shapes")
+    floor = float(floor)
+    power = float(power)
+    if not 0.0 <= floor <= 1.0 or power <= 0.0:
+        raise ValueError(
+            "static chord completion gate requires floor in [0,1] "
+            "and power > 0")
+    multi_press = press_count >= 2
+    completion_gate = (
+        floor + (1.0 - floor)
+        * press_completion.clamp(0.0, 1.0).pow(power))
+    gate = torch.where(
+        multi_press, completion_gate, torch.ones_like(completion_gate))
+    gated = (
+        balanced_reward.clamp_max(0.0)
+        + gate[:, None] * balanced_reward.clamp_min(0.0))
+    return gated, gate
+
+
+def gate_chord_completion_for_stage(
+        stage, balanced_reward, press_completion, press_count,
+        floor=0.15, power=2.0):
+    """Keep the completion gate active throughout static and frozen stages."""
+    if str(stage) not in ("static_chord", "frozen_context"):
+        return balanced_reward, torch.ones_like(press_completion)
+    return gate_incomplete_static_chord_reward(
+        balanced_reward, press_completion, press_count,
+        floor=floor, power=power)
+
+
 def blend_anchor_finger_reward(
         mean_reward, per_finger_reward, active_mask, anchor_finger,
         weight=0.20):
@@ -370,6 +543,13 @@ def cached_finger_pose_guide(
     return reward, per_finger, active
 
 
+def frozen_context_pose_guide_gate(current_finger_active, training_mask):
+    if (current_finger_active.ndim != 2
+            or training_mask.shape != current_finger_active.shape[:1]):
+        raise ValueError("frozen pose-guide masks must have shape [N,F] and [N]")
+    return current_finger_active & training_mask.bool()[:, None]
+
+
 def cached_finger_action_teacher(
         target_action, valid, guide_active, guide_quality,
         minimum_quality=0.0):
@@ -390,6 +570,48 @@ def cached_finger_action_teacher(
     mask = selected[..., None].expand_as(target_action)
     teacher = torch.where(mask, target_action, torch.zeros_like(target_action))
     return teacher, mask
+
+
+def cached_consensus_action_teacher(
+        target_action, valid, active, cache_quality,
+        max_action_spread=0.35, minimum_sources=2):
+    """여러 손가락의 성공 action이 합의하는 proximal 축만 감독한다.
+
+    정규화 action은 관절 범위에 선형 대응하므로 품질 가중 평균을 사용할 수
+    있다. 손가락별 목표가 충돌하는 축은 range 검사를 통해 mask에서 제외해
+    잘못된 평균 자세를 정책에 강제하지 않는다.
+    """
+    if target_action.ndim != 3:
+        raise ValueError("consensus targets must have shape [N,F,A]")
+    expected = target_action.shape[:2]
+    if (valid.shape != expected or active.shape != expected
+            or cache_quality.shape != expected):
+        raise ValueError("consensus teacher gates must have shape [N,F]")
+    max_action_spread = float(max_action_spread)
+    minimum_sources = int(minimum_sources)
+    if not 0.0 < max_action_spread <= 2.0:
+        raise ValueError("consensus action spread must be in (0, 2]")
+    if minimum_sources < 1:
+        raise ValueError("consensus teacher needs at least one source")
+    selected = valid.bool() & active.bool()
+    source_count = selected.sum(dim=1)
+    weights = torch.where(
+        selected, cache_quality.clamp_min(1e-4),
+        torch.zeros_like(cache_quality))
+    weight_sum = weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
+    teacher = (
+        target_action * weights[..., None]
+    ).sum(dim=1) / weight_sum
+    low = target_action.masked_fill(
+        ~selected[..., None], float("inf")).amin(dim=1)
+    high = target_action.masked_fill(
+        ~selected[..., None], -float("inf")).amax(dim=1)
+    agreed = (
+        (source_count >= minimum_sources)[:, None]
+        & torch.isfinite(low) & torch.isfinite(high)
+        & ((high - low) <= max_action_spread))
+    teacher = torch.where(agreed, teacher, torch.zeros_like(teacher))
+    return teacher, agreed
 
 
 def aggregate_active_channel_bottleneck(
@@ -442,6 +664,46 @@ def chord_fine_conjunctive_reward(
             channel, active_mask,
             bottleneck_weight=bottleneck_weight))
     return expanded, aggregate, mean, minimum, axis_minimum
+
+
+def fret_region_alignment(
+        signed_longitudinal, lateral_error, normal_error,
+        target_fraction, usable_length,
+        lower=FRET_VALID_REGION_LOWER,
+        upper=FRET_VALID_REGION_UPPER):
+    """목표점이 아니라 허용 압현 구간까지의 오차를 계산한다."""
+    if not 0.0 <= lower < upper <= 1.0:
+        raise ValueError("fret region must satisfy 0 <= lower < upper <= 1")
+    tensors = (
+        signed_longitudinal, lateral_error, normal_error,
+        target_fraction, usable_length)
+    if any(value.shape != signed_longitudinal.shape for value in tensors):
+        raise ValueError("fret-region tensors must share shape")
+    sample_fraction = (
+        target_fraction
+        - signed_longitudinal / usable_length.clamp_min(1e-5))
+    fraction_error = torch.maximum(
+        (float(lower) - sample_fraction).clamp_min(0.0),
+        (sample_fraction - float(upper)).clamp_min(0.0))
+    longitudinal_error = fraction_error * usable_length
+    longitudinal_quality = torch.exp(-((longitudinal_error / 0.008) ** 2))
+    lateral_quality = torch.exp(-((lateral_error / 0.004) ** 2))
+    normal_quality = torch.exp(-((normal_error / 0.006) ** 2))
+    distance = torch.sqrt(
+        longitudinal_error.square() + lateral_error.square()
+        + normal_error.square() + 1e-12)
+    return {
+        "sample_fraction": sample_fraction,
+        "fraction_error": fraction_error,
+        "longitudinal_error": longitudinal_error,
+        "longitudinal_quality": longitudinal_quality,
+        "lateral_quality": lateral_quality,
+        "normal_quality": normal_quality,
+        "alignment_quality": (
+            longitudinal_quality + lateral_quality + normal_quality) / 3.0,
+        "distance": distance,
+        "inside": fraction_error <= 1e-6,
+    }
 
 
 def next_goal_approach_reward(
@@ -580,6 +842,28 @@ def next_goal_potential_progress(
         progress * positive_scale[:, None],
         progress)
     return progress, potential
+
+
+def gate_next_goal_positive_progress(
+        progress, current_press_preserved, require_preservation=False):
+    """Keep signed progress, but optionally require a held current press.
+
+    A transition may still move *away* from the next target when the outgoing
+    press is lost; that negative signal is useful for learning.  The opposite
+    direction is different: granting positive next-goal credit while the
+    current note is not held teaches the policy to release before transferring.
+    ``require_preservation`` is opt-in so the historical standalone shaping
+    helper remains usable for non-transition ablations.
+    """
+    if progress.ndim != 2 or current_press_preserved.shape != progress.shape[:1]:
+        raise ValueError("next-goal progress gate requires [N,F] and [N]")
+    preserved = current_press_preserved.bool()
+    if require_preservation:
+        progress = torch.where(
+            progress > 0.0,
+            progress * preserved[:, None].to(progress.dtype),
+            progress)
+    return progress
 
 
 def conjunctive_next_goal_quality(next_quality, preservation_quality):
@@ -1027,9 +1311,12 @@ class FretReward:
 
     def __init__(self, env, wrist_weight=0.15, smooth_weight=0.0,
                  wrong_press_penalty=0.25, wrong_press_avoidance_weight=0.10,
-                 press_near_miss_penalty=0.15,
+                 press_near_miss_penalty=0.0,
                  press_near_miss_distance=0.015,
                  finger_arch_reward_weight=0.10,
+                 fine_reach_finger_arch_reward_weight=0.18,
+                 isolated_press_arch_reward_weight=0.35,
+                 isolated_press_conjunctive_weight=0.30,
                  thumb_weight=0.15,
                  thumb_pad_radius=0.010,
                  thumb_approach_scale=0.020, thumb_reach_scale=0.120,
@@ -1045,6 +1332,7 @@ class FretReward:
                  thumb_press_gate_weight=0.15,
                  thumb_base_saturation_threshold=0.90,
                  thumb_base_saturation_penalty_weight=0.01,
+                 thumb_base_supported_saturation_fraction=0.0,
                  proximal_weight=0.02, proximal_transition=0.10,
                  hover_weight=0.020, hover_free_gap=0.012,
                  hover_decay_scale=0.020, hover_position_weight=0.55,
@@ -1065,6 +1353,11 @@ class FretReward:
                  reference_motion_prior_weight=0.0,
                  reference_motion_prior_finger_fraction=0.67,
                  reference_motion_prior_exemplars=64,
+                 human_joint_range_path=None,
+                 human_joint_range_weight=0.0,
+                 human_joint_range_decay_deg=15.0,
+                 human_joint_range_active_finger_fraction=0.25,
+                 human_joint_range_thumb_fraction=0.10,
                  slip_weight=0.005, slip_stable_frames=3,
                  slip_free_distance=0.002, slip_decay_scale=0.003,
                  pressed_drag_threshold=0.003,
@@ -1076,7 +1369,11 @@ class FretReward:
                  chord_fine_joint_weight=0.40,
                  chord_fine_depth_start=-0.025,
                  static_chord_joint_weight=0.30,
+                 static_chord_auxiliary_gate_floor=0.15,
+                 static_chord_completion_gate_floor=0.15,
+                 static_chord_completion_gate_power=2.0,
                  goal_pair_rehearsal_anchor_weight=0.20,
+                 chord_reach_success_pose_guide_weight=0.25,
                  chord_fine_success_pose_guide_weight=0.15,
                  goal_pair_success_pose_guide_weight=0.20,
                  goal_pair_success_pose_focus_weight=0.60,
@@ -1088,6 +1385,12 @@ class FretReward:
                  press_dropout_penalty=0.15,
                  press_position_dense_scale=0.20,
                  press_precision_gate_floor=0.40,
+                 chord_fine_position_upper=0.90,
+                 chord_fine_position_dense_scale=0.30,
+                 chord_fine_precision_gate_floor=0.60,
+                 chord_multi_region_lower=FRET_VALID_REGION_LOWER,
+                 chord_multi_region_upper=FRET_VALID_REGION_UPPER,
+                 chord_multi_point_bonus_weight=0.0,
                  next_goal_weight=0.15,
                  goal_pair_transition_next_goal_weight=0.50,
                  goal_pair_context_next_goal_weight=0.35,
@@ -1103,6 +1406,12 @@ class FretReward:
         self.wrist_weight = float(wrist_weight)
         self.smooth_weight = float(smooth_weight)
         self.finger_arch_reward_weight = float(finger_arch_reward_weight)
+        self.fine_reach_finger_arch_reward_weight = float(
+            fine_reach_finger_arch_reward_weight)
+        self.isolated_press_arch_reward_weight = float(
+            isolated_press_arch_reward_weight)
+        self.isolated_press_conjunctive_weight = float(
+            isolated_press_conjunctive_weight)
         self.thumb_weight = float(thumb_weight)
         self.thumb_overforce_penalty = float(thumb_overforce_penalty)
         self.thumb_gate_full_distance = float(thumb_gate_full_distance)
@@ -1112,6 +1421,8 @@ class FretReward:
             thumb_base_saturation_threshold)
         self.thumb_base_saturation_penalty_weight = float(
             thumb_base_saturation_penalty_weight)
+        self.thumb_base_supported_saturation_fraction = float(
+            thumb_base_supported_saturation_fraction)
         self.proximal_weight = float(proximal_weight)
         self.hover_weight = float(hover_weight)
         self.hover_free_gap = float(hover_free_gap)
@@ -1141,6 +1452,7 @@ class FretReward:
             reference_motion_prior_weight)
         self.reference_motion_prior_finger_fraction = float(
             reference_motion_prior_finger_fraction)
+        self.human_joint_range_weight = float(human_joint_range_weight)
         self.slip_weight = float(slip_weight)
         self.slip_stable_frames = int(slip_stable_frames)
         self.slip_free_distance = float(slip_free_distance)
@@ -1155,8 +1467,16 @@ class FretReward:
         self.chord_fine_joint_weight = float(chord_fine_joint_weight)
         self.chord_fine_depth_start = float(chord_fine_depth_start)
         self.static_chord_joint_weight = float(static_chord_joint_weight)
+        self.static_chord_auxiliary_gate_floor = float(
+            static_chord_auxiliary_gate_floor)
+        self.static_chord_completion_gate_floor = float(
+            static_chord_completion_gate_floor)
+        self.static_chord_completion_gate_power = float(
+            static_chord_completion_gate_power)
         self.goal_pair_rehearsal_anchor_weight = float(
             goal_pair_rehearsal_anchor_weight)
+        self.chord_reach_success_pose_guide_weight = float(
+            chord_reach_success_pose_guide_weight)
         self.chord_fine_success_pose_guide_weight = float(
             chord_fine_success_pose_guide_weight)
         self.goal_pair_success_pose_guide_weight = float(
@@ -1176,6 +1496,16 @@ class FretReward:
         self.press_near_miss_distance = float(press_near_miss_distance)
         self.press_position_dense_scale = float(press_position_dense_scale)
         self.press_precision_gate_floor = float(press_precision_gate_floor)
+        self.chord_fine_position_upper = float(
+            chord_fine_position_upper)
+        self.chord_fine_position_dense_scale = float(
+            chord_fine_position_dense_scale)
+        self.chord_fine_precision_gate_floor = float(
+            chord_fine_precision_gate_floor)
+        self.chord_multi_region_lower = float(chord_multi_region_lower)
+        self.chord_multi_region_upper = float(chord_multi_region_upper)
+        self.chord_multi_point_bonus_weight = float(
+            chord_multi_point_bonus_weight)
         self.next_goal_weight = float(next_goal_weight)
         self.goal_pair_transition_next_goal_weight = float(
             goal_pair_transition_next_goal_weight)
@@ -1197,6 +1527,18 @@ class FretReward:
             raise ValueError("proximal_weight must be non-negative")
         if not 0.0 <= self.finger_arch_reward_weight < 1.0:
             raise ValueError("finger arch reward weight must be in [0, 1)")
+        if not 0.0 <= self.fine_reach_finger_arch_reward_weight < 1.0:
+            raise ValueError(
+                "fine-reach finger arch reward weight must be in [0, 1)")
+        if not 0.0 <= self.isolated_press_arch_reward_weight < 1.0:
+            raise ValueError(
+                "isolated-press arch reward weight must be in [0, 1)")
+        if self.isolated_press_arch_reward_weight + self.thumb_weight >= 1.0:
+            raise ValueError(
+                "isolated-press arch and thumb weights must sum below 1")
+        if not 0.0 <= self.isolated_press_conjunctive_weight <= 1.0:
+            raise ValueError(
+                "isolated-press conjunctive weight must be in [0, 1]")
         if self.thumb_overforce_penalty < 0.0:
             raise ValueError("thumb overforce penalty must be non-negative")
         if not 0.0 <= self.thumb_gate_full_distance < self.thumb_gate_zero_distance:
@@ -1211,6 +1553,11 @@ class FretReward:
                 or self.thumb_base_saturation_penalty_weight < 0.0):
             raise ValueError(
                 "thumb base saturation penalty weight must be non-negative")
+        supported_fraction = self.thumb_base_supported_saturation_fraction
+        if (not math.isfinite(supported_fraction)
+                or not 0.0 <= supported_fraction <= 1.0):
+            raise ValueError(
+                "supported thumb saturation fraction must be in [0,1]")
         if self.hover_weight < 0.0:
             raise ValueError("hover_weight must be non-negative")
         if self.hover_free_gap < 0.0 or self.hover_decay_scale <= 0.0:
@@ -1246,6 +1593,20 @@ class FretReward:
                 max_exemplars=reference_motion_prior_exemplars)
         else:
             self.reference_posture_prior = None
+        if not 0.0 <= self.human_joint_range_weight < 1.0:
+            raise ValueError("human joint range weight must be in [0, 1)")
+        if self.human_joint_range_weight > 0.0:
+            if human_joint_range_path is None:
+                raise ValueError(
+                    "human joint range path is required when enabled")
+            self.human_joint_range_prior = HumanJointRangePrior(
+                env, human_joint_range_path,
+                decay_scale_deg=human_joint_range_decay_deg,
+                active_finger_fraction=
+                    human_joint_range_active_finger_fraction,
+                thumb_fraction=human_joint_range_thumb_fraction)
+        else:
+            self.human_joint_range_prior = None
         if self.slip_weight < 0.0 or self.slip_stable_frames < 1:
             raise ValueError("slip weight must be non-negative and stable frames >= 1")
         if self.slip_free_distance < 0.0 or self.slip_decay_scale <= 0.0:
@@ -1269,9 +1630,21 @@ class FretReward:
                 "chord-fine depth start must precede press depth")
         if not 0.0 <= self.static_chord_joint_weight < 1.0:
             raise ValueError("static chord joint weight must be in [0, 1)")
+        if not 0.0 <= self.static_chord_auxiliary_gate_floor <= 1.0:
+            raise ValueError(
+                "static chord auxiliary gate floor must be in [0, 1]")
+        if not 0.0 <= self.static_chord_completion_gate_floor <= 1.0:
+            raise ValueError(
+                "static chord completion gate floor must be in [0, 1]")
+        if self.static_chord_completion_gate_power <= 0.0:
+            raise ValueError(
+                "static chord completion gate power must be positive")
         if not 0.0 <= self.goal_pair_rehearsal_anchor_weight < 1.0:
             raise ValueError(
                 "goal-pair rehearsal anchor weight must be in [0, 1)")
+        if not 0.0 <= self.chord_reach_success_pose_guide_weight < 1.0:
+            raise ValueError(
+                "chord-reach success pose guide weight must be in [0, 1)")
         if not 0.0 <= self.chord_fine_success_pose_guide_weight < 1.0:
             raise ValueError(
                 "chord-fine success-pose guide weight must be in [0, 1)")
@@ -1308,6 +1681,20 @@ class FretReward:
             raise ValueError("press position dense scale must be positive")
         if not 0.0 <= self.press_precision_gate_floor <= 1.0:
             raise ValueError("press precision gate floor must be in [0, 1]")
+        if not self.APPROACH_X < self.chord_fine_position_upper <= 1.0:
+            raise ValueError(
+                "chord-fine position upper must be above the 20% optimum")
+        if self.chord_fine_position_dense_scale <= 0.0:
+            raise ValueError(
+                "chord-fine position dense scale must be positive")
+        if not 0.0 <= self.chord_fine_precision_gate_floor <= 1.0:
+            raise ValueError(
+                "chord-fine precision gate floor must be in [0, 1]")
+        if not (0.0 <= self.chord_multi_region_lower
+                < self.chord_multi_region_upper <= 1.0):
+            raise ValueError("multi-press fret region is invalid")
+        if not 0.0 <= self.chord_multi_point_bonus_weight <= 0.20:
+            raise ValueError("multi-press point bonus must be in [0, 0.20]")
         if (self.next_goal_weight < 0.0
                 or self.next_goal_lookahead_s <= 0.0
                 or self.next_goal_lookahead_s
@@ -1554,7 +1941,140 @@ class FretReward:
         max_depth_by_fret = torch.where(
             torch.isfinite(max_depth_by_fret), max_depth_by_fret,
             torch.full_like(max_depth_by_fret, -self.PAD_RADIUS))
+        # Side-effect-free Fret-v2 observation queries remap this complete
+        # physical snapshot to the *next* goal after the song clock advances.
+        # Keeping the finger axis avoids falsely crediting a different finger
+        # that happens to press the requested string/fret cell.
+        depth_by_finger_fret = depth_by_fret.amax(dim=(3, 4))
+        self._latest_depth_by_finger_fret = torch.where(
+            torch.isfinite(depth_by_finger_fret), depth_by_finger_fret,
+            torch.full_like(depth_by_finger_fret, -self.PAD_RADIUS))
         return along, depth, lateral_ok, max_depth_by_fret
+
+    def active_press_cells(self):
+        """Return the current goal-independent ``[N,6,22]`` press snapshot.
+
+        A cell is active when any non-thumb playing finger geometrically
+        depresses that virtual string/fret cell under the existing hysteresis
+        detector.  Standalone Fret rewards still evaluate designated-finger
+        adherence; the Full Synchronizer deliberately collapses the finger
+        axis and derives musical sounding fret separately.
+        """
+        return self._press_anyseg.any(dim=2)
+
+    def refresh_press_state(self):
+        """Refresh the goal-independent physical press snapshot once.
+
+        FullG0 uses this post-physics hook without advancing standalone reward,
+        sustain, or success trackers.  Calling it more than once for the same
+        physical frame is harmless for the hysteresis values, but the shared
+        task owns the once-per-frame scheduling contract.
+        """
+        p0, _p1, direction, cell_lo, cell_hi, _approach, outward = (
+            self._string_and_fret_geometry())
+        points = self._finger_points()
+        starts, ends = points[:, :, :-1], points[:, :, 1:]
+        samples = (
+            starts[:, :, :, None]
+            + self._sample_alpha * (ends - starts)[:, :, :, None])
+        self._actual_press_states(
+            samples, p0, direction, cell_lo, cell_hi, outward)
+        return self.active_press_cells()
+
+    def observe_fret_v2_state(self, goal):
+        """Measure current Fret geometry/contact without advancing trackers.
+
+        ``compute`` updates the all-cell contact hysteresis before the goal
+        clock advances.  This method then remaps those goal-independent contact
+        tensors to the new current goal and recomputes goal-relative geometry.
+        It must remain free of latch/streak mutations because actor observation
+        construction may run more than once for a physics snapshot.
+        """
+        n = self.env.num_envs
+        fret = goal["fret"]
+        finger = goal["finger"]
+        barre = goal["barre"]
+        active = fret > 0
+        no_press = fret < 0
+        fret_index = fret.long().clamp(1, 22) - 1
+        finger_index = finger.long().clamp(1, 4) - 1
+
+        p0, _p1, direction, cell_lo, cell_hi, all_approach, outward = \
+            self._string_and_fret_geometry()
+        target = torch.gather(
+            all_approach, 2,
+            fret_index[..., None, None].expand(-1, -1, 1, 3)
+        ).squeeze(2)
+        goal_lo = torch.gather(
+            cell_lo, 2, fret_index[..., None]).squeeze(-1)
+        goal_hi = torch.gather(
+            cell_hi, 2, fret_index[..., None]).squeeze(-1)
+        goal_usable = (goal_hi - goal_lo).clamp_min(1e-5)
+        target_fraction = chord_aware_target_fraction(
+            fret, active, target, goal_usable,
+            optimal=self.APPROACH_X,
+            fingertip_clearance=self.FINGERTIP_TARGET_CLEARANCE)
+        target_along = goal_hi - target_fraction * goal_usable
+        target = p0 + direction * target_along[..., None]
+
+        points = self._finger_points()
+        starts, ends = points[:, :, :-1], points[:, :, 1:]
+        samples = (
+            starts[:, :, :, None]
+            + self._sample_alpha * (ends - starts)[:, :, :, None])
+        approach_distance = self._approach_distance(
+            samples, target, outward, finger_index, barre)
+        fine = self._fine_alignment_metrics(
+            samples, target, direction, outward, finger_index, barre,
+            press_compatible=True)
+        region = fret_region_alignment(
+            fine["fine_signed_longitudinal_error"],
+            fine["fine_lateral_error"],
+            fine["fine_normal_error"],
+            target_fraction, goal_usable,
+            lower=self.chord_multi_region_lower,
+            upper=self.chord_multi_region_upper)
+
+        env_index = torch.arange(
+            n, device=self.env.device)[:, None].expand(n, 6)
+        string_index = torch.arange(
+            6, device=self.env.device)[None].expand(n, 6)
+        distal = self._press_distal[
+            env_index, string_index, finger_index, fret_index]
+        any_segment = self._press_anyseg[
+            env_index, string_index, finger_index, fret_index]
+        designated_pressed = torch.where(barre, any_segment, distal)
+        pressed_by_fret = self._press_anyseg.any(dim=2)
+        _, no_press_required, _ = fret_requirement_masks(fret, max_fret=22)
+        wrong_press = wrong_press_mask(pressed_by_fret, no_press_required)
+
+        if hasattr(self, "_latest_depth_by_finger_fret"):
+            depth = self._latest_depth_by_finger_fret[
+                env_index, string_index, finger_index, fret_index]
+        else:
+            depth = torch.full_like(fret, -self.PAD_RADIUS)
+        depth_quality = (
+            (depth - self.PRESS_OFF_DEPTH)
+            / (self.PRESS_ON_DEPTH - self.PRESS_OFF_DEPTH)
+        ).clamp(0.0, 1.0)
+        alignment_quality = region["alignment_quality"]
+        press_quality = (
+            depth_quality * alignment_quality * active.float())
+        ready = (
+            active & designated_pressed & ~wrong_press
+            & region["inside"] & (alignment_quality >= 0.80))
+        return {
+            "active": active,
+            "no_press": no_press,
+            "target_world": target,
+            "approach_distance": approach_distance,
+            "signed_press_depth": depth,
+            "lateral_error": fine["fine_lateral_error"],
+            "target_region_inside": region["inside"],
+            "press_quality": press_quality,
+            "ready": ready,
+            "wrong_press": wrong_press,
+        }
 
     def _approach_distance(self, samples, target, outward, finger_index, barre):
         delta = samples[:, None] - target[:, :, None, None, None]
@@ -1584,8 +2104,9 @@ class FretReward:
             normal_error = (normal_offset - (
                 self.PAD_RADIUS + self.FINE_NORMAL_CLEARANCE)).abs()
 
-        longitudinal = self._select_finger_samples(
-            longitudinal.abs(), finger_index)
+        signed_longitudinal = self._select_finger_samples(
+            longitudinal, finger_index)
+        longitudinal = signed_longitudinal.abs()
         lateral = self._select_finger_samples(lateral, finger_index)
         normal_error = self._select_finger_samples(normal_error, finger_index)
 
@@ -1613,6 +2134,9 @@ class FretReward:
             "fine_lateral_quality": select(lateral_quality),
             "fine_normal_quality": select(normal_quality),
             "fine_center_distance": center_distance,
+            "fine_signed_longitudinal_error": select(signed_longitudinal),
+            "fine_lateral_error": select(lateral),
+            "fine_normal_error": select(normal_error),
         }
 
     def _goal_contact_metrics(self, along, depth, lateral_ok, cell_lo, cell_hi,
@@ -1704,17 +2228,39 @@ class FretReward:
                >= self.FINGERTIP_TARGET_CLEARANCE - 1e-4))
         approach_distance = self._approach_distance(
             samples, target, outward, finger_index, barre)
+        press_compatible_alignment = uses_press_compatible_alignment(stage)
         fine_metrics = self._fine_alignment_metrics(
             samples, target, direction, outward, finger_index, barre,
-            press_compatible=(stage == "chord_fine_reach"))
+            press_compatible=press_compatible_alignment)
+        region_metrics = fret_region_alignment(
+            fine_metrics["fine_signed_longitudinal_error"],
+            fine_metrics["fine_lateral_error"],
+            fine_metrics["fine_normal_error"],
+            target_fraction, goal_usable,
+            lower=self.chord_multi_region_lower,
+            upper=self.chord_multi_region_upper)
+        multi_press = press_mask.sum(dim=1) >= 2
+        # Once contact is part of the task, every single- and multi-finger
+        # press uses the same uniform 10--90% cell region.  Point alignment is
+        # retained only by the preceding reach stages.
+        use_region = press_mask & press_compatible_alignment
+        effective_fine_distance = torch.where(
+            use_region, region_metrics["distance"],
+            fine_metrics["fine_center_distance"])
+        effective_longitudinal_quality = torch.where(
+            use_region, region_metrics["longitudinal_quality"],
+            fine_metrics["fine_longitudinal_quality"])
+        effective_alignment_quality = torch.where(
+            use_region, region_metrics["alignment_quality"],
+            fine_metrics["fine_alignment_quality"])
         curriculum_distance = (
-            fine_metrics["fine_center_distance"]
+            effective_fine_distance
             if stage in ("fine_reach", "chord_fine_reach")
             else approach_distance)
         distance_reward = multi_scale_approach_reward(approach_distance)
         linear_distance_reward = linear_approach_reward(approach_distance)
         fine_distance_reward = fine_alignment_distance_reward(
-            fine_metrics["fine_center_distance"])
+            effective_fine_distance)
         approach_progress = approach_progress_reward(
             self._previous_approach_distance, curriculum_distance,
             self._previous_approach_valid & press_mask)
@@ -1736,18 +2282,7 @@ class FretReward:
         wrong_press = wrong_press_mask(pressed_by_fret, no_press_required)
         wrong_press_per_finger = wrong_press_finger_mask(
             self._press_anyseg, no_press_required)
-        press_success = designated_pressed & ~wrong_press & press_mask
-        miss_penalty_stages = (
-            "chord_fine_reach", "isolated_press", "integrated_press",
-            "static_chord", "frozen_context", "goal_pair",
-            "transition_window", "coverage", "integration", "full_song")
-        press_near_miss = (
-            press_near_miss_mask(
-                press_mask, press_success,
-                fine_metrics["fine_center_distance"],
-                self.press_near_miss_distance)
-            if stage in miss_penalty_stages
-            else torch.zeros_like(press_mask))
+        physical_press = designated_pressed & ~wrong_press & press_mask
         finger_numbers = torch.arange(
             1, 5, device=self.env.device).view(1, 1, 4)
         finger_assignment = finger.long()[..., None] == finger_numbers
@@ -1757,7 +2292,29 @@ class FretReward:
         position_x, press_depth = self._goal_contact_metrics(
             along, depth, lateral_ok, cell_lo, cell_hi,
             finger_index, fret_index, barre)
-        position_quality = fret_position_quality(position_x)
+        chord_fine_position_relaxed = stage == "chord_fine_reach"
+        position_quality = fret_position_quality(
+            position_x,
+            lower=self.chord_multi_region_lower,
+            upper=self.chord_multi_region_upper)
+        position_inside = fret_position_inside(
+            position_x,
+            lower=self.chord_multi_region_lower,
+            upper=self.chord_multi_region_upper)
+        # A physical string depression outside the 10--90% margin remains a
+        # useful diagnostic, but it is not a correct musical press.
+        press_success = physical_press & position_inside
+        miss_penalty_stages = (
+            "chord_fine_reach", "isolated_press", "integrated_press",
+            "static_chord", "frozen_context", "goal_pair",
+            "transition_window", "coverage", "integration", "full_song")
+        press_near_miss = (
+            press_near_miss_mask(
+                press_mask, press_success,
+                effective_fine_distance,
+                self.press_near_miss_distance)
+            if stage in miss_penalty_stages
+            else torch.zeros_like(press_mask))
         stagger_quality = torch.exp(
             -(((position_x - target_fraction) / 0.15) ** 2))
         staggered = (
@@ -1767,9 +2324,17 @@ class FretReward:
             torch.maximum(position_quality, 0.70 * stagger_quality),
             position_quality)
         dense_position_quality = dense_fret_position_quality(
-            position_x, scale=self.press_position_dense_scale)
+            position_x,
+            scale=(self.chord_fine_position_dense_scale
+                   if chord_fine_position_relaxed
+                   else self.press_position_dense_scale),
+            lower=self.chord_multi_region_lower,
+            upper=self.chord_multi_region_upper)
         precision_gate = press_precision_gate(
-            dense_position_quality, floor=self.press_precision_gate_floor)
+            dense_position_quality,
+            floor=(self.chord_fine_precision_gate_floor
+                   if chord_fine_position_relaxed
+                   else self.press_precision_gate_floor))
         good_position_quality = (
             0.50 * ergonomic_position_quality
             + 0.30 * fine_metrics["fine_lateral_quality"]
@@ -1813,6 +2378,19 @@ class FretReward:
                       + 0.20 * press_success.float() * good_position_quality)
         press_core = apply_binary_penalty(
             press_core, press_dropout, self.press_dropout_penalty)
+        integrated_press_core = integrated_press_core_reward(
+            distance_reward,
+            fine_distance_reward,
+            fine_metrics["fine_lateral_quality"],
+            fine_metrics["fine_normal_quality"],
+            precision_gate,
+            press_acquisition,
+            press_hold_quality,
+            press_success,
+            good_position_quality)
+        integrated_press_core = apply_binary_penalty(
+            integrated_press_core, press_dropout,
+            self.press_dropout_penalty)
 
         # 오압현은 해당 줄 점수를 0으로 만들고 DONT_CARE도 0을 반환한다.
         no_press_success = no_press_mask & ~wrong_press
@@ -2008,6 +2586,22 @@ class FretReward:
             (self._previous_next_goal_fret == next_fret)
             & (self._previous_next_goal_string_mask
                == next_string_mask).all(dim=-1))
+        # In a goal-pair transition, positive next-target progress is a
+        # conditional credit: only an intact outgoing press may earn it.
+        # Keep the negative potential delta unmodified so releasing a current
+        # note is still visible to the policy.
+        if stage == "goal_pair":
+            current_press_preservation_gate = (
+                (~current_finger_active.any(dim=1)
+                 | current_press_protected.all(dim=1))
+                & ~wrong_press.any(dim=1))
+            transition_positive_progress_gate = torch.where(
+                transition_sample,
+                current_press_preservation_gate,
+                torch.ones_like(transition_sample))
+        else:
+            transition_positive_progress_gate = torch.ones(
+                n, dtype=torch.bool, device=self.env.device)
         next_goal_progress_per_finger, next_potential = (
             next_goal_potential_progress(
                 self._previous_next_goal_potential,
@@ -2020,6 +2614,10 @@ class FretReward:
                 far=self.next_goal_progress_far,
                 unprotected_positive_scale=
                     self.next_goal_unprotected_progress_scale))
+        next_goal_progress_per_finger = gate_next_goal_positive_progress(
+            next_goal_progress_per_finger,
+            transition_positive_progress_gate,
+            require_preservation=(stage == "goal_pair"))
         self._previous_next_goal_potential.copy_(next_potential)
         self._previous_next_goal_valid.copy_(next_progress_gate)
         self._previous_next_goal_fret.copy_(next_fret)
@@ -2042,6 +2640,11 @@ class FretReward:
                 current_press_preservation_quality,
             "next_goal_current_press_preservation_per_finger":
                 current_finger_press_quality,
+            "next_goal_current_press_preserved_per_finger":
+                current_press_protected,
+            "active_finger_by_number": current_finger_active,
+            "next_goal_progress_preservation_gate":
+                transition_positive_progress_gate,
         })
         success_pose_guide_reward = torch.zeros(
             n, dtype=q.dtype, device=self.env.device)
@@ -2057,11 +2660,32 @@ class FretReward:
             n, dtype=q.dtype, device=self.env.device)
         success_pose_guide_proximal_active = torch.zeros(
             n, 4, dtype=torch.bool, device=self.env.device)
+        frozen_context_recovery = (
+            stage == "frozen_context"
+            and bool(getattr(
+                self.env, "frozen_context_recovery_active", False)))
+        frozen_context_training = torch.zeros(
+            n, dtype=torch.bool, device=self.env.device)
+        frozen_context_teacher_scale = 0.0
+        if frozen_context_recovery:
+            frozen_context_training = (
+                self.env._frozen_context_training_cohort())
+            frozen_context_teacher_scale = float(getattr(
+                self.env, "frozen_context_recovery_teacher_scale", 0.0))
         pose_guide_weight = (
-            self.chord_fine_success_pose_guide_weight
+            self.chord_reach_success_pose_guide_weight
+            if stage == "chord_reach"
+            else self.chord_fine_success_pose_guide_weight
             if stage in ("chord_fine_reach", "static_chord")
+            else (self.chord_fine_success_pose_guide_weight
+                  * frozen_context_teacher_scale)
+            if frozen_context_recovery
             else self.goal_pair_success_pose_guide_weight)
-        if (stage in ("chord_fine_reach", "static_chord", "goal_pair")
+        if (stage in (
+                "chord_reach", "chord_fine_reach", "static_chord",
+                "frozen_context", "goal_pair")
+                and (stage != "frozen_context"
+                     or frozen_context_recovery)
                 and pose_guide_weight > 0.0):
             pose_slot = goal["finger_pose_slot"].long()
             safe_pose_slot = pose_slot.clamp_min(0)
@@ -2074,7 +2698,11 @@ class FretReward:
             target_pose_q = self.env._success_finger_pose_q[
                 safe_pose_slot, finger_index_4]
             current_pose_q = q[:, self.env._finger_pose_dof_indices]
-            pose_gate = current_finger_active
+            pose_gate = (
+                frozen_context_pose_guide_gate(
+                    current_finger_active, frozen_context_training)
+                if frozen_context_recovery
+                else current_finger_active)
             if stage == "goal_pair":
                 pose_gate = (
                     pose_gate
@@ -2123,7 +2751,9 @@ class FretReward:
             success_pose_guide_reward = torch.where(
                 guide_count > 0, success_pose_guide_reward,
                 torch.zeros_like(success_pose_guide_reward))
-            if stage in ("chord_fine_reach", "static_chord"):
+            if stage in (
+                    "chord_reach", "chord_fine_reach", "static_chord",
+                    "frozen_context"):
                 guide_minimum = success_pose_guide_per_finger.masked_fill(
                     ~success_pose_guide_active, float("inf")).amin(dim=-1)
                 guide_minimum = torch.where(
@@ -2218,8 +2848,11 @@ class FretReward:
         thumb_press_readiness_value = thumb_press_readiness(
             thumb_metrics["thumb_approach_reward"],
             thumb_geometry_ready, thumb_support_ready, thumb_gate)
+        thumb_factor_gate = thumb_gate
+        if stage == "integrated_press":
+            thumb_factor_gate = thumb_gate * press_hold_acquired.any(dim=1).float()
         thumb_press_factor = thumb_press_reward_factor(
-            thumb_press_readiness_value, thumb_gate,
+            thumb_press_readiness_value, thumb_factor_gate,
             self.thumb_press_gate_weight)
         thumb_base_saturation_penalty = (
             thumb_base_action_saturation_penalty(
@@ -2227,12 +2860,17 @@ class FretReward:
                     :, self.env._thumb_base_action_indices],
                 thumb_metrics["thumb_support"],
                 threshold=self.thumb_base_saturation_threshold,
-                weight=self.thumb_base_saturation_penalty_weight))
+                weight=self.thumb_base_saturation_penalty_weight,
+                supported_fraction=
+                    self.thumb_base_supported_saturation_fraction))
         thumb_overforce = thumb_metrics["thumb_overforce"]
         proximal_reward, proximal_metrics = self.proximal_reward.compute(
             approach_distance, press_mask)
         active_channels = press_mask.float()
         arch_gate = linear_approach_reward(approach_distance)
+        arch_precision_quality = press_arch_shaping_quality(designated_arch)
+        isolated_precision_quality = isolated_press_conjunctive_quality(
+            press_acquisition, position_quality, arch_precision_quality)
         if stage in ("coarse_reach", "chord_reach"):
             base_reward = (
                 0.75 * linear_distance_reward + 0.25 * approach_progress)
@@ -2250,16 +2888,19 @@ class FretReward:
             base_reward = 0.90 * alignment_core + 0.10 * approach_progress
             finger_reward = apply_finger_arch_shaping(
                 base_reward, designated_arch, approach_distance,
-                press_mask & ~wrong_press, self.finger_arch_reward_weight)
+                press_mask & ~wrong_press,
+                self.fine_reach_finger_arch_reward_weight)
             reward = active_channels * (
                 (1.0 - self.thumb_weight) * finger_reward
                 + self.thumb_weight * thumb_reward[:, None])
         elif stage == "chord_fine_reach":
+            point_weight = self.chord_multi_point_bonus_weight
             alignment_core = (
                 0.50 * fine_distance_reward
-                + 0.50 * fine_metrics["fine_alignment_quality"])
+                + 0.50 * effective_alignment_quality)
             base_reward = (
-                0.75 * alignment_core
+                (0.75 - point_weight) * alignment_core
+                + point_weight * fine_metrics["fine_alignment_quality"]
                 + 0.15 * press_acquisition
                 + 0.10 * approach_progress)
             finger_reward = apply_finger_arch_shaping(
@@ -2269,16 +2910,23 @@ class FretReward:
                 (1.0 - self.thumb_weight) * finger_reward
                 + self.thumb_weight * thumb_reward[:, None])
         elif stage == "isolated_press":
-            # 분리 압현 단계에서는 손가락 아치 신호를 강화한다.
-            articulation_bonus = designated_arch * arch_gate
-            press_weight = 1.0 - 0.25 - self.thumb_weight
+            articulation_bonus = arch_precision_quality * arch_gate
+            arch_weight = self.isolated_press_arch_reward_weight
+            finger_weight = 1.0 - self.thumb_weight
+            press_weight = finger_weight - arch_weight
+            additive_finger_reward = (
+                press_weight * integrated_press_core
+                + arch_weight * articulation_bonus) / finger_weight
+            conjunction = self.isolated_press_conjunctive_weight
+            finger_reward = finger_weight * (
+                (1.0 - conjunction) * additive_finger_reward
+                + conjunction * isolated_precision_quality)
             reward = active_channels * (
-                press_weight * press_core
-                + 0.25 * articulation_bonus
+                finger_reward
                 + self.thumb_weight * thumb_reward[:, None])
         elif stage == "integrated_press":
             base_reward = (
-                (1.0 - self.thumb_weight) * press_core
+                (1.0 - self.thumb_weight) * integrated_press_core
                 + self.thumb_weight * thumb_reward[:, None])
             reward = active_channels * apply_finger_arch_shaping(
                 base_reward, designated_arch, approach_distance,
@@ -2317,7 +2965,7 @@ class FretReward:
              chord_fine_joint_mean, chord_fine_joint_min,
              chord_fine_axis_min) = chord_fine_conjunctive_reward(
                 fine_distance_reward,
-                fine_metrics["fine_longitudinal_quality"],
+                effective_longitudinal_quality,
                 fine_metrics["fine_lateral_quality"],
                 fine_metrics["fine_normal_quality"],
                 chord_fine_depth_progress, press_success, press_mask,
@@ -2394,6 +3042,38 @@ class FretReward:
             balanced_reward = (
                 (1.0 - joint_weight) * balanced_reward
                 + joint_weight * chord_joint_quality[:, None])
+            class_balance_metrics["class_balanced_reward"] = (
+                balanced_reward[:, 0])
+        static_chord_completion_gate = torch.ones(
+            n, device=self.env.device)
+        frozen_context_completion_gate = torch.ones_like(
+            static_chord_completion_gate)
+        if stage in ("static_chord", "frozen_context"):
+            (completion_gated_reward, completion_gate) = (
+                gate_chord_completion_for_stage(
+                    stage,
+                    balanced_reward,
+                    class_balance_metrics["press_class_completion"],
+                    press_mask.sum(dim=-1),
+                    floor=self.static_chord_completion_gate_floor,
+                    power=self.static_chord_completion_gate_power))
+            if stage == "static_chord":
+                balanced_reward = completion_gated_reward
+                static_chord_completion_gate = completion_gate
+            else:
+                balanced_reward = completion_gated_reward
+                frozen_context_completion_gate = completion_gate
+            class_balance_metrics["class_balanced_reward"] = (
+                balanced_reward[:, 0])
+        static_chord_auxiliary_gate = torch.ones(
+            n, device=self.env.device)
+        if stage == "static_chord":
+            balanced_reward, static_chord_auxiliary_gate = (
+                gate_static_chord_auxiliary_reward(
+                    balanced_reward,
+                    class_balance_metrics["press_class_reward"],
+                    class_balance_metrics["press_class_completion"],
+                    self.static_chord_auxiliary_gate_floor))
             class_balance_metrics["class_balanced_reward"] = (
                 balanced_reward[:, 0])
         if stage == "goal_pair" and self.goal_pair_rehearsal_anchor_weight > 0.0:
@@ -2475,14 +3155,24 @@ class FretReward:
             + positive_next_progress[:, None]
             * (1.0 - reward.clamp(0.0, 1.0))
             - negative_next_progress[:, None])
-        if stage in ("chord_fine_reach", "static_chord", "goal_pair"):
+        if (stage in (
+                "chord_reach", "chord_fine_reach", "static_chord",
+                "frozen_context", "goal_pair")
+                and (stage != "frozen_context"
+                     or frozen_context_recovery)):
+            guide_completion_gate = (
+                frozen_context_completion_gate[:, None]
+                if stage == "frozen_context" else 1.0)
             guided_reward = (
                 reward
                 + pose_guide_weight * success_pose_guide_reward[:, None]
+                * guide_completion_gate
                 * (1.0 - reward.clamp(0.0, 1.0)))
             reward = (
                 torch.where(press_mask, guided_reward, reward)
-                if stage in ("chord_fine_reach", "static_chord")
+                if stage in (
+                    "chord_reach", "chord_fine_reach", "static_chord",
+                    "frozen_context")
                 else guided_reward)
         reward = reward - thumb_base_saturation_penalty[:, None]
         reference_finger_quality = torch.ones(
@@ -2510,7 +3200,29 @@ class FretReward:
             reward = (
                 reward
                 - reference_penalty[:, None] * supervised_mask.float())
+        human_range_quality = torch.ones(n, device=self.env.device)
+        human_range_violation_rate = torch.zeros_like(human_range_quality)
+        human_range_max_excess_deg = torch.zeros_like(human_range_quality)
+        human_range_active = (
+            self.human_joint_range_prior is not None
+            and stage in (
+                "frozen_context", "goal_pair", "transition_window",
+                "coverage", "integration", "full_song"))
+        if human_range_active:
+            (human_range_quality, human_range_violation_rate,
+             human_range_max_excess_deg) = (
+                self.human_joint_range_prior.compute(current_finger_active))
+        human_range_penalty = (
+            self.human_joint_range_weight * (1.0 - human_range_quality))
+        if human_range_active:
+            reward = (
+                reward
+                - human_range_penalty[:, None] * supervised_mask.float())
 
+        (precision_press_pass, precision_position_pass,
+         precision_arch_pass, precision_precise_pass) = (
+            press_precision_components(
+                physical_press, position_inside.float(), designated_arch))
         has_active = press_mask.any(dim=1)
         if stage in ("coarse_reach", "chord_reach"):
             frame_success = has_active & (
@@ -2522,19 +3234,18 @@ class FretReward:
                  | ~press_mask).all(dim=1))
         elif stage == "chord_fine_reach":
             frame_success = has_active & (
-                ((fine_metrics["fine_center_distance"] <= 0.010)
-                 & (fine_metrics["fine_alignment_quality"] >= 0.80)
+                ((effective_fine_distance <= 0.010)
+                 & (effective_alignment_quality >= 0.80)
                  & press_success
                  | ~press_mask).all(dim=1))
         elif stage == "isolated_press":
             frame_success = has_active & (
-                (precise_press_success(
-                    press_success, position_quality, designated_arch,
-                    min_arch=0.65) | ~press_mask).all(dim=1))
+                (precision_precise_pass | ~press_mask).all(dim=1))
         elif stage == "integrated_press":
             frame_success = has_active & (
                 (precise_press_success(
-                    press_success, position_quality) | ~press_mask).all(dim=1))
+                    press_success, position_inside.float())
+                 | ~press_mask).all(dim=1))
         elif stage in ("static_chord", "frozen_context"):
             frame_success = chord_ready & all_correct
         elif stage in ("goal_pair", "transition_window"):
@@ -2556,11 +3267,27 @@ class FretReward:
             "no_press_active": no_press_mask,
             "any_finger_on_target": target_press_any,
             "target_distance": curriculum_distance,
+            "target_point_distance": fine_metrics["fine_center_distance"],
+            "target_region_distance": region_metrics["distance"],
+            "target_region_inside": region_metrics["inside"],
+            "target_sample_fraction": region_metrics["sample_fraction"],
+            "multi_press": multi_press,
             "local_reach_margin": local_reach_margin,
             "linear_distance_reward": linear_distance_reward,
             "fine_distance_reward": fine_distance_reward,
+            "effective_alignment_quality": effective_alignment_quality,
+            "effective_longitudinal_quality":
+                effective_longitudinal_quality,
             "approach_progress": approach_progress,
+            # Keep raw depression and musically valid depression separate.
+            # The precision funnel needs the former to attribute whether a
+            # failure came from contact, longitudinal position, or posture.
+            "physical_press": physical_press,
             "press_success": press_success,
+            "precision_press_pass": precision_press_pass,
+            "precision_position_pass": precision_position_pass,
+            "precision_arch_pass": precision_arch_pass,
+            "precision_precise_pass": precision_precise_pass,
             "press_depth": press_depth,
             "press_depth_progress": depth_progress,
             "press_hold_acquired": press_hold_acquired,
@@ -2571,6 +3298,7 @@ class FretReward:
             "chord_ready": chord_ready,
             "chord_hold_quality": chord_hold_quality,
             "position_quality": position_quality,
+            "position_inside": position_inside,
             "ergonomic_position_quality": ergonomic_position_quality,
             "target_fraction": target_fraction,
             "target_min_separation": target_min_separation,
@@ -2579,12 +3307,15 @@ class FretReward:
             "precision_gate": precision_gate,
             "good_position_quality": good_position_quality,
             "arch_quality": designated_arch,
+            "arch_precision_quality": arch_precision_quality,
+            "isolated_press_conjunctive_quality":
+                isolated_precision_quality,
             "designated_arch_angles": designated_arch_angles,
             "finger_assignment": finger_assignment,
             "tip_contact": designated_distal,
             "non_tip_contact": designated_anyseg & ~designated_distal,
             "cell_aligned": (
-                fine_metrics["fine_alignment_quality"] >= 0.80
+                effective_alignment_quality >= 0.80
                 if stage in ("fine_reach", "chord_fine_reach")
                 else cell_aligned),
             "wrong_press": wrong_press,
@@ -2600,6 +3331,7 @@ class FretReward:
             "thumb_support_ready": thumb_support_ready,
             "thumb_press_readiness": thumb_press_readiness_value,
             "thumb_press_factor": thumb_press_factor,
+            "thumb_press_factor_gate": thumb_factor_gate,
             "thumb_base_saturation_penalty":
                 thumb_base_saturation_penalty,
             "thumb_support_streak": self._thumb_support_streak.clone(),
@@ -2629,6 +3361,15 @@ class FretReward:
             "reference_posture_active": torch.full(
                 (n,), reference_prior_active, dtype=torch.bool,
                 device=self.env.device),
+            "human_joint_range_quality": human_range_quality,
+            "human_joint_range_violation_rate":
+                human_range_violation_rate,
+            "human_joint_range_max_excess_deg":
+                human_range_max_excess_deg,
+            "human_joint_range_penalty": human_range_penalty,
+            "human_joint_range_active": torch.full(
+                (n,), human_range_active, dtype=torch.bool,
+                device=self.env.device),
             "slip_reward": slip_reward,
             "slip_distance": slip_distance,
             "slip_instant": slip_instant,
@@ -2656,6 +3397,13 @@ class FretReward:
                 (n,), class_balance_enabled, dtype=torch.bool,
                 device=self.env.device),
             "chord_joint_quality": chord_joint_quality,
+            "static_chord_completion_gate":
+                static_chord_completion_gate,
+            "frozen_context_completion_gate":
+                frozen_context_completion_gate,
+            "frozen_context_recovery_training":
+                frozen_context_training,
+            "static_chord_auxiliary_gate": static_chord_auxiliary_gate,
             "chord_bridge_bottleneck_reward":
                 chord_bridge_aggregate,
             "chord_bridge_mean_reward": chord_bridge_mean,

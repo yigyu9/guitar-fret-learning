@@ -25,6 +25,7 @@ def _config():
         goal_pair_full_min_iterations=1,
         goal_pair_phase_min_evidence=10,
         goal_pair_focus_min_iterations=1,
+        goal_pair_recovery_focus_min_iterations=1,
         goal_pair_retention_focus_probability=0.30,
         goal_pair_mixed_focus_probability=0.30,
         goal_pair_timeout_focus_probability=0.40,
@@ -118,7 +119,8 @@ def main():
     curriculum.goal_pair_incoming_fingers = (1, 2, 3, 4)
 
     state = curriculum.state()
-    assert state["curriculum_schema_version"] == 44
+    assert state[
+        "curriculum_schema_version"] == FingertipApproachCurriculum.SCHEMA_VERSION
     assert state["curriculum_goal_pair_phase"] == "retention"
     assert state["curriculum_goal_pair_rehearsal_probability"] == 1.0
 
@@ -126,11 +128,11 @@ def main():
     assert joint_config.goal_pair_retention_focus_probability == 0.0
     assert joint_config.goal_pair_mixed_focus_probability == 0.25
     assert joint_config.goal_pair_timeout_focus_probability == 0.35
-    assert joint_config.goal_pair_recovery_rehearsal_probability == 0.50
-    assert joint_config.goal_pair_recovery_sequence_probability == 0.50
-    assert joint_config.goal_pair_recovery_sequence_max_events == 16
-    assert joint_config.goal_pair_recovery_full_song_fraction == 0.20
-    assert joint_config.goal_pair_recovery_uncovered_pose_probability == 0.35
+    assert joint_config.goal_pair_recovery_rehearsal_probability == 0.60
+    assert joint_config.goal_pair_recovery_sequence_probability == 0.40
+    assert joint_config.goal_pair_recovery_sequence_max_events == 4
+    assert joint_config.goal_pair_recovery_full_song_fraction == 0.10
+    assert joint_config.goal_pair_recovery_uncovered_pose_probability == 0.15
     joint = FingertipApproachCurriculum(
         replace(
             config,
@@ -153,16 +155,53 @@ def main():
         config.goal_pair_recovery_windows)
     recovery_state = recovered.state()
     assert recovery_state[
-        "curriculum_goal_pair_sequence_probability"] == 0.50
+        "curriculum_goal_pair_sequence_probability"] == 0.40
     assert recovery_state[
-        "curriculum_goal_pair_sequence_max_events"] == 16
+        "curriculum_goal_pair_sequence_max_events"] == 4
     assert recovery_state[
-        "curriculum_goal_pair_sequence_full_song_fraction"] == 0.20
+        "curriculum_goal_pair_sequence_full_song_fraction"] == 0.10
     assert recovery_state[
-        "curriculum_goal_pair_uncovered_pose_probability"] == 0.35
+        "curriculum_goal_pair_uncovered_pose_probability"] == 0.15
     assert not any(recovered.goal_pair_mastered_fingers)
     assert recovered._sync_goal_pair_recovery(_stats())
     assert not recovered.goal_pair_recovery_active
+
+    preserved = FingertipApproachCurriculum(
+        config, forced_stage="goal_pair")
+    preserved.required_song_fingers = (1, 2, 3, 4)
+    preserved.goal_pair_incoming_fingers = (1, 2, 3, 4)
+    preserved.goal_pair_phase = "mixed"
+    preserved.goal_pair_mixed_level = 1
+    preserved.goal_pair_mixed_level_iteration = 400
+    preserved.goal_pair_mastered_fingers = [True, False, True, True]
+    preserved.goal_pair_mastery_verified_since_recovery = [True] * 4
+    preserved.goal_pair_mastery_streaks = [3, 0, 3, 3]
+    preserved.goal_pair_mastery_fail_streaks = [1, 1, 0, 1]
+    preserved.goal_pair_recovery_active = True
+    preserved.goal_pair_recovery_iteration = (
+        config.goal_pair_recovery_min_iterations)
+    preserved.goal_pair_recovery_good_windows = (
+        config.goal_pair_recovery_windows)
+    state = preserved.after_iteration(_stats())
+    assert not preserved.goal_pair_recovery_active
+    assert preserved.goal_pair_mixed_level_iteration == 0
+    assert preserved.goal_pair_mastered_fingers == [True, False, True, True]
+    assert preserved.goal_pair_mastery_verified_since_recovery == [
+        False, False, False, False]
+    assert preserved.goal_pair_mastery_streaks == [3, 0, 3, 3]
+    assert preserved.goal_pair_mastery_fail_streaks == [0, 0, 0, 0]
+    state = preserved.after_iteration({})
+    assert state["curriculum_goal_pair_mixed_level"] == 1
+    assert preserved.goal_pair_mastery_verified_since_recovery == [
+        False, False, False, False]
+    assert "finger_1_verified_since_recovery" in state[
+        "curriculum_goal_pair_gate_evidence_shortages"]
+    preserved.after_iteration(_stats())
+    assert preserved.goal_pair_mixed_level == 1
+    assert preserved.goal_pair_mastery_verified_since_recovery == [
+        True, False, True, True]
+    state = preserved.after_iteration(_stats())
+    assert state["curriculum_goal_pair_mixed_level"] == 2
 
     song_blocked = FingertipApproachCurriculum(
         config, forced_stage="goal_pair")
@@ -195,6 +234,31 @@ def main():
         wrong_transition, 2)
     assert not passed
 
+    sequence_gate = FingertipApproachCurriculum(
+        config, forced_stage="goal_pair")
+    sequence_gate.goal_pair_phase = "mixed"
+    sequence_gate.goal_pair_mixed_level = 1
+    sequence_gate.required_song_fingers = (1, 2, 3, 4)
+    sequence_gate.goal_pair_incoming_fingers = (1, 2, 3, 4)
+    weak_sequence = _stats()
+    weak_sequence[
+        "curriculum_goal_pair_sequence_finger_4_target_active_count"] = 128.0
+    weak_sequence[
+        "curriculum_goal_pair_sequence_finger_4_press_success"] = 0.20
+    weak_sequence[
+        "curriculum_goal_pair_sequence_finger_4_target_distance"] = 0.006
+    weak_sequence[
+        "curriculum_goal_pair_sequence_finger_4_hold_quality"] = 0.90
+    weak_sequence[
+        "curriculum_goal_pair_sequence_finger_4_dropout_rate"] = 0.02
+    weak_sequence[
+        "curriculum_goal_pair_sequence_finger_4_wrong_press"] = 0.01
+    assert sequence_gate._goal_pair_sequence_finger_sample(
+        weak_sequence) is None
+    # Old checkpoints without per-finger sequence fields keep the aggregate
+    # gate as a compatibility path.
+    assert sequence_gate._goal_pair_sequence_finger_sample(_stats()) is True
+
     rotating = FingertipApproachCurriculum(
         config, forced_stage="goal_pair")
     rotating.required_song_fingers = (1, 2, 3, 4)
@@ -216,6 +280,7 @@ def main():
     song_focus.goal_pair_incoming_fingers = (1, 2, 3, 4)
     song_focus.goal_pair_recovery_active = True
     song_focus.goal_pair_mastered_fingers = [True] * 4
+    song_focus.goal_pair_mastery_verified_since_recovery = [True] * 4
     song_focus.goal_pair_focus_finger = 2
     song_focus.goal_pair_focus_iteration = 0
     weak_song_focus = _stats()
@@ -229,6 +294,30 @@ def main():
         config.goal_pair_focus_min_iterations)
     assert song_focus._update_goal_pair_focus(weak_song_focus, {})
     assert song_focus.goal_pair_focus_finger == 4
+
+    mastery_focus = FingertipApproachCurriculum(
+        config, forced_stage="goal_pair")
+    mastery_focus.required_song_fingers = (1, 2, 3, 4)
+    mastery_focus.goal_pair_incoming_fingers = (1, 2, 3, 4)
+    mastery_focus.goal_pair_recovery_active = True
+    mastery_focus.goal_pair_mastered_fingers = [True, False, True, True]
+    mastery_focus.goal_pair_mastery_verified_since_recovery = [
+        True, False, True, True]
+    assert mastery_focus._update_goal_pair_focus(_stats(), {})
+    assert mastery_focus.goal_pair_focus_finger == 2
+
+    weak_hold_focus = FingertipApproachCurriculum(
+        config, forced_stage="goal_pair")
+    weak_hold_focus.required_song_fingers = (1, 2, 3, 4)
+    weak_hold_focus.goal_pair_incoming_fingers = (1, 2, 3, 4)
+    weak_hold_focus.goal_pair_recovery_active = True
+    weak_hold_focus.goal_pair_mastered_fingers = [True, False, True, True]
+    weak_hold_focus.goal_pair_mastery_verified_since_recovery = [True] * 4
+    weak_middle = _stats()
+    weak_middle[
+        "curriculum_goal_pair_rehearsal_finger_2_hold_quality"] = 0.50
+    state = weak_hold_focus.after_iteration(weak_middle)
+    assert state["curriculum_goal_pair_focus_finger"] == 2
 
     for _ in range(5):
         state = curriculum.after_iteration(_stats(rehearsal_pass=False))
@@ -307,6 +396,8 @@ def main():
         (0.8, -0.01, 1.0), (0.7, -0.02, 2.0),
         (0.6, -0.03, 3.0), (0.5, -0.04, 4.0)]
     source.goal_pair_mastered_fingers = [True, False, True, False]
+    source.goal_pair_mastery_verified_since_recovery = [
+        True, False, False, False]
     source.goal_pair_mastery_streaks = [2, 1, 2, 0]
     source.goal_pair_mastery_fail_streaks = [0, 1, 0, 1]
     source.goal_pair_phase_timeout_count = 3
@@ -344,6 +435,8 @@ def main():
     assert restored.goal_pair_focus_iteration == 51
     assert restored.goal_pair_focus_scores == source.goal_pair_focus_scores
     assert restored.goal_pair_mastered_fingers == [True, False, True, False]
+    assert restored.goal_pair_mastery_verified_since_recovery == [
+        True, False, False, False]
     assert restored.goal_pair_mastery_streaks == [2, 1, 2, 0]
     assert restored.goal_pair_mastery_fail_streaks == [0, 1, 0, 1]
     assert restored.goal_pair_phase_timeout_count == 3
@@ -361,6 +454,14 @@ def main():
         "mixed:1->mixed:0:quality_timeout")
     assert tuple(restored.recent) == (1.0, 0.0)
 
+    missing_verification = source.state()
+    missing_verification.pop(
+        "curriculum_goal_pair_mastery_verified_since_recovery")
+    fail_closed = FingertipApproachCurriculum(config)
+    fail_closed.load_context(missing_verification)
+    assert fail_closed.goal_pair_mastery_verified_since_recovery == [
+        False] * 4
+
     migrated = FingertipApproachCurriculum(config)
     migrated.load_context({
         "curriculum_schema_version": 6,
@@ -370,11 +471,9 @@ def main():
         "curriculum_stalled": True,
         "curriculum_recent": [1.0, 1.0],
     })
-    assert migrated.stage == "goal_pair"
+    assert migrated.stage == "frozen_context"
     assert migrated.stage_iteration == 0
-    assert migrated.goal_pair_phase == "retention"
-    assert migrated.goal_pair_phase_iteration == 0
-    assert migrated.goal_pair_focus_finger == 0
+    assert not migrated.frozen_context_evaluation_started
     assert not migrated.recent
 
     migrated_v9 = FingertipApproachCurriculum(config)
@@ -388,11 +487,9 @@ def main():
         "curriculum_goal_pair_focus_finger": 4,
         "curriculum_recent": [1.0, 1.0],
     })
-    assert migrated_v9.stage == "goal_pair"
+    assert migrated_v9.stage == "frozen_context"
     assert migrated_v9.stage_iteration == 0
-    assert migrated_v9.goal_pair_phase == "retention"
-    assert migrated_v9.goal_pair_phase_iteration == 0
-    assert migrated_v9.goal_pair_focus_finger == 0
+    assert not migrated_v9.frozen_context_evaluation_started
     assert not migrated_v9.recent
 
     migrated_v10 = FingertipApproachCurriculum(config)
@@ -403,9 +500,9 @@ def main():
         "curriculum_goal_pair_phase": "mixed",
         "curriculum_goal_pair_mixed_level": 2,
     })
-    assert migrated_v10.stage == "goal_pair"
+    assert migrated_v10.stage == "frozen_context"
     assert migrated_v10.stage_iteration == 0
-    assert migrated_v10.goal_pair_phase == "retention"
+    assert not migrated_v10.frozen_context_evaluation_started
 
     migrated_v12 = FingertipApproachCurriculum(config)
     migrated_v12.load_context({
@@ -417,9 +514,8 @@ def main():
         "curriculum_goal_pair_mastered_fingers": [True, False, True, True],
         "curriculum_goal_pair_mastery_streaks": [2, 0, 2, 2],
     })
-    assert migrated_v12.stage == "goal_pair"
-    assert migrated_v12.goal_pair_mastered_fingers == [
-        True, False, True, True]
+    assert migrated_v12.stage == "frozen_context"
+    assert migrated_v12.goal_pair_mastered_fingers == [False] * 4
     assert migrated_v12.goal_pair_mastery_fail_streaks == [0, 0, 0, 0]
 
     migrated_v14_state = source.state()
@@ -435,12 +531,10 @@ def main():
         source.goal_pair_phase_baseline)
     migrated_v14 = FingertipApproachCurriculum(config)
     migrated_v14.load_context(migrated_v14_state)
-    assert migrated_v14.goal_pair_phase_baseline == (
-        source.goal_pair_phase_baseline)
-    assert migrated_v14.goal_pair_phase_baseline_label == "mixed:2"
-    assert migrated_v14.goal_pair_recovery_iteration == 0
-    assert migrated_v14.goal_pair_recovery_good_windows == 0
-    assert migrated_v14.goal_pair_focus_finger == 0
+    assert migrated_v14.stage == "frozen_context"
+    assert migrated_v14.stage_iteration == 0
+    assert not migrated_v14.bridge_windows
+    assert not migrated_v14.frozen_context_evaluation_started
 
     accumulated_config = replace(
         config,
@@ -562,8 +656,8 @@ def main():
     assert timeout_state["curriculum_goal_pair_phase_timeout_count"] == 1
     assert timeout_state["curriculum_goal_pair_focus_probability"] == 0.40
     assert timeout_state["curriculum_goal_pair_recovery"]
-    assert timeout_state["curriculum_goal_pair_rehearsal_probability"] == 0.50
-    assert timeout_state["curriculum_goal_pair_sequence_probability"] == 0.50
+    assert timeout_state["curriculum_goal_pair_rehearsal_probability"] == 0.60
+    assert timeout_state["curriculum_goal_pair_sequence_probability"] == 0.40
 
     mixed_timeout = FingertipApproachCurriculum(
         timeout_config, forced_stage="goal_pair")
@@ -577,9 +671,9 @@ def main():
     assert mixed_timeout_state[
         "curriculum_goal_pair_recovery_reason"] == "mixed_timeout"
     assert mixed_timeout_state[
-        "curriculum_goal_pair_rehearsal_probability"] == 0.50
+        "curriculum_goal_pair_rehearsal_probability"] == 0.60
     assert mixed_timeout_state[
-        "curriculum_goal_pair_sequence_probability"] == 0.50
+        "curriculum_goal_pair_sequence_probability"] == 0.40
     assert not mixed_timeout_state["curriculum_goal_pair_preview_only"]
 
     regression_config = replace(
@@ -590,6 +684,7 @@ def main():
     mastery_regression.required_song_fingers = (1, 2, 3, 4)
     mastery_regression.goal_pair_incoming_fingers = (1, 2, 3, 4)
     mastery_regression.goal_pair_mastered_fingers = [True] * 4
+    mastery_regression.goal_pair_mastery_verified_since_recovery = [True] * 4
     mastery_regression.goal_pair_mastery_streaks = [2] * 4
     mastery_regression.after_iteration(_stats(rehearsal_pass=False))
     assert mastery_regression.goal_pair_mastered_fingers[3]
@@ -733,7 +828,7 @@ def main():
         else:
             raise AssertionError(f"invalid goal-pair config accepted: {invalid}")
 
-    print("PASS: phase-relative goal-pair recovery and schema-44 migration")
+    print("PASS: phase-relative goal-pair recovery and schema migration")
 
 
 if __name__ == "__main__":

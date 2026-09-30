@@ -13,11 +13,47 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from env.goals import FINGER_EVENT_TIME_SCALE_S, FretGoalSequence
+from env.goals import (
+    FINGER_EVENT_TIME_SCALE_S,
+    FretGoalSequence,
+    fine_reach_action_scales,
+    integrated_press_action_permissions,
+)
 from learning.curriculum import (
     FingertipApproachCurriculum,
     FingertipApproachCurriculumConfig,
 )
+
+
+def test_static_chord_timeout_enters_failed_chord_recovery():
+    config = FingertipApproachCurriculumConfig(
+        static_chord_min_iterations=1,
+        static_chord_max_iterations=1,
+        static_chord_recovery_max_cycles=2,
+        promotion_windows=1)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "static_chord"
+    curriculum.chord_available_sets = ((1, 2), (1, 4))
+    curriculum.chord_focus_count = 2
+    stats = {
+        "curriculum_chord_set_3_count": 1.0,
+        "curriculum_chord_set_3_success": 0.9,
+        "curriculum_chord_set_9_count": 1.0,
+        "curriculum_chord_set_9_success": 0.0,
+    }
+    state = curriculum.after_iteration(stats)
+    assert state["curriculum_stage"] == "chord_fine_reach"
+    assert state["curriculum_static_chord_recovery"]
+    assert state["curriculum_static_chord_recovery_signatures"] == [9]
+    assert state["curriculum_chord_focus_index"] == 1
+
+    curriculum.chord_focus_iteration = config.chord_fine_focus_max_iterations
+    curriculum.after_iteration(stats)
+    curriculum.chord_focus_iteration = config.chord_fine_max_iterations
+    state = curriculum.after_iteration(stats)
+    assert state["curriculum_stage"] == "static_chord"
+    assert not state["curriculum_static_chord_recovery"]
+    assert state["curriculum_static_chord_recovery_reason"] == "retest"
 
 
 def _goal_file(directory):
@@ -46,6 +82,896 @@ def _goal_file(directory):
         "frames": frames,
     }))
     return path
+
+
+def test_integrated_press_uses_pooled_evidence_and_weak_finger_recovery():
+    config = FingertipApproachCurriculumConfig(
+        integrated_press_min_iterations=1,
+        integrated_press_max_iterations=2,
+        integrated_recovery_max_iterations=2,
+        early_min_evidence_episodes_per_finger=2,
+        promotion_windows=1)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "integrated_press"
+    curriculum.required_song_fingers = (1, 2, 3, 4)
+
+    weak_middle = {
+        "episodes": 8,
+        "curriculum_mean_position_quality": 0.8,
+    }
+    for finger in range(1, 5):
+        weak_middle[f"curriculum_finger_{finger}_count"] = 0.25
+        weak_middle[f"curriculum_finger_{finger}_success"] = (
+            0.0 if finger == 2 else 0.25)
+    curriculum.after_iteration(weak_middle)
+    state = curriculum.after_iteration(weak_middle)
+    assert state["curriculum_integrated_recovery"]
+    assert state["curriculum_integrated_recovery_focus_finger"] == 2
+    assert state["curriculum_integrated_recovery_count"] == 1
+    assert state["curriculum_integrated_control_phase"] == 0
+    assert not state["curriculum_stalled"]
+
+    resumed = FingertipApproachCurriculum(config)
+    resumed.load_context(state)
+    assert resumed.integrated_recovery_active
+    assert resumed.integrated_recovery_focus_finger == 2
+    assert resumed.integrated_recovery_count == 1
+    assert resumed.integrated_recovery_weights == (
+        curriculum.integrated_recovery_weights)
+    assert all(
+        resumed.early_stage_evidence[finger]["target"] == 4
+        for finger in range(1, 5))
+    curriculum = resumed
+
+    recovered = dict(weak_middle)
+    for finger in range(1, 5):
+        recovered[f"curriculum_finger_{finger}_success"] = 0.25
+    for _ in range(8):
+        state = curriculum.after_iteration(recovered)
+        if state["curriculum_stage"] == "chord_reach":
+            break
+    assert state["curriculum_stage"] == "chord_reach"
+
+
+def test_integrated_press_progressively_unlocks_proximal_actions():
+    finger_ids = torch.tensor([0, 1, 2, 3, -1, -1, -1, -1])
+    wrist = torch.tensor([False, False, False, False, True, False, False, False])
+    elbow = torch.tensor([False, False, False, False, False, True, False, False])
+    shoulder = torch.tensor([False, False, False, False, False, False, True, False])
+    target = torch.tensor([2])
+    phase0 = integrated_press_action_permissions(
+        finger_ids, wrist, elbow, shoulder, target, 0)[0]
+    assert phase0.tolist() == [True, False, True, False,
+                               True, False, False, False]
+    phase1 = integrated_press_action_permissions(
+        finger_ids, wrist, elbow, shoulder, target, 1)[0]
+    assert phase1[5] and not phase1[6] and not phase1[7]
+    phase2 = integrated_press_action_permissions(
+        finger_ids, wrist, elbow, shoulder, target, 2)[0]
+    assert phase2[5] and phase2[6] and not phase2[7]
+    phase3 = integrated_press_action_permissions(
+        finger_ids, wrist, elbow, shoulder, target, 3)[0]
+    assert phase3.all()
+
+
+def test_early_promotion_ignores_iterations_without_diagnostic_evidence():
+    config = FingertipApproachCurriculumConfig(
+        fine_min_iterations=1,
+        fine_max_iterations=20,
+        early_min_evidence_episodes_per_finger=1,
+        promotion_windows=2)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "fine_reach"
+    curriculum.required_song_fingers = (1,)
+    evidence = {
+        "episodes": 4,
+        "curriculum_finger_1_success_episodes": 4,
+        "curriculum_finger_1_target_episodes": 4,
+        "curriculum_p90_target_distance": 0.005,
+        "curriculum_cell_alignment_rate": 0.95,
+    }
+    curriculum.after_iteration(evidence)
+    assert list(curriculum.recent) == [1.0]
+    curriculum.after_iteration({})
+    assert list(curriculum.recent) == [1.0]
+    state = curriculum.after_iteration({
+        "curriculum_p90_target_distance": 0.005,
+        "curriculum_cell_alignment_rate": 0.95,
+    })
+    assert state["curriculum_stage"] == "isolated_press"
+
+
+def test_early_evidence_keeps_only_the_recent_episode_window():
+    config = FingertipApproachCurriculumConfig(
+        early_min_evidence_episodes_per_finger=1,
+        early_evidence_window_episodes_per_finger=4)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "fine_reach"
+    curriculum.required_song_fingers = (1,)
+    curriculum.after_iteration({
+        "episodes": 4,
+        "curriculum_finger_1_target_episodes": 4,
+        "curriculum_finger_1_success_episodes": 0,
+    })
+    state = curriculum.after_iteration({
+        "episodes": 4,
+        "curriculum_finger_1_target_episodes": 4,
+        "curriculum_finger_1_success_episodes": 4,
+    })
+    assert state["curriculum_early_finger_1_episodes"] == 4
+    assert state["curriculum_early_finger_1_success_rate"] == 1.0
+
+
+def test_early_recovery_focus_is_latched_for_a_complete_block():
+    config = FingertipApproachCurriculumConfig(
+        fine_min_iterations=1,
+        fine_max_iterations=1,
+        early_min_evidence_episodes_per_finger=1,
+        early_evidence_window_episodes_per_finger=100,
+        early_recovery_focus_min_iterations=2,
+        early_recovery_switch_margin=0.10,
+        promotion_windows=1)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "fine_reach"
+    curriculum.required_song_fingers = (1, 2)
+
+    def evidence(finger_1_success, finger_2_success):
+        return {
+            "episodes": 40,
+            "curriculum_finger_1_target_episodes": 20,
+            "curriculum_finger_1_success_episodes": finger_1_success,
+            "curriculum_finger_2_target_episodes": 20,
+            "curriculum_finger_2_success_episodes": finger_2_success,
+            "curriculum_p90_target_distance": 0.020,
+            "curriculum_cell_alignment_rate": 0.50,
+        }
+
+    state = curriculum.after_iteration(evidence(20, 0))
+    assert state["curriculum_early_recovery_focus_finger"] == 2
+    assert state["curriculum_early_recovery_focus_iteration"] == 0
+    state = curriculum.after_iteration(evidence(0, 20))
+    assert state["curriculum_early_recovery_focus_finger"] == 2
+    assert state["curriculum_early_recovery_focus_iteration"] == 1
+    state = curriculum.after_iteration(evidence(0, 20))
+    assert state["curriculum_early_recovery_focus_finger"] == 1
+    assert state["curriculum_early_recovery_focus_iteration"] == 0
+
+
+def test_stalled_early_stage_focuses_weakest_finger_with_bounded_history():
+    config = FingertipApproachCurriculumConfig(
+        fine_min_iterations=1,
+        fine_max_iterations=1,
+        early_min_evidence_episodes_per_finger=2,
+        early_evidence_window_episodes_per_finger=8,
+        promotion_windows=2)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "fine_reach"
+    curriculum.required_song_fingers = (1, 2, 3, 4)
+    stats = {
+        "episodes": 80,
+        "curriculum_p90_target_distance": 0.020,
+        "curriculum_cell_alignment_rate": 0.50,
+    }
+    for finger in range(1, 5):
+        stats[f"curriculum_finger_{finger}_target_episodes"] = 20
+        stats[f"curriculum_finger_{finger}_success_episodes"] = (
+            0 if finger == 2 else 20)
+    state = curriculum.after_iteration(stats)
+    assert state["curriculum_stalled"]
+    assert state["curriculum_early_recovery"]
+    assert state["curriculum_early_recovery_focus_finger"] == 2
+    assert state["curriculum_recent"] == []
+    assert all(
+        state[f"curriculum_early_finger_{finger}_episodes"] == 8
+        for finger in range(1, 5))
+
+    state["curriculum_recent"] = [0.0, 1.0]
+    for row in state["curriculum_early_stage_evidence"].values():
+        row["success"] *= 1000
+        row["target"] *= 1000
+    restored = FingertipApproachCurriculum(config)
+    restored.load_context(state)
+    assert list(restored.recent) == []
+    assert max(
+        row["target"]
+        for row in restored.early_stage_evidence.values()) == 8
+
+
+def test_integrated_recovery_sampler_focuses_without_dropping_rehearsal():
+    with tempfile.TemporaryDirectory() as directory:
+        goals = FretGoalSequence(
+            _goal_file(directory), 4096, device="cpu", seed=79)
+        goals.set_curriculum_stage("integrated_press")
+        goals.set_practice_focus_finger(2, focus_probability=0.75)
+        goals.reset(torch.arange(goals.num_envs))
+        active = goals.current()["finger"].amax(dim=1)
+        focus_rate = (active == 2).float().mean()
+        assert 0.70 < focus_rate < 0.80
+        for finger in (1, 3, 4):
+            assert (active == finger).any()
+
+
+def test_recovery_sampler_preserves_quota_across_small_reset_batches():
+    with tempfile.TemporaryDirectory() as directory:
+        goals = FretGoalSequence(
+            _goal_file(directory), 8, device="cpu", seed=83)
+        goals.set_curriculum_stage("isolated_press")
+        goals.set_practice_focus_finger(2, focus_probability=0.75)
+        sizes = (1, 2, 1, 3, 1, 1, 2)
+        total = 0
+        while total < 4096:
+            size = min(sizes[total % len(sizes)], 4096 - total)
+            goals.reset(torch.arange(size))
+            total += size
+        diagnostics = goals.practice_sampler_diagnostics()
+        assert diagnostics["practice_sampler_assignment_total"] == 4096
+        assert diagnostics["practice_sampler_max_quota_error"] <= 1.0
+        assert abs(
+            diagnostics["practice_sampler_focus_actual_fraction"] - 0.75
+        ) <= 0.01
+        for finger in (1, 3, 4):
+            assert abs(
+                diagnostics[
+                    f"practice_sampler_finger_{finger}_fraction"]
+                - 1.0 / 12.0) <= 0.01
+        assert diagnostics[
+            "practice_sampler_singleton_reset_fraction"] > 0.0
+
+
+def test_practice_sampler_setters_are_idempotent():
+    with tempfile.TemporaryDirectory() as directory:
+        goals = FretGoalSequence(
+            _goal_file(directory), 8, device="cpu", seed=85)
+        assert goals.set_practice_focus_finger(
+            2, focus_probability=0.75)
+        assert not goals.set_practice_focus_finger(
+            2, focus_probability=0.75)
+        assert goals.set_practice_finger_weights(None)
+        assert goals.practice_focus_finger is None
+        assert not goals.set_practice_finger_weights(None)
+
+
+def test_adaptive_sampler_preserves_all_finger_weight_quotas():
+    with tempfile.TemporaryDirectory() as directory:
+        goals = FretGoalSequence(
+            _goal_file(directory), 8, device="cpu", seed=87)
+        goals.set_curriculum_stage("integrated_press")
+        target = (0.34, 0.29, 0.22, 0.15)
+        goals.set_practice_finger_weights(target)
+        sizes = (1, 3, 2, 1, 4)
+        total = 0
+        while total < 4096:
+            size = min(sizes[total % len(sizes)], 4096 - total)
+            goals.reset(torch.arange(size))
+            total += size
+        diagnostics = goals.practice_sampler_diagnostics()
+        assert diagnostics["practice_sampler_max_quota_error"] <= 1.0
+        for finger, expected in enumerate(target, start=1):
+            assert abs(diagnostics[
+                f"practice_sampler_finger_{finger}_target_fraction"
+            ] - expected) <= 1e-6
+            assert abs(diagnostics[
+                f"practice_sampler_finger_{finger}_fraction"
+            ] - expected) <= 0.01
+
+
+def test_recovery_sampler_checkpoint_restores_quota_and_rng():
+    with tempfile.TemporaryDirectory() as directory:
+        path = _goal_file(directory)
+        source = FretGoalSequence(path, 8, device="cpu", seed=89)
+        source.set_curriculum_stage("isolated_press")
+        source.set_practice_finger_weights((0.34, 0.29, 0.22, 0.15))
+        for size in (1, 2, 3, 1, 4, 2):
+            source.reset(torch.arange(size))
+        state = source.curriculum_sampler_state_dict()
+
+        restored = FretGoalSequence(path, 8, device="cpu", seed=7)
+        restored.set_curriculum_stage("isolated_press")
+        restored.load_curriculum_sampler_state_dict(state)
+        for size in (1, 1, 2, 5, 3):
+            env_ids = torch.arange(size)
+            source.reset(env_ids)
+            restored.reset(env_ids)
+            assert torch.equal(
+                source.frame_idx[env_ids], restored.frame_idx[env_ids])
+            assert torch.equal(
+                source.practice_string[env_ids],
+                restored.practice_string[env_ids])
+        assert (source.practice_sampler_diagnostics()
+                == restored.practice_sampler_diagnostics())
+
+
+def test_integrated_recovery_adapts_weights_without_resetting_evidence():
+    config = FingertipApproachCurriculumConfig(
+        integrated_press_min_iterations=1,
+        integrated_press_max_iterations=1,
+        early_min_evidence_episodes_per_finger=10,
+        early_evidence_window_episodes_per_finger=100,
+        integrated_recovery_block_iterations=1,
+        integrated_recovery_max_blocks=2,
+        integrated_recovery_min_finger_probability=0.15,
+        promotion_windows=1)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "integrated_press"
+    curriculum.required_song_fingers = (1, 2, 3, 4)
+
+    def evidence(rates):
+        stats = {
+            "episodes": 400,
+            "curriculum_mean_position_quality": 0.8,
+        }
+        for finger, rate in enumerate(rates, start=1):
+            stats[f"curriculum_finger_{finger}_target_episodes"] = 100
+            stats[f"curriculum_finger_{finger}_success_episodes"] = 100 * rate
+        return stats
+
+    state = curriculum.after_iteration(evidence((0.55, 0.65, 0.75, 0.95)))
+    assert state["curriculum_integrated_recovery"]
+    weights = [
+        state[f"curriculum_integrated_recovery_finger_{finger}_weight"]
+        for finger in range(1, 5)]
+    assert min(weights) >= 0.15 - 1e-6
+    assert weights[0] == max(weights)
+    assert all(
+        state[f"curriculum_early_finger_{finger}_episodes"] == 100
+        for finger in range(1, 5))
+
+    state = curriculum.after_iteration(evidence((0.55, 0.20, 0.75, 0.95)))
+    weights = [
+        state[f"curriculum_integrated_recovery_finger_{finger}_weight"]
+        for finger in range(1, 5)]
+    assert state["curriculum_integrated_recovery_block_count"] == 1
+    assert state[
+        "curriculum_integrated_recovery_last_update_reason"] == (
+            "retention_drop")
+    assert weights[1] == max(weights)
+    assert all(
+        state[f"curriculum_early_finger_{finger}_episodes"] == 100
+        for finger in range(1, 5))
+
+    recovery_count = state["curriculum_integrated_recovery_count"]
+    state = curriculum.after_iteration(evidence((0.55, 0.20, 0.75, 0.95)))
+    assert state["curriculum_integrated_recovery_exhausted"]
+    assert state["curriculum_stalled"]
+    assert all(abs(state[
+        f"curriculum_integrated_recovery_finger_{finger}_weight"
+    ] - 0.25) <= 1e-6 for finger in range(1, 5))
+    state = curriculum.after_iteration(evidence((0.55, 0.20, 0.75, 0.95)))
+    assert state["curriculum_integrated_recovery_count"] == recovery_count
+
+
+def test_integrated_weight_update_does_not_force_global_reset():
+    class Goals:
+        practice_available_fingers = (0, 1, 2, 3)
+        practice_goal_pair_available_incoming_fingers = ()
+
+        def set_chord_focus_index(self, index, focus_probability=1.0):
+            return False
+
+        def set_practice_finger_weights(self, weights):
+            self.weights = tuple(weights) if weights is not None else None
+            return True
+
+        def set_practice_focus_finger(self, finger, focus_probability=1.0):
+            raise AssertionError("adaptive recovery must not use single focus")
+
+        def set_random_start_probability(self, probability):
+            self.random_start_probability = probability
+
+    class Env:
+        def __init__(self):
+            self.goals = Goals()
+            self.reset_count = 0
+
+        def set_integrated_press_control(self, phase, recovery=False,
+                                         focus_finger=0):
+            self.recovery = recovery
+
+        def set_fine_reach_control(self, iteration, recovery=False):
+            pass
+
+        def set_curriculum_stage(self, stage, duration_frames=None,
+                                 reset=False):
+            return None
+
+        def reset(self):
+            self.reset_count += 1
+            return None
+
+    curriculum = FingertipApproachCurriculum()
+    curriculum.stage = "integrated_press"
+    curriculum.integrated_recovery_active = True
+    curriculum.integrated_recovery_weights = (0.34, 0.29, 0.22, 0.15)
+    env = Env()
+    curriculum.apply(env)
+    assert env.goals.weights == curriculum.integrated_recovery_weights
+    assert env.reset_count == 0
+
+
+def test_repeated_early_focus_application_resets_only_once():
+    class Goals:
+        practice_available_fingers = (0, 1, 2, 3)
+        practice_goal_pair_available_incoming_fingers = ()
+
+        def __init__(self):
+            self.focus = None
+            self.probability = 1.0
+            self.weights = None
+
+        def set_chord_focus_index(self, index, focus_probability=1.0):
+            return False
+
+        def set_practice_finger_weights(self, weights):
+            normalized = tuple(weights) if weights is not None else None
+            changed = (
+                normalized != self.weights
+                or (normalized is None
+                    and (self.focus is not None
+                         or self.probability != 1.0)))
+            if not changed:
+                return False
+            self.weights = normalized
+            if normalized is None:
+                self.focus = None
+                self.probability = 1.0
+            return True
+
+        def set_practice_focus_finger(self, finger, focus_probability=1.0):
+            changed = (
+                finger != self.focus
+                or focus_probability != self.probability
+                or self.weights is not None)
+            self.focus = finger
+            self.probability = focus_probability
+            self.weights = None
+            return changed
+
+        def set_random_start_probability(self, probability):
+            pass
+
+    class Env:
+        def __init__(self):
+            self.goals = Goals()
+            self.reset_count = 0
+
+        def set_integrated_press_control(self, *args, **kwargs):
+            pass
+
+        def set_fine_reach_control(self, *args, **kwargs):
+            pass
+
+        def set_curriculum_stage(self, *args, **kwargs):
+            return None
+
+        def reset(self):
+            self.reset_count += 1
+            return None
+
+    curriculum = FingertipApproachCurriculum()
+    curriculum.stage = "fine_reach"
+    curriculum.stalled = True
+    curriculum.early_recovery_focus_finger = 2
+    env = Env()
+    curriculum.apply(env)
+    assert env.reset_count == 1
+    curriculum.apply(env)
+    assert env.reset_count == 1
+    assert env.goals.focus == 2
+    assert env.goals.weights is None
+    assert curriculum.practice_focus_reset_count == 1
+    assert curriculum.practice_focus_reset_consecutive == 0
+
+
+def test_adaptive_to_single_focus_transition_resets_once():
+    config = FingertipApproachCurriculumConfig(
+        practice_reset_watchdog_iterations=3)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "integrated_press"
+    curriculum.integrated_recovery_active = True
+    curriculum.integrated_recovery_weights = (0.34, 0.29, 0.22, 0.15)
+
+    class Goals:
+        practice_available_fingers = (0, 1, 2, 3)
+        practice_goal_pair_available_incoming_fingers = ()
+
+        def __init__(self):
+            self.focus = None
+            self.probability = 1.0
+            self.weights = None
+
+        def set_chord_focus_index(self, *args, **kwargs):
+            return False
+
+        def set_practice_finger_weights(self, weights):
+            normalized = tuple(weights)
+            changed = normalized != self.weights
+            self.weights = normalized
+            self.focus = max(range(4), key=normalized.__getitem__) + 1
+            self.probability = max(normalized)
+            return changed
+
+        def set_practice_focus_finger(self, finger, focus_probability=1.0):
+            changed = (
+                finger != self.focus
+                or focus_probability != self.probability
+                or self.weights is not None)
+            self.focus = finger
+            self.probability = focus_probability
+            self.weights = None
+            return changed
+
+        def set_random_start_probability(self, probability):
+            pass
+
+    class Env:
+        def __init__(self):
+            self.goals = Goals()
+            self.reset_count = 0
+
+        def set_integrated_press_control(self, *args, **kwargs):
+            pass
+
+        def set_fine_reach_control(self, *args, **kwargs):
+            pass
+
+        def set_curriculum_stage(self, *args, **kwargs):
+            return None
+
+        def reset(self):
+            self.reset_count += 1
+            return None
+
+    env = Env()
+    curriculum.apply(env)
+    assert env.reset_count == 0
+    curriculum.stage = "fine_reach"
+    curriculum.stalled = True
+    curriculum.early_recovery_focus_finger = 2
+    curriculum.apply(env)
+    assert env.reset_count == 1
+    curriculum.apply(env)
+    assert env.reset_count == 1
+
+
+def test_repeated_practice_reset_watchdog_fails_closed():
+    config = FingertipApproachCurriculumConfig(
+        practice_reset_watchdog_iterations=3)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "fine_reach"
+    curriculum.stalled = True
+    curriculum.early_recovery_focus_finger = 2
+
+    class Goals:
+        practice_available_fingers = (0, 1, 2, 3)
+        practice_goal_pair_available_incoming_fingers = ()
+
+        def set_chord_focus_index(self, *args, **kwargs):
+            return False
+
+        def set_practice_focus_finger(self, *args, **kwargs):
+            return True
+
+        def set_random_start_probability(self, probability):
+            pass
+
+    class Env:
+        def __init__(self):
+            self.goals = Goals()
+
+        def set_integrated_press_control(self, *args, **kwargs):
+            pass
+
+        def set_fine_reach_control(self, *args, **kwargs):
+            pass
+
+        def set_curriculum_stage(self, *args, **kwargs):
+            return None
+
+        def reset(self):
+            return None
+
+    env = Env()
+    curriculum.apply(env)
+    curriculum.apply(env)
+    try:
+        curriculum.apply(env)
+    except RuntimeError as exc:
+        assert "consecutive training iterations" in str(exc)
+    else:
+        raise AssertionError("repeated full reset watchdog did not fire")
+
+
+def test_early_recovery_has_a_total_block_limit():
+    config = FingertipApproachCurriculumConfig(
+        fine_min_iterations=1,
+        fine_max_iterations=1,
+        early_min_evidence_episodes_per_finger=1,
+        early_recovery_focus_min_iterations=1,
+        early_recovery_max_total_blocks=3,
+        promotion_windows=1)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "fine_reach"
+    curriculum.required_song_fingers = (1, 2, 3, 4)
+    curriculum.stalled = True
+    curriculum.early_recovery_focus_finger = 2
+    stats = {"episodes": 4, "curriculum_mean_position_quality": 0.8}
+    for finger in range(1, 5):
+        stats[f"curriculum_finger_{finger}_target_episodes"] = 1
+        stats[f"curriculum_finger_{finger}_success_episodes"] = (
+            0 if finger == 2 else 1)
+    for _ in range(3):
+        state = curriculum.after_iteration(stats)
+    assert state["curriculum_early_recovery_exhausted"]
+    assert state["curriculum_early_recovery_total_blocks"] == 3
+    assert state["curriculum_early_recovery_focus_finger"] == 0
+    assert state["curriculum_early_recovery_last_switch_reason"] == (
+        "max_total_blocks")
+    restored = FingertipApproachCurriculum(config)
+    restored.load_context(state)
+    assert restored.early_recovery_exhausted
+    assert restored.early_recovery_total_blocks == 3
+    assert restored.early_recovery_focus_finger == 0
+    curriculum.after_iteration(stats)
+    assert curriculum.early_recovery_total_blocks == 3
+
+
+def test_isolated_recovery_uses_balanced_adaptive_finger_weights():
+    config = FingertipApproachCurriculumConfig(
+        isolated_press_min_iterations=1,
+        isolated_press_max_iterations=1,
+        early_min_evidence_episodes_per_finger=1,
+        early_evidence_window_episodes_per_finger=100,
+        early_recovery_focus_min_iterations=1,
+        early_recovery_max_total_blocks=3,
+        early_recovery_min_finger_probability=0.15,
+        promotion_windows=1)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "isolated_press"
+    curriculum.required_song_fingers = (1, 2, 3, 4)
+    stats = {
+        "episodes": 40,
+        "curriculum_mean_position_quality": 0.8,
+        "curriculum_mean_arch_quality": 0.9,
+    }
+    rates = (0.9, 0.85, 0.2, 0.9)
+    for finger, rate in enumerate(rates, start=1):
+        stats[f"curriculum_finger_{finger}_target_episodes"] = 10
+        stats[f"curriculum_finger_{finger}_success_episodes"] = 10 * rate
+
+    state = curriculum.after_iteration(stats)
+    weights = state["curriculum_early_recovery_weights"]
+    assert state["curriculum_early_bottleneck_finger"] == 3
+    assert abs(state["curriculum_early_min_success_rate"] - 0.2) < 1e-6
+    assert state["curriculum_early_recovery"]
+    assert state["curriculum_early_recovery_focus_finger"] == 3
+    assert abs(sum(weights) - 1.0) < 1e-6
+    assert all(weight >= 0.15 for weight in weights)
+    assert weights[2] == max(weights)
+
+    state = curriculum.after_iteration(stats)
+    assert state["curriculum_early_recovery_total_blocks"] == 1
+    assert state["curriculum_early_recovery_focus_iteration"] == 0
+    assert state["curriculum_early_recovery_last_switch_reason"].startswith(
+        "adaptive_")
+    restored = FingertipApproachCurriculum(config)
+    restored.load_context(state)
+    assert restored.early_recovery_weights == tuple(
+        state["curriculum_early_recovery_weights"])
+
+    state = curriculum.after_iteration(stats)
+    state = curriculum.after_iteration(stats)
+    exhausted_weights = state["curriculum_early_recovery_weights"]
+    assert state["curriculum_early_recovery_exhausted"]
+    assert state["curriculum_early_recovery_consolidation"]
+    assert exhausted_weights[2] == max(exhausted_weights)
+    assert exhausted_weights != (0.25, 0.25, 0.25, 0.25)
+    restored = FingertipApproachCurriculum(config)
+    restored.load_context(state)
+    assert restored.early_recovery_weights == tuple(exhausted_weights)
+
+
+def test_isolated_adaptive_recovery_applies_weights_without_single_focus():
+    class Goals:
+        practice_available_fingers = (0, 1, 2, 3)
+        practice_goal_pair_available_incoming_fingers = ()
+
+        def __init__(self):
+            self.weights = None
+
+        def set_chord_focus_index(self, *args, **kwargs):
+            return False
+
+        def set_practice_finger_weights(self, weights):
+            self.weights = tuple(weights)
+            return True
+
+        def set_practice_focus_finger(self, *args, **kwargs):
+            raise AssertionError(
+                "isolated adaptive recovery must not use single focus")
+
+        def set_random_start_probability(self, _probability):
+            pass
+
+    class Env:
+        def __init__(self):
+            self.goals = Goals()
+            self.reset_count = 0
+
+        def set_integrated_press_control(self, *args, **kwargs):
+            pass
+
+        def set_fine_reach_control(self, *args, **kwargs):
+            pass
+
+        def set_curriculum_stage(self, *args, **kwargs):
+            return None
+
+        def reset(self):
+            self.reset_count += 1
+            return None
+
+    curriculum = FingertipApproachCurriculum()
+    curriculum.stage = "isolated_press"
+    curriculum.stalled = True
+    curriculum.early_recovery_exhausted = True
+    curriculum.early_recovery_focus_finger = 3
+    curriculum.early_recovery_weights = (0.15, 0.15, 0.55, 0.15)
+    env = Env()
+    curriculum.apply(env)
+    curriculum.apply(env)
+    assert env.goals.weights == curriculum.early_recovery_weights
+    assert env.reset_count == 0
+
+
+def test_early_evidence_age_detects_and_recovers_from_starvation():
+    config = FingertipApproachCurriculumConfig(
+        fine_min_iterations=200,
+        fine_max_iterations=300,
+        early_min_evidence_episodes_per_finger=1,
+        early_evidence_stall_iterations=3,
+        early_evidence_recent_iterations=5,
+        promotion_windows=1)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "fine_reach"
+    curriculum.required_song_fingers = (1, 2)
+    evidence = {
+        "episodes": 2,
+        "curriculum_mean_position_quality": 0.8,
+        "curriculum_finger_1_target_episodes": 1,
+        "curriculum_finger_1_success_episodes": 1,
+        "curriculum_finger_2_target_episodes": 1,
+        "curriculum_finger_2_success_episodes": 1,
+    }
+    state = curriculum.after_iteration(evidence)
+    assert not state["curriculum_early_evidence_stalled"]
+    for _ in range(3):
+        state = curriculum.after_iteration({})
+    assert state["curriculum_early_evidence_stalled"]
+    assert state["curriculum_early_evidence_starved_fingers"] == [1, 2]
+    assert not curriculum._has_minimum_stage_evidence({})
+    restored = FingertipApproachCurriculum(config)
+    restored.load_context(state)
+    restored.required_song_fingers = (1, 2)
+    assert restored._early_evidence_starved_fingers() == (1, 2)
+    state = curriculum.after_iteration(evidence)
+    assert not state["curriculum_early_evidence_stalled"]
+    assert state["curriculum_early_finger_1_recent_episodes"] == 2
+    assert state["curriculum_early_finger_2_recent_episodes"] == 2
+
+
+def test_early_recovery_switches_for_retention_before_block_rotation():
+    config = FingertipApproachCurriculumConfig(
+        fine_min_iterations=1,
+        fine_max_iterations=1,
+        early_min_evidence_episodes_per_finger=1,
+        early_evidence_window_episodes_per_finger=10,
+        early_recovery_focus_min_iterations=1,
+        early_recovery_max_focus_blocks=10,
+        early_recovery_retention_drop_tolerance=0.05,
+        promotion_windows=1)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "fine_reach"
+    curriculum.required_song_fingers = (1, 2, 3)
+
+    def evidence(rates):
+        stats = {
+            "episodes": 30,
+            "curriculum_p90_target_distance": 0.020,
+            "curriculum_cell_alignment_rate": 0.50,
+        }
+        for finger, rate in enumerate(rates, start=1):
+            stats[f"curriculum_finger_{finger}_target_episodes"] = 10
+            stats[f"curriculum_finger_{finger}_success_episodes"] = 10 * rate
+        return stats
+
+    state = curriculum.after_iteration(evidence((0.9, 0.2, 0.8)))
+    assert state["curriculum_early_recovery_focus_finger"] == 2
+    state = curriculum.after_iteration(evidence((0.4, 0.4, 0.8)))
+    assert state["curriculum_early_recovery_focus_finger"] == 1
+    assert state[
+        "curriculum_early_recovery_last_switch_reason"] == "retention_drop"
+
+
+def test_early_recovery_rotates_after_maximum_focus_blocks():
+    config = FingertipApproachCurriculumConfig(
+        fine_min_iterations=1,
+        fine_max_iterations=1,
+        early_min_evidence_episodes_per_finger=1,
+        early_evidence_window_episodes_per_finger=10,
+        early_recovery_focus_min_iterations=1,
+        early_recovery_max_focus_blocks=1,
+        early_recovery_retention_drop_tolerance=1.0,
+        early_recovery_switch_margin=1.0,
+        promotion_windows=1)
+    curriculum = FingertipApproachCurriculum(config)
+    curriculum.stage = "fine_reach"
+    curriculum.required_song_fingers = (1, 2, 3)
+    stats = {
+        "episodes": 30,
+        "curriculum_p90_target_distance": 0.020,
+        "curriculum_cell_alignment_rate": 0.50,
+        "curriculum_finger_1_target_episodes": 10,
+        "curriculum_finger_1_success_episodes": 5,
+        "curriculum_finger_2_target_episodes": 10,
+        "curriculum_finger_2_success_episodes": 1,
+        "curriculum_finger_3_target_episodes": 10,
+        "curriculum_finger_3_success_episodes": 9,
+    }
+    state = curriculum.after_iteration(stats)
+    assert state["curriculum_early_recovery_focus_finger"] == 2
+    state = curriculum.after_iteration(stats)
+    assert state["curriculum_early_recovery_focus_finger"] == 1
+    assert state[
+        "curriculum_early_recovery_last_switch_reason"] == "block_limit"
+
+
+def test_early_recovery_block_state_survives_checkpoint_context():
+    config = FingertipApproachCurriculumConfig()
+    source = FingertipApproachCurriculum(config)
+    source.stage = "isolated_press"
+    source.stalled = True
+    source.required_song_fingers = (1, 2, 3, 4)
+    source.early_recovery_focus_finger = 2
+    source.early_recovery_focus_iteration = 123
+    source.early_recovery_focus_blocks = 1
+    source.early_recovery_total_blocks = 3
+    source.early_recovery_count = 4
+    source.early_recovery_best_rates = {
+        1: 0.70, 2: 0.45, 3: 0.85, 4: 0.80}
+    source.early_recovery_last_switch_reason = "retention_drop"
+    source.early_recovery_retention_max_drop = 0.07
+    state = source.state()
+
+    restored = FingertipApproachCurriculum(config)
+    restored.load_context(state)
+    assert restored.early_recovery_focus_finger == 2
+    assert restored.early_recovery_focus_iteration == 123
+    assert restored.early_recovery_focus_blocks == 1
+    assert restored.early_recovery_total_blocks == 3
+    assert restored.early_recovery_count == 4
+    assert restored.early_recovery_best_rates == source.early_recovery_best_rates
+    assert restored.early_recovery_last_switch_reason == "retention_drop"
+    assert restored.early_recovery_retention_max_drop == 0.07
+
+
+def test_fine_reach_action_scales_use_warmup_ramp_and_recovery_assist():
+    finger_ids = torch.tensor([0, 1, 2, 3, -1, -1, -1])
+    wrist = torch.tensor([False, False, False, False, True, False, False])
+    elbow = torch.tensor([False, False, False, False, False, True, False])
+    shoulder = torch.tensor([False, False, False, False, False, False, True])
+    target = torch.tensor([2])
+    warm = fine_reach_action_scales(
+        finger_ids, wrist, elbow, shoulder, target, 200)
+    assert warm[0].tolist() == [1.0] * 7
+    precise = fine_reach_action_scales(
+        finger_ids, wrist, elbow, shoulder, target, 500)
+    assert torch.allclose(
+        precise[0], torch.tensor([1.0, 0.15, 1.0, 0.15,
+                                  1.0, 1.0, 0.15]))
+    recovery = fine_reach_action_scales(
+        finger_ids, wrist, elbow, shoulder, target, 500,
+        recovery=True)
+    assert torch.allclose(recovery[0, 6:], torch.tensor([0.35]))
 
 
 def _single_transition_goal_file(directory):
@@ -194,6 +1120,12 @@ def _song_stats(passed):
     for finger in range(1, 5):
         stats[f"press_finger_{finger}_success"] = 10.0 * rate
         stats[f"press_finger_{finger}_count"] = 10.0
+        stats[f"curriculum_finger_{finger}_target_active_count"] = 10.0
+        stats[f"curriculum_finger_{finger}_target_distance"] = (
+            0.005 if passed else 0.040)
+        stats[f"finger_{finger}_target_distance_active_frames"] = 10.0
+        stats[f"finger_{finger}_target_distance_sum"] = (
+            0.05 if passed else 0.40)
         full_song = (
             f"curriculum_goal_pair_full_song_finger_{finger}")
         stats[f"{full_song}_target_active_count"] = 256.0
@@ -204,6 +1136,14 @@ def _song_stats(passed):
         stats[f"{full_song}_dropout_rate"] = (
             0.02 if passed else 0.20)
     return stats
+
+
+def _frozen_stats(stats):
+    return {
+        **stats,
+        "_frozen_train": dict(stats),
+        "_frozen_eval": dict(stats),
+    }
 
 
 def _static_chord_stats(passed):
@@ -267,6 +1207,31 @@ def _goal_pair_stats():
 
 
 def main():
+    test_static_chord_timeout_enters_failed_chord_recovery()
+    test_integrated_press_uses_pooled_evidence_and_weak_finger_recovery()
+    test_integrated_press_progressively_unlocks_proximal_actions()
+    test_integrated_recovery_sampler_focuses_without_dropping_rehearsal()
+    test_recovery_sampler_preserves_quota_across_small_reset_batches()
+    test_practice_sampler_setters_are_idempotent()
+    test_adaptive_sampler_preserves_all_finger_weight_quotas()
+    test_recovery_sampler_checkpoint_restores_quota_and_rng()
+    test_integrated_recovery_adapts_weights_without_resetting_evidence()
+    test_integrated_weight_update_does_not_force_global_reset()
+    test_repeated_early_focus_application_resets_only_once()
+    test_adaptive_to_single_focus_transition_resets_once()
+    test_repeated_practice_reset_watchdog_fails_closed()
+    test_early_recovery_has_a_total_block_limit()
+    test_isolated_recovery_uses_balanced_adaptive_finger_weights()
+    test_isolated_adaptive_recovery_applies_weights_without_single_focus()
+    test_early_evidence_age_detects_and_recovers_from_starvation()
+    test_early_promotion_ignores_iterations_without_diagnostic_evidence()
+    test_early_evidence_keeps_only_the_recent_episode_window()
+    test_early_recovery_focus_is_latched_for_a_complete_block()
+    test_early_recovery_switches_for_retention_before_block_rotation()
+    test_early_recovery_rotates_after_maximum_focus_blocks()
+    test_early_recovery_block_state_survives_checkpoint_context()
+    test_stalled_early_stage_focuses_weakest_finger_with_bounded_history()
+    test_fine_reach_action_scales_use_warmup_ramp_and_recovery_assist()
     for stage in (
             "static_chord", "frozen_context", "goal_pair",
             "transition_window",
@@ -295,13 +1260,17 @@ def main():
             "coverage", "integration", "full_song"):
         assert FingertipApproachCurriculum.migrate_stage(
             stage, source_schema=4) == "frozen_context"
-    for stage in FingertipApproachCurriculum.STAGES:
-        assert FingertipApproachCurriculum.migrate_stage(
-            stage, source_schema=5) == stage
-        assert FingertipApproachCurriculum.migrate_stage(
-            stage, source_schema=6) == stage
-        assert FingertipApproachCurriculum.migrate_stage(
-            stage, source_schema=7) == stage
+    frozen_migration_stages = {
+        "frozen_context", "goal_pair", "transition_window",
+        "coverage", "integration", "full_song",
+    }
+    for source_schema in (5, 6, 7):
+        for stage in FingertipApproachCurriculum.STAGES:
+            expected = (
+                "frozen_context"
+                if stage in frozen_migration_stages else stage)
+            assert FingertipApproachCurriculum.migrate_stage(
+                stage, source_schema=source_schema) == expected
 
     with tempfile.TemporaryDirectory() as directory:
         transient = FretGoalSequence(
@@ -639,6 +1608,10 @@ def main():
         frozen_context_min_iterations=1,
         frozen_context_max_iterations=2,
         frozen_context_context_warmup_iterations=0,
+        frozen_context_recovery_block_iterations=1,
+        frozen_context_focus_min_evidence=1,
+        frozen_context_recovery_ready_blocks=1,
+        frozen_context_recovery_max_blocks=2,
         goal_pair_min_iterations=1, goal_pair_max_iterations=2,
         goal_pair_retention_min_iterations=1,
         goal_pair_mixed_min_iterations=1,
@@ -691,6 +1664,8 @@ def main():
     recovery_config = replace(
         config,
         frozen_context_focus_min_evidence=1,
+        frozen_context_recovery_block_iterations=1,
+        frozen_context_recovery_min_weight_change=0.0,
         frozen_context_max_iterations=10)
     recovery = FingertipApproachCurriculum(
         recovery_config, forced_stage="frozen_context")
@@ -701,13 +1676,20 @@ def main():
         weak_middle[f"curriculum_finger_{finger}_target_distance"] = 0.005
     weak_middle["press_finger_2_success"] = 1.0
     weak_middle["curriculum_finger_2_target_distance"] = 0.100
-    state = recovery.after_iteration(weak_middle)
-    assert state["curriculum_frozen_context_focus_finger"] == 2
-    assert state["curriculum_frozen_context_focus_probability"] == 0.65
+    prior_bridge = dict(recovery.bridge_accumulator)
+    state = recovery.after_iteration(_frozen_stats(weak_middle))
+    weights = state["curriculum_frozen_context_recovery_weights"]
+    assert weights[1] == max(weights)
+    assert all(weight >= 0.20 for weight in weights)
+    assert abs(sum(weights) - 1.0) < 1e-9
+    assert state["curriculum_frozen_context_recovery_focus_fingers"] == [2]
+    assert recovery.bridge_accumulator == prior_bridge
     restored_recovery = FingertipApproachCurriculum(
         recovery_config, forced_stage="frozen_context")
     restored_recovery.load_context(recovery.state())
-    assert restored_recovery.frozen_context_focus_finger == 2
+    assert (
+        restored_recovery.frozen_context_recovery_weights
+        == recovery.frozen_context_recovery_weights)
     assert (
         restored_recovery.frozen_context_focus_evidence
         == recovery.frozen_context_focus_evidence)
@@ -715,7 +1697,7 @@ def main():
     for finger in range(1, 5):
         recovered[f"curriculum_finger_{finger}_target_active_count"] = 10.0
         recovered[f"curriculum_finger_{finger}_target_distance"] = 0.005
-    state = recovery.after_iteration(recovered)
+    state = recovery.after_iteration(_frozen_stats(recovered))
     assert state["curriculum_frozen_context_focus_finger"] == 0
     recovery.bridge_last_metrics = {"finger_min": 0.64}
     assert not recovery._hard_timeout_quality_floor_passes()
@@ -775,15 +1757,17 @@ def main():
     assert curriculum.stage == "frozen_context"
     weak_finger = _song_stats(True)
     weak_finger["press_finger_4_success"] = 2.0
-    curriculum.after_iteration(weak_finger)
-    state = curriculum.after_iteration(weak_finger)
+    curriculum.after_iteration(_frozen_stats(weak_finger))
+    state = curriculum.after_iteration(_frozen_stats(weak_finger))
     assert curriculum.stage == "frozen_context"
     assert state["curriculum_stalled"]
+    assert state["curriculum_frozen_context_recovery_failed"]
+    curriculum._reset_frozen_context_recovery("test_restart")
     curriculum.frozen_context_final_applied = True
     curriculum.recent.clear()
     curriculum.stalled = False
-    curriculum.after_iteration(_song_stats(True))
-    curriculum.after_iteration(_song_stats(True))
+    curriculum.after_iteration(_frozen_stats(_song_stats(True)))
+    curriculum.after_iteration(_frozen_stats(_song_stats(True)))
     assert curriculum.stage == "goal_pair"
     curriculum.goal_pair_incoming_fingers = (1, 2, 3, 4)
     curriculum.after_iteration(_goal_pair_stats())
@@ -984,8 +1968,8 @@ def main():
     assert state["curriculum_goal_pair_recovery"]
     assert state["curriculum_goal_pair_recovery_reason"] == (
         "performance_regression")
-    assert state["curriculum_goal_pair_rehearsal_probability"] == 0.50
-    assert state["curriculum_goal_pair_sequence_probability"] == 0.50
+    assert state["curriculum_goal_pair_rehearsal_probability"] == 0.60
+    assert state["curriculum_goal_pair_sequence_probability"] == 0.40
     regression.goal_pair_mastered_fingers = [True] * 4
     state = regression.after_iteration(_song_stats(True))
     assert state["curriculum_regression_hold"]
@@ -1043,8 +2027,9 @@ def main():
         "curriculum_recent": [1.0],
     })
     assert schema5_frozen.stage == "frozen_context"
-    assert schema5_frozen.stage_iteration == 2
-    assert schema5_frozen.frozen_context_final_applied
+    assert schema5_frozen.stage_iteration == 0
+    assert not schema5_frozen.frozen_context_final_applied
+    assert not schema5_frozen.frozen_context_evaluation_started
     assert not schema5_frozen.recent
     assert not schema5_frozen.bridge_windows
     assert schema5_frozen.bridge_accumulator["episodes"] == 0.0
@@ -1062,11 +2047,11 @@ def main():
         "curriculum_frozen_context_final_applied": True,
         "curriculum_recent": [0.0, 0.0, 0.0],
     })
-    assert schema5_checkpoint.stage_iteration == 1500
-    assert schema5_checkpoint._frozen_context_evaluation_ready()
+    assert schema5_checkpoint.stage_iteration == 0
+    assert not schema5_checkpoint._frozen_context_evaluation_ready()
     assert not schema5_checkpoint.bridge_windows
     assert schema5_checkpoint.state()[
-        "curriculum_schema_version"] == 44
+        "curriculum_schema_version"] == FingertipApproachCurriculum.SCHEMA_VERSION
     schema41_chord = FingertipApproachCurriculum(config)
     schema41_chord.load_context({
         "curriculum_stage": "chord_fine_reach",
@@ -1092,9 +2077,9 @@ def main():
         "curriculum_total_iteration": 500,
         "curriculum_schema_version": 5,
     })
-    assert current.stage == "goal_pair"
+    assert current.stage == "frozen_context"
     assert current.stage_iteration == 0
-    assert current.goal_pair_phase == "retention"
+    assert not current.frozen_context_evaluation_started
 
     schema6_source = FingertipApproachCurriculum(config)
     schema6_source.stage = "goal_pair"
@@ -1145,6 +2130,22 @@ def main():
     assert restored_evidence._chord_fine_phase_sample(batch) == 0.9
     assert "3" not in restored_evidence.chord_phase_evidence
 
+    rollout_evidence = FingertipApproachCurriculum(evidence_config)
+    rollout_evidence.stage = "chord_fine_reach"
+    rollout_evidence.chord_available_sets = ((1, 3),)
+    rollout_evidence.chord_focus_count = 1
+    rollout_evidence.chord_focus_index = 0
+    rollout_batch = {
+        "failure_termination": 0.0,
+        "curriculum_chord_shape_5_target_active_count": 128.0,
+        "curriculum_chord_shape_5_success": 0.75,
+        "curriculum_chord_shape_5_distance_p90": 0.005,
+        "curriculum_chord_shape_5_alignment": 0.95,
+    }
+    assert rollout_evidence._chord_fine_phase_sample(rollout_batch) < 0.0
+    assert rollout_evidence._chord_fine_phase_sample(rollout_batch) == 0.75
+    assert not rollout_evidence.chord_evidence_stalled
+
     bounded_config = replace(
         config,
         chord_fine_min_iterations=1,
@@ -1167,12 +2168,26 @@ def main():
     })
     assert bounded.stage == "static_chord"
     assert bounded_state["curriculum_last_forced_advance_from"] == (
-        "chord_fine_reach:max_cycles")
+        "chord_fine_reach:bounded_unresolved")
     assert bounded_state["curriculum_chord_unresolved_signatures"] == [3, 5]
     assert bounded_state["curriculum_chord_max_cycles"] == 1
+    assert not bounded_state["curriculum_stalled"]
+
+    retest = FingertipApproachCurriculum(replace(
+        config,
+        static_chord_min_iterations=1,
+        static_chord_max_iterations=10,
+        static_chord_retest_max_iterations=3))
+    retest.stage = "static_chord"
+    assert retest._practice_limits() == (1, 10)
+    retest.static_chord_recovery_count = 1
+    retest.static_chord_recovery_reason = "retest"
+    assert retest._practice_limits() == (1, 3)
+    assert retest.state()[
+        "curriculum_static_chord_retest_max_iterations"] == 3
 
     print(
-        "PASS: schema-44 bounded chord cycles and stage-specific evidence")
+        "PASS: current-schema chord recovery and stage-specific evidence")
 
 
 if __name__ == "__main__":

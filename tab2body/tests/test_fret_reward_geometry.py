@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 from env.rewards.fret import (FretReward, blend_wrong_press_avoidance,
                               cylindrical_pad_depth, multi_scale_approach_reward,
                               fingertip_slip_reward, fret_position_quality,
+                              fret_position_inside,
                               fret_requirement_masks,
                               one_sided_pad_distance, released_finger_hover_reward,
                               released_finger_outward_velocity_reward,
@@ -23,12 +24,15 @@ from env.rewards.fret import (FretReward, blend_wrong_press_avoidance,
 
 
 def main():
-    x = torch.tensor([0.0, 0.05, 0.10, 0.20, 0.30, 0.35, 0.50, 1.0])
+    x = torch.tensor([0.0, 0.05, 0.10, 0.20, 0.50, 0.90, 0.95, 1.0])
     q = fret_position_quality(x)
-    assert q[0] == 0 and q[1] == 0 and q[5] == 0 and q[-1] == 0
-    assert q[3] == 1
-    assert 0 < q[2] < q[3] and 0 < q[4] < q[3]
-    assert torch.isclose(q[2], q[4], atol=1e-6)
+    assert q[0] == 0 and q[-1] == 0
+    assert torch.all(q[2:6] == 1)
+    assert 0 < q[1] < 1 and 0 < q[6] < 1
+    assert torch.isclose(q[1], q[6], atol=1e-6)
+    assert torch.equal(
+        fret_position_inside(x),
+        torch.tensor([False, False, True, True, True, True, False, False]))
 
     d = torch.tensor([0.0, 0.01, 0.02, 0.05, 0.10])
     r = multi_scale_approach_reward(d)

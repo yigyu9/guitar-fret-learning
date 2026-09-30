@@ -21,6 +21,7 @@ FRET = {
     "song_id": DEFAULT_SONG_ID,
     "goal_path": str(fret_goal_path(DEFAULT_SONG_ID)),
     "hand_targets_path": str(hand_targets_path(DEFAULT_SONG_ID)),
+    "observation_contract": "fret.observation.v2",
     # RTX 4070 Ti 12GB profile. A 384-env run used only ~1.4GB VRAM; 1024 is
     # now the validated target, with startup resource guards kept active.
     "num_envs": 1024,
@@ -37,15 +38,27 @@ FRET = {
     "action_scale": 1.0,
     "action_alpha": 0.5,
     "reset_soft_limit_fraction": 0.02,
+    # XML은 수정하지 않는다. False 또는 --no-human-hard-limits로 즉시 원복한다.
+    # 프로필에 없는 제어 관절은 XML hard limit을 그대로 사용한다.
+    "human_hard_limits_enabled": True,
+    "human_hard_limit_path": str(
+        HERE / "assets/fret_human_joint_profile.json"),
     "policy_init_std": 0.02,
     # 모든 신규 학습은 약한 PIP/DIP 아치와 넓은 굽힘 탐색으로 시작하고,
     # 모든 커리큘럼 단계에서 거리 게이트 아치 보상을 유지한다.
     "articulation_flexion_init_std": 0.08,
-    "finger_exploration_target_std": 0.025,
+    # 로그 비교에서 성공한 정책은 코드 습득 중 굽힘 std를 약 0.08로
+    # 유지했지만 실패 정책은 0.025로 조기 수축했다. 다중 손가락 자세를
+    # 찾는 동안에는 탐색 floor를 유지하고, 정적 코드 숙련 뒤에만 줄인다.
+    "finger_exploration_target_std": 0.035,
     "finger_exploration_warmup_iterations": 25,
-    "finger_exploration_ramp_iterations": 300,
-    "chord_focus_finger_exploration_std": 0.045,
-    "goal_pair_focus_finger_exploration_std": 0.045,
+    "finger_exploration_ramp_iterations": 1500,
+    "chord_acquisition_flexion_std": 0.060,
+    "chord_acquisition_lateral_std": 0.040,
+    "integrated_press_lateral_std": 0.050,
+    "integrated_press_focus_lateral_std": 0.075,
+    "chord_focus_finger_exploration_std": 0.080,
+    "goal_pair_focus_finger_exploration_std": 0.055,
     "thumb_exploration_init_std": 0.05,
     "thumb_base_exploration_init_std": 0.05,
     "thumb_base_exploration_target_std": 0.05,
@@ -57,6 +70,13 @@ FRET = {
     "articulation_seed_pip_deg": 15.0,
     "articulation_seed_dip_deg": 10.0,
     "finger_arch_reward_weight": 0.10,
+    "fine_reach_finger_arch_reward_weight": 0.18,
+    # 실제 병목이었던 strict arch 0.65 경계를 직접 넘도록 분리 압현에서만
+    # 아치 보상을 강화한다. 위치·엄지·오압현 가중치는 유지한다.
+    "isolated_press_arch_reward_weight": 0.35,
+    # 접촉·유효 압점·아치를 모두 만족해야 얻는 결합 품질을 섞는다.
+    # 기존 연속 보상 70%를 남겨 접촉 전 탐색 기울기는 보존한다.
+    "isolated_press_conjunctive_weight": 0.30,
     # M2: only abnormal/early termination receives this broadcast penalty.
     # Completing the final goal (even when it coincides with the time limit)
     # remains a normal termination.
@@ -75,7 +95,9 @@ FRET = {
     # 보상에는 쓰지 않고 hard limit 근접 분포만 진단한다.
     "joint_limit_diagnostic_fraction": 0.90,
     "wrong_press_avoidance_weight": 0.15,
-    "press_near_miss_penalty": 0.20,
+    # 가까운 실패에만 고정 감점을 주면 15 mm 경계 바깥이 local optimum이
+    # 된다. near-miss는 진단하되 보상에서는 사용하지 않는다.
+    "press_near_miss_penalty": 0.0,
     "press_near_miss_distance": 0.015,
     # 전체 곡에서 NO_PRESS가 PRESS보다 쉬운 해법이 되지 않도록 줄별
     # 감독 보상을 프레임 안에서 재가중한다.
@@ -86,8 +108,13 @@ FRET = {
     "chord_bridge_bottleneck_weight": 0.90,
     "chord_fine_joint_weight": 0.40,
     "chord_fine_depth_start": -0.025,
-    "static_chord_bottleneck_weight": 0.50,
-    "static_chord_joint_weight": 0.30,
+    "static_chord_bottleneck_weight": 0.90,
+    "static_chord_joint_weight": 0.40,
+    "static_chord_auxiliary_gate_floor": 0.05,
+    # 두 손가락 중 하나만 성공한 상태가 충분한 해법이 되지 않게 한다.
+    # 음의 페널티는 그대로 두고 양의 보상만 동시 완성률의 제곱으로 제한한다.
+    "static_chord_completion_gate_floor": 0.15,
+    "static_chord_completion_gate_power": 2.0,
     # 균형 리허설에서 선택한 손가락의 PRESS 품질을 직접 학습한다.
     "goal_pair_rehearsal_anchor_weight": 0.20,
     "static_chord_no_press_failure_credit": 0.0,
@@ -100,12 +127,22 @@ FRET = {
     "static_chord_min_duration_seconds": 0.20,
     "press_position_dense_scale": 0.20,
     "press_precision_gate_floor": 0.40,
+    # 실제 correct-position 계약은 fret cell의 10~90% 균일 구간이다.
+    # 20% 지점은 앞선 reach 단계의 접근점일 뿐 압현 성공에 가산점이 없다.
+    "chord_fine_position_upper": 0.90,
+    "chord_fine_position_dense_scale": 0.30,
+    "chord_fine_precision_gate_floor": 0.60,
+    # 단일/다중 압현 모두 같은 균일한 유효 구간을 사용한다.
+    "chord_multi_region_lower": 0.10,
+    "chord_multi_region_upper": 0.90,
+    "chord_multi_point_bonus_weight": 0.0,
     "next_goal_weight": 0.15,
     # 전환 병목에서는 현재 압현을 보존하면서 다음 위치 접근을 더 크게
     # 반영한다. 기본 압현 단계에는 적용되지 않는다.
     "goal_pair_transition_next_goal_weight": 0.70,
     "goal_pair_context_next_goal_weight": 0.35,
     "goal_pair_success_pose_guide_weight": 0.20,
+    "chord_reach_success_pose_guide_weight": 0.25,
     "chord_fine_success_pose_guide_weight": 0.15,
     "goal_pair_success_pose_focus_weight": 0.60,
     "goal_pair_success_pose_proximal_fraction": 0.20,
@@ -140,16 +177,24 @@ FRET = {
     "thumb_gate_zero_distance": 0.080,
     # 접촉을 하드 조건으로 만들지는 않되, 손끝이 목표에 가까울 때 엄지 없는
     # 압현이 충분한 우회 해법이 되지 않도록 성공 보상을 부드럽게 제한한다.
-    "thumb_press_gate_weight": 0.45,
+    "thumb_press_gate_weight": 0.40,
     "thumb_base_saturation_threshold": 0.90,
-    "thumb_base_saturation_penalty_weight": 0.01,
+    "thumb_base_saturation_penalty_weight": 0.03,
+    "thumb_base_supported_saturation_fraction": 0.25,
     # Near a fingertip goal, discourage solving the task with the shoulder or
     # elbow. This is a multiplicative cost, so it creates no idle baseline.
     "proximal_weight": 0.05,
     "proximal_transition": 0.040,
-    # A2a: transport with the whole arm, then freeze proximal commands and let
-    # only the designated finger plus thumb finish the press.
-    "isolated_press_lock_after_frames": 60,
+    # 시간만 보고 shoulder/elbow를 잠그면 짧은 pinky의 curl 궤적을 보정할
+    # 수 없다. 0은 lock 비활성이고, 필요하면 성공 latch 기반 lock을 별도
+    # 검증한 뒤 다시 켠다.
+    "isolated_press_lock_after_frames": 0,
+    "fine_reach_action_warmup_iterations": 200,
+    "fine_reach_action_ramp_iterations": 300,
+    "fine_reach_non_target_action_scale": 0.15,
+    "fine_reach_proximal_action_scale": 0.15,
+    "fine_reach_recovery_proximal_action_scale": 0.35,
+    "curriculum_episode_success_fraction": 0.80,
     # R18: released fingers stay near the strings. Position applies throughout
     # release; outward-speed damping yields for an imminent MOVE target.
     "hover_weight": 0.020,
@@ -177,12 +222,20 @@ FRET = {
     "reference_motion_prior_weight": 0.03,
     "reference_motion_prior_finger_fraction": 0.67,
     "reference_motion_prior_exemplars": 64,
+    # 전문 기타리스트 4,749프레임의 p01-p99와 안전 여유로 만든 soft range.
+    # 성공에 필요한 범위 이탈은 허용하되 후기 곡 단계에서만 약하게 감점한다.
+    "human_joint_range_path": str(
+        HERE / "assets/fret_human_joint_profile.json"),
+    "human_joint_range_weight": 0.015,
+    "human_joint_range_decay_deg": 15.0,
+    "human_joint_range_active_finger_fraction": 0.25,
+    "human_joint_range_thumb_fraction": 0.10,
     # 보상만으로 거의 나타나지 않았던 연동을 비활성 손가락 PD target에
     # 작은 굽힘 변화로 전달한다. 활성 PRESS와 다음 MOVE는 건드리지 않는다.
-    "finger_synergy_coefficients": (0.15, 0.20, 0.25),
-    "finger_synergy_min_driver_delta_deg": 0.10,
+    "finger_synergy_coefficients": (0.20, 0.30, 0.40),
+    "finger_synergy_min_driver_delta_deg": 0.05,
     "finger_synergy_full_driver_delta_deg": 1.00,
-    "finger_synergy_max_induced_delta_deg": 2.00,
+    "finger_synergy_max_induced_delta_deg": 3.00,
     # R23: after 3 stable press frames, allow 2mm cumulative tangent slip and
     # softly decay beyond it. This is a 0.5% reward term, never a termination.
     "slip_weight": 0.020,
@@ -195,8 +248,9 @@ FRET = {
     "wrist_safety_frames": 3,
     # R8: 확정된 -50 mm 평면 전부터 감점하고, proximal은 조금 더 여유를 둔다.
     "finger_back_soft_limit_z": -0.025,
+    "finger_back_proximal_soft_limit_z": -0.040,
     "finger_back_soft_scale": 0.020,
-    "finger_back_soft_penalty": 0.10,
+    "finger_back_soft_penalty": 0.15,
     "finger_back_limit_z": -0.050,
     "finger_back_proximal_limit_z": -0.060,
     "finger_back_frames": 3,
@@ -227,10 +281,21 @@ FRET = {
     "success_rsi_probability": 0.35,
     "success_rsi_min_quality": 0.75,
     "success_rsi_min_thumb_quality": 0.40,
+    # 완성 전이라도 모든 목표 손가락이 함께 유지된 자세를 재탐색 시작점으로 쓴다.
+    "success_discovery_rsi_probability": 0.20,
+    "success_discovery_min_quality": 0.45,
+    # goal 파일 옆 fret_pose_library.pt가 있으면 해시 검증 후 자동 사용한다.
+    "success_pose_library_path": None,
     "success_finger_pose_min_quality": 0.60,
     "success_finger_pose_guide_scale_fraction": 0.30,
     "success_action_teacher_min_pose_quality": 0.70,
     "chord_fine_action_teacher_min_pose_quality": 0.20,
+    # 단일 손가락에서 얻은 성공 자세의 arm/wrist action을 코드의 활성
+    # 손가락끼리 합성해 초기 코드 탐색의 중심으로만 사용한다. 서로 크게
+    # 충돌하는 축은 teacher mask에서 자동 제외한다.
+    "chord_proximal_action_teacher": True,
+    "chord_proximal_teacher_max_action_spread": 0.35,
+    "chord_proximal_teacher_disable_press_completion": 0.80,
     # 상위 관절 단일 자세 action은 긴 전환에서 실패율을 높여 비활성화한다.
     "success_action_teacher_proximal_fraction": 0.0,
     # Goal Pair에서 현재·1.5초 이내 목표·해제 중 손가락만 PPO 확률항에
@@ -272,6 +337,28 @@ FRET = {
         "isolated_press_max_iterations": 2000,
         "integrated_press_min_iterations": 300,
         "integrated_press_max_iterations": 2500,
+        "early_min_evidence_episodes_per_finger": 512,
+        "early_evidence_window_episodes_per_finger": 4096,
+        "early_evidence_stall_iterations": 100,
+        "early_evidence_recent_iterations": 100,
+        "early_recovery_focus_min_iterations": 400,
+        "early_recovery_switch_margin": 0.03,
+        "early_recovery_focus_probability": 0.75,
+        "early_recovery_max_focus_blocks": 2,
+        # 12블록에서 약지가 계속 좋아지는 중 복구가 끊겼다. 최대 24블록을
+        # 허용하고, 소진 뒤에도 마지막 보존형 표집 분포를 유지한다.
+        "early_recovery_max_total_blocks": 24,
+        "early_recovery_min_finger_probability": 0.15,
+        "early_recovery_retention_drop_tolerance": 0.05,
+        "practice_reset_watchdog_iterations": 25,
+        "integrated_recovery_focus_probability": 0.75,
+        "integrated_recovery_max_iterations": 1000,
+        "integrated_recovery_block_iterations": 400,
+        "integrated_recovery_min_finger_probability": 0.15,
+        "integrated_recovery_max_blocks": 12,
+        "integrated_recovery_min_improvement": 0.03,
+        "integrated_recovery_retention_drop_tolerance": 0.05,
+        "integrated_press_unlock_iterations": (100, 200, 300),
         "chord_reach_min_iterations": 300,
         "chord_reach_max_iterations": 2000,
         "chord_fine_min_iterations": 400,
@@ -284,13 +371,26 @@ FRET = {
         # 집중 코드 80%, 다른 코드 20%를 유지해 손가락 망각을 막는다.
         "chord_fine_focus_probability": 0.80,
         "chord_fine_success_rate": 0.80,
-        "chord_fine_p90_distance": 0.010,
+        # 동시 압현을 먼저 확보한 뒤 static_chord에서 10 mm 수준으로 다듬는다.
+        "chord_fine_p90_distance": 0.015,
         "chord_fine_alignment_rate": 0.80,
         "chord_fine_min_phase_episodes": 256,
+        # 목표 조합 표본이 장시간 0이면 로그에서 즉시 드러낸다.
+        "chord_evidence_stall_iterations": 300,
+        # 엄격한 승급 기준을 못 채워도 최소 기하/성공률이 확보된 경우에만
+        # 정적 코드 단계에서 압현 지속을 학습한다.
+        "chord_fine_soft_success_rate": 0.10,
+        "chord_fine_soft_p90_distance": 0.025,
+        "chord_fine_soft_alignment_rate": 0.40,
         "static_chord_min_iterations": 400,
         "static_chord_max_iterations": 3000,
+        # 첫 복구 뒤에는 같은 실패 조합을 3천 회 더 기다리지 않고 재평가한다.
+        "static_chord_retest_max_iterations": 1000,
+        # 정적 코드가 막히면 실패 코드만 다시 집중 연습한 뒤 재평가한다.
+        "static_chord_recovery_max_cycles": 3,
+        "static_chord_recovery_focus_probability": 0.95,
         "frozen_context_min_iterations": 1000,
-        "frozen_context_max_iterations": 2500,
+        "frozen_context_max_iterations": 4000,
         "goal_pair_min_iterations": 400,
         "goal_pair_max_iterations": 8000,
         "transition_min_iterations": 800,
@@ -330,19 +430,20 @@ FRET = {
         "goal_pair_phase_max_iterations": 1600,
         "goal_pair_phase_min_evidence": 1024,
         "goal_pair_focus_min_iterations": 50,
-        # 회복 중 최약 손가락을 절반만 우선해 다른 손가락의 망각을 막는다.
+        # 회복 중에도 네 손가락을 모두 표집하고 약한 손가락을 더 자주 복습한다.
         "goal_pair_timeout_focus_probability": 0.35,
+        "goal_pair_recovery_finger_weights": (0.15, 0.15, 0.30, 0.40),
+        "goal_pair_recovery_focus_min_iterations": 100,
         "goal_pair_recovery_min_iterations": 100,
         "goal_pair_recovery_max_iterations": 600,
         "goal_pair_recovery_windows": 2,
-        # 복구 중에도 현재 phase의 sequence 비율을 유지한다. 조건부
-        # rehearsal만 95%로 높여 이전 손가락을 함께 복습한다.
-        "goal_pair_recovery_rehearsal_probability": 0.50,
+        # 복구는 rehearsal을 우선하되 짧은 sequence도 유지한다.
+        "goal_pair_recovery_rehearsal_probability": 0.60,
         "goal_pair_uncovered_pose_probability": 0.10,
-        "goal_pair_recovery_uncovered_pose_probability": 0.35,
-        "goal_pair_recovery_sequence_probability": 0.50,
-        "goal_pair_recovery_sequence_max_events": 16,
-        "goal_pair_recovery_full_song_fraction": 0.20,
+        "goal_pair_recovery_uncovered_pose_probability": 0.15,
+        "goal_pair_recovery_sequence_probability": 0.40,
+        "goal_pair_recovery_sequence_max_events": 4,
+        "goal_pair_recovery_full_song_fraction": 0.10,
         "goal_pair_full_song_focus_min_evidence": 128,
         "goal_pair_recovery_min_full_song_press_rate": 0.20,
         # 전곡 episode가 한 번 완료되기 전에 짧은 episode만으로
@@ -365,6 +466,21 @@ FRET = {
         "frozen_context_initial_real_probability": 0.0,
         "frozen_context_context_warmup_iterations": 200,
         "frozen_context_context_ramp_iterations": 800,
+        "frozen_context_evaluation_fraction": 0.25,
+        "frozen_context_initial_finger_weights": (0.20, 0.20, 0.30, 0.30),
+        "frozen_context_recovery_block_iterations": 500,
+        "frozen_context_recovery_min_finger_probability": 0.20,
+        "frozen_context_recovery_max_finger_probability": 0.40,
+        "frozen_context_recovery_weight_smoothing": 1.0,
+        "frozen_context_recovery_min_weight_change": 0.02,
+        "frozen_context_recovery_retention_drop_tolerance": 0.05,
+        "frozen_context_recovery_ready_blocks": 2,
+        "frozen_context_recovery_max_blocks": 8,
+        "frozen_context_evaluation_min_finger_frames": 4096,
+        "frozen_context_singleton_probability": 0.60,
+        "frozen_context_chord_probability": 0.30,
+        "frozen_context_uniform_probability": 0.10,
+        # schema 55 checkpoint 호환용. 신규 학습에서는 단일 focus를 쓰지 않는다.
         "frozen_context_focus_probability": 0.65,
         "frozen_context_focus_min_evidence": 1024,
         "frozen_context_recovery_press_rate": 0.70,
@@ -449,7 +565,7 @@ FRET = {
         "entropy_coef": 0.001,
         "action_saturation_regularization_weight": 0.01,
         "action_saturation_regularization_threshold": 0.80,
-        "action_teacher_weight": 0.05,
+        "action_teacher_weight": 0.15,
         # The initial bounded policy is intentionally narrow for R8 safety.
         # Its actor therefore needs a smaller step than the critic to keep KL
         # inside the trust region instead of destroying the safe initialization.

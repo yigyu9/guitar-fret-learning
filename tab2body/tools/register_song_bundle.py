@@ -21,6 +21,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from tab2body.song_bundles import bundle_path  # noqa: E402
+from tab2body.env.strike_goal_compiler import (  # noqa: E402
+    STRIKE_TRANSITION_PROFILE,
+    compiled_strike_goal_from_plan_document,
+)
 
 
 STAGE1_TARGETS = {
@@ -93,9 +97,44 @@ def write_tablature_if_missing(root: Path) -> None:
 
 
 def strike_training_status(root: Path, fingering: dict | None) -> dict:
-    target = root / "training" / "strike_training.json"
-    if target.is_file():
-        return {"state": "ready", "profile": "pick_monophonic_v1"}
+    raw = root / "training" / "strike_training.json"
+    plan = root / "training" / "strike_plan.json"
+    if raw.is_file() and plan.is_file():
+        document = json.loads(plan.read_text(encoding="utf-8"))
+        profile = document.get("metadata", {}).get(
+            "direction_profile", "phrase_dp_microtiming_v3")
+        unsupported = sum(
+            event.get("gesture") == "alternate_restrike"
+            for event in document.get("events", []))
+        if unsupported:
+            return {
+                "state": "unsupported", "profile": profile,
+                "reason": f"{unsupported} alternate_restrike event(s)"}
+        compiled = compiled_strike_goal_from_plan_document(document)
+        infeasible = tuple(
+            item for item in compiled.transition_diagnostics(1.0)
+            if not item.original_tempo_feasible)
+        if infeasible:
+            first = infeasible[0]
+            return {
+                "state": "infeasible",
+                "profile": profile,
+                "transition_profile": STRIKE_TRANSITION_PROFILE,
+                "infeasible_transition_count": len(infeasible),
+                "reason": (
+                    f"transition {first.from_event_index}->"
+                    f"{first.to_event_index} has only "
+                    f"{first.edge_gap_s * 1000.0:.3f} ms after the previous "
+                    "traversal edge"),
+            }
+        return {
+            "state": "ready", "profile": profile,
+            "transition_profile": STRIKE_TRANSITION_PROFILE,
+        }
+    if raw.is_file():
+        return {
+            "state": "plan_missing", "profile": "pick_gesture_compiler_v2",
+            "reason": "strike_training.json exists but strike_plan.json is missing"}
     notes = fingering.get("notes", []) if fingering else []
     previous_time = None
     previous_frame = None
@@ -165,6 +204,7 @@ def write_manifest(song_id: str, root: Path, provenance: dict | None = None) -> 
             "fingering": fingering_path.is_file(),
             "fret_training": (root / "training" / "fret_training.json").is_file(),
             "strike_training": (root / "training" / "strike_training.json").is_file(),
+            "strike_plan": (root / "training" / "strike_plan.json").is_file(),
         },
         "training_status": {
             "fret": {

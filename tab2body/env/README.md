@@ -3,14 +3,16 @@
 > 이 문서는 `base.py`(공유 환경 코어)의 **모든 설계 결정과 그 근거**를 정리한다.
 > 근거 표기: **[G]**=guitar/(Pei Xu SA'24, 이식 원본) · **[D]**=과거 DIGIT 실패 분석(안티패턴) ·
 > **[P]**=PROJECT_CONTEXT(설계 정본·실측 함정) · **[M]**=이 프로젝트에서 직접 실측(도구 명시).
-> 최종 갱신: 2026-08-03. 현재 배관 smoke는 `python -m tab2body.train --task ... --smoke`로 실행한다.
+> 최종 갱신: 2026-09-17. 현재 배관 smoke는 `python -m tab2body.train --task fret|strike --smoke`로 실행한다.
+> 이 문서는 현재 G0 Fret/Strike 공유 환경만 설명한다. 과거 G1/G2 자유기타 실험은 폐기했으며,
+> asset XML에 남은 관련 주석은 checkpoint hash 보존용 역사 metadata일 뿐 지원 기능이 아니다.
 
 ---
 
 ## 0. base.py는 무엇인가
 
-장기 파이프라인은 **fret[A] ∥ strike[B] → 결합[A+B] → 기타 스테이징 G0→G1→G2**지만,
-2026-07-27 현재 fret[A]와 새 pick-only strike[B]가 각각 실행 가능하다.
+현재 파이프라인은 **fret[A] ∥ strike[B] → G0 결합[A+B]**이며,
+fret[A]와 pick-only strike[B]가 각각 실행 가능하다. 자유기타 환경은 StabilityAdapter에서 새로 설계한다.
 모든 태스크는 **같은 `GuitarEnvBase`를 인스턴스화**하고 `control_dofs`(제어할 관절)·goal·reward 모듈만 바꿔 끼운다.
 따라서 base.py = **태스크 없는 공유 sim + 관측 + step 코어**. 여기에 태스크 특화(goal 인코딩, reward)는 없다.
 
@@ -25,13 +27,14 @@
 | `rewards/thumb.py` | tapered neck-back 접근 + `LH:thumb_pad` 접촉·압축 깊이 기반 R6 지지 보상 | ✅ GPU sweep·학습 검증 |
 | `rewards/motion.py` | wrist goal 도달 후 finger→wrist→elbow→shoulder R12 속도 우선순위 | ✅ CPU+GPU smoke |
 | `safety.py` | R13 손바닥 법선 + R14 기타 관통 + R22 손가락 쌍별 capsule 관통 진단 | ✅ CPU+GPU smoke |
-| `rewards/hold.py` | 기타 안정 (G1 스트랩) | ⬜ W2+ |
-| `tasks/task_fret.py` | 33DOF 제어·428D 관측·goal/reward/R13 손바닥 종료/F1 집계·4-tuple step | ✅ S0 |
-| `strike_goals.py` | 최소 `[time,frame,string]` goal 검증·60 Hz canonical timeline | ✅ v1 |
+| `tasks/task_fret.py` | 30DOF 제어·Fret-v1 425D/Fret-v2 420D 관측·goal/reward/R13 손바닥 종료/F1 집계·4-tuple step | ✅ S0 |
+| `strike_goals.py` | 최소 `[time,frame,string]` + 선택적 provenance/reviewed override 검증·60 Hz canonical timeline | ✅ raw v3 |
+| `strike_goal_compiler.py` | phrase 방향 계획·microtiming·traversal-edge/path feasibility | ✅ direction v3 / transition v2 |
 | `strike_detector.py` | goal 독립 finite swept crossing·RELEASE·물리 re-arm·zone quality | ✅ CPU/CUDA |
-| `rewards/strike.py` | A0~A4 stage-mask scalar reward와 guitar reference grip | ✅ v1 |
-| `tasks/task_strike.py` | 30DOF·263D 관측·3 motor phase·event matching/진단 | ✅ GPU audit/smoke |
-| `tasks/task_full.py` | 후속 병합 태스크 조립 | ⬜ |
+| `rewards/strike.py` | A0~A4 single→clean-recovery/S0~S3 strum stage-mask scalar reward와 guitar reference grip | ✅ 현재 계약 |
+| `tasks/task_strike.py` | 30DOF·v2 303D/v1 327D 관측·3 motor phase·끝줄/exit 완주·path-aware dual recovery·failure mining | ✅ state v14 |
+| `tasks/task_full.py` | G0 one-step transaction bridge; shared Isaac simulator backend는 미구현 | ◐ |
+| `../full/` | canonical event, rule Synchronizer, strict source loader, 105D named ABI(실질 가동 97D) runtime 계약 | ✅ CPU |
 
 ---
 
@@ -40,7 +43,7 @@
 ### 2.1 신 구성 (씬·액터)
 
 **휴머노이드·기타 별도 2액터 + 의자 박스, env별 순차 생성.**
-- *왜 별도 액터:* 기타 스테이징 G0(월드고정)→G1(스트랩)→G2(자유)를 **에셋 재작성 없이 `fix_base_link` 플래그만으로** 전환하기 위함([P] §5.1). 결합 멀티루트 MJCF는 Isaac 미검증이라 IK/렌더용으로 강등.
+- *현재 범위:* G0 월드고정 기타를 별도 액터로 로드한다. 과거 `fix_base_link` 기반 G1/G2 전환은 제거했으며 새 환경 계약에서 다시 정의한다.
 - *왜 순차 생성:* env1의 모든 액터 → env2 순. Isaac 함정 #7([P]).
 
 **`fix_base_link=True`(휴머노이드 골반 용접), 중력 ON.**
@@ -86,14 +89,15 @@
 
 ### 2.5 기타-상대 관측 — [G] observe_iccgan, [P] §5.1
 
-모든 바디 상태를 **기타 로컬 프레임**으로 표현(`to_guitar_frame`). G0에선 기타가 정적이라 월드프레임과 동일하지만, **같은 코드가 G1/G2로 그대로 이어져** weld→free 전이가 정책에 **투명**해진다 — 구 파이프라인의 좌손 0.90→0.18 붕괴가 바로 이 프레임 단절이었다.
-- *[M]/[G] 주의:* guitar/env.py L879/L884의 쿼터니언 conjugation 버그는 **기타가 월드고정일 때만 무해**(상수 회전=학습가능 상수). 우리 기타는 움직이므로 base.py는 **정확한 역회전**(`quat_rotate_inverse`)을 쓴다 — 버그를 이식하지 않는다.
+모든 바디 상태를 **기타 로컬 프레임**으로 표현(`to_guitar_frame`). 현재 G0에서는 기타가 정적이다.
+새 자유기타 환경이 이 변환을 재사용할지는 새 관측 계약과 함께 검증한다.
+- *[M]/[G] 주의:* guitar/env.py L879/L884의 쿼터니언 conjugation 버그는 **기타가 월드고정일 때만 무해**(상수 회전=학습가능 상수). base.py는 정확한 역회전(`quat_rotate_inverse`)을 사용한다.
 - (`isaacgym.torch_utils`는 이 numpy 버전에서 `np.float` 때문에 임포트 실패 → 쿼터니언 유틸을 base.py에 직접 정의.)
 
 ### 2.6 control_dofs 분할 — 한 몸, 태스크별 제어 집합
 
 `control_dofs`(관절 이름 접두사) → `controlled`/`ctrl_idx`/`num_actions`. fret[A]는
-`L_Thorax~L_Wrist + 왼손 다섯 손가락` 33DOF만 제어하고 몸통은 고정한다.
+`L_Shoulder~L_Wrist + 왼손 다섯 손가락` 30DOF만 제어한다. `L_Thorax`와 몸통은 초기 PD 자세로 고정한다.
 strike[B]는 `R_Shoulder + R_Elbow + R_Wrist + RH:*`의 30DOF를 제어하고 `R_Thorax`는 고정한다.
 제어하지 않는 관절은 하이브리드 PD로 init에 유지한다.
 - *[P] 고유 난제:* [G]는 fret/strike를 별도 액터로 학습한다. 우리는 한 몸의 제어 관절을 나눈다.
@@ -117,8 +121,8 @@ obs, done = env.step(actions)           # 액션적용→sim→refresh→종료+
 - **액션**: tanh 정책의 `[-1,1]` → EMA(α=0.5) → `tgt = mid + ema(a)·half_range`로 hard range에 1:1 대응한다. 제어관절 reset은 경계 포화를 피하려고 hard range 안쪽 2%를 사용한다.
 - **관측(기본)**: 비잠금 dof pos+vel(고유수용) + obs_body들의 **기타상대 위치**. 태스크는 이를 `super().compute_observations()`로 받아 goal obs를 concat.
 - **종료**: timeout | NaN | 속도 blow-up(>50rad/s). root 용접이라 전도는 설계상 불가; 태스크가 자기 조건을 OR.
-- **접촉 텐서**: `contact_force` (net force) — pluck 검출·G2 마찰용(⚠️[D] item3: XML site 없으면 0 출력 → 보상 전 실측 확인).
-- **버퍼**: `progress_buf`/`reset_buf`/`obs_buf`/`prev_action`, `root_init`(G1 자유기타 리셋 훅).
+- **접촉 텐서**: `contact_force` (net force) — 현재 Fret/Strike 접촉 검사와 pluck 검출에 사용한다.
+- **버퍼**: `progress_buf`/`reset_buf`/`obs_buf`/`prev_action`, `root_init`.
 
 ---
 
@@ -136,37 +140,46 @@ obs, done = env.step(actions)           # 액션적용→sim→refresh→종료+
 
 ---
 
-## 5. guitar/ (27DOF 부유손) → 우리 (105DOF 좌식) 적응
+## 5. guitar/ (27DOF 부유손) → 우리 (105개 authored slot / 97DOF 실질 가동 좌식) 적응
 
 - **직행**: Env/tensor 골격, RSI(ReferenceMotion), observe_iccgan(parent_link), 멀티크리틱 reward 인터페이스, goal/note/timer 기계.
 - **바꿈**: `disable_gravity` 끔(몸통 중력), 게인=SMPL 스케일(mjcf_gains), vel_iter 0→2, 종료=자세기반, 쿼터니언 버그 수정.
-- **[P] 신규 난제(참조 없음)**: 좌식 하체 접촉 안정(§2.3), 전신 자기충돌(§2.4), 한 몸 제어분할+결합(§2.6), G1/G2 기타 결합(스트랩 spring-damper+관성+obs).
+- **[P] 신규 난제(참조 없음)**: 좌식 하체 접촉 안정(§2.3), 전신 자기충돌(§2.4), 한 몸 제어분할+결합(§2.6). 자유기타 결합은 새 StabilityAdapter 환경 범위다.
 
 ---
 
 ## 6. 완료 상태 (base 코어)
 
 **[DONE]** 2액터 씬·하이브리드 PD·하체 3중 잠금·충돌규약·접촉오프셋·control_dofs 분할·기타상대 관측 변환·기본 관측 빌더·액션 EMA+스케일·RSI reset·종료·step API·접촉 텐서·버퍼·RNG.
-**[MISSING → 후속]** full 결합 goal·reward, disc 관측(스타일),
-PopArt/AdaptNet, G1 자유기타 root/스트랩 plumbing.
+**[MISSING → 후속]** full 결합 goal·reward, disc 관측(스타일), one-simulator FullG0 task,
+그리고 별도로 재설계할 StabilityAdapter 환경. AdaptNet은 현재 선택이 아닌 역사적 비교안이다.
 
 ### 6.1 S0 fret 확장 (2026-07-19)
 
 `base.py` 코어는 유지하고 task subclass에서 goal/reward를 배관했다. `obs_buf`의 base-prefix 기록만
-확장 관측과 공존하도록 수정. `FretTask`: obs 428
-(기본180+goal128+EMA actuator state33+thumb geometry12+미래 goal75), actions 33,
-reward/value 6. 현재 checkpoint contract는 이 차원을 포함한다. 이전 353D 정책은 명시적
-초기화로만 확장하며, 구 341D·37-action checkpoint는 strict resume하지 않는다.
+확장 관측과 공존하도록 수정. `FretTask`: obs 425
+(기본180+goal128+EMA actuator state30+thumb geometry12+미래 goal75), actions 30,
+reward/value 6. 현재 checkpoint contract는 이 차원과 `L_Shoulder`부터 시작하는 제어 순서를 포함한다.
+기존 33-action checkpoint는 재개하거나 초기화에 사용하지 않는다.
 
 ### 6.2 pick-only strike 확장 (2026-07-27)
 
-`StrikeTask`는 어깨부터 손가락까지 30 action, 고정된 263D actor observation, scalar value/reward를
-사용한다. 공개 motor phase는 `READY/APPROACH/RELEASE_RECOVER` 세 개이며, 실제 성공 시점은
+`StrikeTask`는 어깨부터 손가락까지 30 action, 기본 Strike-v2 303D actor observation,
+scalar value/reward를 사용한다. 327D v1은 명시적 호환 모드로 보존한다. 공개 motor phase는
+`READY/APPROACH/RELEASE_RECOVER` 세 개이며, 실제 성공 시점은
 별도 detector의 swept crossing RELEASE pulse다. A0 grip, A1 ready, A2 crossing, A3 timing,
-A4 zone을 성능 기반으로 승급하고 A3 허용 오차를 100→67→50 ms로 줄인다. GPU runtime audit에서
-6줄 finite segment, 충돌 필터, 5단계 tensor 유한성을 확인했다. A1~A4는 완료 episode의 exact
-지표만 승급 증거로 쓰며, timing p95에는 허용창 밖의 유효 target crossing도 포함한다. A4 sampled
-lane은 `±6 mm` 만점, `±12.5 mm` 성공 경계다.
+A3 single timing 뒤 A4에서 실제 strum 문맥의 clean recovery를 익힌 후 S0~S2에서
+strum 폭 2→6, E0 양방향 마지막 줄·exit 완주와 timing
+`400→250→225→200→175→150→100→zone 100→67→50 ms`를 익히고
+S3에서 곡으로 통합한다. 현재 compiler는 direction `phrase_dp_microtiming_v3`, transition
+`entry_side_edge_gap_v2`를 사용한다. S3의 짧은 사건 간격은 다음 접근 전까지 확보된 frame을
+사용하는 handoff recovery, 충분한 간격·마지막 사건은 12-frame full recovery를 적용한다. 직접
+exit-side→next-entry-side 경로가 최근 줄이나 비목표 줄을 가로지르면
+`release lift → elevated transfer → approach` clearance와 detector re-arm을 모두 요구한다.
+관측에는 이전 recovery 방향, 현재 음악 방향, clearance required/reached가 포함된다.
+A1~S3는 완료 episode의 exact 지표만 승급 증거로 쓰며, timing p95에는 허용창 밖의
+유효 target crossing도 포함한다. S3 sampled lane은 `±6 mm` 만점, `±12.5 mm` 성공
+경계다.
 
 ### 6.3 Goal Pair 병목 개선 (2026-08-12)
 
@@ -181,13 +194,86 @@ lane은 `±6 mm` 만점, `±12.5 mm` 성공 경계다.
 - `local_reach_margin`으로 현재 MCP 위치에서 손가락만으로 목표에 닿는지 기록한다.
 - 얕은 일반 관통은 연속 감점하며, 엄지 지지는 엄지 전용 안전 규칙으로 분리한다.
 
+### 6.4 S3 failure-mining 상태와 평가 격리 (2026-08-28)
+
+S3 `stalled`에서는 event별 실패 mass와 노출 mass를 decay `0.995`로 갱신하고,
+전역 실패율의 prior exposure `16`으로 축소한 실패율을 hard-window score로 사용한다.
+episode 시작의 15%만 hard window에서 뽑고 하나의 window 확률을 10%로 제한해,
+노출이 많은 하나의 사건이 표집 분포를 자기강화하는 것을 막는다. hard episode도
+PPO update에는 포함하지만 stalled S3 승급 evidence에서는 제외한다.
+
+영상·deterministic 전체곡 평가는 `failure_mining_updates_enabled=False`인 격리 구간에서
+실행하고 종료 뒤 기존 failure mass·exposure·score를 복원한다. 평가 중 생긴 동일
+실패가 병렬 환경 수만큼 누적되어 학습 표집을 오염하지 않도록 한 계약이다.
+이 절의 저장 계약은 curriculum schema `v12`, environment state `v13`, semantic contract
+`exposure_normalized_failure_mining.v12`였으며 현재 exact resume 대상이 아니다. 당시 path-aware
+전환에서는 관측이 321D에서 327D로 바뀌어 구 actor도 전이하지 않고 fresh A0부터 학습했다. 현재
+endpoint 계약의 제한된 S2 actor 전이는 아래 §6.6이 별도로 정의한다.
+
+평가·주기 영상은 failure-mining mass/exposure/score뿐 아니라 `StrikeTask` generator RNG와
+reset generation을 함께 snapshot한다. 산출물 생성 뒤 이 상태를 복원한 다음 학습 observation을
+새로 reset하므로, 진단 rollout이 이후 hard-window 표집과 reset 난수열을 바꾸지 않는다.
+
+### 6.5 Strike 입력 품질과 path-aware 실행 계약 (2026-08-30)
+
+새 plan의 정본 profile은 direction `phrase_dp_microtiming_v3`, transition
+`entry_side_edge_gap_v2`다. compiler는 사건 중심 간격이 아니라 이전 traversal 마지막 줄과 다음
+traversal 첫 줄의 실제 edge gap, exit/entry side와 직접 경로 재통과 줄을 봉인한다. full-song
+preflight는 `INFEASIBLE` transition을 GPU 생성 전에 거부한다.
+
+2026-08-30에 사용자가 판정을 위임해 `00_SS1-68-E_comp`의 source event 147~149를 하나의 down
+strum으로 병합한 후보를 `approved_user_delegated` 상태로 canonical에 승격했다. 수동 오디오 청취는
+수행하지 않았고 source JAMS·symbolic chord·기존 `46.5 ms < 50 ms` 불가능 경계를 근거로 승인했다.
+현재 canonical은 raw v3/plan v4, direction v3/transition v2, 104 events(61 single/43 strum),
+최소 edge gap `51.0 ms`, `INFEASIBLE=0`이다. 전체 strict audit는 exit 0,
+`PASS 2 / AMBIGUOUS 6 / INFEASIBLE 0`이다. 이 곡은 남은 source/grouping 경고 때문에
+`AMBIGUOUS`지만 original-tempo preflight를 통과하므로 303D v2 정책을 fresh A0부터 학습할 수 있다.
+승격 전 정본과 후보는 `training/history/20260830_user_delegated_strum_merge/`에 보존한다.
+이미 실행 중인 구 run은 메모리에 로드된 이전 goal/contract를 계속 사용하며 새 canonical은 다음
+fresh run부터 적용된다.
+
+### 6.6 S2 양방향 끝줄·exit 완주 계약 (2026-08-31)
+
+`20260830_1928_00_SS1-68-E_comp`의 S2 시작 구간은 up 완주율이 약 `99.3%`인 반면 down은
+`0.1%` 미만이었다. down은 대부분 `5→4→3→2→1`까지 통과한 뒤 마지막 `0`번 줄을 남겼다.
+S1에서 두 방향이 모두 약 `99.4%`였으므로 입력 방향 분포보다 S2 전이 시 끝점 유도의 구조적
+비대칭으로 판정했다.
+
+마지막 줄 하나만 남으면 `APPROACH` 목표를 줄의 진입점이 아니라 방향별 final-string→exit 선분의
+exit로 바꾼다. 그 선분 투영의 지금까지 최대값만 `0..1`로 보상하므로 down/up에 같은 수식을 쓰며,
+뒤로 왕복해도 양의 보상을 다시 얻지 못한다. 마지막 줄 RELEASE가 검출된 순간에는 timing gate와
+독립된 one-shot physical-completion pulse를 준다. 따라서 물리 sweep 획득과 목표 시각 정렬은
+분리하며, 과거의 지연 clawback을 다시 도입하지 않는다.
+
+S2는 `E0_BALANCED_ENDPOINT`에서 먼저 양방향 물리 완주를 복구한 뒤 `T0_400MS`로 이동한다.
+완료 episode의 down/up completed/event raw count를 각각 합쳐 최저 방향 완주율을 계산하고,
+scheduled recovery completed를 물리 완료 수로 나눈 conditional rate와 전체 예정 사건 수로 나눈
+end-to-end rate를 따로 gate한다. 한쪽 최저 방향 완주율이 `0.60` 미만인 evidence가 3회 연속이면
+그 방향을 전체 학습 표본의 `70%`로 집중한다. 강제 focus가 아닌 `60%` 표본은 여전히 down/up
+`30/30`의 balanced holdout이며 승급 evidence는 이 holdout만 사용한다. E0와 T0에서는
+어깨·팔꿈치·손목 첫 9개 action의 정책 표준편차 하한을 `0.03`으로 유지한다.
+
+이 절의 저장 계약은 checkpoint `v13`, curriculum `v13`, environment state `v14`였으며
+Strike-v1의 역사적 재현 규칙이다. 현재 기본 Strike-v2로 exact resume하거나 전이하지 않는다.
+동일한 327D 관측·30 action·goal/grip/asset/profile/recovery 계약을
+가진 S1 최종 또는 S2 진입 직후(`stage_iteration=0`, S2 evidence 0) checkpoint는 사용자가
+`--allow-policy-objective-transfer`를 명시한 경우에만 actor, observation normalizer와 학습된
+`log_std`를 새 S2 run으로 가져올 수 있다. critic·optimizer·iteration·curriculum·환경 RNG는 모두
+초기화한다. 기준 전이 소스는 `20260830_1928_00_SS1-68-E_comp/checkpoints/strike_003147.pt`다.
+
 ## 7. 검증 도구
 
-- 공용 배관 smoke — `python -m tab2body.train --task fret|strike --smoke --num-envs 8`
+- 공용 배관 smoke — `python -m tab2body.train --task fret|strike --smoke --num-envs 8`.
+  canonical 검수 전 Strike는 `--curriculum-stage A0_PICK_GRIP`을 함께 사용하고 full curriculum을
+  시작하지 않는다.
+- Strike bundle 읽기 전용 감사 —
+  `python -m tab2body.tools.audit_strike_goal_quality --all --format human --strict`.
+  `PASS`는 통과, `AMBIGUOUS`는 사람 검수 대기, `INFEASIBLE`은 full-song 학습 금지다.
+  수정은 canonical에 직접 쓰지 않고 evidence가 있는 `*.proposed.json` 후보로 만든 뒤 오디오 승인,
+  canonical 원자 교체, strict 재감사 순서로 수행한다.
 - `tools/hold_compare.py` — 하체 홀드 5전략 떨림 비교(설계 근거).
 - `tools/foot_settle.py` — 발 접지각 solve. `tools/render_pose.py` — base env 자세 렌더(4뷰). `tools/isaac_contact_audit.py` — 관통 감사.
 
 ## 8. 참조 문서
-- 설계 정본: `PROJECT_CONTEXT.md` §3·§4와 `docs/plans/`의 태스크별 문서.
-- 이식 원본: `guitar/env.py`. 과거 DIGIT 실패 구현의 핵심 안티패턴은 이 문서와
-  `docs/base-env-research.md`에 요약되어 있으며, 원본 디렉터리는 정리되었다.
+- 설계 정본: `PROJECT_CONTEXT.md` §3·§4와 `docs/archive/plans/`의 태스크별 문서.
+- 이식 원본: `guitar/env.py`. 과거 DIGIT 실패 구현의 핵심 안티패턴은 이 문서에 요약되어 있다.

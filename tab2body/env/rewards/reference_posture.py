@@ -124,3 +124,84 @@ class ReferenceHandPosturePrior:
             q[:, self.thumb_indices], self.thumb_reference,
             self.thumb_scale)
         return finger_quality, thumb_quality
+
+
+class HumanJointRangePrior:
+    """기타 연주 데이터 기반 soft range를 벗어난 정도만 계산한다."""
+
+    def __init__(self, env, path, decay_scale_deg=15.0,
+                 active_finger_fraction=0.25, thumb_fraction=0.10):
+        profile = json.loads(Path(path).read_text(encoding="utf-8"))
+        if profile.get("schema") != "tab2body.fret-human-joint-profile.v1":
+            raise ValueError("unsupported human joint profile schema")
+        joints = profile.get("joints")
+        if not isinstance(joints, dict) or not joints:
+            raise ValueError("human joint profile must contain joints")
+        missing = [name for name in joints if name not in env.dof_names]
+        if missing:
+            raise KeyError(f"human joint profile DOFs are missing: {missing}")
+        self.names = tuple(joints)
+        self.indices = torch.tensor(
+            [env.dof_names.index(name) for name in self.names],
+            dtype=torch.long, device=env.device)
+        self.lower = torch.deg2rad(torch.tensor(
+            [float(joints[name]["lower_deg"]) for name in self.names],
+            device=env.device))
+        self.upper = torch.deg2rad(torch.tensor(
+            [float(joints[name]["upper_deg"]) for name in self.names],
+            device=env.device))
+        if not torch.all(self.lower < self.upper):
+            raise ValueError("human joint soft ranges must be increasing")
+        hard_lower = env.dof_lower[:env.n_dof][self.indices]
+        hard_upper = env.dof_upper[:env.n_dof][self.indices]
+        if torch.any(self.lower < hard_lower - 1e-6) \
+                or torch.any(self.upper > hard_upper + 1e-6):
+            raise ValueError("human joint soft range exceeds simulator hard limits")
+        self.scale = math.radians(float(decay_scale_deg))
+        self.active_finger_fraction = float(active_finger_fraction)
+        self.thumb_fraction = float(thumb_fraction)
+        if self.scale <= 0.0:
+            raise ValueError("human joint range decay scale must be positive")
+        if not 0.0 <= self.active_finger_fraction <= 1.0 \
+                or not 0.0 <= self.thumb_fraction <= 1.0:
+            raise ValueError("human joint range fractions must be in [0, 1]")
+        finger_ids = []
+        for name in self.names:
+            finger_id = -1
+            if name.startswith("LH:thumb"):
+                finger_id = 0
+            else:
+                for index, finger in enumerate(FINGERS, start=1):
+                    if name.startswith(f"LH:{finger}"):
+                        finger_id = index
+                        break
+            finger_ids.append(finger_id)
+        self.finger_ids = torch.tensor(
+            finger_ids, dtype=torch.long, device=env.device)
+        self.env = env
+
+    def compute(self, active_fingers):
+        if active_fingers.shape != (self.env.num_envs, 4):
+            raise ValueError("active_fingers must have shape [N,4]")
+        q = self.env.dof_state.view(
+            self.env.num_envs, self.env.n_dof, 2)[:, self.indices, 0]
+        excess = (self.lower[None] - q).clamp_min(0.0) \
+            + (q - self.upper[None]).clamp_min(0.0)
+        weights = torch.ones_like(excess)
+        thumb = self.finger_ids == 0
+        weights[:, thumb] = self.thumb_fraction
+        for finger_index in range(4):
+            selected = self.finger_ids == finger_index + 1
+            weights[:, selected] = torch.where(
+                active_fingers[:, finger_index, None],
+                torch.full_like(weights[:, selected],
+                                self.active_finger_fraction),
+                torch.ones_like(weights[:, selected]))
+        denominator = weights.sum(dim=1).clamp_min(1e-6)
+        normalized_error = (
+            weights * (excess / self.scale).square()).sum(dim=1) / denominator
+        quality = torch.exp(-0.5 * normalized_error).clamp(0.0, 1.0)
+        violation_rate = (
+            weights * (excess > 0.0).float()).sum(dim=1) / denominator
+        max_excess_deg = torch.rad2deg(excess).amax(dim=1)
+        return quality, violation_rate, max_excess_deg

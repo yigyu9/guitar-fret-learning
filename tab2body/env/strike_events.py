@@ -15,6 +15,341 @@ import math
 import torch
 
 
+def strike_rational_timing_quality(
+        error_s: torch.Tensor, core_s: float) -> torch.Tensor:
+    if not isinstance(error_s, torch.Tensor) or not error_s.is_floating_point():
+        raise TypeError("timing error must be a floating tensor")
+    if not torch.isfinite(error_s).all():
+        raise ValueError("timing error must be finite")
+    if isinstance(core_s, bool):
+        raise TypeError("timing core must be numeric")
+    core_s = float(core_s)
+    if not math.isfinite(core_s) or core_s <= 0.0:
+        raise ValueError("timing core must be finite and positive")
+    return 1.0 / (1.0 + (error_s / core_s).square())
+
+
+def strike_timed_approach_open(
+        episode_time_s: torch.Tensor,
+        target_time_s: torch.Tensor,
+        first_offset_s: torch.Tensor,
+        approach_lead_s: float) -> dict[str, torch.Tensor]:
+    values = (episode_time_s, target_time_s, first_offset_s)
+    if any(not isinstance(value, torch.Tensor) for value in values):
+        raise TypeError("timed approach inputs must be tensors")
+    if any(value.shape != episode_time_s.shape for value in values[1:]):
+        raise ValueError("timed approach inputs must share shape [N]")
+    if any(not value.is_floating_point() for value in values):
+        raise TypeError("timed approach inputs must use floating tensors")
+    if any(value.device != episode_time_s.device for value in values[1:]):
+        raise ValueError("timed approach inputs must share a device")
+    if any(not torch.isfinite(value).all() for value in values):
+        raise ValueError("timed approach inputs must be finite")
+    if isinstance(approach_lead_s, bool):
+        raise TypeError("approach lead must be numeric")
+    approach_lead_s = float(approach_lead_s)
+    if not math.isfinite(approach_lead_s) or approach_lead_s <= 0.0:
+        raise ValueError("approach lead must be finite and positive")
+    approach_start_s = target_time_s + first_offset_s - approach_lead_s
+    time_to_approach_s = approach_start_s - episode_time_s
+    return {
+        "approach_start_s": approach_start_s,
+        "time_to_approach_s": time_to_approach_s,
+        "approach_open": time_to_approach_s <= 0.0,
+    }
+
+
+def strike_early_timing_cost(
+        accepted_release: torch.Tensor,
+        signed_error_s: torch.Tensor,
+        *,
+        grace_s: float,
+        scale_s: float) -> torch.Tensor:
+    if (not isinstance(accepted_release, torch.Tensor)
+            or accepted_release.dtype != torch.bool
+            or accepted_release.ndim != 2):
+        raise TypeError("accepted_release must be bool [N,S]")
+    if (not isinstance(signed_error_s, torch.Tensor)
+            or signed_error_s.shape != accepted_release.shape
+            or not signed_error_s.is_floating_point()):
+        raise TypeError("signed_error_s must be floating [N,S]")
+    if signed_error_s.device != accepted_release.device:
+        raise ValueError("early timing inputs must share a device")
+    if not torch.isfinite(signed_error_s[accepted_release]).all():
+        raise ValueError("accepted signed timing errors must be finite")
+    if isinstance(grace_s, bool) or isinstance(scale_s, bool):
+        raise TypeError("early timing grace and scale must be numeric")
+    grace_s = float(grace_s)
+    scale_s = float(scale_s)
+    if (not math.isfinite(grace_s) or grace_s < 0.0
+            or not math.isfinite(scale_s) or scale_s <= 0.0):
+        raise ValueError("early timing grace/scale must be finite and valid")
+    excess = (-signed_error_s - grace_s).clamp(min=0.0)
+    return torch.where(
+        accepted_release,
+        (excess / scale_s).square().clamp(max=1.0),
+        torch.zeros_like(signed_error_s))
+
+
+def strike_premature_release(
+        accepted_release: torch.Tensor,
+        release_time_s: torch.Tensor,
+        target_time_s: torch.Tensor,
+        target_offset_s: torch.Tensor,
+        left_tolerance_s: torch.Tensor) -> dict[str, torch.Tensor]:
+    if (accepted_release.ndim != 2
+            or accepted_release.dtype != torch.bool):
+        raise TypeError("accepted_release must be bool [N,S]")
+    if (release_time_s.shape != accepted_release.shape
+            or target_offset_s.shape != accepted_release.shape):
+        raise ValueError("release times/offsets must match accepted releases")
+    if (target_time_s.shape != accepted_release.shape[:1]
+            or left_tolerance_s.shape != accepted_release.shape[:1]):
+        raise ValueError("target time/tolerance must have shape [N]")
+    values = (release_time_s, target_time_s, target_offset_s,
+              left_tolerance_s)
+    if any(not value.is_floating_point() for value in values):
+        raise TypeError("timing evidence must use floating tensors")
+    if any(value.device != accepted_release.device for value in values):
+        raise ValueError("premature-release inputs must share a device")
+    if (not torch.isfinite(target_time_s).all()
+            or not torch.isfinite(target_offset_s).all()
+            or not torch.isfinite(left_tolerance_s).all()
+            or not torch.isfinite(release_time_s[accepted_release]).all()
+            or torch.any(left_tolerance_s <= 0.0)):
+        raise ValueError("premature-release timing inputs are invalid")
+    expected = target_time_s[:, None] + target_offset_s
+    signed_error = torch.where(
+        accepted_release, release_time_s - expected,
+        torch.zeros_like(release_time_s))
+    return {
+        "signed_error_s": signed_error,
+        "premature": (
+            accepted_release
+            & (signed_error < -left_tolerance_s[:, None])).any(dim=1),
+    }
+
+
+def strike_balanced_practice_direction(
+        env_ids: torch.Tensor,
+        reset_generation: torch.Tensor) -> torch.Tensor:
+    if env_ids.ndim != 1 or reset_generation.shape != env_ids.shape:
+        raise ValueError("practice direction inputs must share shape [N]")
+    if env_ids.is_floating_point() or reset_generation.is_floating_point():
+        raise TypeError("practice direction inputs must use integer tensors")
+    if env_ids.device != reset_generation.device:
+        raise ValueError("practice direction inputs must share a device")
+    if torch.any(env_ids < 0) or torch.any(reset_generation < 0):
+        raise ValueError("practice direction inputs must be non-negative")
+    return torch.where(
+        ((env_ids + reset_generation) % 2) == 0,
+        torch.ones_like(env_ids),
+        -torch.ones_like(env_ids))
+
+
+def strike_focused_practice_direction(
+        balanced_direction: torch.Tensor,
+        focus_draw: torch.Tensor,
+        *,
+        focus_direction: int,
+        target_focus_fraction: float) -> dict[str, torch.Tensor]:
+    if (not isinstance(balanced_direction, torch.Tensor)
+            or balanced_direction.ndim != 1
+            or balanced_direction.dtype == torch.bool
+            or balanced_direction.is_floating_point()):
+        raise TypeError("balanced_direction must be an integer tensor [N]")
+    if (not isinstance(focus_draw, torch.Tensor)
+            or focus_draw.shape != balanced_direction.shape
+            or not focus_draw.is_floating_point()
+            or focus_draw.device != balanced_direction.device):
+        raise TypeError("focus_draw must be a matching floating tensor")
+    if torch.any((balanced_direction != -1) & (balanced_direction != 1)):
+        raise ValueError("balanced directions must contain only -1 or +1")
+    if not torch.isfinite(focus_draw).all() \
+            or torch.any(focus_draw < 0.0) or torch.any(focus_draw >= 1.0):
+        raise ValueError("focus draws must be finite in [0, 1)")
+    if isinstance(focus_direction, bool) or focus_direction not in (-1, 1):
+        raise ValueError("focus_direction must be -1 or +1")
+    if isinstance(target_focus_fraction, bool):
+        raise TypeError("target_focus_fraction must be numeric")
+    target_focus_fraction = float(target_focus_fraction)
+    if (not math.isfinite(target_focus_fraction)
+            or not 0.5 <= target_focus_fraction <= 0.7):
+        raise ValueError("target focus fraction must be in [0.5, 0.7]")
+    focused_subset_fraction = 2.0 * (target_focus_fraction - 0.5)
+    focused_subset = focus_draw < focused_subset_fraction
+    direction = torch.where(
+        focused_subset,
+        torch.full_like(balanced_direction, focus_direction),
+        balanced_direction)
+    return {
+        "direction": direction,
+        "focused_subset": focused_subset,
+    }
+
+
+def strike_uniform_traversal_offsets(
+        traversal: torch.Tensor,
+        direction: torch.Tensor,
+        interval_s: torch.Tensor) -> torch.Tensor:
+    if traversal.ndim != 2 or traversal.dtype != torch.bool:
+        raise TypeError("traversal must be a bool tensor with shape [N,S]")
+    if direction.shape != traversal.shape[:1] or direction.is_floating_point():
+        raise TypeError("direction must be an integer tensor with shape [N]")
+    if interval_s.shape != traversal.shape[:1] \
+            or not interval_s.is_floating_point():
+        raise TypeError("interval_s must be a floating tensor with shape [N]")
+    if (direction.device != traversal.device
+            or interval_s.device != traversal.device):
+        raise ValueError("traversal offset inputs must share a device")
+    if torch.any((direction != -1) & (direction != 1)):
+        raise ValueError("direction must contain only -1 or +1")
+    if not torch.isfinite(interval_s).all() or torch.any(interval_s <= 0.0):
+        raise ValueError("interval_s must be finite and positive")
+    if not traversal.any(dim=1).all():
+        raise ValueError("every traversal row must contain a string")
+    indices = torch.arange(
+        traversal.shape[1], device=traversal.device,
+        dtype=interval_s.dtype)[None]
+    center = (
+        (indices * traversal).sum(dim=1)
+        / traversal.sum(dim=1).to(interval_s.dtype))
+    offsets = (
+        -direction.to(interval_s.dtype)[:, None]
+        * (indices - center[:, None])
+        * interval_s[:, None])
+    return torch.where(traversal, offsets, torch.zeros_like(offsets))
+
+
+def strike_limit_traversal_span(
+        traversal: torch.Tensor,
+        target_direction: torch.Tensor,
+        max_strings: int) -> torch.Tensor:
+    if traversal.ndim != 2 or traversal.dtype != torch.bool:
+        raise TypeError("traversal must be a bool tensor with shape [N,S]")
+    if target_direction.shape != traversal.shape[:1] \
+            or target_direction.is_floating_point():
+        raise TypeError("target_direction must be an integer tensor with shape [N]")
+    if target_direction.device != traversal.device:
+        raise ValueError("traversal and direction must share a device")
+    if isinstance(max_strings, bool) or not isinstance(max_strings, int) \
+            or max_strings < 1:
+        raise ValueError("max_strings must be a positive integer")
+    if torch.any((target_direction != -1) & (target_direction != 1)):
+        raise ValueError("target_direction must contain only -1 or +1")
+
+    forward_rank = traversal.long().cumsum(dim=1)
+    reverse_rank = torch.flip(
+        torch.flip(traversal, dims=(1,)).long().cumsum(dim=1), dims=(1,))
+    rank = torch.where(
+        (target_direction == 1)[:, None], reverse_rank, forward_rank)
+    return traversal & (rank <= max_strings)
+
+
+def strike_next_traversal_string(
+        traversal: torch.Tensor,
+        completed: torch.Tensor,
+        target_direction: torch.Tensor,
+        fallback: torch.Tensor) -> torch.Tensor:
+    if traversal.ndim != 2 or completed.shape != traversal.shape:
+        raise ValueError("traversal and completed must share shape [N,S]")
+    if traversal.dtype != torch.bool or completed.dtype != torch.bool:
+        raise TypeError("traversal and completed must use torch.bool")
+    if target_direction.shape != traversal.shape[:1] \
+            or fallback.shape != traversal.shape[:1]:
+        raise ValueError("direction and fallback must have shape [N]")
+    if target_direction.is_floating_point() or fallback.is_floating_point():
+        raise TypeError("direction and fallback must use integer tensors")
+    if (completed.device != traversal.device
+            or target_direction.device != traversal.device
+            or fallback.device != traversal.device):
+        raise ValueError("traversal target tensors must share a device")
+    if torch.any((target_direction != -1) & (target_direction != 1)):
+        raise ValueError("target_direction must contain only -1 or +1")
+
+    remaining = traversal & ~completed
+    indices = torch.arange(
+        traversal.shape[1], device=traversal.device,
+        dtype=fallback.dtype)[None]
+    down = torch.where(
+        remaining, indices, torch.full_like(indices, -1)).amax(dim=1)
+    up = torch.where(
+        remaining, indices,
+        torch.full_like(indices, traversal.shape[1])).amin(dim=1)
+    selected = torch.where(target_direction == 1, down, up)
+    return torch.where(remaining.any(dim=1), selected, fallback)
+
+
+def strike_strum_terminal_progress(
+        tip_g: torch.Tensor,
+        final_string_point_g: torch.Tensor,
+        exit_point_g: torch.Tensor,
+        previous_best: torch.Tensor,
+        active: torch.Tensor) -> dict[str, torch.Tensor]:
+    """Measure monotone progress from the final string to the sweep exit.
+
+    The segment itself defines the positive direction, so this contract is
+    identical for down- and up-strums.  Only increases in the best clamped
+    projection are returned; reversing or cycling therefore cannot create
+    additional positive reward.
+    """
+    values = (
+        ("final_string_point_g", final_string_point_g),
+        ("exit_point_g", exit_point_g),
+    )
+    if not isinstance(tip_g, torch.Tensor):
+        raise TypeError("tip_g must be a torch.Tensor")
+    if tip_g.ndim != 2 or tip_g.shape[1] != 3:
+        raise ValueError("tip_g must have shape [N,3]")
+    for name, value in values:
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"{name} must be a torch.Tensor")
+        if value.shape != tip_g.shape:
+            raise ValueError(f"{name} must match tip_g shape [N,3]")
+        if value.dtype != tip_g.dtype or value.device != tip_g.device:
+            raise TypeError(f"{name} must match tip_g dtype/device")
+    if (not isinstance(previous_best, torch.Tensor)
+            or previous_best.shape != tip_g.shape[:1]
+            or previous_best.dtype != tip_g.dtype
+            or previous_best.device != tip_g.device):
+        raise TypeError(
+            "previous_best must match the tip batch floating dtype/device")
+    if (not isinstance(active, torch.Tensor)
+            or active.shape != tip_g.shape[:1]
+            or active.dtype != torch.bool
+            or active.device != tip_g.device):
+        raise TypeError("active must be a matching bool tensor")
+    if not tip_g.is_floating_point():
+        raise TypeError("terminal progress geometry must be floating tensors")
+    if (not torch.isfinite(tip_g).all()
+            or not torch.isfinite(final_string_point_g).all()
+            or not torch.isfinite(exit_point_g).all()
+            or not torch.isfinite(previous_best).all()
+            or torch.any(previous_best < 0.0)
+            or torch.any(previous_best > 1.0)):
+        raise ValueError("terminal progress inputs must be finite and bounded")
+
+    segment = exit_point_g - final_string_point_g
+    length_squared = segment.square().sum(dim=1)
+    if torch.any(active & (length_squared <= 1e-12)):
+        raise ValueError("active strum exit segments must be non-degenerate")
+    safe_length_squared = length_squared.clamp_min(1e-12)
+    projection = (
+        ((tip_g - final_string_point_g) * segment).sum(dim=1)
+        / safe_length_squared).clamp(0.0, 1.0)
+    current = torch.where(active, projection, torch.zeros_like(projection))
+    next_best = torch.where(
+        active, torch.maximum(previous_best, current), previous_best)
+    increment = (next_best - previous_best).clamp(0.0, 1.0)
+    exit_distance = torch.linalg.vector_norm(tip_g - exit_point_g, dim=1)
+    return {
+        "current": current,
+        "best": next_best,
+        "increment": increment,
+        "exit_distance_m": exit_distance,
+    }
+
+
 def strike_ordered_release_progress(
         previous: torch.Tensor,
         release: torch.Tensor,
@@ -47,10 +382,10 @@ def strike_ordered_release_progress(
 
     accepted = previous.clone()
     accepted_now = torch.zeros_like(previous)
-    protected = torch.zeros(previous.shape[0], device=previous.device)
-    wrong_direction = torch.zeros_like(protected)
-    order_violation = torch.zeros_like(protected)
-    duplicate = torch.zeros_like(protected)
+    unplanned = torch.zeros(previous.shape[0], device=previous.device)
+    wrong_direction = torch.zeros_like(unplanned)
+    order_violation = torch.zeros_like(unplanned)
+    duplicate = torch.zeros_like(unplanned)
     active_time = torch.where(
         release, subframe_t,
         torch.full_like(subframe_t, float("inf")))
@@ -79,13 +414,13 @@ def strike_ordered_release_progress(
             target_direction == 1, down_expected, up_expected)
         expected_now = string_index == expected
         can_accept = active & target & direction_ok & ~already & expected_now
-        protected += (active & ~target).to(protected.dtype)
-        wrong_direction += (active & target & ~direction_ok).to(protected.dtype)
+        unplanned += (active & ~target).to(unplanned.dtype)
+        wrong_direction += (active & target & ~direction_ok).to(unplanned.dtype)
         duplicate += (active & target & direction_ok & already).to(
-            protected.dtype)
+            unplanned.dtype)
         order_violation += (
             active & target & direction_ok & ~already & ~expected_now
-        ).to(protected.dtype)
+        ).to(unplanned.dtype)
         accepted[rows, string_index] |= can_accept
         accepted_now[rows, string_index] |= can_accept
 
@@ -94,7 +429,7 @@ def strike_ordered_release_progress(
         "accepted_release": accepted_now,
         "accumulated_release": accepted,
         "complete": complete,
-        "protected_crossing_count": protected,
+        "unplanned_crossing_count": unplanned,
         "wrong_direction_count": wrong_direction,
         "order_violation_count": order_violation,
         "duplicate_crossing_count": duplicate,
@@ -137,6 +472,7 @@ def _require_integer_tensor(name, value):
 def strike_motion_target_context(
         event_string: torch.Tensor,
         event_lane_y: torch.Tensor,
+        event_direction: torch.Tensor,
         recovery_string: torch.Tensor,
         recovery_lane_y: torch.Tensor,
         recovery_direction: torch.Tensor,
@@ -147,6 +483,7 @@ def strike_motion_target_context(
     """Keep released geometry and direction while the motor follows through."""
     values = (
         ("event_lane_y", event_lane_y),
+        ("event_direction", event_direction),
         ("recovery_string", recovery_string),
         ("recovery_lane_y", recovery_lane_y),
         ("recovery_direction", recovery_direction),
@@ -155,6 +492,7 @@ def strike_motion_target_context(
     )
     _matching_shape_device("event_string", event_string, values)
     _require_integer_tensor("event_string", event_string)
+    _require_integer_tensor("event_direction", event_direction)
     _require_integer_tensor("recovery_string", recovery_string)
     _require_integer_tensor("recovery_direction", recovery_direction)
     _require_integer_tensor("motor_phase", motor_phase)
@@ -169,6 +507,8 @@ def strike_motion_target_context(
             & (recovery_direction != -1)
             & (recovery_direction != 1)):
         raise ValueError("valid recovery direction must be -1 or +1")
+    if torch.any((event_direction != -1) & (event_direction != 1)):
+        raise ValueError("event direction must be -1 or +1")
     if not torch.isfinite(event_lane_y).all() or not torch.isfinite(
             recovery_lane_y).all():
         raise ValueError("strike lane context must be finite")
@@ -186,7 +526,7 @@ def strike_motion_target_context(
             recovering, recovery_lane_y, event_lane_y),
         "target_direction": torch.where(
             recovering, recovery_direction,
-            torch.ones_like(recovery_direction)),
+            event_direction),
         "recovering": recovering,
     }
 
@@ -238,7 +578,7 @@ def strike_recovery_to_approach(
         & (time_to_target_s <= approach_lead_s))
 
 
-def strike_a4_continuing_phase(
+def strike_song_continuing_phase(
         motor_phase: torch.Tensor,
         physical_release: torch.Tensor,
         recovery_context_valid: torch.Tensor,
@@ -277,7 +617,8 @@ def strike_completed_recovery_frames(
         action_phase: torch.Tensor,
         recovery_count: torch.Tensor,
         *,
-        release_recover_phase: int) -> torch.Tensor:
+        release_recover_phase: int,
+        disruption: torch.Tensor | None = None) -> torch.Tensor:
     """Count intervals executed from a RELEASE_RECOVER observation.
 
     Entering recovery after a crossing does not count the hit frame itself;
@@ -294,10 +635,403 @@ def strike_completed_recovery_frames(
         raise TypeError("release_recover_phase must be an integer")
     if torch.any(recovery_count < 0):
         raise ValueError("recovery_count must be non-negative")
-    return torch.where(
+    next_count = torch.where(
         action_phase == release_recover_phase,
         recovery_count + 1,
         torch.zeros_like(recovery_count))
+    if disruption is None:
+        return next_count
+    if (not isinstance(disruption, torch.Tensor)
+            or disruption.dtype != torch.bool
+            or disruption.shape != recovery_count.shape
+            or disruption.device != recovery_count.device):
+        raise TypeError(
+            "recovery disruption must be a matching bool tensor")
+    return torch.where(disruption, torch.zeros_like(next_count), next_count)
+
+
+def strike_clean_recovery_progress(
+        recovery_count: torch.Tensor,
+        best_count: torch.Tensor,
+        recovery_rearmed: torch.Tensor,
+        recovery_active: torch.Tensor,
+        completion_recorded: torch.Tensor,
+        *,
+        recovery_frames: int) -> dict[str, torch.Tensor]:
+    _matching_shape_device(
+        "recovery_count", recovery_count,
+        (("best_count", best_count),
+         ("recovery_rearmed", recovery_rearmed),
+         ("recovery_active", recovery_active),
+         ("completion_recorded", completion_recorded)))
+    _require_integer_tensor("recovery_count", recovery_count)
+    _require_integer_tensor("best_count", best_count)
+    if (recovery_rearmed.dtype != torch.bool
+            or recovery_active.dtype != torch.bool
+            or completion_recorded.dtype != torch.bool):
+        raise TypeError("recovery progress masks must use torch.bool")
+    if (isinstance(recovery_frames, bool)
+            or not isinstance(recovery_frames, int)
+            or recovery_frames < 1):
+        raise ValueError("recovery_frames must be a positive integer")
+    if torch.any(recovery_count < 0) or torch.any(best_count < 0):
+        raise ValueError("recovery progress counts must be non-negative")
+    eligible = torch.where(
+        recovery_active & recovery_rearmed,
+        recovery_count.clamp_max(recovery_frames),
+        torch.zeros_like(recovery_count))
+    next_best = torch.maximum(best_count, eligible)
+    progress = (
+        (next_best - best_count).to(torch.float32)
+        / float(recovery_frames))
+    complete_pulse = (
+        ~completion_recorded
+        & (best_count < recovery_frames)
+        & (next_best >= recovery_frames))
+    return {
+        "best_count": next_best,
+        "progress": progress,
+        "complete_pulse": complete_pulse,
+        "completion_recorded": completion_recorded | complete_pulse,
+    }
+
+
+def strike_recovery_clearance_target(
+        recovery_active: torch.Tensor,
+        clearance_required: torch.Tensor,
+        clearance_lifted: torch.Tensor,
+        clearance_reached: torch.Tensor,
+        release_lift: torch.Tensor,
+        next_entry_lift: torch.Tensor,
+        next_ready: torch.Tensor) -> dict[str, torch.Tensor]:
+    """Select and retain the recovery waypoint until APPROACH begins."""
+    _matching_shape_device(
+        "recovery_active", recovery_active,
+        (("clearance_required", clearance_required),
+         ("clearance_lifted", clearance_lifted),
+         ("clearance_reached", clearance_reached)))
+    for name, value in (
+            ("recovery_active", recovery_active),
+            ("clearance_required", clearance_required),
+            ("clearance_lifted", clearance_lifted),
+            ("clearance_reached", clearance_reached)):
+        if value.dtype != torch.bool:
+            raise TypeError(f"{name} must use torch.bool")
+    if (release_lift.ndim != 2 or release_lift.shape[-1] != 3
+            or next_entry_lift.shape != release_lift.shape
+            or next_ready.shape != release_lift.shape
+            or release_lift.shape[0] != recovery_active.shape[0]
+            or release_lift.device != recovery_active.device
+            or next_entry_lift.device != recovery_active.device
+            or next_ready.device != recovery_active.device):
+        raise ValueError("recovery clearance points must have shape [N, 3]")
+    active = recovery_active & clearance_required
+    lifted_target = torch.where(
+        clearance_reached[:, None], next_ready, next_entry_lift)
+    target = torch.where(
+        clearance_lifted[:, None], lifted_target, release_lift)
+    return {"active": active, "target": target}
+
+
+def strike_handoff_path_clearance(
+        continuing: torch.Tensor,
+        release_string: torch.Tensor,
+        previous_direction: torch.Tensor,
+        next_entry_string: torch.Tensor,
+        next_direction: torch.Tensor,
+        *,
+        num_strings: int) -> dict[str, torch.Tensor]:
+    _matching_shape_device(
+        "continuing", continuing,
+        (("release_string", release_string),
+         ("previous_direction", previous_direction),
+         ("next_entry_string", next_entry_string),
+         ("next_direction", next_direction)))
+    if continuing.dtype != torch.bool:
+        raise TypeError("continuing must use torch.bool")
+    for name, value in (
+            ("release_string", release_string),
+            ("previous_direction", previous_direction),
+            ("next_entry_string", next_entry_string),
+            ("next_direction", next_direction)):
+        _require_integer_tensor(name, value)
+    if (isinstance(num_strings, bool) or not isinstance(num_strings, int)
+            or num_strings < 1):
+        raise ValueError("num_strings must be a positive integer")
+    for name, value in (
+            ("release_string", release_string),
+            ("next_entry_string", next_entry_string)):
+        if torch.any((value < 0) | (value >= num_strings)):
+            raise ValueError(f"{name} is outside the string range")
+    for name, value in (
+            ("previous_direction", previous_direction),
+            ("next_direction", next_direction)):
+        if torch.any((value != -1) & (value != 1)):
+            raise ValueError(f"{name} must contain only -1 or +1")
+
+    previous_exit_side = 2 * release_string - previous_direction
+    next_entry_side = 2 * next_entry_string + next_direction
+    lower = torch.minimum(previous_exit_side, next_entry_side)
+    upper = torch.maximum(previous_exit_side, next_entry_side)
+    string_positions = (
+        2 * torch.arange(
+            num_strings, dtype=release_string.dtype,
+            device=release_string.device)[None])
+    crossing_mask = (
+        continuing[:, None]
+        & (string_positions > lower[:, None])
+        & (string_positions < upper[:, None]))
+    rows = torch.arange(continuing.shape[0], device=continuing.device)
+    release_index = release_string.to(torch.long)
+    next_entry_index = next_entry_string.to(torch.long)
+    return {
+        "crossing_mask": crossing_mask,
+        "clearance_required": crossing_mask.any(dim=1),
+        "recent_string_crossed": crossing_mask[rows, release_index],
+        "next_entry_string_crossed": crossing_mask[rows, next_entry_index],
+        "same_string": continuing & (release_string == next_entry_string),
+        "previous_exit_side": previous_exit_side,
+        "next_entry_side": next_entry_side,
+    }
+
+
+def strike_clearance_waypoint_state(
+        active: torch.Tensor,
+        lifted: torch.Tensor,
+        reached: torch.Tensor,
+        target_distance: torch.Tensor,
+        *,
+        distance_threshold: float) -> dict[str, torch.Tensor]:
+    _matching_shape_device(
+        "active", active,
+        (("lifted", lifted),
+         ("reached", reached),
+         ("target_distance", target_distance)))
+    for name, value in (
+            ("active", active),
+            ("lifted", lifted),
+            ("reached", reached)):
+        if value.dtype != torch.bool:
+            raise TypeError(f"{name} must use torch.bool")
+    if not target_distance.is_floating_point():
+        raise TypeError("target_distance must use a floating dtype")
+    distance_threshold = float(distance_threshold)
+    if not math.isfinite(distance_threshold) or distance_threshold <= 0.0:
+        raise ValueError("distance_threshold must be finite and positive")
+    arrived = (
+        active
+        & ~reached
+        & (target_distance <= distance_threshold))
+    target_changed = arrived & ~lifted
+    reached_pulse = arrived & lifted
+    return {
+        "lifted": lifted | target_changed,
+        "reached": reached | reached_pulse,
+        "target_changed": target_changed,
+        "reached_pulse": reached_pulse,
+    }
+
+
+def strike_dual_recovery_plan(
+        current_time_s: torch.Tensor,
+        next_target_time_s: torch.Tensor,
+        continuing: torch.Tensor,
+        release_string: torch.Tensor,
+        previous_direction: torch.Tensor,
+        next_entry_string: torch.Tensor,
+        next_direction: torch.Tensor,
+        *,
+        num_strings: int,
+        sim_hz: int,
+        approach_lead_s: float,
+        full_recovery_frames: int,
+        minimum_handoff_frames: int) -> dict[str, torch.Tensor]:
+    _matching_shape_device(
+        "current_time_s", current_time_s,
+        (("next_target_time_s", next_target_time_s),
+         ("continuing", continuing),
+         ("release_string", release_string),
+         ("previous_direction", previous_direction),
+         ("next_entry_string", next_entry_string),
+         ("next_direction", next_direction)))
+    if (not current_time_s.is_floating_point()
+            or not next_target_time_s.is_floating_point()):
+        raise TypeError("dual recovery times must use floating dtypes")
+    if not torch.isfinite(current_time_s).all() \
+            or not torch.isfinite(next_target_time_s).all():
+        raise ValueError("dual recovery times must be finite")
+    if continuing.dtype != torch.bool:
+        raise TypeError("continuing must use torch.bool")
+    _require_integer_tensor("release_string", release_string)
+    _require_integer_tensor("previous_direction", previous_direction)
+    _require_integer_tensor("next_entry_string", next_entry_string)
+    _require_integer_tensor("next_direction", next_direction)
+    for name, value in (
+            ("sim_hz", sim_hz),
+            ("full_recovery_frames", full_recovery_frames),
+            ("minimum_handoff_frames", minimum_handoff_frames)):
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or value < 1):
+            raise ValueError(f"{name} must be a positive integer")
+    if minimum_handoff_frames > full_recovery_frames:
+        raise ValueError(
+            "minimum_handoff_frames cannot exceed full_recovery_frames")
+    approach_lead_s = float(approach_lead_s)
+    if not math.isfinite(approach_lead_s) or approach_lead_s < 0.0:
+        raise ValueError("approach_lead_s must be finite and non-negative")
+    available_frames = torch.floor(
+        (next_target_time_s - current_time_s - approach_lead_s)
+        * float(sim_hz) + 1e-6).to(torch.long)
+    handoff = continuing & (available_frames < full_recovery_frames)
+    handoff_frames = available_frames.clamp(
+        min=minimum_handoff_frames, max=full_recovery_frames)
+    required_frames = torch.where(
+        handoff,
+        handoff_frames,
+        torch.full_like(handoff_frames, full_recovery_frames))
+    path = strike_handoff_path_clearance(
+        continuing,
+        release_string,
+        previous_direction,
+        next_entry_string,
+        next_direction,
+        num_strings=num_strings)
+    same_string_handoff = handoff & path["same_string"]
+    rearm_required = continuing & (
+        ~handoff | path["same_string"] | path["clearance_required"])
+    return {
+        "available_frames": available_frames,
+        "required_frames": required_frames,
+        "handoff": handoff,
+        "same_string_handoff": same_string_handoff,
+        "path_crossing_mask": path["crossing_mask"],
+        "clearance_required": path["clearance_required"],
+        "rearm_required": rearm_required,
+    }
+
+
+def strike_dual_recovery_to_approach(
+        motor_phase: torch.Tensor,
+        event_resolved: torch.Tensor,
+        recovery_count: torch.Tensor,
+        recovery_rearmed: torch.Tensor,
+        time_to_target_s: torch.Tensor,
+        required_frames: torch.Tensor,
+        handoff: torch.Tensor,
+        same_string_handoff: torch.Tensor,
+        clearance_required: torch.Tensor,
+        clearance_reached: torch.Tensor,
+        *,
+        release_recover_phase: int,
+        approach_lead_s: float) -> torch.Tensor:
+    _matching_shape_device(
+        "motor_phase", motor_phase,
+        (("event_resolved", event_resolved),
+         ("recovery_count", recovery_count),
+         ("recovery_rearmed", recovery_rearmed),
+         ("time_to_target_s", time_to_target_s),
+         ("required_frames", required_frames),
+         ("handoff", handoff),
+         ("same_string_handoff", same_string_handoff),
+         ("clearance_required", clearance_required),
+         ("clearance_reached", clearance_reached)))
+    _require_integer_tensor("motor_phase", motor_phase)
+    _require_integer_tensor("recovery_count", recovery_count)
+    _require_integer_tensor("required_frames", required_frames)
+    for name, value in (
+            ("event_resolved", event_resolved),
+            ("recovery_rearmed", recovery_rearmed),
+            ("handoff", handoff),
+            ("same_string_handoff", same_string_handoff),
+            ("clearance_required", clearance_required),
+            ("clearance_reached", clearance_reached)):
+        if value.dtype != torch.bool:
+            raise TypeError(f"{name} must use torch.bool")
+    if not time_to_target_s.is_floating_point() \
+            or not torch.isfinite(time_to_target_s).all():
+        raise ValueError("time_to_target_s must be a finite floating tensor")
+    if torch.any(recovery_count < 0) or torch.any(required_frames < 1):
+        raise ValueError("dual recovery frame counts are invalid")
+    if torch.any(same_string_handoff & ~handoff):
+        raise ValueError("same-string handoff must also be a handoff")
+    if (isinstance(release_recover_phase, bool)
+            or not isinstance(release_recover_phase, int)):
+        raise TypeError("release_recover_phase must be an integer")
+    approach_lead_s = float(approach_lead_s)
+    if not math.isfinite(approach_lead_s) or approach_lead_s < 0.0:
+        raise ValueError("approach_lead_s must be finite and non-negative")
+    rearm_required = same_string_handoff | clearance_required
+    rearm_ready = recovery_rearmed | (handoff & ~rearm_required)
+    clearance_ready = ~clearance_required | clearance_reached
+    return (
+        (motor_phase == release_recover_phase)
+        & ~event_resolved
+        & (recovery_count >= required_frames)
+        & rearm_ready
+        & clearance_ready
+        & (time_to_target_s <= approach_lead_s))
+
+
+def strike_dual_recovery_progress(
+        recovery_count: torch.Tensor,
+        best_count: torch.Tensor,
+        recovery_rearmed: torch.Tensor,
+        recovery_active: torch.Tensor,
+        required_frames: torch.Tensor,
+        handoff: torch.Tensor,
+        handoff_transition: torch.Tensor,
+        clearance_required: torch.Tensor,
+        clearance_reached: torch.Tensor,
+        completion_recorded: torch.Tensor) -> dict[str, torch.Tensor]:
+    _matching_shape_device(
+        "recovery_count", recovery_count,
+        (("best_count", best_count),
+         ("recovery_rearmed", recovery_rearmed),
+         ("recovery_active", recovery_active),
+         ("required_frames", required_frames),
+         ("handoff", handoff),
+         ("handoff_transition", handoff_transition),
+         ("clearance_required", clearance_required),
+         ("clearance_reached", clearance_reached),
+         ("completion_recorded", completion_recorded)))
+    _require_integer_tensor("recovery_count", recovery_count)
+    _require_integer_tensor("best_count", best_count)
+    _require_integer_tensor("required_frames", required_frames)
+    for name, value in (
+            ("recovery_rearmed", recovery_rearmed),
+            ("recovery_active", recovery_active),
+            ("handoff", handoff),
+            ("handoff_transition", handoff_transition),
+            ("clearance_required", clearance_required),
+            ("clearance_reached", clearance_reached),
+            ("completion_recorded", completion_recorded)):
+        if value.dtype != torch.bool:
+            raise TypeError(f"{name} must use torch.bool")
+    if (torch.any(recovery_count < 0) or torch.any(best_count < 0)
+            or torch.any(required_frames < 1)):
+        raise ValueError("dual recovery progress frame counts are invalid")
+    eligible = torch.where(
+        recovery_active & (handoff | recovery_rearmed),
+        torch.minimum(recovery_count, required_frames),
+        torch.zeros_like(recovery_count))
+    next_best = torch.maximum(best_count, eligible)
+    progress = (
+        (next_best - best_count).to(torch.float32)
+        / required_frames.to(torch.float32))
+    completion_ready = torch.where(
+        handoff, handoff_transition, recovery_rearmed)
+    completion_ready &= ~clearance_required | clearance_reached
+    complete_pulse = (
+        recovery_active
+        & ~completion_recorded
+        & (next_best >= required_frames)
+        & completion_ready)
+    return {
+        "best_count": next_best,
+        "progress": progress,
+        "complete_pulse": complete_pulse,
+        "completion_recorded": completion_recorded | complete_pulse,
+    }
 
 
 def strike_timing_gate(
@@ -326,6 +1060,140 @@ def strike_timing_gate(
     return {
         "timing_sample": timing_sample,
         "success_candidate": success_candidate,
+    }
+
+
+def strike_event_outcome_masks(
+        physical_target_candidate: torch.Tensor,
+        target_hit: torch.Tensor,
+        miss_pulse: torch.Tensor) -> dict[str, torch.Tensor]:
+    _matching_bool_masks(
+        "physical_target_candidate", physical_target_candidate,
+        "target_hit", target_hit)
+    _matching_bool_masks(
+        "physical_target_candidate", physical_target_candidate,
+        "miss_pulse", miss_pulse)
+    if torch.any(target_hit & ~physical_target_candidate):
+        raise ValueError("target_hit must be a physical target candidate")
+    newly_resolved = target_hit | miss_pulse
+    physical_hit = physical_target_candidate & newly_resolved
+    physical_miss = miss_pulse & ~physical_hit
+    return {
+        "newly_resolved": newly_resolved,
+        "physical_hit": physical_hit,
+        "physical_miss": physical_miss,
+    }
+
+
+def strike_directional_strum_outcomes(
+        newly_resolved: torch.Tensor,
+        physical_hit: torch.Tensor,
+        is_strum: torch.Tensor,
+        target_direction: torch.Tensor) -> dict[str, torch.Tensor]:
+    _matching_bool_masks(
+        "newly_resolved", newly_resolved,
+        "physical_hit", physical_hit)
+    _matching_bool_masks(
+        "newly_resolved", newly_resolved,
+        "is_strum", is_strum)
+    if (not isinstance(target_direction, torch.Tensor)
+            or target_direction.shape != newly_resolved.shape
+            or target_direction.device != newly_resolved.device
+            or target_direction.dtype == torch.bool
+            or target_direction.is_floating_point()):
+        raise TypeError(
+            "target_direction must be a matching integer tensor")
+    if torch.any(physical_hit & ~newly_resolved):
+        raise ValueError("physical_hit must be a resolved event")
+    if torch.any((target_direction != -1) & (target_direction != 1)):
+        raise ValueError("target_direction must contain only -1 or +1")
+    resolved_strum = newly_resolved & is_strum
+    down_event = resolved_strum & (target_direction == 1)
+    up_event = resolved_strum & (target_direction == -1)
+    return {
+        "down_event": down_event,
+        "up_event": up_event,
+        "down_completed": physical_hit & down_event,
+        "up_completed": physical_hit & up_event,
+    }
+
+
+def strike_traversal_timing(
+        release_time_s: torch.Tensor,
+        release_valid: torch.Tensor,
+        traversal: torch.Tensor,
+        target_center_s: torch.Tensor,
+        target_offsets_s: torch.Tensor,
+        left_tolerance_s: torch.Tensor,
+        right_tolerance_s: torch.Tensor) -> dict[str, torch.Tensor]:
+    if (release_time_s.ndim != 2
+            or target_offsets_s.shape != release_time_s.shape
+            or release_valid.shape != release_time_s.shape
+            or traversal.shape != release_time_s.shape):
+        raise ValueError("strike traversal timing tensors must have shape [N,S]")
+    if release_valid.dtype != torch.bool or traversal.dtype != torch.bool:
+        raise TypeError("release_valid and traversal must use torch.bool")
+    if not release_time_s.is_floating_point() \
+            or not target_offsets_s.is_floating_point():
+        raise TypeError("strike traversal times must use floating tensors")
+    vectors = (target_center_s, left_tolerance_s, right_tolerance_s)
+    if any(value.shape != release_time_s.shape[:1] for value in vectors):
+        raise ValueError("strike traversal timing vectors must have shape [N]")
+    if any(value.device != release_time_s.device for value in (
+            release_valid, traversal, target_offsets_s, *vectors)):
+        raise ValueError("strike traversal timing tensors must share a device")
+    if (not torch.isfinite(release_time_s).all()
+            or not torch.isfinite(target_offsets_s).all()
+            or any(not torch.isfinite(value).all() for value in vectors)):
+        raise ValueError("strike traversal timing tensors must be finite")
+    if torch.any(left_tolerance_s <= 0.0) or torch.any(right_tolerance_s <= 0.0):
+        raise ValueError("strike timing tolerances must be positive")
+
+    required_valid = release_valid & traversal
+    complete = ((release_valid & traversal) == traversal).all(dim=1)
+    target_time = target_center_s[:, None] + target_offsets_s
+    error = release_time_s - target_time
+    error = torch.where(required_valid, error, torch.zeros_like(error))
+    timing_ok_by_string = (
+        (error >= -left_tolerance_s[:, None])
+        & (error <= right_tolerance_s[:, None])
+        & required_valid)
+    timing_ok = complete & ((~traversal) | timing_ok_by_string).all(dim=1)
+    early = complete & (
+        traversal & (error < -left_tolerance_s[:, None])).any(dim=1)
+    late = complete & (
+        traversal & (error > right_tolerance_s[:, None])).any(dim=1)
+    count = traversal.sum(dim=1).clamp_min(1).to(error.dtype)
+    rms = torch.sqrt((error.square() * traversal).sum(dim=1) / count)
+    masked_abs = torch.where(
+        traversal, error.abs(), torch.full_like(error, -1.0))
+    worst_index = masked_abs.argmax(dim=1)
+    worst_error = error.gather(1, worst_index[:, None])[:, 0]
+
+    inf = torch.full_like(target_offsets_s, float("inf"))
+    neg_inf = torch.full_like(target_offsets_s, float("-inf"))
+    first_index = torch.where(traversal, target_offsets_s, inf).argmin(dim=1)
+    last_index = torch.where(traversal, target_offsets_s, neg_inf).argmax(dim=1)
+    rows = torch.arange(release_time_s.shape[0], device=release_time_s.device)
+    actual_duration = (
+        release_time_s[rows, last_index] - release_time_s[rows, first_index])
+    planned_duration = (
+        target_offsets_s[rows, last_index]
+        - target_offsets_s[rows, first_index])
+    duration_error = torch.where(
+        complete, actual_duration - planned_duration,
+        torch.zeros_like(actual_duration))
+    return {
+        "complete": complete,
+        "timing_ok": timing_ok,
+        "early": early,
+        "late": late,
+        "per_string_error_s": error,
+        "worst_error_s": worst_error,
+        "rms_error_s": rms,
+        "actual_duration_s": actual_duration,
+        "planned_duration_s": planned_duration,
+        "duration_error_s": duration_error,
     }
 
 
@@ -586,8 +1454,25 @@ def strike_resolved_episode_done(
 
 
 __all__ = [
-    "strike_a4_continuing_phase",
+    "strike_rational_timing_quality",
+    "strike_timed_approach_open",
+    "strike_early_timing_cost",
+    "strike_premature_release",
+    "strike_balanced_practice_direction",
+    "strike_focused_practice_direction",
+    "strike_uniform_traversal_offsets",
+    "strike_limit_traversal_span",
+    "strike_next_traversal_string",
+    "strike_strum_terminal_progress",
+    "strike_song_continuing_phase",
     "strike_completed_recovery_frames",
+    "strike_clean_recovery_progress",
+    "strike_recovery_clearance_target",
+    "strike_handoff_path_clearance",
+    "strike_clearance_waypoint_state",
+    "strike_dual_recovery_plan",
+    "strike_dual_recovery_to_approach",
+    "strike_dual_recovery_progress",
     "strike_false_positive_count",
     "strike_release_recovery_context",
     "strike_recovery_incomplete_timeout",
@@ -597,5 +1482,8 @@ __all__ = [
     "strike_ready_episode_resolution",
     "strike_recovery_to_approach",
     "strike_timing_gate",
+    "strike_event_outcome_masks",
+    "strike_directional_strum_outcomes",
+    "strike_traversal_timing",
     "strike_resolved_episode_done",
 ]
