@@ -33,6 +33,7 @@ fret[A]와 pick-only strike[B]가 각각 실행 가능하다. 자유기타 환�
 | `strike_detector.py` | goal 독립 finite swept crossing·RELEASE·물리 re-arm·zone quality | ✅ CPU/CUDA |
 | `rewards/strike.py` | A0~A4 single→clean-recovery/S0~S3 strum stage-mask scalar reward와 guitar reference grip | ✅ 현재 계약 |
 | `tasks/task_strike.py` | 30DOF·v2 303D/v1 327D 관측·3 motor phase·끝줄/exit 완주·path-aware dual recovery·failure mining | ✅ state v14 |
+| `strap_chain.py` | opt-in XPBD 입자 체인 스트랩(1D 옷감): 몸 capsule 감김·마찰, 기타 버튼 장력, 몸 반작용 (§6.7) | ◐ CPU 검증, GPU 미검증 |
 | `tasks/task_full.py` | G0 one-step transaction bridge; shared Isaac simulator backend는 미구현 | ◐ |
 | `../full/` | canonical event, rule Synchronizer, strict source loader, 105D named ABI(실질 가동 97D) runtime 계약 | ✅ CPU |
 
@@ -260,6 +261,46 @@ Strike-v1의 역사적 재현 규칙이다. 현재 기본 Strike-v2로 exact res
 `--allow-policy-objective-transfer`를 명시한 경우에만 actor, observation normalizer와 학습된
 `log_std`를 새 S2 run으로 가져올 수 있다. critic·optimizer·iteration·curriculum·환경 RNG는 모두
 초기화한다. 기준 전이 소스는 `20260830_1928_00_SS1-68-E_comp/checkpoints/strike_003147.pt`다.
+
+### 6.7 XPBD 입자 체인 스트랩 (opt-in, 2026-10-01)
+
+기본값은 꺼져 있다(`guitar_fixed=True`, `strap_chain_config=None`). 이 경우 G0 동작은 바뀌지 않는다.
+켜려면 `GuitarEnvBase(..., guitar_fixed=False, strap_chain_config="tab2body/assets/strap_chain.json")`로 생성한다.
+
+- **모델**: 스트랩을 입자 24개 체인으로 본다(옷감 시뮬레이션의 1D 버전).
+  - 양 끝은 기타 엔드핀과 힐 버튼에 고정한다.
+  - 내부 입자는 중력, 장력 전용 거리 제약, 몸 capsule 충돌, Coulomb 마찰로 움직인다.
+  - 경로: 엔드핀 → 오른쪽 겨드랑이 아래 → 등 대각선 → 왼쪽 어깨 위 → 가슴 앞 → 힐.
+- **솔버** (각 선택은 CPU 실측에서 실패한 대안을 대체한 것):
+  - 거리 제약은 체인 전체를 삼중대각 선형계로 한 번에 푼다. Gauss-Seidel은 24입자에서 수렴하지 못했고,
+    남은 중력 늘어짐이 최대 42N의 가짜 장력으로 읽혔다.
+  - active set은 풀기 전에 정한다(늘어났거나 장력이 있는 구간만). 풀어본 뒤 빼는 2-pass 방식은
+    느슨한 스트랩에 에너지를 주입했다.
+  - 충돌은 입자-capsule이 아닌 선분-capsule로 한다. 입자 간격(5.6cm)이 어깨 반지름보다 커서,
+    입자 충돌만으로는 선분이 어깨를 관통해 고리가 빠졌다.
+  - 장력은 수렴한 XPBD 승수(-λ/h²)에서 읽는다. 최종 위치의 늘어남은 감긴 구간에서
+    20/90N이 번갈아 나오는 인공물을 남긴다.
+  - 감쇠는 버튼 장력의 변화율로 건다(Kelvin-Voigt, τ = c·L/EA). 길이 변화율을 쓰면
+    느슨하게 출렁이는 스트랩에서도 힘이 생겼다.
+- **결합**: 60Hz 명시적 결합이다. `post_simulate`가 버튼과 capsule을 보간하며 스트랩을 전진시키고,
+  다음 `simulate` 동안 `apply`가 힘과 COM 기준 토크를 건다.
+  - 기타는 두 버튼 힘의 합력과 토크를 받는다.
+  - 몸은 준정적 균형(스트랩 무게 − 기타가 받은 힘)을 접촉 비율대로 나눠 받으므로 스트랩이 운동량을 만들지 않는다.
+- **reset**: 첫 reset에서만 스트랩을 몸에 밀착(cinch)시키고, 그 모양을 Chest 기준 템플릿으로 저장한다.
+  이후 reset은 템플릿을 옮겨 놓고 4스텝만 적응시킨다. reset 직후 한 스텝은 body transform이
+  stale이라 힘을 걸지 않는다.
+- **몸 proxy 보강**: SMPL capsule은 팔이 앞으로 뻗으면 오른쪽 겨드랑이 뒤(견갑골)가 비어 있다.
+  그래서 스트랩이 등을 타고 올라가 목걸이처럼 걸렸다. 이를 막으려고 config에 `R_Thorax` capsule
+  하나와 골반 capsule(MJCF에서는 box)을 추가했다.
+- **CPU 실측** (`tools/strap_chain_preview.py`, 기타를 4.5kg 병진 질점으로 수직 이동만 허용):
+  - 처짐 9.6mm, 들어 올리는 힘 44.14N(무게 44.15N), 몸 하중 45.3N(= 무게 + 스트랩)
+  - 관통 0mm, 약 1초 안에 정착(이후 ±0.5N, 0.2mm 잔떨림)
+  - `--free`(지지 없음)는 왼쪽 어깨 아래로 진자처럼 흔들리며, 이는 물리적으로 정상이다.
+- **미검증 (GPU 필요)**: Isaac 실제 결합 안정성, free guitar의 허벅지·손 접촉, `ENV_SPACE` 좌표 일치,
+  4096 env 비용(`torch.linalg.solve` 23×23 배치 × 6 substep × 5회/step).
+  검사: `python tests/test_strap_chain.py` (CPU, fake env로 coupler 기하·힘 검사 포함).
+  GPU 확인: `python -m tab2body.tools.strap_chain_isaac_check` (영상·정지 이미지·`report.json`을
+  `_gen/diagnostics/strap_chain_check/`에 쓰고, 검사 실패 시 exit 1).
 
 ## 7. 검증 도구
 

@@ -1,0 +1,47 @@
+{
+  "_doc": [
+    "XPBD particle-chain strap (tab2body/env/strap_chain.py).",
+    "guitar_anchors: strap buttons in the guitar root frame (x across strings, y nut(+)->body(-), z out of the fretboard).",
+    "  end_pin = bottom face of G:body (y=-0.4-0.17); heel = top edge of G:body, just behind the back face.",
+    "route: initial guide points only (end_pin -> right waist -> back -> over left shoulder -> left chest -> heel),",
+    "  body-local, SMPL frame: +x left, -y forward, +z up. Chosen ~5-7 cm outside the capsules in the seated pose;",
+    "  the strap drapes onto the body during settle_steps, so they need not be exact.",
+    "colliders: body name -> its fromto capsule in smpl_mpl_hands_body.xml; or an explicit body-local capsule",
+    "  (Pelvis is a box in the MJCF, so it is approximated by a hip-wide capsule).",
+    "  The R_Thorax capsule closes the back of the right armpit (scapula / posterior axillary fold). SMPL capsules",
+    "  leave that region open because the right arm reaches forward, and the strap would otherwise ride up the",
+    "  back, over the right shoulder, and hang around the neck like a necklace."
+  ],
+  "guitar_body": "guitar",
+  "guitar_anchors": {
+    "end_pin": [0.0, -0.57, -0.022],
+    "heel": [0.0, -0.235, -0.045]
+  },
+  "route": [
+    {"body": "Torso", "local": [-0.1209, 0.0046, 0.0936]},
+    {"body": "Chest", "local": [-0.0301, 0.1565, -0.0293]},
+    {"body": "Chest", "local": [0.068, 0.1276, 0.1254]},
+    {"body": "L_Thorax", "local": [0.0788, 0.0253, 0.1218]},
+    {"body": "Chest", "local": [0.0411, -0.0935, 0.1348]}
+  ],
+  "colliders": [
+    "Torso", "Spine", "Chest", "Neck", "L_Thorax", "R_Thorax", "L_Shoulder", "R_Shoulder",
+    {"body": "Pelvis", "from": [-0.06, 0.017, -0.02], "to": [0.06, 0.017, -0.02], "radius": 0.085},
+    {"body": "R_Thorax", "from": [-0.1144, 0.0102, -0.0169], "to": [0.0284, 0.0942, -0.0229], "radius": 0.05}
+  ],
+  "params": {
+    "num_particles": 24,
+    "mass": 0.12,
+    "axial_stiffness": 2500.0,
+    "thickness": 0.003,
+    "friction": 0.6,
+    "damping": 4.0,
+    "substeps": 6,
+    "iterations": 4,
+    "rest_length_scale": 0.99,
+    "settle_steps": 60,
+    "reset_settle_steps": 4,
+    "anchor_damping": 60.0,
+    "max_anchor_force": 300.0
+  }
+}

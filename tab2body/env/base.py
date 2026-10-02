@@ -16,6 +16,7 @@ from .collision import (
 )
 from .safety import dof_torque_limit
 from .joint_limits import apply_joint_limit_profile
+from .strap_chain import StrapChainCoupler
 
 # quaternion helpers (xyzw), defined locally: isaacgym.torch_utils imports fail on this numpy
 # (np.float deprecation). These are the standard Isaac forms.
@@ -65,13 +66,18 @@ class GuitarEnvBase:
                  human_hard_limit_path=None,
                  obs_body_names=('L_Wrist', 'R_Wrist'),
                  locked_dof_keywords=LOCK_KEYWORDS,
-                 shared_backend=None):
+                 shared_backend=None,
+                 guitar_fixed=True,
+                 strap_chain_config=None):
         """control_dofs: dof-name prefixes the policy controls (task decides); the rest are held.
         max_episode_length: control steps per episode. action_alpha: EMA smoothing on actions.
         action_scale: PD-target scale (1.0 maps bounded actions one-to-one to limits).
         reset_noise: RSI
         exploration noise (rad) on controlled dofs. obs_body_names: humanoid bodies whose
-        guitar-relative position enters the base observation (tasks extend)."""
+        guitar-relative position enters the base observation (tasks extend).
+        guitar_fixed: G0 weld (default). False = free guitar with gravity (G1/G2).
+        strap_chain_config: path to a strap JSON (assets/strap_chain.json) to hang the guitar
+        on the XPBD particle-chain strap (env/strap_chain.py); None = no strap."""
         self.num_envs = num_envs
         self.device = device
         self.max_episode_length = max_episode_length
@@ -97,6 +103,10 @@ class GuitarEnvBase:
                 or not 0.0 <= self.reset_soft_limit_fraction < 0.5):
             raise ValueError("reset_soft_limit_fraction must be in [0, 0.5)")
         self.obs_body_names = list(obs_body_names)
+        self.guitar_fixed = bool(guitar_fixed)
+        self.strap_chain_config = (
+            str(strap_chain_config) if strap_chain_config is not None else None)
+        self.strap_chain = None
         self.rng = torch.Generator(device=device); self.rng.manual_seed(seed)
         self._shared_backend = shared_backend
         if shared_backend is None:
@@ -110,6 +120,10 @@ class GuitarEnvBase:
             self._create_envs()
             self.gym.prepare_sim(self.sim)
             self._init_tensors(control_dofs or [])
+            if self.strap_chain_config is not None:
+                self.strap_chain = StrapChainCoupler(
+                    self, self.strap_chain_config,
+                    os.path.join(ASSETS, 'smpl_mpl_hands_body.xml'))
         else:
             self._init_shared_backend(shared_backend, control_dofs or [])
 
@@ -164,6 +178,11 @@ class GuitarEnvBase:
                 raise RuntimeError(
                     f"shared_backend is not initialized: missing {name}")
             setattr(self, name, getattr(backend, name))
+        if self.strap_chain_config is not None:
+            raise ValueError("strap_chain_config belongs to the shared backend, not a view")
+        # one physical strap per backend; task views alias it (never step it twice)
+        self.guitar_fixed = getattr(backend, "guitar_fixed", True)
+        self.strap_chain = getattr(backend, "strap_chain", None)
         for name in (
                 "solver_position_iterations", "solver_velocity_iterations",
                 "contact_collection_contract", "max_depenetration_velocity"):
@@ -275,7 +294,8 @@ class GuitarEnvBase:
     def _load_assets(self):
         oh = gymapi.AssetOptions(); oh.fix_base_link = True
         self.asset_human = self.gym.load_asset(self.sim, ASSETS, 'smpl_mpl_hands_body.xml', oh)
-        og = gymapi.AssetOptions(); og.fix_base_link = True; og.disable_gravity = True
+        og = gymapi.AssetOptions()
+        og.fix_base_link = self.guitar_fixed; og.disable_gravity = self.guitar_fixed
         self.asset_guitar = self.gym.load_asset(self.sim, ASSETS, 'guitar_asset.xml', og)
         ch = self.P['chair']['half']
         oc = gymapi.AssetOptions(); oc.fix_base_link = True
@@ -366,6 +386,8 @@ class GuitarEnvBase:
                         props['damping'][j] = float(self._kd_np[j])
                 self._dof_props = props
             self.gym.set_actor_dof_properties(env, h, self._dof_props)
+            if not self.guitar_fixed:
+                self._give_guitar_markers_mass(env, g)
             for actor in (h, g):                            # per-shape 1e-4 offset: kill the 2cm phantom-contact gap
                 shp = self.gym.get_actor_rigid_shape_properties(env, actor)
                 for p_ in shp:
@@ -386,6 +408,20 @@ class GuitarEnvBase:
             raise RuntimeError("PhysX actor에 런타임 관절 hard limit이 반영되지 않았다")
         self.human_hard_limit_audit["physx_verified"] = True
         self._audit_collision_setup()
+
+    def _give_guitar_markers_mass(self, env, actor, mass=1e-3, inertia=1e-7):
+        """Free guitar: G:string*/G:*_end marker bodies have no geometry, hence no mass.
+        Give them a tiny finite mass/inertia so PhysX can integrate the articulation."""
+        props = self.gym.get_actor_rigid_body_properties(env, actor)
+        for p_ in props:
+            if p_.mass < mass:
+                p_.mass = mass
+                tensor = gymapi.Mat33()
+                tensor.x = gymapi.Vec3(inertia, 0.0, 0.0)
+                tensor.y = gymapi.Vec3(0.0, inertia, 0.0)
+                tensor.z = gymapi.Vec3(0.0, 0.0, inertia)
+                p_.inertia = tensor
+        self.gym.set_actor_rigid_body_properties(env, actor, props, False)
 
     def _body_shape_indices(self, env, actor, body_names, body_name):
         try:
@@ -715,6 +751,9 @@ class GuitarEnvBase:
         reset_ctrl_q = q_reset[:, self.ctrl_idx]
         self.prev_action[env_ids] = self.actions_for_pd_targets(reset_ctrl_q, env_ids)
         self.applied_tau[env_ids] = 0.0
+        strap = getattr(self, "strap_chain", None)
+        if strap is not None:
+            strap.reset(env_ids)
         self.progress_buf[env_ids] = 0
         self.reset_buf[env_ids] = False
 
@@ -948,8 +987,13 @@ class GuitarEnvBase:
         self.applied_tau.copy_(tau.view(self.num_envs, self.n_dof))
         self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(tau.contiguous()))
         self._submit_pending_reset_state()
+        strap = getattr(self, "strap_chain", None)
+        if strap is not None:
+            strap.apply()                             # forces from the previous step (held)
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
+        if strap is not None:
+            strap.post_simulate()                     # advance strap to the new poses
         if getattr(self, "defer_reset_state_submission", False):
             self._dof_state_refreshed = self._root_state_refreshed = False
         if not getattr(self, "reinject_locked_dof_state", True):
