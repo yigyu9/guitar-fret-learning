@@ -1,0 +1,221 @@
+"""Fresh hand launch keeps real input pins, role masks and old strict routes."""
+import copy
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+import numpy as np
+import torch
+
+from guitar_learning.training import runner as train_parallel
+from guitar_learning.training import parallel, policy
+from guitar_learning.tool.training import train_legacy as start
+from guitar_learning.training.recording import digest
+from guitar_learning.tests.quality_fixtures import fixed_note_contract
+from guitar_learning.skills.specialist_policy import SpecialistPolicy
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class SimpleStartTests(unittest.TestCase):
+    def test_fresh_hands_need_no_previous_model_or_evaluations(self):
+        for hand in ('left', 'right'):
+            with self.subTest(hand=hand):
+                settings = start.settings_document(hand, num_envs=1, updates=1, device='cpu')
+                self.assertEqual(settings['specialist'], dict(role=hand,
+                    left_checkpoint=None, right_checkpoint=None))
+                self.assertEqual(settings['song']['pre_roll_s'], 3.)
+                self.assertEqual(settings['horizon'], 1969)
+                self.assertEqual(settings['song_training']['target_count'], 67)
+                self.assertEqual(settings['song_training']['observation_dimension'], 512 if hand == 'left' else 500)
+                self.assertEqual('left_curriculum' in settings['song'], hand == 'left')
+                self.assertEqual('finger_control' in settings['song'], hand == 'left')
+                self.assertEqual(settings['ppo']['cost_weight'], 1.)
+                self.assertNotIn('initialization', settings)
+                self.assertNotIn('actor_initialization', settings)
+        for kwargs in (dict(hand='joint'), dict(hand='left', updates=0),
+                       dict(hand='right', num_envs=3, device='cpu'), dict(hand='left', horizon=0)):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                start.settings_document(**kwargs)
+
+    def test_automatic_device_selection_records_effective_device(self):
+        for available, expected in ((False, 'cpu'), (True, 'cuda:0')):
+            with patch.object(torch.cuda, 'is_available', return_value=available):
+                self.assertEqual(start.settings_document('left', device='auto')['device'], expected)
+        with patch.object(torch.cuda, 'is_available', return_value=False) as available:
+            self.assertEqual(start.settings_document('right', device='cuda:0')['device'], 'cuda:0')
+            available.assert_not_called()
+
+    def test_help_needs_neither_native_nor_tensor_libraries(self):
+        script = '''
+import importlib.abc, runpy, sys
+class Guard(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in ('isaacgym', 'numpy', 'torch'):
+            raise AssertionError('help imported a native/tensor dependency: '+fullname)
+sys.meta_path.insert(0, Guard())
+sys.argv = ['train', '--help']
+runpy.run_module('guitar_learning.tool.training.train_legacy', run_name='__main__')
+'''
+        result = subprocess.run([sys.executable, '-B', '-c', script], cwd='/tmp',
+            env=dict(os.environ, PYTHONPATH=str(ROOT), PYTHONDONTWRITEBYTECODE='1'),
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--hand {left,right}', result.stdout)
+        self.assertIn('--song', result.stdout)
+        self.assertNotIn('--settings', result.stdout)
+
+    def test_selected_policy_keeps_other_hand_zero_on_actual_quality_contract(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for hand, inactive in (('left', slice(33, 39)), ('right', slice(0, 33))):
+                contract = fixed_note_contract(folder, hand)
+                model = SpecialistPolicy(563, size='small', contract=contract,
+                                         role=hand, frozen_partner=False)
+                inputs = (torch.zeros(2, 563), torch.zeros(2, 8, 24),
+                          torch.zeros(2, 8, dtype=torch.bool), torch.zeros(2, 2, 24),
+                          torch.zeros(2, 2, dtype=torch.bool))
+                action = model.act(*inputs)['action'].detach().numpy()
+                np.testing.assert_array_equal(action[:, inactive], 0.)
+                self.assertEqual(contract['termination']['preparation_seconds'], 0.)
+                self.assertEqual(contract['task']['duration_s'], 7.)
+
+    def test_dispatch_uses_current_worker_and_restores_bindings_on_interrupt(self):
+        from guitar_learning.song import runtime as song_runtime
+        from guitar_learning.tool.training import train_musical_quality as quality
+        from guitar_learning.training import persistent_audit
+        settings = start.settings_document('right', num_envs=1, device='cpu')
+        original_pool, original_policy = parallel.Pool, policy.Policy
+        original_argv = sys.argv
+        seen = {}
+
+        def capture_pool(instance, specs, **kwargs):
+            seen.update(specs=specs, **kwargs)
+
+        def interrupt(*, settings):
+            parallel.Pool([dict(out='unused')])
+            self.assertEqual(seen['specs'][0]['specialist']['role'], 'right')
+            self.assertEqual(seen['specs'][0]['song']['pre_roll_s'], 3.)
+            self.assertIs(seen['worker_factory'], song_runtime.native_environment)
+            self.assertEqual(policy.Policy.keywords, dict(role='right', frozen_partner=False))
+            self.assertEqual(settings['simple_start']['initial_pose'], 'agreed035_v14')
+            raise KeyboardInterrupt()
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.dict(sys.modules, {'isaacgym': SimpleNamespace()}), \
+                patch.object(original_pool, '__init__', capture_pool), \
+                patch.object(train_parallel, 'main', interrupt), \
+                patch.object(quality, 'run', side_effect=AssertionError('old transfer required')), \
+                patch.object(persistent_audit, 'finalize_persistent_run', side_effect=RuntimeError('cleanup fault')):
+            args = SimpleNamespace(out=Path(folder)/'run', resume=None)
+            before = copy.deepcopy(settings)
+            with self.assertRaises(KeyboardInterrupt):
+                start.run(settings, args)
+            self.assertEqual(settings, before)
+        self.assertIs(parallel.Pool, original_pool)
+        self.assertIs(policy.Policy, original_policy)
+        self.assertIs(sys.argv, original_argv)
+
+    def test_supplied_settings_are_permanent_and_pinned_before_native_start(self):
+        settings = start.settings_document('left', song='02_Jazz1-200-B_solo', num_envs=1, updates=1,
+                                          horizon=2, device='cpu', size='small')
+        seen = []
+        class StopPool:
+            def __init__(self, specs, **kwargs):
+                seen.extend(specs)
+                raise InterruptedError('stop before native')
+
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder)/'run'
+            path = out/'settings.json'
+            self.assertFalse(path.exists())
+            with patch.dict(sys.modules, {'isaacgym': SimpleNamespace()}), \
+                    patch.object(sys, 'argv', ['train', '--settings', str(path), '--out', str(out)]), \
+                    patch.object(parallel, 'Pool', StopPool):
+                with self.assertRaisesRegex(InterruptedError, 'stop before native'):
+                    train_parallel.main(settings=settings)
+            self.assertEqual(json.loads(path.read_text()), settings)
+            pins = json.loads((out/'inputs_before.json').read_text())
+            self.assertEqual(pins[str(path)], digest(path))
+            self.assertIn(str(ROOT/'guitar_learning/training/start.py'), pins)
+            self.assertTrue(all(Path(name).is_file() for name in pins))
+            bundle = ROOT/'data/song_bundles/02_Jazz1-200-B_solo'
+            self.assertEqual(seen[0]['bundle'], str(bundle))
+            self.assertTrue(all(str(p) in pins for p in bundle.rglob('*') if p.is_file()))
+
+    def test_song_selection_preserves_all_notes_and_rejects_unsupported_inputs(self):
+        settings = start.settings_document('right', song='02_Jazz1-200-B_solo', device='cpu')
+        self.assertEqual(settings['song_training']['target_count'], 42)
+        self.assertEqual(settings['horizon'], 1074)
+        self.assertEqual(settings['song_training']['episode_duration_s'], 17.9)
+        cut = start.settings_document('left', horizon=128, device='cpu')
+        self.assertEqual(cut['horizon'], 128)
+        self.assertEqual(cut['song_training']['control_ticks'], 1969)
+        for song in ('../05_BN2-131-B_solo', '/tmp/copied', '.', ''):
+            with self.subTest(song=song), self.assertRaises(ValueError):
+                start.settings_document('left', song=song, device='cpu')
+        with self.assertRaisesRegex(ValueError, 'unsupported full-song event'):
+            start.settings_document('left', song='00_SS1-68-E_comp', device='cpu')
+
+    def test_song_worker_uses_persistent_factory_and_retains_terminal_notes(self):
+        from guitar_learning.song import runtime, hand_environment
+        from guitar_learning.runtime.persistent_session import PersistentHeadlessPreparedSession
+        spec = dict(config={}, out='/tmp/song-worker-test', bundle='chosen_song',
+                    song=start.settings_document('right', device='cpu')['song'],
+                    specialist=dict(role='right'))
+        with patch.dict(sys.modules, {'isaacgym': SimpleNamespace()}), \
+                patch.object(hand_environment, 'build_environment', return_value='environment') as build, \
+                patch.object(parallel, '_compact', parallel._compact):
+            self.assertEqual(runtime.native_environment(spec, 0), 'environment')
+            self.assertIs(parallel._compact, runtime.compact)
+        self.assertIs(build.call_args.kwargs['session_factory'], PersistentHeadlessPreparedSession)
+        self.assertEqual(build.call_args.kwargs['bundle'], 'chosen_song')
+        self.assertEqual(build.call_args.kwargs['role'], 'right')
+        notes = dict(song=dict(target_count=67, per_note={'last': {'left_achieved': False}}, events=[]),
+                     musical_quality=dict(role='right', stage_success=False))
+        compact = runtime.compact(None, notes, np.zeros(39))
+        self.assertNotIn('per_note', compact['song'])
+        self.assertIn('per_note', notes['song'])
+        terminal = dict(notes, episode=dict(song=copy.deepcopy(notes['song'])))
+        self.assertIn('per_note', runtime.compact(None, terminal, np.zeros(39))['episode']['song'])
+
+    def test_single_note_checkpoint_is_rejected_by_actual_hand_song_contract(self):
+        from guitar_learning.song.hand_environment import build_environment
+        from guitar_learning.tests.test_skill_environment import LongRecordedSession
+        from guitar_learning.training.ppo import PPOTrainer
+        with tempfile.TemporaryDirectory() as folder:
+            old = SpecialistPolicy(563, size='small', contract=fixed_note_contract(folder), role='left')
+            checkpoint = Path(folder)/'single.pt'
+            PPOTrainer(old).save(checkpoint, metadata=dict(scope='single_note'))
+            sessions = []
+            def factory(config, out):
+                from guitar_learning.core.finger_control import default_profile
+                session = LongRecordedSession(config, out)
+                session.finger_control_description = dict(profile=default_profile(), applied=True,
+                    scope='recorded interface fixture; not native PD evidence')
+                sessions.append(session)
+                return session
+            def contacts(scene):
+                return copy.deepcopy(sessions[-1].row()['native_contacts']['contacts'])
+            settings = start.settings_document('left', device='cpu')
+            env = build_environment({}, Path(folder)/'song', role='left',
+                bundle=settings['song_training']['bundle'], song=settings['song'],
+                session_factory=factory, contact_reader=contacts)
+            try:
+                env.reset()
+                policy = SpecialistPolicy(500, size='small', contract=env.contract, role='left')
+                before = {key: value.clone() for key, value in policy.state_dict().items()}
+                with self.assertRaisesRegex(ValueError, 'schema/architecture/input/control/config mismatch'):
+                    PPOTrainer(policy).load(checkpoint)
+                self.assertTrue(all(torch.equal(value, policy.state_dict()[key]) for key, value in before.items()))
+            finally:
+                env.close()
+
+
+if __name__ == '__main__':
+    unittest.main()

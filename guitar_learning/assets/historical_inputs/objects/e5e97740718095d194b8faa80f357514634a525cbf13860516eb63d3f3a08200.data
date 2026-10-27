@@ -1,0 +1,27 @@
+"""Two fixed millimetre offsets: source-only overlap sensitivity, no dynamics."""
+import copy
+from pathlib import Path
+import xml.etree.ElementTree as ET
+import numpy as np
+from scipy.spatial.transform import Rotation
+from stability_adapter_2.initial_pose_noise_v1 import read,save,sha,pose
+from stability_adapter_2.realistic_guitar_geometry_v1 import source_scene,source_audit
+from stability_adapter_2.pose_experiments_v1.inputs import pin_inputs
+ROOT=Path(__file__).resolve().parents[2];A=ROOT/'stability_adapter_2';BASE=ROOT/'paper/initail_pose/experiments_v1'
+
+def main():
+ protocol=BASE/'inputs/perturbation_protocol.json';spec=read(protocol);manifest=A/'working_initial_pose_v1/manifest.json';initial=Path(read(manifest)['native_initial']);geometry=A/'assets/om_body_geometry_v3/manifest.json';asset=Path(read(geometry)['asset']);out=BASE/'analysis/source_perturbation_v2';out.mkdir(exist_ok=False)
+ paths=pin_inputs(BASE/'inputs/baseline.json');paths.update({str(p):sha(p) for p in (Path(__file__).resolve(),protocol,manifest,initial,geometry)});save(out/'inputs_before.json',paths)
+ state=read(initial)['native_initial_state'];bodies=read(initial)['human_body_names'];parents={c.get('name'):b.get('name') for b in ET.parse(A/'assets/humanoid_fixed_lower.xml').iter('body') for c in b.findall('body')};results=[]
+ try:
+  for case in spec['cases']:
+   transformed=copy.deepcopy(state);delta=np.array(case['translation_W_m'])
+   for b in transformed['guitar_body_states']:
+    p,r=pose(b);b['pose']={'p':dict(zip('xyz',(p+delta).tolist())),'r':dict(zip('xyzw',r.as_quat().tolist()))}
+   assert transformed['human_body_states']==state['human_body_states'] and transformed['human_dof_states']==state['human_dof_states']
+   save(out/(case['id']+'_source_state.json'),transformed);audit=source_audit(source_scene(transformed,bodies,asset),parents);row={'id':case['id'],'translation_W_m':delta.tolist(),'source_audit':audit};save(out/(case['id']+'_audit.json'),row);results.append(row);print(case['id'],audit['source_clear'],flush=True)
+ finally:
+  unchanged=all(sha(p)==h for p,h in paths.items());save(out/'report.json',{'input_sha256':paths,'inputs_unchanged':unchanged,'rows':results,'completed':len(results)==len(spec['cases']),'native_runs':0,'scope':spec['scope']})
+ assert unchanged
+
+if __name__=='__main__':main()

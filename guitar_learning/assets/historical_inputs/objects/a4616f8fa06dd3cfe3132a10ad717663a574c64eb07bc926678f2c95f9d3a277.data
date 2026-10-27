@@ -1,0 +1,132 @@
+import copy
+import random
+import tempfile
+from pathlib import Path
+import unittest
+from unittest.mock import patch
+import numpy as np
+import torch
+from guitar_learning.tests.test_policy import policy
+from guitar_learning.ppo import PPOTrainer,PPOConfig,compute_gae,KLGuardError
+
+
+def buffer(model):
+    state=torch.randn(8,1,5)
+    events=torch.randn(8,1,2,24)
+    mask=torch.ones(8,1,2,dtype=torch.bool)
+    priority=torch.randn(8,1,2,24)
+    priority_mask=torch.ones(8,1,2,dtype=torch.bool)
+    with torch.no_grad():
+        result=model.act(state[:,0],events[:,0],mask[:,0],priority[:,0],priority_mask[:,0])
+    return dict(state=state,events=events,mask=mask,priority_events=priority,priority_mask=priority_mask,latent=result['latent'][:,None],
+        logp=result['logp'][:,None],old_mean=result['mean'][:,None],old_log_std=result['log_std'][:,None].clone(),
+        reward_value=result['reward_value'][:,None],cost_value=result['cost_value'][:,None],
+        next_reward_value=torch.zeros(8,1),next_cost_value=torch.zeros(8,1),
+        reward=torch.arange(8.).reshape(8,1)/10,cost=torch.zeros(8,1),
+        terminated=torch.zeros(8,1,dtype=torch.bool),truncated=torch.zeros(8,1,dtype=torch.bool))
+
+
+def assert_tree(test,a,b):
+    if isinstance(a,torch.Tensor): test.assertTrue(torch.equal(a,b))
+    elif isinstance(a,dict):
+        test.assertEqual(a.keys(),b.keys())
+        for key in a: assert_tree(test,a[key],b[key])
+    elif isinstance(a,(tuple,list)):
+        test.assertEqual(len(a),len(b))
+        for x,y in zip(a,b): assert_tree(test,x,y)
+    else: test.assertEqual(a,b)
+
+
+class PPOTests(unittest.TestCase):
+    def test_update_changes_actor_and_both_critics(self):
+        torch.manual_seed(19)
+        trainer=PPOTrainer(policy(),PPOConfig(actor_lr=1e-5,target_kl=.1,epochs=1))
+        data=buffer(trainer.policy)
+        actor=[p.detach().clone() for p in trainer.policy.actor_parameters()]
+        reward=trainer.policy.reward_critic.weight.detach().clone()
+        cost=trainer.policy.cost_critic.weight.detach().clone()
+        trainer.update(data)
+        self.assertTrue(any(not torch.equal(a,b) for a,b in zip(actor,trainer.policy.actor_parameters())))
+        self.assertFalse(torch.equal(reward,trainer.policy.reward_critic.weight))
+        self.assertFalse(torch.equal(cost,trainer.policy.cost_critic.weight))
+
+    def test_value_failure_restores_entire_update(self):
+        torch.manual_seed(17)
+        trainer = PPOTrainer(policy(), PPOConfig(actor_lr=1e-6, epochs=1))
+        data = buffer(trainer.policy)
+        model = copy.deepcopy(trainer.policy.state_dict())
+        actor = copy.deepcopy(trainer.actor_optimizer.state_dict())
+        value = copy.deepcopy(trainer.value_optimizer.state_dict())
+        rng = torch.get_rng_state()
+        original_step = trainer.value_optimizer.step
+        def fail_after_step(*args, **kwargs):
+            original_step(*args, **kwargs)
+            raise RuntimeError('injected value failure')
+        with patch.object(trainer.value_optimizer, 'step', fail_after_step):
+            with self.assertRaisesRegex(RuntimeError, 'injected value failure'):
+                trainer.update(data)
+        assert_tree(self, model, trainer.policy.state_dict())
+        assert_tree(self, actor, trainer.actor_optimizer.state_dict())
+        assert_tree(self, value, trainer.value_optimizer.state_dict())
+        self.assertTrue(torch.equal(rng, torch.get_rng_state()))
+        self.assertEqual(trainer.updates, 0)
+
+    def test_budget_units_and_loop_config_validation(self):
+        for config in (PPOConfig(cost_gamma=.99,episode_cost_budget=.2),PPOConfig(clip_ratio=0),PPOConfig(epochs=1.5)):
+            with self.assertRaises(ValueError): PPOTrainer(policy(),config)
+
+    def test_gae_terminal_truncated_and_rollout_boundary(self):
+        reward=torch.tensor([[1.],[2.],[3.]])
+        value=torch.zeros_like(reward)
+        nxt=torch.tensor([[4.],[5.],[6.]])
+        terminal=torch.tensor([[True],[False],[False]])
+        truncated=torch.tensor([[False],[True],[False]])
+        advantage,_=compute_gae(reward,value,nxt,terminal,truncated,1.,1.)
+        self.assertTrue(torch.equal(advantage,torch.tensor([[1.],[7.],[9.]])))
+
+    def test_kl_failure_restores_weights_and_existing_adam_moments(self):
+        torch.manual_seed(3)
+        model=policy()
+        trainer=PPOTrainer(model,PPOConfig(actor_lr=.1,target_kl=1e-12,kl_retries=1,epochs=1))
+        # Populate real Adam moments, then force the next guarded step to fail.
+        model.log_std.sum().backward()
+        trainer.actor_optimizer.step()
+        trainer.actor_optimizer.zero_grad()
+        data=buffer(model)
+        before=[p.detach().clone() for p in model.actor_parameters()]
+        adam=copy.deepcopy(trainer.actor_optimizer.state_dict())
+        with self.assertRaises(KLGuardError): trainer.update(data)
+        for parameter,old in zip(model.actor_parameters(),before): self.assertTrue(torch.equal(parameter,old))
+        assert_tree(self,adam,trainer.actor_optimizer.state_dict())
+        self.assertEqual(trainer.updates,0)
+        self.assertEqual(len(trainer.value_optimizer.state),0)
+
+    def test_valid_resume_rng_optimizer_and_legacy_rejection(self):
+        torch.manual_seed(7)
+        config=PPOConfig(actor_lr=1e-6,target_kl=.1,epochs=1,episode_cost_budget=.2)
+        trainer=PPOTrainer(policy(),config)
+        data=buffer(trainer.policy)
+        trainer.update(data,completed_episodes=[dict(cost=.5,valid=True,reason='terminal_failure'),
+                                               dict(cost=100.,valid=False,reason='guard_fault')])
+        self.assertAlmostEqual(trainer.cost_weight,1.003)
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'own.pt'
+            trainer.save(path,{'physical_resume':'new episode'})
+            expected=(torch.rand(3),np.random.rand(),random.random())
+            result=trainer.update(data)
+            restored=PPOTrainer(policy(),config)
+            self.assertEqual(restored.load(path),{'physical_resume':'new episode'})
+            actual=(torch.rand(3),np.random.rand(),random.random())
+            self.assertTrue(torch.equal(expected[0],actual[0]))
+            self.assertEqual(expected[1:],actual[1:])
+            self.assertEqual(restored.update(data),result)
+            assert_tree(self,trainer.policy.state_dict(),restored.policy.state_dict())
+            assert_tree(self,trainer.actor_optimizer.state_dict(),restored.actor_optimizer.state_dict())
+            with self.assertRaises(FileExistsError): restored.save(path)
+            old=Path(directory)/'old.pt'
+            torch.save({'identity':{'schema':'fresh54_dualcritic_ppo_v1'}},old)
+            with self.assertRaises(ValueError): restored.load(old)
+
+
+if __name__=='__main__':
+    unittest.main()

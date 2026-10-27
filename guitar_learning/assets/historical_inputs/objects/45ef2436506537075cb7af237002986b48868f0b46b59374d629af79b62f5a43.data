@@ -1,0 +1,122 @@
+"""One short zero-action native contact probe after the original preparation."""
+import argparse
+import json
+import sys
+import traceback
+from pathlib import Path
+from dataclasses import asdict
+from .run_smoke_v7 import digest, write, project_source_paths, bridge_dependency
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    args = parser.parse_args()
+    import isaacgym
+    import numpy as np
+    from .fretting_environment_v1 import FrettingEnvironment
+    from .fretting_v1 import FretTarget, FretContract
+    from ..lower_body_release_v1.common import pin
+    from ..gym_trial_recording import GymTrialRecording
+    # Load the actual control dependency chain before the initial source census.
+    from .environment_v3 import NativeSession
+    from ..front_facing_ready_v1.runtime_v15 import Scene
+    from ..front_facing_ready_v1.runtime_v12 import Controller
+    from ..native_contacts import body_names, read_contacts
+
+    root = Path(__file__).resolve().parents[2]
+    config, out = args.config.resolve(), args.out.resolve()
+    expected_config = root / 'paper/initial_pose/lower_body_release_v1/front_facing_ready_v1/inputs_spine_margin035_v1/baseline_v1.json'
+    if config != expected_config.resolve():
+        raise ValueError('Only the original035 baseline reset is supported in this probe')
+    out.mkdir(parents=True, exist_ok=False)
+    cfg = json.loads(config.read_text())
+    target = FretTarget(1, 5, 'index')
+    contract = FretContract(minimum_dwell_s=.05)
+    sources = {Path(__file__).resolve(), config}
+    sources.update((root / 'stability_adapter_2').rglob('*.py'))
+    for value in cfg.values():
+        if isinstance(value, str) and value.startswith('/') and Path(value).is_file():
+            sources.add(Path(value).resolve())
+    candidate = json.loads(Path(cfg['candidate']).read_text())
+    sources.add(Path(candidate['support_candidate']).resolve())
+    original_run = expected_config.parent.parent / 'native_baseline_v14'
+    sources.update(original_run / name for name in ('attempt.json', 'support_wrapper.json'))
+    pins = pin(config, extra=sources)
+    expected = {}
+    for name in ('attempt.json', 'support_wrapper.json'):
+        manifest = json.loads((original_run / name).read_text())
+        for filename, value in manifest['input_sha256'].items():
+            canonical = str(Path(filename).resolve())
+            if canonical in expected and expected[canonical] != value:
+                raise RuntimeError('Conflicting original source SHA: ' + canonical)
+            expected[canonical] = value
+    original = {p for p in project_source_paths(list(sys.modules.items())) if not bridge_dependency(p)}
+    original.update(p for p in pins if Path(p).suffix.lower() in ('.xml', '.obj', '.stl', '.ply', '.dae'))
+    original.add(str(config))
+    write(out / 'inputs_before.json', pins)
+    if any(expected.get(p) != digest(p) for p in original):
+        raise RuntimeError('Original runtime/model source parity failed')
+    write(out / 'attempt.json', dict(target=asdict(target), contract=asdict(contract),
+          target_selection='Diagnostic target selected from existing prepared index2 contact; not a song-performance test',
+          preparation_seconds=22, active_seconds=1, action_half_range_rad=.002, normalized_action=0,
+          scope='Post-fetch native contact candidate and hold measurement; no pressure/audio/PPO'))
+    recorder = []
+    def capture(scene, phase):
+        if not recorder:
+            initial = dict(native_state=scene.native(), joint_names=scene.names,
+                           human_body_names=scene.human_bodies, guitar_body_names=scene.guitar_bodies,
+                           native_PD_properties={key: scene.pd_properties[key].tolist() for key in scene.pd_properties.dtype.names},
+                           control_K105=scene.control_kp, control_D105=scene.control_kd,
+                           target105_rad=scene.target, loaded_assets=scene.loaded_assets,
+                           chair_initial_placement=scene.chair_placement, collision_policy=scene.collision_policy,
+                           actual_shape_properties=scene.shape_properties,
+                           human_properties=scene.human_properties, guitar_properties=scene.guitar_properties,
+                           position_indices=scene.position_indices, effort_indices=scene.effort_indices,
+                           zero_range_indices=scene.zero_indices, camera_spec=scene.camera_spec,
+                           human_root_fixed=scene.human_root_fixed, guitar_root_fixed=scene.guitar_root_fixed,
+                           guitar_gravity_disabled=scene.guitar_gravity_disabled)
+            write(out / 'initial_values.json', initial)
+            recorder.append(GymTrialRecording(scene, out / 'media'))
+            recorder[0].fps, recorder[0].interval = 5, 48
+        if scene.steps % 48 == 0:
+            recorder[0].capture()
+    environment = FrettingEnvironment(config, out / 'environment', action_half_range_rad=.002,
+                                     fret_target=target, fret_contract=contract,
+                                     note_start_step=5280, note_end_step=5520, sample_callback=capture)
+    rows, failure, videos, encoding_errors = [], None, {}, []
+    try:
+        initial, metadata = environment.reset()
+        write(out / 'prepared.json', dict(sample=initial, metadata=metadata))
+        rows.append(initial)
+        for _ in range(60):
+            _, info = environment.step(np.zeros(39))
+            rows.extend(info['physics_samples240'])
+        write(out / 'final.json', dict(sample=rows[-1], forbidden_calls=environment.session.scene.forbidden_calls))
+    except BaseException as error:
+        failure = dict(type=type(error).__name__, message=str(error), traceback=traceback.format_exc())
+        raise
+    finally:
+        environment.close()
+        write(out / 'measurements240.json.gz', dict(rows=rows), compressed=True)
+        if recorder:
+            try:
+                videos = recorder[0].encode()
+            except BaseException as error:
+                encoding_errors.append(str(error))
+        changed = [p for p, h in pins.items() if digest(p) != h]
+        imported = project_source_paths(list(sys.modules.items()))
+        missing = sorted(imported - set(pins))
+        parity_errors = sorted(p for p in imported if not bridge_dependency(p) and expected.get(p) != pins.get(p))
+        completed = failure is None and len(rows) == 241 and not (changed or missing or parity_errors or encoding_errors)
+        write(out / 'report.json', dict(completed=completed, failure=failure, encoding_errors=encoding_errors,
+              recorded_samples=len(rows), inputs_unchanged=not changed, changed_inputs=changed,
+              actual_imported_sources=sorted(imported), missing_import_pins=missing,
+              original_source_parity_errors=parity_errors, videos=videos, new_training_updates=0))
+        if failure is None and not completed:
+            raise RuntimeError('Native probe output/source checks failed; see preserved report')
+
+
+if __name__ == '__main__':
+    main()

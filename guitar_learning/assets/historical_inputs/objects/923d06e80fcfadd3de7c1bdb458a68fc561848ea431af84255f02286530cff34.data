@@ -1,0 +1,27 @@
+"""Preserve report v1 and correct an ambiguous reference to a previous image."""
+from pathlib import Path
+from ..lower_body_release_v1.common import ROOT,BASE,read,save,sha,verify
+
+
+def main():
+    phase=BASE/'upright_horizontal_play_v1'
+    files=[Path(__file__).resolve(),Path(__file__).parents[1]/'lower_body_release_v1/common.py',
+           phase/'README.md',phase/'media_index.md',phase/'RESULT_CHECKLIST.md',
+           ROOT/'docs/plans/upright_horizontal_play_result_20261015.md']
+    pins={str(p):sha(p) for p in files};save(phase/'doc_correction_v2_before.json',pins)
+    def links(text):
+        return text.replace(str(phase/'README.md'),str(phase/'README_v2.md')).replace(str(phase/'media_index.md'),str(phase/'media_index_v2.md')).replace(str(phase/'RESULT_CHECKLIST.md'),str(phase/'RESULT_CHECKLIST_v2.md'))
+    text=links((phase/'README.md').read_text())
+    old='오른쪽 비교 이미지는 [이전 교정 시험]'
+    new='사용자가 선택한 기준 자세는 [이전 교정 시험]'
+    assert old in text;text=text.replace(old,new).replace('의5초 프레임이다. 원source4','의5초 상태다. 이 문서 위 그림의 오른쪽은 이번 결합 시험7.1초이며 재현 기준 프레임과 구분한다. 원source4')
+    text+=f'\n## 문서V2 정정\n\n위그림의오른쪽7.1초와사용자가선택한이전교정실행5초를혼동할수있던문구를정정했다. 수치·동작·판정은그대로다. 원 [README V1]({phase}/README.md)과 [영상색인V1]({phase}/media_index.md)은보존하며이V2와 [영상색인V2]({phase}/media_index_v2.md)를권장한다.\n'
+    for name,value in (('README_v2.md',text),('media_index_v2.md',links((phase/'media_index.md').read_text())),('RESULT_CHECKLIST_v2.md',links((phase/'RESULT_CHECKLIST.md').read_text()))):
+        path=phase/name;assert not path.exists();path.write_text(value)
+    result=ROOT/'docs/plans/upright_horizontal_play_result_v2_20261015.md';assert not result.exists()
+    result.write_text(links((ROOT/'docs/plans/upright_horizontal_play_result_20261015.md').read_text()))
+    save(phase/'doc_correction_v2.json',dict(inputs_unchanged=verify(pins),reason='Clarify previous selected5s reference versus current during-action7.1s panel. Preserve consumed v1 and pair recommended README/media index v2.',numerical_results_changed=False))
+    assert verify(pins)
+
+
+if __name__=='__main__':main()

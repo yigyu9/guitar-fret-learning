@@ -1,0 +1,21 @@
+"""실제 String→Gym 두 층의 원 native 영상을 5fps로 저장한다."""
+from ..string_trial_recording_v1 import StringTrialRecording
+from ..gym_trial_recording import GymTrialRecording
+
+
+class ThinStringTrialRecording(StringTrialRecording):
+    def __init__(self, env, out):
+        super().__init__(env, out)
+        assert env.config['physics_hz'] == 240
+        assert type(self.strap) is GymTrialRecording and not hasattr(self.strap, 'raw')
+        for recorder in (self, self.strap):
+            recorder.fps = 5
+            recorder.interval = 48
+        assert self.fps == self.strap.fps == 5 and self.interval == self.strap.interval == 48
+
+    def capture(self):
+        if self.env.steps % 48:
+            return
+        if self.frames and self.frames[-1]['physics_step'] == self.env.steps:
+            return
+        return super().capture()

@@ -1,0 +1,167 @@
+"""Explicit-budget native collection and PPO; no learning starts on import."""
+import argparse
+import json
+import random
+import sys
+import traceback
+from pathlib import Path
+from .recording import write, digest, project_source_paths, bridge_dependency
+
+
+def training_dependency(path):
+    # The score wrapper is new to this run, not a V14 native-physics dependency.
+    return bridge_dependency(path) or '/stability_adapter_2/fresh_music_v1/' in path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    root = Path(__file__).resolve().parents[1]
+    parser.add_argument('--config',type=Path,default=root/'paper/initial_pose/lower_body_release_v1/front_facing_ready_v1/inputs_spine_margin035_v1/baseline_v1.json')
+    parser.add_argument('--bundle',type=Path,default=root/'data/song_bundles/05_BN2-131-B_solo')
+    parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--updates',type=int,required=True)
+    parser.add_argument('--rollout-steps',type=int,required=True)
+    parser.add_argument('--stage',choices=('B','C','D','full'),default='B')
+    parser.add_argument('--start-event-index',type=int,default=0)
+    parser.add_argument('--phrase-events',type=int,default=8)
+    parser.add_argument('--size',choices=('small','medium','large'),default='medium')
+    parser.add_argument('--tempo-scale',type=float,default=1.)
+    parser.add_argument('--preparation-seconds',type=float,default=2.)
+    parser.add_argument('--time-limit',type=float)
+    parser.add_argument('--action-half-range',type=float,help='Explicit uniform override in radians; default uses per-role learning ranges')
+    parser.add_argument('--device',default='cpu')
+    parser.add_argument('--seed',type=int,default=7)
+    parser.add_argument('--resume',type=Path)
+    args = parser.parse_args()
+    if args.updates < 1 or args.rollout_steps < 2:
+        parser.error('updates>=1 and rollout-steps>=2 required')
+    # Isaac Gym must precede torch/numpy and the native dependency chain.
+    import isaacgym
+    import numpy as np
+    import torch
+    from .music_task import ScoreTask
+    from .training_environment import TrainingEnvironment
+    from .policy import Policy
+    from .ppo import PPOTrainer, PPOConfig
+    from .rollout import RolloutCollector
+    from . import prepared_reset_v1
+    from stability_adapter_2.front_facing_ready_v1.runtime_v15 import Scene
+    from stability_adapter_2.front_facing_ready_v1.runtime_v12 import Controller
+    from stability_adapter_2.native_contacts import body_names, read_contacts
+    from stability_adapter_2.lower_body_release_v1.common import pin
+    torch.set_num_threads(1)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    task = ScoreTask.from_bundle(args.bundle,stage=args.stage,start_event_index=args.start_event_index,
+                                phrase_events=args.phrase_events,tempo_scale=args.tempo_scale)
+    config = args.config.resolve()
+    cfg = json.loads(config.read_text())
+    out = args.out.resolve()
+    out.mkdir(parents=True,exist_ok=False)
+    sources = {config,Path(__file__).resolve()}
+    sources.update((root/'stability_adapter_2').rglob('*.py'))
+    sources.add(root/'tab2body/full/events.py')
+    sources.update(p for p in (root/'guitar_learning').rglob('*.py') if 'archive' not in p.parts)
+    sources.update(p for p in args.bundle.resolve().rglob('*') if p.is_file())
+    sources.update(prepared_reset_v1.prepared_input_paths())
+    for value in cfg.values():
+        if isinstance(value,str) and value.startswith('/') and Path(value).is_file():
+            sources.add(Path(value).resolve())
+    candidate = json.loads(Path(cfg['candidate']).read_text())
+    sources.add(Path(candidate['support_candidate']).resolve())
+    original_run = root/'paper/initial_pose/lower_body_release_v1/front_facing_ready_v1/native_baseline_v14'
+    expected = {}
+    for name in ('attempt.json','support_wrapper.json'):
+        path = original_run/name
+        sources.add(path)
+        for filename,value in json.loads(path.read_text())['input_sha256'].items():
+            canonical = str(Path(filename).resolve())
+            if canonical in expected and expected[canonical] != value:
+                raise RuntimeError('Conflicting original source SHA: '+canonical)
+            expected[canonical] = value
+    pins = pin(config,extra=sources)
+    original = {p for p in project_source_paths(list(sys.modules.items())) if not training_dependency(p)}
+    original.update(p for p in pins if Path(p).suffix.lower() in ('.xml','.obj','.stl','.ply','.dae'))
+    original.add(str(config))
+    write(out/'inputs_before.json',pins)
+    if any(expected.get(p) != digest(p) for p in original):
+        raise RuntimeError('Original runtime/model source parity failed')
+    write(out/'arguments.json',{k:str(v) if isinstance(v,Path) else v for k,v in vars(args).items()})
+    initial_written = []
+    def capture(scene,phase):
+        if not initial_written:
+            write(out/'initial_values.json',dict(native_state=scene.native(),joint_names=scene.names,
+                human_body_names=scene.human_bodies,guitar_body_names=scene.guitar_bodies,
+                target105_rad=scene.target,human_properties=scene.human_properties,guitar_properties=scene.guitar_properties,
+                human_root_fixed=scene.human_root_fixed,guitar_root_fixed=scene.guitar_root_fixed,
+                guitar_gravity_disabled=scene.guitar_gravity_disabled,loaded_assets=scene.loaded_assets,
+                collision_policy=scene.collision_policy,actual_shape_properties=scene.shape_properties,
+                native_PD_properties={k:scene.pd_properties[k].tolist() for k in scene.pd_properties.dtype.names},
+                control_K105=scene.control_kp,control_D105=scene.control_kd))
+            initial_written.append(True)
+    class RecordedEnvironment(TrainingEnvironment):
+        def reset(self):
+            observation,info = super().reset()
+            write(out/('reset_%04d.json' % self.control.episode),dict(observation=observation,info=info,
+                sample=self.last_sample,measurement=self.last_measured,stability=self.last_safety))
+            return observation,info
+
+        def step(self,action):
+            observation,reward,terminated,truncated,info = super().step(action)
+            write(out/('transition_%08d.json.gz' % len(transition_paths)),
+                  dict(action=action,observation=observation,reward=reward,terminated=terminated,truncated=truncated,info=info),compressed=True)
+            transition_paths.append(str(out/('transition_%08d.json.gz' % len(transition_paths))))
+            return observation,reward,terminated,truncated,info
+    transition_paths, updates, completed_rows, failure = [], [], [], None
+    env = RecordedEnvironment(config,out/'environment',task=task,action_half_range_rad=args.action_half_range,
+                              preparation_seconds=args.preparation_seconds,time_limit_s=args.time_limit,sample_callback=capture)
+    trainer = None
+    try:
+        observation,info = env.reset()
+        write(out/'training_contract.json',env.contract)
+        policy = Policy(len(observation['state']),size=args.size,contract=env.contract).to(args.device)
+        trainer = PPOTrainer(policy,PPOConfig())
+        if args.resume:
+            trainer.load(args.resume.resolve())
+        trainer.save(out/'initial.pt',metadata=dict(scope='before this run; no environment solver checkpoint'))
+        collector = RolloutCollector(policy,env,device=args.device)
+        collector.observation = observation
+        for index in range(args.updates):
+            buffer,completed = collector.collect(args.rollout_steps)
+            torch.save({k:v.cpu() for k,v in buffer.items()},out/('rollout_%04d.pt' % index))
+            before = {k:v.detach().clone() for k,v in policy.state_dict().items()}
+            metrics = trainer.update(buffer,completed)
+            changed_squared = sum(float((value-before[key]).square().sum()) for key,value in policy.state_dict().items())
+            metrics.update(update_index=index,parameter_delta_l2=float(changed_squared**.5),
+                           transitions=args.rollout_steps,completed_episodes=completed)
+            updates.append(metrics)
+            completed_rows.extend(completed)
+            write(out/('update_%04d.json' % index),metrics)
+            trainer.save(out/('checkpoint_%04d.pt' % index),metadata=dict(task_scope=args.stage,updates_in_run=index+1))
+            print(json.dumps(metrics),flush=True)
+        write(out/'final_state.json',dict(sample=env.last_sample,music=env.last_measured,stability=env.last_safety,
+                                        forbidden_calls=env.control.session.scene.forbidden_calls))
+    except BaseException as error:
+        failure = dict(type=type(error).__name__,message=str(error),traceback=traceback.format_exc())
+        raise
+    finally:
+        env.close()
+        changed = [p for p,h in pins.items() if digest(p) != h]
+        imported = project_source_paths(list(sys.modules.items()))
+        missing = sorted(imported-set(pins))
+        parity = sorted(p for p in imported if not training_dependency(p) and expected.get(p) != pins.get(p))
+        completed = failure is None and len(updates)==args.updates and not (changed or missing or parity)
+        write(out/'report.json',dict(completed=completed,failure=failure,requested_updates=args.updates,
+              updates=updates,transition_count=len(transition_paths),completed_episodes=completed_rows,
+              parameters=sum(p.numel() for p in policy.parameters()) if trainer else None,
+              state_dimension=len(observation['state']) if trainer else None,
+              actual_imported_sources=sorted(imported),missing_import_pins=missing,
+              original_source_parity_errors=parity,changed_inputs=changed,inputs_unchanged=not changed,
+              scope='Native interface/PPO connection only; not a learned performance or pose certification'))
+        if failure is None and not completed:
+            raise RuntimeError('Training output/source checks failed; see preserved report')
+
+
+if __name__ == '__main__':
+    main()

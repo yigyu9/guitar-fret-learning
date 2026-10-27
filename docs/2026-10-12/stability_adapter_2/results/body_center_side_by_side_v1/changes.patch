@@ -1,0 +1,39 @@
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/body_center_side_by_side_v1/before/PLAN.md
++++ /home/ajou/yigyu/3/stability_adapter_2/PLAN.md
+@@ -641,3 +641,12 @@
+ - [x] 변환·표시·입력 보존 검증, 독립 검수와 결과 설명·파일 색인.
+ 
+ 표시용 body-center local[0,-.4,-.0217]m를 기존 native 값과 대조하고 world↔actor-root 변환 helper 및 Pelvis RFU 표시를 추가했다. 바디 중심은 질량 중심이 아니다. 원점 marker를 제외한 정면/측면6PNG와3자세 수치표는 저장된 Isaac Gym t0 이미지 후처리이며 새native/physics/학습0회다. 수평 기타에서 사용자 바디 중심 범위는 골반 기준 오른쪽[-10,25]cm/앞[0.83,30.83]cm/위[5.80,29.17]cm다. 실제 중심은 오른쪽16.9585/앞24.5012/위10.8973cm다. 모든 회전의 공통 고정 box가 아니며 기존 actor-root/회전 경계는 유지한다. helper는 기존 runner에 아직 연결하지 않았다. 이후 표시·결과표는 이 기준점/RFU와 해당 q를 명시하고 내부 명령은 역변환한다. [그림·전체 표·파일 색인](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/body_center_view_v1/README.md:1).
++
++
++## 사용자·팀원 범위 나란히 표시 (2026-10-11)
++
++- [x] 같은수평q·동일native장면 비교 [계획](/home/ajou/yigyu/3/stability_adapter_2/BODY_CENTER_SIDE_BY_SIDE_PLAN.md:1) 작성.
++- [x] 정면·측면 각각 사용자/팀원 범위 단독 두panel 그림 및 수치·보존 검증.
++- [x] 독립 검수·설명·파일색인 기록.
++
++같은 수평 기타의 저장 native프레임을 양쪽에 배치해 하늘색 사용자/노란 팀원 위치box를 분리표시했다. 정면·측면 각각의 좌우에 같은카메라·crop·배율을 적용하고 RFU범위/폭/동일실제중심을 기록했다. body-center영역 확대이므로 측면의 머리 상단은 일부crop된다. 이회전의 조건부 위치비교이며 새native/physics/학습0,기존경계·제어·과거원본은유지한다. [두panel이미지·설명·실제줄](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/body_center_side_by_side_v1/README.md:1).
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/body_center_side_by_side_v1/before/README.md
++++ /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/README.md
+@@ -564,3 +564,8 @@
+ ## 2026-10-11 바디 중심으로 사용자 범위 보기
+ 
+ [바디 중심 기준 화면·세 자세 수치표](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/body_center_view_v1/README.md:1)를 추가했다. 분홍 marker/좌표는 표시용 기타 바디 중심, 하늘색은 기존 사용자 위치box를 각 실제 q로 변환한 조건부 body-center 범위다. 현재 수평 배치의 골반 상대 범위는 오른쪽−10..25cm/앞0.83..30.83cm/위5.80..29.17cm이고 팀원 후보는17..23/24.5..34.5/8..10cm다. 같은 body-center 기준으로 비교하지만 단순 포함관계가 아니다. 세 자세의6그림/CSV/JSON은 기존 native 프레임 후처리로 새native/physics/학습0회다. 양방향 좌표 helper를 추가했고 기존 runner 연결·제어 경계 변경은 없다.
++
++
++## 2026-10-11 사용자·팀원 범위 나란히 비교
++
++[정면·측면 두panel 비교와 설명](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/body_center_side_by_side_v1/README.md:1)를 추가했다. 왼쪽은 사용자 위치범위, 오른쪽은 팀원 후보이며 같은 native수평기타프레임/카메라/crop/배율에서 표시용 바디중심을 비교한다. 분홍 실제중심은 양쪽 동일하다. 이회전에서만유효한 위치비교이고 새native/physics/학습0회다.
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/body_center_side_by_side_v1/before/VISUAL_REPORT.md
++++ /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/VISUAL_REPORT.md
+@@ -2302,3 +2302,10 @@
+ ![골반 상대 바디 중심 수치와 사용자·팀원 위치 범위, 저장 native 프레임 후처리](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/body_center_view_v1/analysis/current_control/front.png)
+ 
+ 원점 marker를 제거하고 분홍 바디 중심만 표시했다. footer의 실제 위치/하늘색 사용자/노랑 팀원은 모두 골반 기준 오른쪽·앞·위 cm다. 현재 실제 바디 중심은16.9585/24.5012/10.8973cm, 사용자 수평q 조건부 범위는[-10,25]/[0.83,30.83]/[5.80,29.17]cm다. 기타가 회전하면 사용자 body-center box도 이동하며 모든 회전의 공통box/안전영역은 아니다. 초록은 실제 넥 방향을 바디 중심에서 옮겨 표시한 방향선이며 접촉선이 아니다. 저장된 Isaac Gym t0 프레임과depth행렬을 활용한 새 후처리6PNG, 새native/physics/학습0회다. [세 자세 정면/측면과수치표·변환 가정](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/body_center_view_v1/README.md:1).
++
++
++## 2026-10-11 동일 장면에서 범위 분리 비교
++
++![같은 수평 기타에서 왼쪽 사용자 범위와 오른쪽 팀원 후보를 별도표시](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/body_center_side_by_side_v1/analysis/front.png)
++
++양쪽은 같은카메라·같은기타/인체초기배치·같은crop/배율이다. 하늘색 사용자 범위의 폭35/30/23.37cm, 노란 팀원 후보의 폭6/10/2cm로 위치영역 크기를 비교한다. 분홍 실제 바디중심RFU는양쪽16.96/24.50/10.90cm다. 실제기타를각범위중심으로옮긴장면이아니며, 표시선은저장native프레임의후처리다. 현재수평q조건부범위,새native/physics/학습0이며접촉·안전영역인증이아니다. [측면확대·설명·파일색인](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/body_center_side_by_side_v1/README.md:1).

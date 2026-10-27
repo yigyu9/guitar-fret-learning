@@ -1,0 +1,44 @@
+"""Restore the shared seated human pose while keeping the editor guitar pose."""
+import json
+from pathlib import Path
+import hashlib
+import numpy as np
+
+ROOT=Path(__file__).resolve().parents[2]
+A=Path(__file__).resolve().parent
+D=ROOT/'docs/2026-10-19/stability_adapter_2/results/manual_pose_lab_v1/upright_default_v1'
+POSE=ROOT/'tab2body/assets/seated_pose.json'
+PREVIOUS=ROOT/'docs/2026-10-19/stability_adapter_2/results/right_arm_wrap_upright_v1/native_wrap55_static/initial_values.json'
+
+
+def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def main():
+    D.mkdir(exist_ok=False)
+    inputs=[Path(__file__),A/'UPRIGHT_DEFAULT_PLAN_V1.md',POSE,PREVIOUS]
+    before={str(p):sha(p) for p in inputs}
+    previous=json.loads(PREVIOUS.read_text()); pose=json.loads(POSE.read_text())
+    names=previous['joint_names']; assert len(names)==81
+    raw=np.array([pose['joints_isaac'][n] for n in names])
+    lower=np.array(previous['PD_properties']['lower']);upper=np.array(previous['PD_properties']['upper'])
+    q=np.clip(raw,lower,upper).astype(np.float32)
+    assert np.isfinite(q).all() and np.all(q>=lower) and np.all(q<=upper)
+    root=previous['native_initial_state']['guitar_body_states'][0]['pose']
+    preset={'schema':'manual_pose_lab_v1','joint_names':names,'joint_angles_rad':q.astype(float).tolist(),
+            'position_W_m':[root['p'][k]for k in 'xyz'],'quaternion_xyzw':[root['r'][k]for k in 'xyzw'],
+            'strap_enabled':False,'root_lower_fixed':True,'human_pose_source':str(POSE),
+            'input_sha256':before,'scope':'shared original seated pose; editor guitar pose preserved; no dynamic stability certification'}
+    with (A/'upright_initial_v1.json').open('x') as f:json.dump(preset,f,ensure_ascii=False,indent=2,allow_nan=False)
+    clamps=[{'joint':n,'source_rad':float(v),'applied_rad':float(w)}for n,v,w,l,h in zip(names,raw,q,lower,upper)if v<l or v>h]
+    assert {r['joint']for r in clamps}=={'LH:thumb1_x','LH:thumb1_y','LH:thumb1_z'}
+    assert all(sha(p)==h for p,h in before.items())
+    report={'passed':True,'input_sha256':before,'inputs_unchanged':True,'joint_count':81,
+            'clipped_model_limit_coordinates':clamps,'guitar_pose_preserved':True,
+            'human_body_head_original_rad':{n:float(v)for n,v in zip(names,q)if n.startswith(('Torso','Spine','Chest','Neck','Head'))},
+            'preset_path':str(A/'upright_initial_v1.json'),'preset_sha256':sha(A/'upright_initial_v1.json')}
+    with (D/'preset_check.json').open('x')as f:json.dump(report,f,ensure_ascii=False,indent=2)
+    print(json.dumps(report,ensure_ascii=False))
+
+
+if __name__=='__main__':main()

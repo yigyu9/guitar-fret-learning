@@ -1,0 +1,265 @@
+"""Native-calibrated lower FK and source-shape diagnostics, never a native run.
+
+The fixed root, upper81 and free-guitar initial pose are preserved. A bounded
+source candidate adjusts knee/ankle/toe only. PhysX must validate its FK and
+contacts independently; MuJoCo signed gaps are not cooked penetration depths.
+"""
+import copy
+import itertools
+import json
+import traceback
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from types import SimpleNamespace
+
+import mujoco
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+
+from .common import ROOT,A,BASE,HUMAN,H0,MANIFEST,read,save,sha,restore
+from stability_adapter_2.initial_overlap import build_probe
+
+OUT = BASE/'analysis/source_geometry_v1'
+CORRECTIONS = BASE/'inputs/source_corrections_v1'
+LOWER_BODIES = tuple(s+'_'+p for s in ('L','R') for p in ('Hip','Knee','Ankle','Toe'))
+FOOT_BODIES = tuple(s+'_'+p for s in ('L','R') for p in ('Ankle','Toe'))
+VARIABLES = tuple(s+'_'+p for s in ('L','R') for p in (
+    'Knee_x','Ankle_x','Ankle_y','Ankle_z','Toe_x'))
+RANGES = np.array([.10,.15,.15,.15,.15]*2)
+GROUND_TARGET_M = .003
+
+
+def pose(state):
+    p,r = state['pose']['p'],state['pose']['r']
+    return np.array([p[k] for k in 'xyz']),Rotation.from_quat([r[k] for k in 'xyzw'])
+
+
+def input_pins():
+    """Only actually consumed sources/inputs; no concurrently edited native code."""
+    cfg=read(A/'config.json');manifest=read(MANIFEST)
+    geometry=A/'assets/om_body_geometry_v3/manifest.json'
+    guitar=Path(read(geometry)['asset'])
+    paths={Path(__file__).resolve(),Path(__file__).with_name('common.py'),
+        Path(__file__).with_name('PLAN.md'),
+        A/'initial_overlap.py',A/'config.json',ROOT/cfg['pose_source'],
+        MANIFEST,Path(manifest['native_initial']),Path(manifest['candidate']),
+        H0/'states.json',H0/'report.json',geometry,HUMAN,guitar}
+    for xml in (HUMAN,guitar):
+        tree=ET.parse(xml);meshdir=xml.parent/tree.find('compiler').get('meshdir','')
+        paths|={(meshdir/m.get('file')).resolve() for m in tree.findall('./asset/mesh')}
+    return {str(p.resolve()):sha(p) for p in sorted(paths)}
+
+
+def lower_fk(candidate,bodies):
+    """Calibrate local offsets/zero rotations to saved native baseline.
+
+    Isaac's three scalar channels use the imported joint's rotation-vector
+    convention (basis @ q), rather than sequential MuJoCo hinges. This is a
+    source prediction, not an independent validation of candidate native FK.
+    """
+    tree=ET.parse(HUMAN).getroot()
+    parents={c.get('name'):p.get('name') for p in tree.iter('body') for c in p.findall('body')}
+    initial={n:pose(s) for n,s in zip(bodies,candidate['expected_initial_state']['human_body_states'])}
+    names=candidate['joint_names'];q0=np.array(candidate['q_ref_rad']);rows=[]
+    for body in tree.findall('./worldbody//body'):
+        n=body.get('name')
+        if n not in LOWER_BODIES:continue
+        parent=parents[n];bp,br=initial[n];pp,pr=initial[parent]
+        indices=[names.index(j.get('name')) for j in body.findall('joint')]
+        basis=np.column_stack([np.fromstring(j.get('axis'),sep=' ') for j in body.findall('joint')])
+        zero=Rotation.from_rotvec(basis@q0[indices]).inv()*(pr.inv()*br)
+        rows.append((n,parent,pr.inv().apply(bp-pp),zero,basis,indices))
+    def fk(q):
+        result=dict(initial)
+        for n,parent,t,zero,basis,indices in rows:
+            p,r=result[parent]
+            result[n]=(p+r.apply(t),r*Rotation.from_rotvec(basis@q[indices])*zero)
+        return result
+    return fk,parents,initial
+
+
+def limits(names):
+    joints={j.get('name'):j for j in ET.parse(HUMAN).findall('./worldbody//joint') if j.get('name')}
+    return np.array([np.deg2rad(list(map(float,joints[n].get('range').split()))) for n in names])
+
+
+def foot_vertices(poses):
+    tree=ET.parse(HUMAN)
+    result={}
+    for body in tree.findall('./worldbody//body'):
+        n=body.get('name')
+        if n not in FOOT_BODIES:continue
+        geom=body.find('geom');assert geom.get('type')=='box'
+        half=np.fromstring(geom.get('size'),sep=' ');center=np.fromstring(geom.get('pos'),sep=' ')
+        rot=Rotation.from_quat(np.roll(np.fromstring(geom.get('quat','1 0 0 0'),sep=' '),-1))
+        corners=np.array(list(itertools.product((-1.,1.),repeat=3)))
+        p,r=poses[n];vertices=p+r.apply(center+rot.apply(corners*half))
+        result[n]=(vertices,vertices[corners[:,2]==-1])
+    return result
+
+
+def probe(candidate,bodies,poses,guitar_asset,chair):
+    state=copy.deepcopy(candidate['expected_initial_state'])
+    for n,(p,r) in poses.items():
+        state['human_body_states'][bodies.index(n)]['pose']={
+            'p':dict(zip('xyz',p.tolist())),'r':dict(zip('xyzw',r.as_quat().tolist()))}
+    guitar_names=[b.get('name') for b in ET.parse(guitar_asset).findall('./worldbody//body')]
+    assert len(guitar_names)==len(state['guitar_body_states'])
+    names=[bodies,guitar_names]
+    scene=SimpleNamespace(config={'humanoid_asset':str(HUMAN),'guitar_asset':str(guitar_asset)},
+        human=0,guitar=1,env=None,gym=SimpleNamespace(get_actor_rigid_body_names=lambda e,a:names[a]),
+        bodies=lambda a:state['human_body_states'] if a==0 else state['guitar_body_states'])
+    # Reuse source flattening; add the unchanged scene's native chair box.
+    model,data,shapes=build_probe(scene,include_ground=True)
+    xml=ET.fromstring(model_xml(model))
+    ET.SubElement(xml.find('worldbody'),'geom',name='chair_box',type='box',
+        size=' '.join(map(str,chair['half'])),
+        pos=' '.join(map(str,[*chair['center_xy'],chair['half'][2]])))
+    model=mujoco.MjModel.from_xml_string(ET.tostring(xml,encoding='unicode'))
+    data=mujoco.MjData(model);mujoco.mj_forward(model,data)
+    shapes.append({'actor':'chair','body':'chair','geom_name':'chair_box'})
+    for s in shapes:s['geom_id']=mujoco.mj_name2id(model,mujoco.mjtObj.mjOBJ_GEOM,s['geom_name'])
+    return model,data,shapes,state
+
+
+def model_xml(model):
+    """Read the flattened geometry XML through an exclusive temporary file."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='lower_source_') as directory:
+        path=Path(directory)/'flattened.xml';mujoco.mj_saveLastXML(str(path),model)
+        return path.read_text()
+
+
+def audit(candidate,bodies,poses,parents,guitar_asset,chair):
+    model,data,shapes,state=probe(candidate,bodies,poses,guitar_asset,chair)
+    lower=[s for s in shapes if s['actor']=='human' and s['body'] in LOWER_BODIES]
+    human=[s for s in shapes if s['actor']=='human']
+    guitar=[s for s in shapes if s['actor']=='guitar']
+    ground=next(s for s in shapes if s['actor']=='ground');seat=next(s for s in shapes if s['actor']=='chair')
+    excluded={frozenset((e.get('body1'),e.get('body2'))) for e in ET.parse(HUMAN).findall('./contact/exclude')}
+    def gap(a,b):
+        points=np.zeros(6);value=float(mujoco.mj_geomDistance(model,data,a['geom_id'],b['geom_id'],.5,points))
+        if not np.isfinite(value) or not np.isfinite(points).all():raise FloatingPointError('source gap nonfinite')
+        return {'a':a['body'],'b':b['body'],'a_actor':a['actor'],'b_actor':b['actor'],
+            'a_geom':a['geom_name'],'b_geom':b['geom_name'],'signed_gap_m':value,
+            'witness_points_W_m':points.reshape(2,3).tolist(),'cutoff_m':.5}
+    ground_rows=[gap(a,ground) for a in lower]
+    chair_rows=[gap(a,seat) for a in lower]
+    guitar_rows=[gap(a,b) for a in lower for b in guitar]
+    self_rows=[];seen=set()
+    for a in lower:
+        for b in human:
+            pair=frozenset((a['geom_id'],b['geom_id']))
+            if a['body']==b['body'] or pair in seen:continue
+            seen.add(pair);row=gap(a,b)
+            row['xml_excluded']=frozenset((a['body'],b['body'])) in excluded
+            row['direct_parent_child']=parents.get(a['body'])==b['body'] or parents.get(b['body'])==a['body']
+            row['source_candidate_collision_relevant']=not(row['xml_excluded'] or row['direct_parent_child'])
+            self_rows.append(row)
+    feet={n:{'vertices_W_m':v.tolist(),'local_bottom_face_vertices_W_m':bottom.tolist(),
+             'minimum_z_m':float(v[:,2].min()),'maximum_z_m':float(v[:,2].max()),
+             'bottom_face_z_span_m':float(np.ptp(bottom[:,2])),
+             'body_origin_W_m':poses[n][0].tolist()} for n,(v,bottom) in foot_vertices(poses).items()}
+    return {'feet':feet,'lower_ground_pairs':ground_rows,'lower_chair_pairs':chair_rows,
+        'lower_guitar_pairs':guitar_rows,'lower_human_pairs':self_rows,
+        'minimum_foot_vertex_z_m':min(row['minimum_z_m'] for row in feet.values()),
+        'minimum_lower_ground_signed_gap_m':min(r['signed_gap_m'] for r in ground_rows),
+        'minimum_lower_chair_signed_gap_m':min(r['signed_gap_m'] for r in chair_rows),
+        'source_negative_relevant_self_pairs':[r for r in self_rows if r['source_candidate_collision_relevant'] and r['signed_gap_m']<-1e-7],
+        'gap_scope':'MuJoCo source convex gap; cutoff .5m; negative magnitude not calibrated penetration depth; importer filters beyond XML/direct-parent not certified'},state
+
+
+def optimize(q0,names,fk,bounds):
+    ix=np.array([names.index(n) for n in VARIABLES]);lo=np.maximum(bounds[ix,0],q0[ix]-RANGES);hi=np.minimum(bounds[ix,1],q0[ix]+RANGES)
+    def trial(x):
+        q=q0.copy();q[ix]=x;return q
+    def residual(x):
+        feet=foot_vertices(fk(trial(x)));rows=[]
+        for vertices,bottom in feet.values():
+            rows.extend(1000*(bottom[:,2]-GROUND_TARGET_M))
+            rows.extend(3000*np.minimum(vertices[:,2]-.001,0))
+        rows.extend(.5*(x-q0[ix])/RANGES)
+        return np.array(rows)
+    fit=least_squares(residual,np.clip(q0[ix],lo+1e-10,hi-1e-10),bounds=(lo,hi),
+        max_nfev=300,ftol=1e-11,xtol=1e-11,gtol=1e-9)
+    q=trial(fit.x)
+    return q,{'variables':list(VARIABLES),'delta_limits_rad':dict(zip(VARIABLES,RANGES.tolist())),
+        'goal':'least-squares flatten foot source local-bottom faces toward z=3mm; penetration penalty below1mm; minimum angle regularization',
+        'hip_delta_rad':0.,'success':bool(fit.success),'message':fit.message,'nfev':int(fit.nfev),
+        'cost':float(fit.cost),'optimality':float(fit.optimality),
+        'effective_lower_rad':lo.tolist(),'effective_upper_rad':hi.tolist()}
+
+
+def main():
+    OUT.mkdir(parents=True,exist_ok=False);CORRECTIONS.mkdir(parents=True,exist_ok=False)
+    pins=input_pins();save(OUT/'inputs_before.json',pins)
+    report={'scope':'source-shape diagnostic only; native steps0; no cooked PhysX certification',
+        'status':'started','input_sha256':pins,'ground_z_m':0.,'hips_changed':False,
+        'root_upper81_guitar_changed':False,'candidate_selected':None,
+        'source_acceptance_rule':'all foot vertices >=0.5mm above z0; reject relevant self/chair gaps less than min(-1mm, baseline_gap-1mm); existing overlaps remain reported; not a clearance gate'}
+    try:
+        candidate=restore();names=candidate['joint_names'];q0=np.array(candidate['q_ref_rad']);bounds=limits(names)
+        h0report=read(H0/'report.json');h0state=read(H0/'states.json')[0];bodies=h0report['human_body_names']
+        assert bodies==read(Path(read(MANIFEST)['native_initial']))['human_body_names']
+        assert len(q0)==105 and len(set(names))==105 and len(bodies)==len(candidate['expected_initial_state']['human_body_states'])
+        assert np.all(q0>=bounds[:,0]-1e-6) and np.all(q0<=bounds[:,1]+1e-6)
+        fk,parents,initial=lower_fk(candidate,bodies)
+        pose_match=[]
+        for n in LOWER_BODIES:
+            p,r=pose(h0state['human_body_states'][bodies.index(n)]);bp,br=initial[n]
+            pose_match.append({'body':n,'position_error_m':float(np.linalg.norm(p-bp)),
+                'rotation_error_rad':float((r.inv()*br).magnitude()),
+                'raw_pose_dict_equal':h0state['human_body_states'][bodies.index(n)]['pose']==candidate['expected_initial_state']['human_body_states'][bodies.index(n)]['pose']})
+        assert max(r['position_error_m'] for r in pose_match)<1e-6
+        assert max(r['rotation_error_rad'] for r in pose_match)<1e-5
+        geometry=read(A/'assets/om_body_geometry_v3/manifest.json');guitar_asset=Path(geometry['asset'])
+        cfg=read(A/'config.json');chair=read(ROOT/cfg['pose_source'])['params']['chair'];report['chair']=chair
+        report['baseline_lower_pose_H0_match']=pose_match
+        report['zero_range_names']=[n for n,(lo,hi) in zip(names,bounds) if lo==hi]
+        original,original_state=audit(candidate,bodies,fk(q0),parents,guitar_asset,chair)
+        original_state['human_dof_states']=[dict(pos=float(v),vel=0.) for v in q0]
+        save(OUT/'original_audit.json',original);save(OUT/'original_source_state.json',original_state)
+        q,fit=optimize(q0,names,fk,bounds);save(OUT/'optimization.json',fit)
+        q=q.astype(np.float32).astype(float)
+        delta=q-q0;changed={n:float(d) for n,d in zip(names,delta) if abs(d)>1e-10}
+        assert set(changed)<=set(VARIABLES) and np.all(abs(delta[[names.index(n) for n in VARIABLES]])<=RANGES+1e-7)
+        assert np.all(q>=bounds[:,0]-1e-6) and np.all(q<=bounds[:,1]+1e-6)
+        corrected,corrected_state=audit(candidate,bodies,fk(q),parents,guitar_asset,chair)
+        corrected_state['human_dof_states']=[dict(pos=float(v),vel=0.) for v in q]
+        save(OUT/'bounded_feet_audit.json',corrected);save(OUT/'bounded_feet_source_state.json',corrected_state)
+        baseline_pairs={(r['a_geom'],r['b_geom']):r['signed_gap_m'] for r in original['lower_human_pairs'] if r['source_candidate_collision_relevant']}
+        worsening=[r for r in corrected['lower_human_pairs'] if r['source_candidate_collision_relevant'] and r['signed_gap_m']<min(-.001,baseline_pairs[(r['a_geom'],r['b_geom'])]-.001)]
+        chair_worse=[r for r,b in zip(corrected['lower_chair_pairs'],original['lower_chair_pairs']) if r['signed_gap_m']<min(-.001,b['signed_gap_m']-.001)]
+        valid=corrected['minimum_foot_vertex_z_m']>=.0005 and not worsening and not chair_worse
+        out_candidate=copy.deepcopy(candidate);out_candidate['q_ref_rad']=q.astype(np.float32).astype(float).tolist()
+        out_candidate['lower_deltas_rad']=changed
+        out_candidate['lower24_q_rad']={n:out_candidate['q_ref_rad'][names.index(n)] for n in candidate['lower24_q_rad']}
+        out_candidate['predicted_corrected_human_body_poses']={
+            n:corrected_state['human_body_states'][bodies.index(n)]['pose'] for n in LOWER_BODIES}
+        out_candidate['predicted_corrected_source_state_path']=str(OUT/'bounded_feet_source_state.json')
+        out_candidate['scope']='Bounded source-only knee/ankle/toe correction; original expected_initial_state remains the margin/H0 baseline; predicted_corrected_human_body_poses contains source FK predictions requiring independent native validation; fixed root/upper81/guitar/hips unchanged.'
+        out_candidate['source_geometry_report']=str(OUT/'report.json')
+        out_candidate['source_candidate_valid']=bool(valid)
+        p=CORRECTIONS/'bounded_feet.json';save(p,out_candidate)
+        report.update(status='completed',candidate_path=str(p),candidate_selected='bounded_feet' if valid else None,
+            source_candidate_valid=bool(valid),baseline_minimum_foot_z_m=original['minimum_foot_vertex_z_m'],
+            corrected_minimum_foot_z_m=corrected['minimum_foot_vertex_z_m'],changed_angles_rad=changed,
+            source_self_worsening_pairs=worsening,source_chair_worsening_pairs=chair_worse,
+            baseline_relevant_self_negative_count=len(original['source_negative_relevant_self_pairs']),
+            corrected_relevant_self_negative_count=len(corrected['source_negative_relevant_self_pairs']),
+            next_step='Native baseline then bounded candidate initial FK/contacts/5s static comparison; no source clearance claim',
+            baseline_chair_min_signed_gap_m=original['minimum_lower_chair_signed_gap_m'],
+            corrected_chair_min_signed_gap_m=corrected['minimum_lower_chair_signed_gap_m'])
+    except Exception:
+        report.update(status='failed',error=traceback.format_exc())
+        raise
+    finally:
+        report['input_sha256_after']={p:sha(p) for p in pins}
+        report['inputs_unchanged']=pins==report['input_sha256_after']
+        save(OUT/'report.json',report)
+        assert report['inputs_unchanged'],'consumed input changed; preserve failure and version retry'
+    print(json.dumps({k:v for k,v in report.items() if k not in ('input_sha256','input_sha256_after')},indent=2),flush=True)
+
+
+if __name__=='__main__':main()

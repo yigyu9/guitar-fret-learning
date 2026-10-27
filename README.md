@@ -1,221 +1,50 @@
-# github_publish
+# Tab2Body — 자유 기타 연주 제어 연구
 
-오디오 입력을 기타 탭·운지 데이터로 변환하고, 이를 Isaac Gym 기반의 왼손 `fret` 및 오른손
-`strike` 물리 학습으로 연결하는 프로젝트입니다.
+오디오에서 구성한 연주 목표를 휴머노이드와 자유 기타의 물리적 상호작용으로 실행하는 연구다. 논문 작업 제목은 **From Audio to Full-Body Guitar Performance with a Freely Moving Instrument**다.
 
-## 프로젝트 구조
+**현재 상태는 [CURRENT_STATUS](/home/ajou/yigyu/3/CURRENT_STATUS.md), 신규 학습은 [현행 학습 안내](/home/ajou/yigyu/3/guitar_learning/README.md)를 먼저 읽는다.**
 
-```text
-.
-├── data/                  # 곡별 오디오·annotation·학습 입력
-│   └── song_bundles/      # 검수된 곡 단위 입력과 목표 데이터
-├── docs/                  # 설계·검증·사용 문서
-├── fret/                  # 왼손 fret 학습 문서와 실행 결과 위치
-├── strike/                # 오른손 strike 학습 문서와 실행 결과 위치
-├── isaacgym/              # NVIDIA Isaac Gym Preview 4 런타임
-├── tab2body/              # 물리 환경·reward·PPO·평가·학습 코드
-├── tab2fingermapping/     # 오디오→탭·코드·운지 Stage1 파이프라인
-├── PROJECT_CONTEXT.md     # 프로젝트 전체 상태와 결정 기록
-├── .gitignore
-└── .gitattributes
-```
+## 현재 조건과 확인된 결과
 
-| 경로 | 용도 |
+Root만 고정하고 하체는 유한한 자세 유지 제어를 사용한다. 기타는 자유 강체·중력ON·스트랩OFF다. 105개 모델 입력 채널과97개 비영 가동범위 축,8개 원 영범위 축을 구분한다. 정책 출력은 왼팔·왼손33개와 오른팔꿈치·손목6개이며 전신105축을 모두 학습하는 구조는 아니다.
+
+손별 초기 정책은 각각4/4 품질 평가를 통과했다. 단음joint는 같은 장면에서 두 손을 제어하고 실제840전이·PPO1업데이트·저장 모델 재평가까지 확인했다. 안전하게 완주했으나 공동 음악 성공은 아직0회다. 전곡song은4096전이·8업데이트와 안전 전곡2회 완주를 확인했으며 음악적 전곡 성공은0/2다. 자세·음악·실행 연결의 성공을 서로 구분한다.
+
+## 코드와 문서
+
+| 위치 | 역할 |
 |---|---|
-| `data/song_bundles/` | 학습에 사용하는 곡별 입력과 목표 데이터 |
-| `tab2fingermapping/` | 오디오에서 탭·코드·왼손 운지 생성 |
-| `tab2body/` | Isaac Gym 환경, PPO 학습, checkpoint·평가 도구 |
-| `fret/` | 왼손 압현 학습 문서와 결과 관리 |
-| `strike/` | 오른손 타현 학습 문서와 결과 관리 |
-| `docs/` | 공통 설계·검증·실행 문서 |
-| `isaacgym/` | 물리 시뮬레이션 런타임 |
-
-`tab2fingering`이라는 폴더는 없으며, 실제 폴더명은 `tab2fingermapping`입니다.
-`related_work/`는 참고·보관용 디렉토리이며 현재 실행에 필수는 아닙니다. 과거 `DIGIT/` 실패 구현은
-정리되어 현재 저장하지 않으며, 핵심 안티패턴은 설계 문서에 요약되어 있습니다.
-
-## 처리 흐름
-
-```text
-오디오
-  → tab2fingermapping
-  → data/song_bundles/<song_id>/
-  → tab2body + Isaac Gym
-  → fret 또는 strike 학습·평가
-```
+| [guitar_learning 현행 안내](/home/ajou/yigyu/3/guitar_learning/README.md) | 신규 자유 기타 환경·측정·학습과 버전 구분 |
+| [joint](/home/ajou/yigyu/3/guitar_learning/tool/experiments/joint/README.md) | 검증된 두 손의 단음 공동 실행·PPO·평가 |
+| [song 계획](/home/ajou/yigyu/3/docs/plans/guitar_learning_full_song_20261019.md) | 전곡67음·500상태·1969tick 확장과 검증 진행 |
+| [paper](/home/ajou/yigyu/3/paper/README.md) | 논문 본문·근거·작성 원칙 |
+| [학습 기준 초기 자세](/home/ajou/yigyu/3/paper/initial_pose/current_v3/README.md) | 기존035/v14의 값·영상·개별 시험 |
+| [tab2fingermapping](/home/ajou/yigyu/3/tab2fingermapping/README.md) | 오디오·탭·코드·운지 전처리 |
+| [압현·타현](/home/ajou/yigyu/3/guitar_learning/README.md) | 현재 환경·측정·학습 진입점 |
+| [양손·전곡](/home/ajou/yigyu/3/guitar_learning/tool/experiments/song/README.md) | 양손 실행·공통 시간축·공동 판정 |
+| [도구](/home/ajou/yigyu/3/guitar_learning/tool/README.md) | 곡 번들 등록·데이터·타현 계획·입력 감사·타임라인 |
+| [구형 코드 보관](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/README.md) | fret/full/strike/stability_adapter/stability_adapter_2/tab2body 원본과 과거 실행 계보 |
+| [문서 색인](/home/ajou/yigyu/3/docs/DOCUMENT_INDEX.md) | 목적별 현재 문서와 실험 근거 |
 
 ## 실행 환경
 
-물리 학습은 CUDA GPU와 Isaac Gym Preview 4가 설치된 `rl38` conda 환경에서 실행합니다.
-오디오 변환 Stage1은 별도의 `tab2fm` 환경을 사용합니다.
-
-물리 학습 환경:
+물리 학습은 Isaac Gym Preview4가 설치된 `rl38` 환경을 사용한다. 기본 `python -m guitar_learning.train --out NEW`는 왼손 finger-skill v2의 GPU PhysX·GPU tensor pipeline 학습을 실행한다. `--learning-family finger-skill`은 생략할 수 있다. 설정·보상·종료·저장 명령은 [현행 안내](/home/ajou/yigyu/3/guitar_learning/README.md)를 따른다. 기존 song·오른손·CPU·v24 실행은 [별도 도구](/home/ajou/yigyu/3/guitar_learning/tool/README.md)의 `python -m guitar_learning.tool.training.train_legacy`를 사용한다. 오디오 전처리는 별도 `tab2fm` 환경을 사용한다.
 
 ```bash
-cd /path/to/yigyu/3
+cd /home/ajou/yigyu/3
 conda activate rl38
-export PROJECT_ROOT="$PWD"
-export PYTHONPATH="$PROJECT_ROOT/isaacgym/python:$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
-export TORCH_EXTENSIONS_DIR="/tmp/torch_extensions_tab2body"
+export PYTHONPATH="$PWD/isaacgym/python:$PWD${PYTHONPATH:+:$PYTHONPATH}"
+export LD_LIBRARY_PATH=/home/ajou/miniconda3/envs/rl38/lib:${LD_LIBRARY_PATH:-}
 ```
 
-Stage1 환경 설정과 ACE 관련 의존성은 [`tab2fingermapping/SETUP.md`](tab2fingermapping/SETUP.md)를
-참조합니다.
+Native Python 진입점은 NumPy·Torch보다 Isaac Gym을 먼저 불러온다. 출력 경로는 새 디렉토리를 사용하고, 경로별 설정과 checkpoint 계약을 혼용하지 않는다. [단음의 실제 검증 설정·명령](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_joint_v1/README.md), [전곡의 진행 중 결과](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_full_song_v1)를 확인한다.
 
-## 사용 방법
-
-### 1. 오디오에서 탭·운지 입력 생성
+Stage1은 [설치 안내](/home/ajou/yigyu/3/tab2fingermapping/SETUP.md)에 따라 다음과 같이 실행한다.
 
 ```bash
 conda activate tab2fm
-cd tab2fingermapping
+cd /home/ajou/yigyu/3/tab2fingermapping
 python pipeline.py /path/to/audio.wav --bpm 117
 ```
 
-생성 결과를 검수한 뒤 `data/song_bundles/<song_id>/`에 등록합니다.
-
-### 2. 물리 학습 배관 확인
-
-`--smoke`는 전체 시뮬레이터·PPO·checkpoint·평가 저장 경로를 짧게 확인합니다.
-최대 8개 환경, 1 iteration으로 실행되며 자동 영상은 생성하지 않습니다.
-
-Fret:
-
-```bash
-conda activate rl38
-cd "$PROJECT_ROOT"
-python -m tab2body.train \
-  --task fret --song 02_Jazz1-200-B_solo \
-  --smoke --num-envs 8 --run-name fret_smoke
-```
-
-Strike:
-
-```bash
-python -m tab2body.train \
-  --task strike --song 02_Jazz1-200-B_solo \
-  --smoke --num-envs 8 --run-name strike_smoke
-```
-
-### 3. Fret 학습 시작
-
-기본 설정은 1,024개 병렬 환경, 5,000 iteration입니다.
-
-```bash
-python -m tab2body.train \
-  --task fret --song 02_Jazz1-200-B_solo \
-  --num-envs 1024 --iterations 5000 \
-  --run-name fret_s0
-```
-
-GPU 메모리가 부족하면 환경 수를 낮춥니다.
-
-```bash
-python -m tab2body.train \
-  --task fret --song 02_Jazz1-200-B_solo \
-  --num-envs 512 --iterations 5000 \
-  --run-name fret_s0_512env
-```
-
-### 4. Strike 학습 시작
-
-기본 설정은 512개 병렬 환경, 3,000 iteration입니다.
-
-```bash
-python -m tab2body.train \
-  --task strike --song 02_Jazz1-200-B_solo \
-  --num-envs 512 --iterations 3000 \
-  --run-name strike_main
-```
-
-### 5. 학습 설정과 결과 위치
-
-| 항목 | Fret | Strike |
-|---|---:|---:|
-| 기본 환경 수 | `1024` | `512` |
-| 기본 iteration | `5000` | `3000` |
-| PPO horizon | `32` | `32` |
-| minibatch 크기 | `4096` | `2048` |
-| PPO epoch | `5` | `5` |
-| checkpoint 주기 | 500 iteration | 500 iteration |
-| 자동 영상 주기 | 1000 iteration | 500 iteration |
-
-실행 결과는 `--run-name`에 따라 다음 위치에 저장됩니다.
-
-```text
-fret/training/runs/<run-name>/
-├── checkpoints/fret_*.pt
-├── logs/metrics.jsonl
-├── logs/training.log
-├── evaluations/
-├── videos/
-└── plots/
-
-strike/training/runs/<run-name>/
-├── checkpoints/strike_*.pt
-├── logs/metrics.jsonl
-├── logs/training.log
-├── evaluations/
-├── videos/
-└── plots/
-```
-
-checkpoint는 기본적으로 500 iteration마다 저장되며, 학습 종료 시 마지막 iteration도 저장됩니다.
-실행 폴더에 이미 학습 기록이 있으면 덮어쓰지 않으므로 새 실험에는 다른 `--run-name`을 사용합니다.
-
-자동 영상이 필요하지 않으면 다음 옵션을 사용합니다.
-
-```bash
-python -m tab2body.train --task fret \
-  --num-envs 1024 --iterations 500 \
-  --no-auto-video --run-name fret_no_video
-```
-
-### 6. checkpoint 재개
-
-`--checkpoint`는 모델, optimizer, iteration, global step, curriculum 상태를 복원합니다.
-`--iterations`는 checkpoint 이후에 추가로 실행할 iteration 수입니다.
-
-```bash
-python -m tab2body.train \
-  --task fret \
-  --checkpoint fret/training/runs/fret_s0/checkpoints/fret_005000.pt \
-  --num-envs 1024 --iterations 500
-```
-
-위 명령은 같은 실행 폴더에서 학습을 이어갑니다. 현재 코드와 checkpoint의 학습 계약이 다르면
-안전하게 실행을 중단합니다.
-
-정책 가중치만 가져와 새 실행을 시작하려면 Fret에서 `--initialize-from`을 사용합니다.
-
-```bash
-python -m tab2body.train \
-  --task fret \
-  --initialize-from fret/training/runs/fret_s0/checkpoints/fret_005000.pt \
-  --num-envs 1024 --iterations 5000 \
-  --run-name fret_warmstart
-```
-
-### 7. checkpoint 평가
-
-`--eval`과 `--checkpoint`를 함께 사용합니다.
-
-```bash
-python -m tab2body.train \
-  --task fret --eval \
-  --checkpoint fret/training/runs/fret_s0/checkpoints/fret_005000.pt \
-  --num-envs 64 --eval-episodes 64
-```
-
-평가 결과는 해당 실행 폴더의 `evaluations/`에 저장됩니다.
-
-## 상세 문서
-
-- [`tab2body/TRAINING.md`](tab2body/TRAINING.md): 물리 학습·평가·checkpoint 상세 사용법
-- [`fret/03_training/README.md`](fret/03_training/README.md): Fret 학습 문서
-- [`strike/03_training/README.md`](strike/03_training/README.md): Strike 학습 문서
-- [`tab2fingermapping/SETUP.md`](tab2fingermapping/SETUP.md): Stage1 설치와 실행 환경
-- [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md): 프로젝트 전체 상태와 결정 기록
-
-Isaac Gym, ACE, 오디오, annotation, checkpoint를 외부에 배포할 때는 각 구성요소의 라이선스와
-재배포 조건을 확인해야 합니다.
+생성한 목표를 검수한 뒤 곡 번들에 등록한다. 현재 물리 실험의 성능을 자동 오디오 전사의 정확도로 해석하지 않는다.

@@ -4,7 +4,7 @@
 > 현재 실행은 상위 [`../pipeline.py`](../pipeline.py)와 [`../SETUP.md`](../SETUP.md)를 기준으로
 > 하며, 아래 수치를 현재 성능으로 간주하지 않는다.
 
-> 설계 정본 `docs/finger-mapping-design.md`(규칙 1~5 + 제안 6~10)의 v0 구현.
+> 설계 정본 `docs/archive/finger-mapping-design.md`(규칙 1~5 + 제안 6~10)의 v0 구현.
 > 코드: `grips.py`(규칙 1 사전) + `assign.py`(후보 생성·빔 서치·검증) + `run_fingering.py`(CLI).
 > 파이프라인 4단계(`pipeline.py`)로 자동 실행: `<stem>.fingering.json` 생성.
 
@@ -160,5 +160,5 @@ $PY pipeline.py <wav> --bpm 117        # 4단계 전체 (fingering.json 포함)
 python3 fingermapping/run_fingering.py <notes.csv> <chords.json>   # 단독 (stdlib만)
 ```
 
-`render_timeline.py`의 줄 배치는 실제 연주 자세를 따른다. 이미지 위→아래가
+`guitar_learning.tool.render_timeline`의 줄 배치는 실제 연주 자세를 따른다. 이미지 위→아래가
 `low-E(6번줄) → A → D → G → B → high-e(1번줄)`이며, JSON string 0→5 순서와 같다.

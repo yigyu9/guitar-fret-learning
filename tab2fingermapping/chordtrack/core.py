@@ -1,6 +1,6 @@
 """코드 트랙 코어 — 탭→규칙(1차 증인) + 시간 필터(①) + ACE 융합 게이팅(②).
 
-finger mapping(docs/finger-mapping-design.md §A)의 코드 트랙 생산자.
+finger mapping(docs/archive/finger-mapping-design.md §A)의 코드 트랙 생산자.
 근거: 07-15 ACE 평가(결론은 PROJECT_CONTEXT §2, 원 리포트는 07-16 유실) — 고립/희소 텍스처에서 ACE가
 무너지므로(top-1 0.65) 1차 증인은 탭→규칙(match_pcset, moum 0.937 실측),
 ACE는 2차(경계 힌트·모호성 해소·탭 N 구간 구제).

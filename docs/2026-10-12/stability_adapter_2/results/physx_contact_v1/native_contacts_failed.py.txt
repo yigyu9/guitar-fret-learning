@@ -1,0 +1,35 @@
+"""Read all native contact fields; raw lambda units are not converted."""
+import numpy as np
+
+
+def plain(value):
+    if isinstance(value, np.void) and value.dtype.names:
+        return {name:plain(value[name]) for name in value.dtype.names}
+    if isinstance(value, np.ndarray):
+        return [plain(v) for v in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def body_names(gym, env):
+    names = {-1:'ground'}
+    for i in range(gym.get_actor_count(env)):
+        actor = gym.get_actor_handle(env,i)
+        actor_name = gym.get_actor_name(env,actor)
+        for j,name in enumerate(gym.get_actor_rigid_body_names(env,actor)):
+            index = gym.get_actor_rigid_body_index(env,actor,j,0)  # DOMAIN_ENV
+            if index in names:
+                raise ValueError('duplicate environment body index')
+            names[index] = actor_name+'/'+name
+    return names
+
+
+def read_contacts(gym, env, names):
+    result = []
+    for contact in gym.get_env_rigid_contacts(env):
+        record = plain(contact)
+        record['body0_name'] = names[int(record['body0'])]
+        record['body1_name'] = names[int(record['body1'])]
+        result.append(record)
+    return result

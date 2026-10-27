@@ -1,0 +1,44 @@
+"""Original bilateral actual-pick preparation for each scheduled four-second stroke."""
+import argparse
+from pathlib import Path
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import read,save,pin,verify
+from ..front_facing_strike_v1.readiness_v1 import geometry,consecutive
+from .protocol_v1 import schedule
+
+
+def evaluate(initial,states,spec,events,starts):
+    names,gnames=initial['human_body_names'],initial['guitar_body_names'];windows=[]
+    for index,start_time in enumerate(starts):
+        sides={}
+        for side,lo,hi,direction in [('down',start_time+1.1,start_time+1.5,1),('up',start_time+2.1,start_time+2.3,-1)]:
+            event=next((e for e in events if start_time<=e['time_s']<=start_time+4 and e['direction']==direction and e['global_zone_allowed'] and e['lane_allowed']),None);samples=[]
+            for row in states:
+                k,t=row['physics_step'],row['time_s']
+                if k%4 or not lo<=t<=hi:continue
+                native=row['state'];gp,gr=pose(native['guitar_body_states'][0]);pick=gr.inv().apply(pose(native['human_body_states'][names.index(spec['strike']['marker'])])[0]-gp)
+                a,b=[np.array([gr.inv().apply(pose(native['guitar_body_states'][gnames.index('G:string%d%s'%(n,suffix))])[0]-gp) for n in range(1,7)]) for suffix in ('','_end')]
+                sample=geometry(pick,a,b,spec['strike']['lane_G_y_m'],side);sample.update(step=k,time_s=t,before_first_release=bool(event is not None and t<event['time_s']));sample['ready'] &= sample['before_first_release'];samples.append(sample)
+            pairs=consecutive(samples);sides[side]=dict(interval_s=[lo,hi],first_release=event,samples=samples,ready_consecutive60Hz_pairs=pairs,passed=bool(pairs))
+        windows.append(dict(cycle=index,start_s=start_time,sides=sides,passed=all(s['passed'] for s in sides.values())))
+    return dict(passed=all(w['passed'] for w in windows),windows=windows,
+        scope='Every scheduled cycle uses continuous detector history and actual moving-G/native pick geometry; original1mm depth/3mm side clearance/two consecutive60Hz/finite strings/zone/lane thresholds. No finger pressing or sound certificate.')
+
+
+def main(run,analysis,out):
+    out.mkdir(exist_ok=False);cfgpath=Path(read(run/'attempt.json')['config']);cfg=read(cfgpath);case=schedule(cfg['ready_case'])
+    prior=read(analysis/'inputs_before.json');paths=[Path(__file__).resolve(),cfgpath,analysis/'summary.json',analysis/'strike_evidence.json',analysis/'inputs_before.json',run/'initial_values.json',run/'states240.json',Path(cfg['play_spec'])]+[Path(p) for p in prior]
+    inputs=pin(cfgpath,extra=paths)
+    for p,h in prior.items():assert p not in inputs or inputs[p]==h,p;inputs[p]=h
+    assert verify(inputs);save(out/'inputs_before.json',inputs)
+    evidence=evaluate(read(run/'initial_values.json'),read(run/'states240.json')['rows'],read(cfg['play_spec']),read(analysis/'strike_evidence.json')['events'],case['strike_starts'])
+    checks=dict(same_case=read(analysis/'summary.json')['case']==case['case'],all_scheduled_bilateral=evidence['passed'],inputs_unchanged=verify(inputs))
+    save(out/'report.json',dict(passed=all(checks.values()),checks=checks,evidence=evidence,inputs_unchanged=verify(inputs)))
+    print(dict(passed=all(checks.values()),case=case['case']),flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser()
+    for key in ('run','analysis','out'):p.add_argument('--'+key,type=Path,required=True)
+    args=p.parse_args();main(args.run.resolve(),args.analysis.resolve(),args.out.resolve())

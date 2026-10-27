@@ -1,0 +1,61 @@
+{
+  "schema": "guitar_learning.short_learning_implementation_review.v2",
+  "reviewer": "/root/review_overnight_results",
+  "verdict": "문제없음",
+  "critical": [],
+  "warning": [],
+  "suggestion": [],
+  "scope": "Frozen v2short-task code and CPU contracts only; new wrist.py + runtime/spec/runner/tests and retained2production hooks. No GPU execution or code/model edits by reviewer. Actual3sarrival/contact/force/learning performance remain native prerequisites.",
+  "independently_run_tests": {
+    "command": "/home/ajou/miniconda3/envs/rl38/bin/python -m unittest guitar_learning.tests.test_short_finger_learning -v",
+    "tests": 14,
+    "passed": 14,
+    "failed": 0,
+    "wall_s": 4.688
+  },
+  "independent_math_check": {
+    "guitar_rotation": "worldRz90deg",
+    "wrist_rotation": "guitarRx30deg",
+    "goal_rotation": "guitarRy10deg times current local orientation",
+    "nonzero_com_m": [
+      0.07,
+      -0.02,
+      0.03
+    ],
+    "scipy_independent_world_pose_error_max": 1.734723475976807e-17,
+    "scipy_independent_origin_jacobian_max": 5.551115123125783e-17,
+    "scope": "Nonidentity-frame and COM-offset/world-rotation check using SciPy rotations, separate from unit tests."
+  },
+  "code_review": {
+    "native_mapping": "Wrist body index minus1 for fixed-root native Jacobian; exact controller first12 equals namedLEFT_ARM_NAMES. COM-to-body-origin offset is Rcurrent*(-com), linearJ adds angular cross offset.",
+    "frames": "Guitar-local goal position/quaternion transformed to world. Angular error log(Rgoal_world*Rcurrent_world^-1) matches world angularJacobian. Rotation scaled0.1m consistently in error andJ.",
+    "interpolation": "Position linear in guitar frame; quaternion shortest-hemisphere nlerp normalized. Teacher ramp2s and original audible onsetlocal3s are separately sealed v2condition.",
+    "finite_control": "DLS damping1e-5; correction peraxis capped0.5degree/tick. Combined requested arm target rate-clamped by actual controller peraxisrate then actualactionbounds; correction stored asboundedrequest-base to avoid unbounded target windup. Native controller alpha0.2/rate/PD/force/safety unchanged.",
+    "reset": "Only affected initial-wrist/correction/previous-arm-request rows reset. reset_body_snapshot rows may have stale/NaN nativeJ; J/error zeroed before linear solve, yieldingzero correction on firstreset tick. GpuPool constructor dispatch toShortPool.reset has required attributes initialized before super.",
+    "selected4": "Wrist feedback writes arm columns0..11 only. Final learnmask preserves original selected4policy actions17..32 exactly; teacher otherfingerB/RH handling and4axislogp/KL/entropy remain unchanged.",
+    "contract": "Short-learning/teacher/policy schemas v2, fixed_wrist_pose/ramp2 required, normalized finite guitar-localpose validated, completeWRIST_CONTROL copied intocontract and runtime-checked. Strict input/architecture/config load preserved; v1results/checkpoints not silently interpreted asv2.",
+    "logging": "RawDLSdelta0.5deg cap is precombinedrequestclipping and labeled as such. Pose error is precontrol actual wrist to next target, world xyz plus0.1*worldrotvec. Actual measured target/q and fullpolicy/teacher distinction retained.",
+    "initial_std": "Prior warning resolved: top-level settings.initial_std matches explicit short spec and actual policy initialization; regression test covers0.01."
+  },
+  "preservation": {
+    "previous_review": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/03_short_learning/stage3review.json",
+    "previous_review_sha256": "66d151dd420c5a2108a2bb4397a6201a98690eb43689d833d10c27bdd65a475d",
+    "v1source_manifest": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/03_short_learning/source_before_wrist_teacher/manifest.json",
+    "v1source_manifest_sha256": "1cabe622171c9c8ee02404f6694329264dd0b29483dea612e870ca5f4ee30d97",
+    "preserved_files": 517,
+    "all_preserved_file_hashes_verified": true
+  },
+  "native_readiness": "This code/CPU review does not certify teacher arrival, valid acoustic pressure, actual contact under termination, suitable force levels, or learned performance. Same actual-clock reference and original physical/wrist termination must pass before budgeted learning comparison.",
+  "reviewed_source_sha256": {
+    "guitar_learning/tool/experiments/short_finger_learning/__init__.py": "4c3f8f39b7a7ca7481a492ef02421fe16f499e92e887139ba7e15b8f675f2fc0",
+    "guitar_learning/tool/experiments/short_finger_learning/__main__.py": "c48182fdcbb9bbbc587dfe91ee89811386fc58edfd239258039b9fc4b7bee667",
+    "guitar_learning/tool/experiments/short_finger_learning/runner.py": "15973645910d944d7d3c84f941f76816d5a08f93e8b23b84bfa19bd1a2994c25",
+    "guitar_learning/tool/experiments/short_finger_learning/runtime.py": "74e67024b8962dbf522dacf4f945c14356acdd5ec50770d6eab0d94c6b0dfa34",
+    "guitar_learning/tool/experiments/short_finger_learning/spec.py": "10bac50bc6b226ac5471e1473123e1f0babd2e87449e86b7227bf7da3074ec31",
+    "guitar_learning/tool/experiments/short_finger_learning/wrist.py": "644bc795dea4764028782e2a9fb4260359c75983e99158ca525baf84125ce802",
+    "guitar_learning/training/gpu_pool.py": "675fa199778a9760bd292f3265d57393a3f540748840308d8fa16e0d84bd468d",
+    "guitar_learning/gpu/finger_skill_environment.py": "d28b9f10c87d429586d0b4ca1487b6b62e5f9f544547d93d0f35d22a446ed9de",
+    "guitar_learning/tests/test_short_finger_learning.py": "300dac091abb02d192d39e6ce497160a78bb6bd30b2753d7f73198beaf97f096"
+  },
+  "no_review_changes_to_package": true
+}

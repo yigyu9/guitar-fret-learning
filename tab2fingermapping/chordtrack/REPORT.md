@@ -1,5 +1,7 @@
 # 코드 트랙 구축 — 탭→규칙(1차) + ACE 게이팅(2차) 구현·평가 리포트 (2026-07-15)
 
+> **상태: HISTORICAL EVALUATION REPORT.** 현재 실행 방법은 상위 `README.md`와 `SETUP.md`를 따른다.
+
 > 역사적 실험 보고서. 최종 갱신: 2026-08-03. 재현·운영 진입점은 상위
 > [`../SETUP.md`](../SETUP.md)와 [`../pipeline.py`](../pipeline.py)이며, 이 문서의 수치는 당시
 > moum/rock3 평가 결과다.

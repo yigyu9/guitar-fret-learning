@@ -1,0 +1,28 @@
+{
+  "schema": "exploration_conditioning_precommit.v1",
+  "created_at": "2026-10-27T13:22:27.474048+09:00",
+  "seed": 20261027,
+  "rng": "numpy.default_rng PCG64",
+  "latent_mean": 0.0,
+  "latent_std": 0.049787068367863944,
+  "physical_action": "tanh(std*z)",
+  "one_tick_samples": 256,
+  "independent_trajectory_paths": 16,
+  "trajectory_ticks": 180,
+  "reported_endpoints": [
+    1,
+    60,
+    180
+  ],
+  "sharing": "one16-D iid standardized Gaussian vector per sample/time/path; arm12 uses first12 and nonthumb16 uses all16 in native named order; same fixed draws reused between masks",
+  "masks": [
+    "arm12_only",
+    "nonthumb16_only"
+  ],
+  "inactive_actions": "all other actions0, including thumb5/right6; arm position at reset-reference, nonthumb finger incremental target hold",
+  "baseline": "controller prepared035 reference105 target; source FK calibrated from prepared035 actual q/body; inactive q held at controller reference; geometric target FK only",
+  "trajectory": "independent iid zero-mean Gaussian innovations each60Hz tick, no learned means or contact feedback; 60 is prefix of same180 sequence",
+  "budget": "256*2 one-tick FK plus16*180*2 path FK; no GPU or physics; no pilot logs used to select conditions",
+  "hypothesis": "same latent std may yield group/horizon-dependent target-FK exploration; magnitude ordering is not presupposed",
+  "limits": "not actual q, dynamics, contact/load, reward gradient or causal action importance"
+}

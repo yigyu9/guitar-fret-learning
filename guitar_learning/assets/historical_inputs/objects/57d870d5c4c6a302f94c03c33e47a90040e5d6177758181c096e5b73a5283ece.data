@@ -1,0 +1,15 @@
+"""Additional finite Chest margin audit, followed by every original control audit."""
+from .duration_math_v1 import control_evidence as original_control_evidence
+from .preload_margin_math_v1 import margin_evidence,restore_margin_rows
+
+
+def control_evidence(initial,properties,states,efforts,targets,cfg):
+    config_exact=(cfg.get('ready_chest_margin_mode')=='finite_human_Chest_extra0p25mm_v1'
+        and cfg.get('ready_chest_margin_extra_m')==.00025 and cfg.get('ready_chest_margin_ramp_s')==[10,10.5])
+    margin=margin_evidence(initial,properties,states,efforts,cfg)
+    restored=restore_margin_rows(efforts)
+    original=original_control_evidence(initial,properties,states,restored,targets,cfg)
+    checks=dict(margin_config_exact=config_exact,margin_allN=bool(margin['passed']),restored_original_allN=bool(original['passed']))
+    return dict(passed=all(checks.values()),checks=checks,physics_steps=original['physics_steps'],post10_steps=original['post10_steps'],
+        margin=margin,restored_original=original,
+        scope='Independent margin audit AND all original all-N formulas after exact margin restoration. Parent restoration order is margin then SO3 then Chest action then original Chest runtime18; no original numerical failure is removed. Only a finite human Chest virtual-goal extension is tested, not an adopted success or measured native load. Original physical support, foot, free-guitar and target-ownership gates remain separate.')

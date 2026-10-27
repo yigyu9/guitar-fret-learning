@@ -1,0 +1,21 @@
+# 오른쪽 10 mm 결과 패키지 파일 색인
+
+이 색인은 새 결과 패키지 v2를 가리킵니다. v1 패키징 producer와 pin은 실패 이력을 위해 보존했으며, v1 partial outputs은 배포본에 포함하지 않습니다. 텍스트 파일은 실제 첫 줄, binary에는 줄 번호를 붙이지 않습니다.
+
+| 파일 | 설명 |
+|---|---|
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/README_v2.md:1](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/README_v2.md:1) | before/after 및 5초 비교 — 1행 |
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/build_right_shift_archive_v1.py:1](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/build_right_shift_archive_v1.py:1) | 패키징 producer — 1행 |
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/build_right_shift_archive_v2.py:1](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/build_right_shift_archive_v2.py:1) | 패키징 producer — 1행 |
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/preflight_pin_v1.json:1](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/preflight_pin_v1.json:1) | producer/input 사전 pin — 1행 |
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/preflight_pin_v2.json:1](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/preflight_pin_v2.json:1) | producer/input 사전 pin — 1행 |
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/provenance_v2.json:1](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/provenance_v2.json:1) | 전후 SHA와 ffprobe — 1행 |
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/v2/before_current_baseline_t00_whole_body.png](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/v2/before_current_baseline_t00_whole_body.png) | native byte-exact frame |
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/v2/after_right10_t00_whole_body.png](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/v2/after_right10_t00_whole_body.png) | native byte-exact frame |
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/v2/after_right10_t00_hands.png](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/v2/after_right10_t00_hands.png) | native byte-exact frame |
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/v2/after_right10_t00_thumb_back.png](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/v2/after_right10_t00_thumb_back.png) | native byte-exact frame |
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/v2/after_right10_t05_whole_body.png](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/v2/after_right10_t05_whole_body.png) | native byte-exact frame |
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/FILES_v2.md:1](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1/artifacts_v1/FILES_v2.md:1) | 이 파일 색인 — 1행 |
+| [/home/ajou/yigyu/3/docs/2026-10-19/initial/right_shift10_comparison_v1/README_v2.md:1](/home/ajou/yigyu/3/docs/2026-10-19/initial/right_shift10_comparison_v1/README_v2.md:1) | initial candidate archive 안내 — 1행 |
+| [/home/ajou/yigyu/3/docs/2026-10-19/initial/right_shift10_comparison_v1/FILES_v2.md:1](/home/ajou/yigyu/3/docs/2026-10-19/initial/right_shift10_comparison_v1/FILES_v2.md:1) | archive file index — 1행 |
+| [/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/video/right_shift_initial_v1/INDEX_v2.md:1](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/video/right_shift_initial_v1/INDEX_v2.md:1) | native MP4 영상 색인 — 1행 |

@@ -1,0 +1,43 @@
+"""Require finalized checked-runtime evidence in addition to the native audit."""
+import json
+from pathlib import Path
+
+from guitar_learning.tool.experiments.transition_refinement_runtime_v2.serialization import SCHEMA
+
+
+def validate_report(path, out, mode):
+    report = json.loads(path.read_text())
+    if (report.get('schema') != 'guitar_learning.runtime_json_audit.v1'
+            or report.get('backend') != SCHEMA or report.get('completed') is not True
+            or report.get('mode') != mode or report.get('out') != str(out)
+            or report.get('failure') is not None or report.get('anomaly') is not None
+            or report.get('state_mutations') is not False
+            or type(report.get('checks')) is not int or report['checks'] <= 0
+            or not report.get('control_words')
+            or any(int(key, 16) & 63 != 63 for key in report['control_words'])):
+        raise ValueError('finalized successful checked-runtime gate required')
+
+
+def validate_gates(proof, settings):
+    from guitar_learning.imitation.imitation import dataset_manifest
+    pins = dict(proof['source_pins'])
+    for folder in settings['initialization']['gate_evaluations']:
+        out = Path(folder).parent.resolve()
+        path = out.parent/(out.name+'_runtime_json_audit.json')
+        validate_report(path, out, 'eval')
+        actual = dataset_manifest([path])
+        if any(key in pins and pins[key] != value for key,value in actual.items()):
+            raise ValueError('runtime gate audit changed')
+        pins.update(actual)
+    return dict(proof, source_pins=pins)
+
+
+def validate_workers(out, settings):
+    from guitar_learning.imitation.imitation import dataset_manifest
+    paths = []
+    for index in range(settings['num_envs']):
+        folder = out.resolve()/('worker_%03d'%index)
+        path = folder/'runtime_json_audit.json'
+        validate_report(path, folder, 'worker')
+        paths.append(path)
+    return dataset_manifest(paths)

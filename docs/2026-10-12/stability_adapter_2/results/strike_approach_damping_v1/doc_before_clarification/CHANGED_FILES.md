@@ -1,0 +1,18 @@
+# 변경 파일 색인
+
+- [실제 결과·한계·영상](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/README.md:1)
+- [변경 파일 색인](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/CHANGED_FILES.md:1)
+- [분석 요약](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/analysis/summary.json:1)
+- [native report/checks](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/native/data/report.json:1)
+- [initial values 및 설정](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/native/data/initial_values.json:1)
+- [APPROACH damping 적용 전후 PD properties](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/native/data/PD_approach_properties.json:1)
+- [switch 전 baseline 대조 결과](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/pre_switch_comparison.json:1) · [대조 코드](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/compare_before_switch.py:1)
+- [initial audit](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/native/data/initial_audit.json:1)
+- [controls](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/native/data/controls.json:1)
+- [inputs before/after](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/native/inputs_before.json:1) · [후행 입력 검사](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/native/inputs_after.json:1)
+- [분석기](/home/ajou/yigyu/3/stability_adapter_2/analyze_strike_transfer_trials_v2.py:1) · [실행 runner](/home/ajou/yigyu/3/stability_adapter_2/run_strike_approach_damping.py:133)
+- [사용한 timed EXIT 초기 설정](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_timed_exit_v1/README.md:1)
+- [APPROACH damping 계획](/home/ajou/yigyu/3/stability_adapter_2/STRIKE_APPROACH_DAMPING_PLAN.md:1)
+- [APPROACH-only damping 후속 계획](/home/ajou/yigyu/3/stability_adapter_2/STRIKE_APPROACH_ONLY_DAMPING_PLAN.md:1)
+- [전신 native 영상](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/native/data/images/whole_body.mp4)
+- [손 근접 native 영상](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_approach_damping_v1/native/data/images/hands.mp4)

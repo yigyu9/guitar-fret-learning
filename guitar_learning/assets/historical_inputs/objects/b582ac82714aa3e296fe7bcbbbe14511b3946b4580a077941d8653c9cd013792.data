@@ -1,0 +1,33 @@
+"""Only select a single-episode plan around the entire inherited Motion3 call."""
+import copy
+from .motion_v3 import Motion as PreviousMotion
+from .protocol_v6 import schedule,episode_view
+
+
+class Motion(PreviousMotion):
+    def __init__(self,scene,fk):
+        super().__init__(scene,fk)
+        assert self.plan==schedule(scene.cfg['ready_case'])
+        self.canonical_plan=copy.deepcopy(self.plan)
+
+    def apply(self,named):
+        canonical=self.plan
+        assert canonical==self.canonical_plan==schedule(self.s.cfg['ready_case'])
+        view=episode_view(canonical,self.s.steps/240)
+        reference=self.reference16;fk=self.fk
+        try:
+            self.plan=view
+            result=super().apply(named)
+            if self.s.steps>=2400:
+                self.info['continuous83']=dict(episode_id=view['episode_id'],
+                    episode_release_s=view['release'].copy(),episode_free_s=view['free'].copy(),
+                    all_strike_starts_s=canonical['strike_starts'].copy(),
+                    phase_start_step=self.phase_start_step,
+                    release_reference_episode_id=None if not hasattr(self,'release_start_step') else ('release2' if self.release_start_step>=15600 else 'release1'),
+                    close_reference_episode_id='release1' if hasattr(self,'close_start_actual14') else None,
+                    reference16_step=None if self.reference16 is None else self.reference16['step'])
+            return result
+        finally:
+            self.plan=canonical
+            assert self.fk is fk
+            if reference is not None:assert self.reference16 is reference

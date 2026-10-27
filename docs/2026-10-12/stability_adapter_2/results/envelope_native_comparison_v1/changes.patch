@@ -1,0 +1,42 @@
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/envelope_native_comparison_v1/before/PLAN.md
++++ /home/ajou/yigyu/3/stability_adapter_2/PLAN.md
+@@ -624,3 +624,11 @@
+ 세 번의 독립 native 실행을 완료했다. 각 실행은 1,200 step/5초이며 전신·손 카메라가 각각 151 frame을 저장했다. 같은 humanoid 초기각·무스트랩·기존 팔24 PI에서 현재 수평 배치는 30Hz 저장 표본 최대 62.438mm/15.540°, 종료 34.364mm/4.620°였고, 2초 대비 후기 최대 변화는 1.852mm/0.298°였다. 보고 기준·중앙을 재구성한 배치는 왼손 raw contact가 관측되지 않았다. 각각 0.8833/0.5875초에 G:body–ground 접촉 후 낙하했으며 표본 최대 변화는 1381.178mm/122.985°, 1306.791mm/154.357°였다. 후기 정지는 연주 위치 유지와 구별한다.
+ 
+ 초기 원본 convex 기타–인체/의자 교집합은 0건이며 실제 native 초기q·한계·Pelvis/bodycenter readback도 세 조건 모두 통과했다. 이것은 cooked 관통·자연스러움·연주 성공 인증이 아니다. 원 팀원 초기각·p/q·pivot·041000 run 식별이 없어 현재 각도에 좌표 가정을 적용한 전이 진단이다. 원 판정의 반증이나 6축 영역 전체 검증으로 확대하지 않는다. 기존 허용범위는 유지한다. 다음은 원본 입력을 확보·대조하고 기타 후보와 왼손 초기각을 함께 설정하는 작은 배치 시험이다. [결과·이미지·전체5초영상](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/team_pose_envelope_validation_v1/README.md:1).
++
++## 사용자·팀원 범위의 실제 장면 비교 (2026-10-10)
++
++- [x] 좌표 변환·무물리·표시 의미를 명시한 [비교 계획](/home/ajou/yigyu/3/stability_adapter_2/ENVELOPE_NATIVE_COMPARISON_PLAN.md:1) 작성.
++- [x] 세 자세의 정면/측면 native 렌더와 두 위치 범위·바디 중심·넥 방향 표시.
++- [x] 실제 상태·입력 보존·이미지 설명·독립 검수와 변경 색인 기록.
++
++새 Isaac Gym 정적 환경을 세 개 생성하여 초기값을 읽고 적분 없이 정면/측면을 렌더했다. physics step0/학습0, native 상태 exact 대조·렌더 전후 불변·입력SHA 검사를 통과했다. 파랑은 각 실제 회전에 종속된 바디 중심 위치범위이고 노랑은 현재 Pelvis로 옮긴 팀원 바디 중심 후보여서 단순 포함 관계가 아니다. 현재/보고 기준 회전은 사용자 회전범위 안, 중앙 조합은 밖이다. 세 점 판정이며 전체6축 조합·접촉·동적 유지 인증이 아니다. [실제 장면·설명·파일 색인](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/envelope_native_comparison_v1/README.md:1).
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/envelope_native_comparison_v1/before/README.md
++++ /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/README.md
+@@ -554,3 +554,8 @@
+ ## 2026-10-10 팀원 자세 후보의 현재 환경 적용 진단
+ 
+ [세 조건의 native 비교·초기값·5초영상](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/team_pose_envelope_validation_v1/README.md:1)을 기록했다. 같은 humanoid 초기각·무스트랩·팔24 PI에서 수평 대조는 2초 대비 후기 최대 1.852mm/0.298° 변화였다. 보고 기준·중앙 재구성은 왼손 접촉 관측0, 각각 0.8833/0.5875초에 기타 바디–ground 접촉 후 낙하했다. 각 실행은 5초/1,200 step, 두 카메라 각각151 frame이며 전체 3초기화/3,600 step·새학습0이다. 초기 source 기타–인체/의자 교집합0과 실제 native q/Pelvis/한계 대조를 통과했다. 원 팀의 정확한 초기각·pivot·checkpoint run이 없어 원 실험 재현이나 전체 범위 인증이 아니며 기존 허용범위는 유지한다. 기타 후보와 손 초기각을 함께 검증해야 한다.
++
++
++## 2026-10-10 사용자·팀원 범위의 Isaac Gym 장면 비교
++
++[현재 수평·보고 기준·중앙 후보의 정면/측면 이미지와 설명](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/envelope_native_comparison_v1/README.md:1)을 추가했다. 같은 humanoid 초기각을 새 native 정적 환경3개에 넣고 physics0step/학습0으로 촬영했다. 파랑 사용자 actor-root 위치범위는 각 실제 회전에서의 바디 중심 범위로 변환했고, 노랑 팀원 골반 상대 바디 중심 후보와 같은 좌표에서 비교한다. 두 상자는 단순 포함 관계가 아니다. 회전은 현재/보고 기준이 기존 범위 안이고 중앙 조합은 밖인 세 점 판정이다. 6annotated PNG·6raw native PNG·6depth와 카메라 행렬을 저장했다. 기존 범위·제어·원본 실험은 보존했으며 접촉·동적 안정성을 인증하는 장면이 아니다.
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/envelope_native_comparison_v1/before/VISUAL_REPORT.md
++++ /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/VISUAL_REPORT.md
+@@ -2284,3 +2284,14 @@
+ ![30Hz151저장 표본의 초기 기타 actor-root 대비 이동과 최단 회전 차이](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/team_pose_envelope_validation_v1/analysis/pose_changes.png)
+ 
+ 세 조건은 각각 1,200 physics step/5초, 두 카메라 각각151 frame이다. 초기 convex 기타–인체/의자 교집합은0건이나 cooked 관통 인증이 아니다. 수평 대조 표본 최대62.438mm/15.540°, 보고 기준1381.178mm/122.985°, 중앙1306.791mm/154.357°다. 두 낙하 조건의 후기 평탄함은 연주 위치 유지가 아니다. 위치는 world actor-root, 회전은 초기q 대비 최단각이며 240Hz 전체 step 최대값을 인증하지 않는다. raw 접촉수를 지지력·연주 성공으로 해석하지 않는다. [설명·초기값·6개5초영상·변경색인](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/team_pose_envelope_validation_v1/README.md:1). 현재 허용범위 변경·policy·학습은 없다.
++
++
++## 2026-10-10 실제 장면 위의 두 위치 후보
++
++![현재 수평 배치에서 사용자·팀원 위치 후보를 같은 바디 중심 좌표로 비교](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/envelope_native_comparison_v1/native/current_control/front.png)
++
++파랑 선 상자는 사용자 위치범위를 이 장면의 실제 기타 회전에서 바디 중심 좌표로 변환한 것이다. 노랑 선 상자는 팀원 바디 중심 후보(right17..23/front24.5..34.5/up8..10cm)를 현재 Pelvis에 적용한 것이다. 분홍은 실제 바디 중심, 회색은 기타 actor 원점, 초록은 실제 넥 방향이다. 파랑 box는 회전마다 달라지며 두 상자가 단순 포함 관계를 이루지 않는다.
++
++![팀원 기준22도 배치의 측면, 조건부 사용자 범위와 팀원 후보](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/envelope_native_comparison_v1/native/reported_reference/side.png)
++
++같은 humanoid 초기각에서 보고 기준 자세를 재구성한 실제 Isaac Gym0초 장면이다. 선은 실제 depth와 camera행렬로 후처리한 설명표시이고 가려진 선은 점선이다. raw frame도 따로 저장했다. 물리 적분을 끈 정적 장면으로 손지지·관통·유지 성공을 뜻하지 않으며 원팀원 초기각/회전중심이 없어 원장면 재현도 아니다. native초기화3회/physics0step/학습0, 상태 exact/렌더불변/inputSHA통과. [세 자세의 정면/측면·원본·변경 실제 줄](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/envelope_native_comparison_v1/README.md:1).

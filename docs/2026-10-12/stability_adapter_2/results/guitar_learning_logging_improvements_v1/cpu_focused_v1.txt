@@ -1,0 +1,52 @@
+test_preparation_prefix_summary_exists_after_interrupt (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests) ... ok
+test_quality_prefix_summary_exists_after_interrupt_without_completed_episode (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests) ... ok
+test_secondary_summary_error_does_not_replace_primary_exception (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests) ... [quality] secondary summary error: fake full disk
+ok
+test_standard_reduction_preserves_environment_and_terminal_quality (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests) ... FAIL
+test_stream_reports_filter_incomplete_and_do_not_scan_transition_gzip (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests) ... ok
+test_completed_members_and_truncated_tail_need_explicit_recovery_diagnostic (guitar_learning.tests.test_training_log_io.JournalTests) ... ok
+test_crc_corruption_garbage_and_bad_json_never_skip_into_later_members (guitar_learning.tests.test_training_log_io.JournalTests) ... ok
+test_empty_log_and_invalid_accounting_never_overwrite_existing_files (guitar_learning.tests.test_training_log_io.JournalTests) ... ok
+test_fsync_failure_does_not_claim_durable_or_committed_data (guitar_learning.tests.test_training_log_io.JournalTests) ... ok
+test_legacy_single_member_valid_empty_and_cut_streams_are_distinguished (guitar_learning.tests.test_training_log_io.JournalTests) ... ok
+test_numpy_encoding_metadata_and_serialization_failure_accounted_without_logged_row (guitar_learning.tests.test_training_log_io.JournalTests) ... ok
+test_sixty_control_tick_boundary_multiworker_counts_and_explicit_commit_discard (guitar_learning.tests.test_training_log_io.JournalTests) ... ok
+test_no_latest_checkpoint_uses_save_and_external_source_is_rejected (guitar_learning.tests.test_training_log_io.PublicationTests) ... ok
+test_same_full_ppo_state_hardlinks_and_strict_load_preserves_original_metadata (guitar_learning.tests.test_training_log_io.PublicationTests) ... ok
+test_same_update_but_changed_model_or_rng_requires_full_save (guitar_learning.tests.test_training_log_io.PublicationTests) ... ok
+test_done_without_episode_and_explicit_timeout_never_fake_success (guitar_learning.tests.test_training_metrics.LearningMetricsTests) ... ok
+test_input_not_mutated_and_summary_is_independent (guitar_learning.tests.test_training_metrics.LearningMetricsTests) ... ok
+test_invalid_terminal_is_not_success_denominator (guitar_learning.tests.test_training_metrics.LearningMetricsTests) ... ok
+test_preparation_boundary_and_old_action_fallback_use_active_hand (guitar_learning.tests.test_training_metrics.LearningMetricsTests) ... ok
+test_safety_completion_timing_quality_and_joint_are_separate (guitar_learning.tests.test_training_metrics.LearningMetricsTests) ... ok
+test_two_workers_cumulative_once_and_update_boundary (guitar_learning.tests.test_training_metrics.LearningMetricsTests) ... ok
+test_unreported_reset_closes_old_episode_without_history_leak (guitar_learning.tests.test_training_metrics.LearningMetricsTests) ... ok
+test_actual_quality_stamp_not_tick_end_or_release_completion (guitar_learning.tests.test_training_metrics.SafetyTickTests) ... ok
+test_reject_nonconsecutive_or_nonfinite_physics (guitar_learning.tests.test_training_metrics.SafetyTickTests) ... ok
+test_run_crosses_tick_boundary_and_episode_resets (guitar_learning.tests.test_training_metrics.SafetyTickTests) ... ok
+test_substep_peak_and_contact_gap_are_not_endpoint (guitar_learning.tests.test_training_metrics.SafetyTickTests) ... ok
+test_saved_native_training_ledgers_and_interval_rewards (guitar_learning.tests.test_training_metrics.SavedTraceRegressionTests) ... ok
+test_post_update_metrics_active_only_and_zero_target_variance (guitar_learning.tests.test_ppo_logging.PPOLoggingTests) ... ok
+test_sample_weighted_aggregation_separates_nonfinite_attempts (guitar_learning.tests.test_ppo_logging.PPOLoggingTests) ... ok
+test_update_matches_archived_weights_optimizers_rng_and_legacy_metrics (guitar_learning.tests.test_ppo_logging.PPOLoggingTests) ... ok
+
+======================================================================
+FAIL: test_standard_reduction_preserves_environment_and_terminal_quality (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/ajou/yigyu/3/guitar_learning/tests/test_training_logging_integration.py", line 36, in test_standard_reduction_preserves_environment_and_terminal_quality
+    self.assertEqual(terminal['musical_quality'],quality)
+AssertionError: {'rol[92 chars]rect'}, 'strike': {'target_id': 'note'}} != {'rol[92 chars]rect', 'feature_diagnostics': [{'evidence_id':[80 chars]c'}}}
+- {'fretting_state': {'status': 'correct'},
++ {'fretting_state': {'feature_diagnostics': [{'evidence_id': '1:2'}],
++                     'status': 'correct'},
+   'release_late_s': 2.5,
+   'role': 'left',
+   'stage_success': False,
+-  'strike': {'target_id': 'note'}}
++  'strike': {'preparation': {'explanation': 'static'}, 'target_id': 'note'}}
+
+----------------------------------------------------------------------
+Ran 30 tests in 0.985s
+
+FAILED (failures=1)

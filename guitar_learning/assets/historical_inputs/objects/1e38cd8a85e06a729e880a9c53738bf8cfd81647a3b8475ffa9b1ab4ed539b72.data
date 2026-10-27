@@ -1,0 +1,53 @@
+"""Test real Tk controls on a virtual display; native viewer calls are stand-ins."""
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from PIL import ImageGrab
+from .test_lab import FakeScene
+from .lab import Lab
+from .run import Window, DEFAULT, ROOT
+
+OUT=ROOT/'docs/2026-10-19/stability_adapter_2/results/manual_pose_lab_v1/ui_check_v1'
+
+
+def main():
+    OUT.mkdir(exist_ok=False)
+    initial=json.loads(DEFAULT.read_text()); names=initial['joint_names']
+    scene=FakeScene();scene.names=names
+    scene.geometry=json.loads((ROOT/'stability_adapter_2/assets/om_body_geometry_v3/manifest.json').read_text())
+    for row in initial['native_initial_state']['human_dof_states']: row['pos']=.1
+    scene.create_viewer=lambda *a:1
+    scene.destroy_viewer=lambda *a:None
+    scene.subscribe_viewer_keyboard_event=lambda *a:None
+    scene.viewer_camera_look_at=lambda *a:None
+    scene.query_viewer_has_closed=lambda *a:False
+    scene.query_viewer_action_events=lambda *a:[]
+    scene.step_graphics=lambda *a:None
+    scene.draw_viewer=lambda *a:None
+    scene.sim=0
+    api=SimpleNamespace(STATE_ALL=3,CameraProperties=SimpleNamespace,Vec3=lambda *args:args)
+    for key in ('SPACE','R','C','G','F1','F2','F3','F4','F5','F6','J','L','S','ESCAPE'): setattr(api,'KEY_'+key,key)
+    lab=Lab(scene,initial,api); window=Window(lab,OUT,api)
+    window.messagebox.showerror=lambda *a:(_ for _ in ()).throw(AssertionError(a))
+    try:
+        window.root.update_idletasks()
+        assert len(window.joints['values'])==12 and window.group.get()=='오른팔'
+        window.joint_changed(12)
+        window.root.update_idletasks()
+        assert abs(float(scene.target[window.index])-12*3.141592653589793/180)<1e-6
+        window.apply_guitar()
+        window.toggle()
+        assert lab.running and all(str(w.cget('state'))=='disabled' for w in window.guitar_widgets)
+        window.toggle(); assert not lab.running
+        window.handle('F1'); p0=lab.pose()[0].copy(); window.handle('L')
+        assert abs(lab.pose()[0][0]-p0[0]-.005)<1e-6
+        window.reset(); assert scene.steps==0 and not lab.running
+        window.tick(); window.root.update_idletasks()
+        x,y=window.root.winfo_rootx(),window.root.winfo_rooty()
+        image=ImageGrab.grab(bbox=(x,y,x+window.root.winfo_width(),y+window.root.winfo_height()))
+        image.save(OUT/'control_panel.png')
+        (OUT/'checks.json').write_text(json.dumps({'passed':True,'real_tk_controls':True,'native_viewer_api':'stand-in; no native rendering claimed','group_selection':True,'angle_slider':True,'physics_toggle_disables_guitar_edit':True,'keyboard_guitar_translation':True,'reset':True},indent=2)+'\n')
+    finally: window.close()
+
+
+if __name__=='__main__':main()

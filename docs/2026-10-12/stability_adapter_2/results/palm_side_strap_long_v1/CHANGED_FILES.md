@@ -1,0 +1,22 @@
+# 산출물 파일 인덱스
+
+- [저장 trace 및 기존 camera frame plotter](/home/ajou/yigyu/3/stability_adapter_2/plot_palm_side_strap_long.py:155)
+- [결과표·해석·한계](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/README.md:1)
+- [네 조건 0.5초 곡선](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/artifacts/palm_side_strap_long_curves.png)
+- [current native camera step 0/120 montage](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/artifacts/palm_side_strap_long_camera.png)
+- [60 fps 저장-frame video](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/artifacts/palm_side_strap_long_realtime.mp4), [6 fps·0.1× video](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/artifacts/palm_side_strap_long_slow.mp4)
+- [입력·producer·출력 SHA](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/artifacts/plot_manifest.json), [ffmpeg 인코딩 명령](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/artifacts/ffmpeg_commands.json), [plot·ffprobe 명령/환경/종료 상태](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/artifacts/plot_execution.json), [실행 로그](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/artifacts/plot_execution.log)
+- 실제 입력: [검증 분석](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/analysis.json:1), [current trace](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/current/trace.json:1), [current camera report](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/native_current/report.json:1), [source overlay helper](/home/ajou/yigyu/3/stability_adapter_2/plot_palm_side_feedback.py:1), [facet point input](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_neck_side_v1/facet_distal_search/search.json:1)
+- [VISUAL_REPORT §62, 그림 82–83](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/VISUAL_REPORT.md:1098), [날짜별 결과 인덱스](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/README.md:355)
+- input SHA 선봉인 수정 전 producer·canonical outputs는 [producer_preinputseal](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/producer_preinputseal/plot_palm_side_strap_long.py)과 [artifacts_preinputseal](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/artifacts_preinputseal/plot_manifest.json)에 보존했다.
+- helper 지연 import를 포함한 직전 producer와 결과도 [producer_preimportseal](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/producer_preimportseal/plot_palm_side_strap_long.py)과 [artifacts_preimportseal](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/artifacts_preimportseal/plot_manifest.json)에 보존했다. 최신 canonical producer는 helper path를 데이터 처리 전에 SHA로 봉인한 뒤 helper를 import한다.
+
+전체 62개 원본 camera PNG와 네 run의 trace/task/contact/report 경로를 데이터 처리 전에 고정하고 SHA를 봉인했다. 실제 소비 경로 집합과 고정 입력을 대조하고 처리 후 같은 파일들의 SHA를 다시 확인한다. 후처리에는 native initialization이나 physics step이 추가되지 않았다. 독립 검수는 완료됐으며 남은 지적은 없다.
+
+## 구현·계획 변경
+
+- [0.5초 연속 native 실행](/home/ajou/yigyu/3/stability_adapter_2/run_palm_side_strap_long.py:18), [원자료·prefix·수동 장력 검증](/home/ajou/yigyu/3/stability_adapter_2/analyze_palm_side_strap_long.py:13).
+- [소단계 계획·좌표 해석](/home/ajou/yigyu/3/stability_adapter_2/PALM_SIDE_STRAP_LONG_PLAN.md:1), [메인 README](/home/ajou/yigyu/3/stability_adapter_2/README.md:585), [메인 PLAN](/home/ajou/yigyu/3/stability_adapter_2/PLAN.md:1177).
+- 기존 [관절각·길이 후보 목록](/home/ajou/yigyu/3/stability_adapter_2/trials/palm_side_strap_v1/candidates.json:1)은 이번에 수정하지 않았다.
+- [실행 로그·명령](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/execution.json), [camera 실행 기록](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/execution_camera.json), [분석 후처리 기록](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/analysis_execution.json).
+- [기존 자료 보존 확인](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/preservation_check.json), [독립 검수](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_side_strap_long_v1/review.md).

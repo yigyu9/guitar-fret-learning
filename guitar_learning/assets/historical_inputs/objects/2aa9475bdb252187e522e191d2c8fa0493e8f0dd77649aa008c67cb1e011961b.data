@@ -1,0 +1,125 @@
+"""새 손 형상 후보와 기존 정면 reference 인증을 묶는 사전검사."""
+import copy
+from pathlib import Path
+import numpy as np
+from ..lower_body_release_v1.common import ROOT, A, BASE, read, save, pin, verify, sha
+from ..front_facing_pose_v1.release_prepare_v2 import validate_reference
+
+PHASE = BASE/'front_facing_strike_v1'
+PLAN = ROOT/'docs/plans/front_facing_strike_clearance_v3_20261016.md'
+PROTOCOL = 'front_prepare5_hold5_distalstrike4_v1'
+REFERENCE_GATES = {
+    'prepared_repeat_all_actual25_gates_pass','four_raw_SHA_exact','actual10_right_chain_and_all_RH_FK_under10um_0p01deg',
+    'original_initial105_strict_bounds','actual_initial_qref_exact_source','proximal6_latch_strict_bounds',
+    'proximal6_latch_principal_under160','source41_new6_float32_strict_bounds_qref_principal',
+    'source41_float32_pick_reach2mm','source41_other99_source_query_q_exact','new_commands_exclude_original_zero8',
+    'source_candidate_SHA_exact','upper_target_SHA_exact'}
+
+
+def validate_clearance(directory):
+    directory = Path(directory).resolve()
+    report_path, spec_path = directory/'report.json', directory/'selected_spec.json'
+    report = read(report_path)
+    assert report['eligible_for_native'] is True and report['inputs_unchanged'] is True
+    assert report['input_sha256'] and verify(report['input_sha256'])
+    assert report['selected_candidate_id']
+    assert report['selected_spec_sha256'] == sha(spec_path)
+    assert Path(report['old_spec_path']).resolve() != spec_path
+    old_path = Path(report['old_spec_path']).resolve()
+    assert sha(old_path) == report['old_spec_sha256']
+    assert Path(report['selected_spec_path']).resolve() == spec_path
+    spec, old = read(spec_path), read(old_path)
+    assert report['source_candidate_sha256'] == spec['source_candidate_sha256']
+    assert set(spec) == set(old) | {'clearance_solver_v2'}
+    unchanged = set(old)-{'strike'}
+    assert all(spec[k] == old[k] for k in unchanged)
+    assert set(spec['strike']) == set(old['strike'])
+    assert all(spec['strike'][k] == old['strike'][k] for k in old['strike'] if k != 'waypoints_G_m')
+    points = np.array(spec['strike']['waypoints_G_m'])
+    original = np.array(old['strike']['waypoints_G_m'])
+    assert points.shape == original.shape == (5,3) and np.isfinite(points).all()
+    assert np.array_equal(points[:,:2], original[:,:2])
+    solver = spec['clearance_solver_v2']
+    assert solver['depth_m'] in (.004,.0025) and solver['rotation_G_y_deg'] in (-12.,-15.)
+    assert solver['orientation_weight'] == 10. and solver['qref_weight'] == .1 and solver['continuity_weight'] == .1
+    assert solver['orientation_ramp_s'] == [10.,10.8]
+    quat = np.array(solver['palm_G_reference_xyzw'])
+    assert quat.shape == (4,) and np.isfinite(quat).all() and abs(np.linalg.norm(quat)-1.) < 1e-12
+    for samples, count, gates in (('selected41',41,'selected41_gates'),('selected241',241,'selected241_gates')):
+        assert len(report[samples]) == count
+        assert report[gates] and all(value is True for value in report[gates].values())
+        assert report[gates]['minimum_active_clearance2mm'] is True
+        assert all(np.isfinite(row['min_active_signed_gap_m']) and row['min_active_signed_gap_m']>=.002 for row in report[samples])
+    assert report['reference_run'] == old['reference_run']
+    return report, spec_path, old_path.parent/'report.json'
+
+
+def main(config, reference, repeat, certificate, clearance, out):
+    config, reference, repeat, certificate, clearance, out = map(lambda p:Path(p).resolve(),
+        (config, reference, repeat, certificate, clearance, out))
+    assert out.parent == PHASE and not out.exists()
+    report, selected_spec, old_preflight_path = validate_clearance(clearance)
+    cfg, old = read(config), read(old_preflight_path)
+    assert old['eligible_for_native'] is True and old['inputs_unchanged'] is True
+    assert set(old['gates']) == REFERENCE_GATES and all(v is True for v in old['gates'].values())
+    assert old['input_sha256'] and verify(old['input_sha256'])
+    assert sha(Path(report['old_spec_path'])) == old['spec_sha256']
+    assert old['source_candidate_sha256'] == cfg['candidate_sha256']
+    assert old['prepared_static_config_sha256'] == sha(config)
+    cert, analyses, summaries, exact, verified = validate_reference(reference, repeat, certificate)
+    assert config == verified
+    assert old['reference_run'] == str(reference) == report['reference_run']
+    assert old['repeat_run'] == str(repeat) and old['repeat_verification_sha256'] == sha(certificate)
+    assert read(selected_spec)['source_candidate_sha256'] == cfg['candidate_sha256']
+    paths = [config, certificate, clearance/'report.json', selected_spec, old_preflight_path,
+             old_preflight_path.parent/'inputs_before.json', PLAN, A/'AGENTS.md']
+    paths += list((A/'front_facing_strike_v1').glob('*.py'))
+    inputs = pin(extra=paths)
+    for mapping in (old['input_sha256'], report['input_sha256'], cert['input_sha256']):
+        for path, expected in mapping.items():
+            assert path not in inputs or inputs[path] == expected
+            inputs[path] = expected
+    assert verify(inputs)
+    out.mkdir(parents=True, exist_ok=False)
+    save(out/'inputs_before.json', inputs)
+    save(out/'play_spec.json', read(selected_spec))
+    gates = dict(reference_preflight13_unchanged=all(old['gates'].values()),
+                 new_selected41_all_gates=all(report['selected41_gates'].values()),
+                 new_selected241_all_gates=all(report['selected241_gates'].values()),
+                 prepared_reference_and_repeat25=all(s['passed'] for s in summaries),
+                 prepared_four_raw_exact=all(exact.values()), source_candidate_exact=sha(cfg['candidate'])==cfg['candidate_sha256'])
+    result = copy.deepcopy(old)
+    result.update(eligible_for_native=all(gates.values()), gates=gates,
+        reference_preflight_path=str(old_preflight_path),reference_preflight_sha256=sha(old_preflight_path),
+        reference_preflight_gates=old['gates'], reference_preflight_samples_scope='기존13gate/41점은 원타현 경로 인증의 보존 참조. 새 경로는 selected41/241을 별도로 검사한다.',
+        samples=report['selected41'], selected241=report['selected241'],
+        source_clearance_report=str(clearance/'report.json'),source_clearance_report_sha256=sha(clearance/'report.json'),
+        selected_candidate_id=report['selected_candidate_id'], selected_source_spec=str(selected_spec),selected_source_spec_sha256=sha(selected_spec),
+        selected41_gates=report['selected41_gates'],selected241_gates=report['selected241_gates'],
+        input_sha256=inputs, inputs_after_sha256={p:sha(p) for p in inputs},inputs_unchanged=verify(inputs),
+        spec_sha256=sha(out/'play_spec.json'), native_simulation_steps=0,
+        scope='원 정면/오른쪽chain/근위2396/reference 인증은 보존하고 새 distal6 경로와soft palm 방향의 source41/241을 추가 인증. source 손 형상은 cooked 접촉/기타 지지 성공이 아니다. 원 gain/cap/나머지99축/손가락/초기calibration 그대로, 기타 직접힘·고정·상태주입·PPO 없음.')
+    save(out/'report.json',result)
+    outputs=[out/'report.json',out/'play_spec.json']
+    for case in ('baseline','strike'):
+        casecfg=dict(cfg)
+        casecfg.update(seconds=14.,mode='static',play_case=case,play_start_s=10.,play_action_interval_s=[10,14],validation_protocol=PROTOCOL,
+            play_preflight_report=str(out/'report.json'),play_preflight_report_sha256=sha(out/'report.json'),
+            play_spec=str(out/'play_spec.json'),play_spec_sha256=sha(out/'play_spec.json'),
+            source_clearance_report=str(clearance/'report.json'),source_clearance_report_sha256=sha(clearance/'report.json'),
+            selected_clearance_candidate_id=report['selected_candidate_id'],
+            prepared_static_config=str(config),prepared_static_config_sha256=sha(config),prepared_reference_run=str(reference),
+            prepared_repeat_run=str(repeat),prepared_repeat_certificate=str(certificate))
+        path=out.parent/'inputs'/(case+'_v4.json');save(path,casecfg);outputs.append(path)
+    assert verify(inputs)
+    save(out/'generation.json',dict(input_sha256=inputs,inputs_unchanged=True,eligible_for_native=result['eligible_for_native'],
+        output_sha256={str(p):sha(p) for p in outputs},native_simulation_steps=0))
+    print(dict(eligible=result['eligible_for_native'],selected_candidate_id=report['selected_candidate_id'],gates=gates),flush=True)
+    assert result['eligible_for_native'],'새 clearance source gate 실패. Native 금지.'
+
+
+if __name__=='__main__':
+    import argparse
+    p=argparse.ArgumentParser()
+    for key in ('config','reference','repeat','certificate','clearance','out'):p.add_argument('--'+key,type=Path,required=True)
+    args=p.parse_args();main(args.config,args.reference,args.repeat,args.certificate,args.clearance,args.out)

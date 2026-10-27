@@ -1,0 +1,161 @@
+"""Training reset from a prepared pose, followed by 1–2s of finite hand settling."""
+import json
+import copy
+from pathlib import Path
+import numpy as np
+from guitar_learning.core.control import ACTIVE_NAMES, EXPECTED_NAMES, JointTargetContract
+from guitar_learning.core.whole_body_control import EXPECTED_NAMES as FULL_EXPECTED_NAMES
+from guitar_learning.runtime.native_session import ZERO_RANGE_NAMES, target_rates
+from guitar_learning.core.finger_control import validate_profile, profile_control_settings
+
+PREPARATION_SECONDS = 2.
+PREPARATION_STEPS = int(PREPARATION_SECONDS * 240)
+
+
+class FreeGuitarEnvironment:
+    """reset -> (state, metadata), step(normalized action39) -> (state, metadata).
+
+    One policy step submits one target and performs four original 240-Hz physics
+    steps. Reset starts from the saved prepared pose, then executes 1–2 real
+    seconds of finite settling. No historical 22-second protocol is replayed.
+    """
+    def __init__(self, config, out, *, action_half_range_rad, action_names=ACTIVE_NAMES,
+                 smoothing_alpha=.2, preparation_seconds=PREPARATION_SECONDS, session_factory=None, geometry_fn=None,
+                 sample_callback=None, finger_profile=None):
+        if tuple(action_names) != ACTIVE_NAMES:
+            raise ValueError('action_names must exactly equal canonical ACTIVE_NAMES order39')
+        half = np.asarray(action_half_range_rad, dtype=float)
+        if half.ndim == 0:
+            half = np.full(39, float(half))
+        if half.shape != (39,) or not np.isfinite(half).all() or np.any(half <= 0):
+            raise ValueError('Explicit action_half_range_rad must be positive finite scalar or39 vector')
+        alpha = np.asarray(smoothing_alpha, dtype=float)
+        if (alpha.shape not in ((), (39,)) or not np.isfinite(alpha).all() or
+                np.any(alpha <= 0) or np.any(alpha > 1)):
+            raise ValueError('smoothing_alpha must be scalar or39 values in (0,1]')
+        if not np.isfinite(preparation_seconds) or not 1. <= preparation_seconds <= 2.:
+            raise ValueError('preparation_seconds must be within1..2 seconds')
+        control_ticks = preparation_seconds * 60
+        if abs(control_ticks - round(control_ticks)) > 1e-9:
+            raise ValueError('preparation_seconds must align with60Hz control ticks')
+        self.preparation_seconds = float(preparation_seconds)
+        self.preparation_steps = int(round(control_ticks)) * 4
+        if session_factory is None:
+            from guitar_learning.runtime.prepared_reset_v1 import PreparedSession
+            session_factory = PreparedSession
+        self.config = json.loads(Path(config).read_text()) if isinstance(config, (str, Path)) else dict(config)
+        self.out = Path(out)
+        self.half_range = half.copy()
+        self.alpha = float(alpha) if alpha.ndim == 0 else alpha.tolist()
+        self._base_half_range = half.copy()
+        self._base_alpha = copy.deepcopy(self.alpha)
+        self.finger_profile = None if finger_profile is None else validate_profile(finger_profile)
+        self.session_factory, self.geometry_fn = session_factory, geometry_fn
+        self.sample_callback = sample_callback
+        self.session = None
+        self.episode = 0
+        self.ready = False
+
+    def reset(self):
+        self.close()
+        folder = self.out / ('episode_%04d' % self.episode)
+        folder.mkdir(parents=True, exist_ok=False)
+        self.episode += 1
+        try:
+            self.session = self.session_factory(self.config, folder)
+            scene = self.session.scene
+            names = tuple(scene.names)
+            if len(names) != 105 or len(set(names)) != 105 or set(names) != FULL_EXPECTED_NAMES:
+                raise ValueError('unique exact canonical native105 joint names required')
+            self.upper = np.array([i for i, name in enumerate(names) if name in EXPECTED_NAMES])
+            if len(self.upper) != 81 or set(names[i] for i in self.upper) != EXPECTED_NAMES:
+                raise ValueError('native105 must contain exact canonical upper81 names')
+            if len(scene.zero_indices) != 8 or np.count_nonzero(scene.lower < scene.upper) != 97:
+                raise ValueError('native105/effective97/zero8 contract violated')
+            actual_zero_names = {names[i] for i in np.flatnonzero(scene.lower == scene.upper)}
+            if actual_zero_names != ZERO_RANGE_NAMES or {names[i] for i in scene.zero_indices} != ZERO_RANGE_NAMES:
+                raise ValueError('exact canonical nominal zero8 names required')
+            if not scene.human_root_fixed or scene.guitar_root_fixed or scene.guitar_gravity_disabled:
+                raise ValueError('fixed human root and free gravity-enabled guitar required')
+            self.original_properties = scene.pd_properties.copy()
+            if self.sample_callback:
+                self.sample_callback(scene, 'preparation')
+            while scene.steps < self.preparation_steps:
+                self.session.prepare_tick()
+                for _ in range(4):
+                    self.session.integrate()
+                    if self.sample_callback:
+                        self.sample_callback(scene, 'preparation')
+            if scene.steps != self.preparation_steps:
+                raise RuntimeError('Short preparation exceeded the requested physical duration')
+            self.reference105 = scene.target.astype(float).copy()
+            bad = np.flatnonzero((self.reference105 < scene.lower) | (self.reference105 > scene.upper))
+            if len(bad):
+                raise ValueError('Prepared final target outside native bounds: ' + repr([{'name': names[i], 'target': self.reference105[i], 'lower': float(scene.lower[i]), 'upper': float(scene.upper[i])} for i in bad]))
+            rates = target_rates(names)
+            self.half_range = self._base_half_range.copy()
+            self.alpha = copy.deepcopy(self._base_alpha)
+            if self.finger_profile is not None:
+                description = getattr(self.session, 'finger_control_description', None)
+                if (not isinstance(description, dict) or description.get('applied') is not True or
+                        description.get('profile') != self.finger_profile):
+                    raise ValueError('matching applied native left finger profile required')
+                self.half_range, rates, alpha = profile_control_settings(names,
+                    self.reference105, scene.lower, scene.upper,
+                    self._base_half_range, rates, self._base_alpha)
+                self.alpha = alpha.tolist()
+            self.contract = JointTargetContract(tuple(names[i] for i in self.upper), self.reference105[self.upper], scene.lower[self.upper], scene.upper[self.upper], rates[self.upper], half_range_rad=self.half_range, control_hz=60., smoothing_alpha=self.alpha)
+            if self.finger_profile is not None:
+                self.contract.metadata['finger_control'] = dict(
+                    profile=copy.deepcopy(self.finger_profile),
+                    range='left21 full native limits; zero action is prepared reference',
+                    rate='left21 4rad/s; other native rates unchanged',
+                    smoothing='left21 alpha0.45; other action channels unchanged')
+            self.codec_previous = self.contract.reset_targets()
+            codec_metadata = copy.deepcopy(self.contract.metadata)
+            codec_metadata['contact_roles']['thigh']['scope'] = 'Lower24 remain under the original external finite foot/support controller; no fixed-lower asset requirement in this environment and no lower-body policy actions in39.'
+            codec_metadata['environment_application_scope'] = 'Upper81 target codec only; original finite mixed controller and dynamic lower24 foot maintenance remain separate.'
+            self.ready = True
+            return self._snapshot(), {'phase': 'prepared_pose_policy_handoff', 'preparation_seconds': self.preparation_seconds, 'preparation_mode': 'prepared_pose_then_short_hand_settle', 'prepared_reset': getattr(self.session, 'prepared_reset_description', None), 'prepared_physics_step': scene.steps, 'prepared_target105_rad': self.reference105.tolist(), 'target_contract': codec_metadata, 'nonpolicy_target_scope': 'upper42 held at final prepared targets; lower24 may change via original finite foot maintenance', 'support_feedback': 'Original finite human Chest/support/gravity/hip-load/SO3 effort feedback remains active; no direct guitar force or state overwrite', 'reward_or_music_training': 'not implemented; no fabricated reward', 'legacy_music_semantics': 'Fret zero DONT_CARE is distinct from musical open-string zero', 'inherited_V3_stability_success': False}
+        except BaseException:
+            self.close()
+            raise
+
+    def _snapshot(self):
+        scene = self.session.scene
+        state = scene.native()
+        geometry_fn = self.geometry_fn
+        if geometry_fn is None:
+            from guitar_learning.core.geometry_v1 import geometry_snapshot
+            geometry_fn = geometry_snapshot
+        geometry = geometry_fn(state, scene.human_bodies, scene.guitar_bodies)
+        return {'native': state, 'geometry': geometry}
+
+    def step(self, action39):
+        if not self.ready:
+            raise RuntimeError('reset must succeed before step')
+        requested81, final81 = self.contract.targets(action39, self.codec_previous)
+        scene = self.session.scene
+        target = self.reference105.copy()
+        target[self.upper] = final81
+        before = scene.native()
+        row = self.session.submit_policy_target(target)
+        if scene.native() != before:
+            raise RuntimeError('Target submission overwrote physical state')
+        self.codec_previous = final81.copy()
+        efforts, physics_samples = [], []
+        for _ in range(4):
+            efforts.append(self.session.integrate())
+            physics_samples.append(self._snapshot())
+            if self.sample_callback:
+                self.sample_callback(scene, 'policy_handoff')
+        if not np.array_equal(scene.pd_properties, self.original_properties) or scene.forbidden_calls:
+            raise RuntimeError('Original actuator properties or native guard changed')
+        state = physics_samples[-1]
+        return state, {'physics_steps_advanced': 4, 'physics_step': scene.steps, 'action_order': list(ACTIVE_NAMES), 'normalized_action39': np.asarray(action39, dtype=float).tolist(), 'requested_upper81_rad': requested81.tolist(), 'codec_target_upper81_rad': final81.tolist(), 'native_final_target105_rad': scene.target.astype(float).tolist(), 'target_submission': row, 'original_effort_diagnostics': efforts, 'physics_samples240': physics_samples}
+
+    def close(self):
+        self.ready = False
+        if self.session is not None:
+            self.session.close()
+            self.session = None

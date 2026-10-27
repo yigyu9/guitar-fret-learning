@@ -1,0 +1,116 @@
+"""Pure whole-body targets and finite PD efforts; no simulator/state writes.
+
+All 105 non-root joints are actuated. Only 39 receive policy offsets; the
+remaining 66 track the externally supplied reset pose through finite PD gains.
+"""
+import numpy as np
+
+from stability_adapter_2.music_pipeline_v2.control import (
+    ACTIVE_NAMES, HELD_NAMES as UPPER_HELD_NAMES,
+    EXPECTED_NAMES as UPPER_NAMES, JointTargetContract, _vector)
+
+
+LOWER_NAMES = tuple(side+'_'+part+'_'+axis for side in ('L','R')
+                    for part in ('Hip','Knee','Ankle','Toe') for axis in 'xyz')
+HELD_NAMES = UPPER_HELD_NAMES+LOWER_NAMES
+EXPECTED_NAMES = UPPER_NAMES | frozenset(LOWER_NAMES)
+
+
+def _gains(kp,kd,effort_limits):
+    kp = _vector(kp,105,'kp')
+    kd = _vector(kd,105,'kd')
+    effort = _vector(effort_limits,105,'effort_limits')
+    if np.any(kp<=0) or np.any(kd<0) or np.any(effort<=0):
+        raise ValueError('kp and effort_limits must be positive; kd must be nonnegative')
+    return kp,kd,effort
+
+
+class WholeBodyTargetContract:
+    """Compose the frozen upper81 codec with 24 reset-reference leg targets.
+
+    Names and all controller arrays come from the caller's native contract.
+    Lower joints may have equal native limits, as in the original XML.
+    """
+    action_dim = 39
+    target_dim = 105
+    actuated_dim = 105
+    active_names = ACTIVE_NAMES
+    held_names = HELD_NAMES
+
+    def __init__(self,names,q_ref,lower,upper,rates_rad_s,*,half_range_rad,
+                 kp,kd,effort_limits,control_hz=60.,smoothing_alpha=.2):
+        names = tuple(names)
+        if (len(names)!=105 or any(not isinstance(name,str) for name in names)
+                or len(set(names))!=105 or set(names)!=EXPECTED_NAMES):
+            raise ValueError('unique exact named whole-body105 set required; root excluded')
+        self.names = names
+        self.q_ref = _vector(q_ref,105,'q_ref')
+        self.lower = _vector(lower,105,'lower')
+        self.upper = _vector(upper,105,'upper')
+        self.rates = _vector(rates_rad_s,105,'rates_rad_s')
+        self.kp,self.kd,self.effort_limits = _gains(kp,kd,effort_limits)
+        if (np.any(self.lower>self.upper) or np.any(self.q_ref<self.lower)
+                or np.any(self.q_ref>self.upper) or np.any(self.rates<0)):
+            raise ValueError('reference, native bounds or rates invalid')
+        self.upper_indices = np.array([i for i,name in enumerate(names) if name in UPPER_NAMES])
+        self.held_indices = np.array([names.index(name) for name in HELD_NAMES])
+        self.active_indices = np.array([names.index(name) for name in ACTIVE_NAMES])
+        ix = self.upper_indices
+        self.upper_contract = JointTargetContract(tuple(names[i] for i in ix),
+            self.q_ref[ix],self.lower[ix],self.upper[ix],self.rates[ix],
+            half_range_rad=half_range_rad,control_hz=control_hz,smoothing_alpha=smoothing_alpha)
+        u = self.upper_contract.metadata
+        self.metadata = dict(schema='music_pipeline_v3.whole_body_pd.v1',
+            action_dim=39,target_dim=105,actuated_dim=105,held_dim=66,
+            action_order=list(ACTIVE_NAMES),native_order=list(names),
+            held_names=list(HELD_NAMES),lower_names=list(LOWER_NAMES),root_output=False,
+            held_scope='reset-reference actuator targets; actual states governed by physics',
+            held_previous_policy='reject any exact-reference mismatch',
+            upper_codec_schema=u['schema'],action_codec=u['action_codec'],
+            control_hz=u['control_hz'],smoothing_alpha=u['smoothing_alpha'],
+            q_ref_rad=self.q_ref.tolist(),native_lower_rad=self.lower.tolist(),
+            native_upper_rad=self.upper.tolist(),rates_rad_s=self.rates.tolist(),
+            half_range_rad=u['half_range_rad'].copy(),
+            action_lower_rad=u['action_lower_rad'].copy(),action_upper_rad=u['action_upper_rad'].copy(),
+            kp=self.kp.tolist(),kd=self.kd.tolist(),effort_limits=self.effort_limits.tolist(),
+            zero_range_names=[name for i,name in enumerate(names) if self.lower[i]==self.upper[i]],
+            zero_range_count=int(np.count_nonzero(self.lower==self.upper)),
+            nonzero_range_dim=int(np.count_nonzero(self.lower<self.upper)),
+            torque_law='clip(kp*(target-q)-kd*qdot, -effort_limits, effort_limits)',
+            target_velocity_rad_s=0.,effort_units='Nm',
+            deployment='CPU commanded effort only; native adapter and measured physical torque absent')
+        for value in (self.q_ref,self.lower,self.upper,self.rates,self.kp,self.kd,
+                      self.effort_limits,self.upper_indices,self.held_indices,self.active_indices):
+            value.setflags(write=False)
+
+    def reset_targets(self):
+        return self.q_ref.copy()
+
+    def targets(self,action,previous_target):
+        previous = _vector(previous_target,105,'previous_target')
+        if not np.array_equal(previous[self.held_indices],self.q_ref[self.held_indices]):
+            raise ValueError('held previous target contaminated; reset-reference target required')
+        requested_upper,final_upper = self.upper_contract.targets(action,previous[self.upper_indices])
+        requested,final = self.q_ref.copy(),self.q_ref.copy()
+        requested[self.upper_indices],final[self.upper_indices] = requested_upper,final_upper
+        return requested,final
+
+    def torques(self,q,qdot,target):
+        """Return finite CPU PD effort105 without overwriting actual states.
+
+        Overflow saturates; indeterminate finite-input arithmetic raises.
+        """
+        q = _vector(q,105,'q')
+        qdot = _vector(qdot,105,'qdot')
+        target = _vector(target,105,'target')
+        if not np.array_equal(target[self.held_indices],self.q_ref[self.held_indices]):
+            raise ValueError('held torque target contaminated; reset-reference target required')
+        active = target[self.active_indices]
+        if (np.any(active<self.upper_contract.action_lower)
+                or np.any(active>self.upper_contract.action_upper)):
+            raise ValueError('active torque target outside effective bounds')
+        with np.errstate(over='ignore',invalid='ignore'):
+            raw = self.kp*(target-q)-self.kd*qdot
+        if np.isnan(raw).any():
+            raise ValueError('PD arithmetic is indeterminate')
+        return np.clip(raw,-self.effort_limits,self.effort_limits)

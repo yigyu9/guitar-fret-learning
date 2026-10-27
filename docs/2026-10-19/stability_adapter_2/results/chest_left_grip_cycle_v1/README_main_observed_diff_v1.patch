@@ -1,0 +1,29 @@
+--- /home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/chest_left_grip_cycle_v1/main_before/README.md
++++ /home/ajou/yigyu/3/stability_adapter_2/README.md
+@@ -1,4 +1,10 @@
+ # StabilityAdapter 2 작업 계획과 새 채팅 인계
++
++## 2026-10-15 지지 자세 역할을 반영한39행동 파이프라인
++
++가슴·오른쪽 상완·허벅지가 기타를 지지하고 오른손 손가락은 피크 그립을 유지하는 사용자 조건을 반영했다. 새 `music_pipeline_v2`는 왼팔·손33과 오른쪽 팔꿈치·손목6만 정책 출력으로 두며, 지지부15·오른손21·목/머리6의 목표각은 초기 기준을 유지한다. 실제 상태를 강제로 고정하는 것이 아니다. 왼손의 필수 기타 지지 목표는 부과하지 않는다.
++
++음악24특징·진행8상태, 현재/임박 deadline 직접 경로, actor/value 파라미터 분리, 짧은 음과50/100ms 독립 기록, minibatch KL 제한과 전체 update 복원을 구현했다. CPU26개 테스트가 통과했고 기존 native 입력1333개는 보존됐다. 상세 환경·물리 관측 ABI·안정성 비용과 새 학습 연결은 초기 자세 확정 후 진행한다. 아래54행동 구현은 이전 실행 이력이다. [구현·근거·검증](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/music_pipeline_v2/README.md).
+ 
+ **2026-10-14 사용자 변경 — 기존 정책을 사용하지 않는 새 학습.** 기존 Fret·Strike 및 잔차 정책의 가중치를 불러오지 않고, 공유 Actor의 support15/fret33/strike6 출력과 보상·비용 Critic 두 개를 새로 초기화한다. 첫 실행은 기타 지지 상태에서의 작은 손 이동(Stage A)이다. 이전 체크포인트와 결과는 비교·재현용으로 보존한다. 아래 연결 학습 기록보다 이 변경을 우선하며, 구현·검증·실행 상태는 [새 학습 계획](/home/ajou/yigyu/3/docs/plans/fresh_guitar_learning_20261014.md)을 따른다. 새 학습이 압현·타현·곡 연주를 달성했다는 뜻은 아니다.
+ 
+@@ -2430,3 +2436,15 @@
+ 자유기타·스트랩OFF에서시작직후가슴/오른위팔동시지지가형성되는초기후보를추가했다. near는0.125초에동시양의rawlambda접촉,5초최대BB중심이동4.287mm/회전1.219°다. 왼손을더물린far비교는왼팔·왼손접촉0/1200step과오른손목·손접촉0을확인했고최대4.915mm/2.833°였다. 오른Elbow/Wrist6목표만바꾼가상피크down6→1/up1→6모두검출됐다. 다른75목표유지와실제관절상태고정을구분한다.
+ 
+ 타현후반에는Chest접촉이끊기고오른위팔/오른허벅지접촉이유지되며왼허벅지도접촉한다. 계속가슴으로끼우는자세·수동평형·학습곡연주성공은아니다. 기존기본값/자산/학습은보존하고별도프리셋으로제공한다. [완료·초기값·실행](/home/ajou/yigyu/3/stability_adapter_2/CHEST_UPPERARM_INITIAL_COMPLETION_V1.md:1), [영상·측정결과](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/chest_upperarm_initial_v1/README.md:1)를따른다. 사용자테스트는chest_upperarm_pose_test_v1/open_v2.sh를사용하며headless0.2초prefix동일,실제GUI창통합은미검증이다.
++
++
++## 현재 초기 지지 자세의 왼손 잡기·놓기 검증 착수
++
++가슴·오른쪽 위팔 초기 near 배치에서 왼손 두 넥 지점을 잡고 놓는16초 검증을 진행한다. 오른손 타현은 끄고 지지 준비 목표를 유지한다. 놓기는 확인된 대각선 방향으로 손목을 물리며 실제 왼팔·손 접촉0 구간과 기타 BB 중심·회전을 측정한다. [계획](/home/ajou/yigyu/3/stability_adapter_2/CHEST_LEFT_GRIP_CYCLE_PLAN_V1.md:1)을 따른다. 기존 결과와 독립 fresh 학습은 보존한다.
++
++
++## 현재 초기 지지 자세의 왼손 잡기·놓기 결과
++
++최신 가슴·위팔 초기 배치에서16초 동안 A 잡기→놓기→B 이동40mm→잡기→놓기를 완료했다. 두 잡기 유지 구간에서 엄지+다른 손가락의 양의 raw lambda 동시 접촉이 각각1.5초 내내 있었고, 놓기 유지 구간은 왼팔·손 전체 접촉이 각각1초/3초 동안0이었다. 오른손 타현은OFF이며 왼손33목표만 변경했다.
++
++전체 초기 대비 최대 기타BB 중심 이동37.288mm/회전14.516°로 해제 전후의 흔들림이 컸다. 마지막 놓기13–16초에는0.445mm/0.213°로 정착했다. 잡기·놓기는 확인했지만 초기 위치/회전 유지나 강건한 연주 성공으로 해석하지 않는다. 다음 후보는 손가락을 먼저 편 뒤 손목을 물리는 순차 해제 비교다. [결과·영상](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/chest_left_grip_cycle_v1/README.md:1)을 따른다.

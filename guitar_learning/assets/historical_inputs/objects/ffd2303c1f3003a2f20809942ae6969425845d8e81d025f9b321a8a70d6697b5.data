@@ -1,0 +1,99 @@
+"""563 pool migration preserves the active actor and keeps strict resume exact."""
+import copy
+from pathlib import Path
+import tempfile
+import unittest
+import torch
+from guitar_learning.curriculum.transfer import apply_actor_initialization
+from guitar_learning.specialist_policy import SpecialistPolicy
+from guitar_learning.ppo import PPOTrainer
+from guitar_learning.tests.test_quality_curriculum_environment import environment
+
+
+def contracts(folder, role='left'):
+    env, _ = environment(Path(folder)/('environment_'+role), role)
+    try:
+        env.reset()
+        target = copy.deepcopy(env.contract)
+        source = copy.deepcopy(target)
+        source['task'] = copy.deepcopy(next(row['task'] for row in
+            target['task']['curriculum']['candidates'] if row['event_index'] == 0))
+        return source, target
+    finally: env.close()
+
+
+class CurriculumTransferTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls): torch.set_num_threads(1)
+
+    def test_only_actor_and_active_std_transfer_values_optimizers_rng_are_fresh(self):
+        for role in ('left', 'right'):
+            with tempfile.TemporaryDirectory() as folder:
+                old, new = contracts(folder, role)
+                source = SpecialistPolicy(563, contract=old, role=role)
+                with torch.no_grad():
+                    source.actor_heads[role].weight.normal_(0, .01)
+                    source.log_std[source.role_slices[role]].fill_(-4.)
+                trainer = PPOTrainer(source); trainer.updates = 3
+                path = Path(folder)/'source.pt'; trainer.save(path)
+                model = SpecialistPolicy(563, contract=new, role=role)
+                before = {k: v.clone() for k, v in model.state_dict().items()}
+                rng = torch.get_rng_state().clone()
+                result = apply_actor_initialization(model, path, kind='ppo')
+                self.assertEqual(result['source_updates'], 3)
+                self.assertTrue(torch.equal(rng, torch.get_rng_state()))
+                for key, value in model.state_dict().items():
+                    if key.startswith(('actor_encoders.'+role+'.', 'actor_heads.'+role+'.')):
+                        torch.testing.assert_close(value, source.state_dict()[key], rtol=0, atol=0)
+                    elif key == 'log_std':
+                        active = model.role_slices[role]
+                        other = model.role_slices['right' if role == 'left' else 'left']
+                        torch.testing.assert_close(value[active], source.log_std[active], rtol=0, atol=0)
+                        torch.testing.assert_close(value[other], before[key][other], rtol=0, atol=0)
+                    else: torch.testing.assert_close(value, before[key], rtol=0, atol=0)
+                fresh = PPOTrainer(model)
+                self.assertEqual(fresh.updates, 0)
+                self.assertFalse(fresh.actor_optimizer.state)
+                self.assertFalse(fresh.value_optimizer.state)
+                # No relaxation of PPO identity: fixed-note state cannot strict resume.
+                with self.assertRaises(ValueError): fresh.load(path)
+                target_path = Path(folder)/'pool.pt'; fresh.save(target_path)
+                restored = PPOTrainer(SpecialistPolicy(563, contract=new, role=role))
+                restored.load(target_path)
+                changed = copy.deepcopy(new)
+                changed['task']['curriculum']['goal_event_indices'] = [0]
+                with self.assertRaises(ValueError):
+                    PPOTrainer(SpecialistPolicy(563, contract=changed, role=role)).load(target_path)
+
+    def test_contract_role_size_and_nonfinite_reject_before_any_mutation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            old, new = contracts(folder)
+            source = SpecialistPolicy(563, contract=old, role='left')
+            trainer = PPOTrainer(source); trainer.updates = 1
+            path = Path(folder)/'source.pt'; trainer.save(path)
+            changes = [('termination', 'guitar_position_failure_m', 999.),
+                ('observation', 'clip_abs', 999.), ('reward', 'action_change_second', 999.)]
+            candidates = []
+            for section, key, value in changes:
+                changed = copy.deepcopy(new); changed[section][key] = value
+                candidates.append(SpecialistPolicy(563, contract=changed, role='left'))
+            changed = copy.deepcopy(new); changed['observation']['scales'][0] *= 2
+            candidates.append(SpecialistPolicy(563, contract=changed, role='left'))
+            changed = copy.deepcopy(new)
+            changed['task']['curriculum']['candidates'][1]['task']['timing']['config']['stage_index'] = 2
+            candidates.append(SpecialistPolicy(563, contract=changed, role='left'))
+            candidates += [SpecialistPolicy(563, contract=new, role='right'),
+                           SpecialistPolicy(563, contract=new, role='left', size='small')]
+            for model in candidates:
+                before = {k: v.clone() for k, v in model.state_dict().items()}
+                with self.assertRaises(ValueError): apply_actor_initialization(model, path, kind='ppo')
+                for key, value in model.state_dict().items():
+                    torch.testing.assert_close(value, before[key], rtol=0, atol=0)
+            payload = torch.load(path, weights_only=False)
+            payload['model']['actor_heads.left.bias'][0] = float('nan')
+            damaged = Path(folder)/'damaged.pt'; torch.save(payload, damaged)
+            with self.assertRaises(ValueError):
+                apply_actor_initialization(SpecialistPolicy(563, contract=new), damaged, kind='ppo')
+
+
+if __name__ == '__main__': unittest.main()

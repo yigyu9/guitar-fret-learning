@@ -1,0 +1,45 @@
+"""Explicit single-note specialist stages; no automatic promotion on reward."""
+import copy
+import math
+from pathlib import Path
+
+
+def settings_document(value):
+    from .train_parallel import settings_document as base_settings
+    if not isinstance(value, dict):
+        raise ValueError('settings object required')
+    value = copy.deepcopy(value)
+    stage = value.pop('specialist', None)
+    if not isinstance(stage, dict) or set(stage) - {'role', 'left_checkpoint', 'right_checkpoint'}:
+        raise ValueError('explicit specialist role and optional expert checkpoints required')
+    role = stage.get('role')
+    if role not in ('left', 'right', 'joint'):
+        raise ValueError('specialist role must be left/right/joint')
+    paths = {}
+    for hand in ('left', 'right'):
+        path = stage.get(hand + '_checkpoint')
+        if path is not None:
+            if not isinstance(path, str) or not path or not Path(path).is_file():
+                raise ValueError('existing expert checkpoint path required: ' + hand)
+            path = str(Path(path).resolve())
+        paths[hand + '_checkpoint'] = path
+    if role == 'joint' and not all(paths.values()):
+        raise ValueError('joint stage requires both independently trained experts')
+    settings = base_settings(value)
+    if settings['stage'] != 'B' or settings['music'] != dict(reward_mode='legacy', goal_event_indices=None):
+        raise ValueError('specialist v1 requires single-note B, no goal pool, and legacy base reward')
+    cost_weight = settings['ppo']['cost_weight']
+    if isinstance(cost_weight, bool) or not isinstance(cost_weight, (int, float)) or not math.isfinite(cost_weight) or cost_weight <= 0:
+        raise ValueError('specialist stages require a positive stability cost weight')
+    settings['specialist'] = dict(role=role, **paths)
+    return settings
+
+
+def frozen_partner(stage):
+    role = stage['role']
+    return role != 'joint' and stage.get(('right' if role == 'left' else 'left') + '_checkpoint') is not None
+
+
+def expert_paths(stage):
+    return [Path(stage[hand + '_checkpoint']) for hand in ('left', 'right')
+            if stage.get(hand + '_checkpoint') is not None]

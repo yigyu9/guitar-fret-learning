@@ -1,0 +1,7 @@
+# 병렬 학습 재개 supervisor 사전 검수
+
+요약 판정: **문제없음**. Critical·미해결 기능 오류 없음. [새 supervisor:60](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/parallel_collection_v1/launch_recorded_parallel_v1.py:60)는 검증된 `smoke_v1/checkpoints/update_000316.pt`를 같은 병렬 runner의 strict checkpoint load로 복원한다. N4·T256=갱신당1024표본, CUDA·스트랩 ON·30분 공식 평가·11:40 cutoff가 맞고, 기존 미니배치128·epochs4·KL≤0.02·RMS 고정 설정을 유지한다. [verification_v1.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/parallel_collection_v1/verification_v1.json:1)의 22검사 true 및 입력24개의 현재 SHA를 직접 확인했다. CP316 SHA는 `2d4fd0033c579f51785cdd0fec9dda0825f534d549e634469c608618eee1d52a`다. 검증된 N4/T64 수집은 모두 PREP 구간이므로 그 속도를 기존 PLAY 평균과 직접 비교한 성능 개선으로 해석하지 않는다.
+
+기존 graphics supervisor와 diff는 출력·보관 경로·CP 및 runner/N/T 실행 인자뿐이다. 원본 영상 SHA 확인·배타적 복사·복사 후 원본/사본 SHA 재확인, 임시 파일/fsync/os.link의 manifest 게시, 기존 manifest/README 검증, 완주·부분 종료 구분과 archive_errors 별도 기록은 동일하다. 새 출력은 `parallel_collection_v1/long_v1`, 보관은 `video/parallel_long_v1/<평가label>/`이며 기존 결과를 덮어쓰지 않는다. 학습 이행 수치/ABI·물리·제어·보상 계약을 이 supervisor에서 변경하지 않는다.
+
+Warning(범위): 5분 복구와 30분 공식 저장은 갱신 완료 뒤의 예정 간격이며, 초기 평가 소요 시간과 마감까지 남은 시간에 따라 실제 학습 시간·첫 복구 저장·정기 평가 여부가 달라질 수 있다. 11:40은 협조적 진입 검사이며 네이티브 호출의 강제 선점이 아니다. 이번 검수는 재개 코드·경로·인자와 검증 입력 식별에 한정되고 새 장기 실행·추가 보관·음악 성공·처리량 개선·마감 완료는 인증하지 않는다. 추가 native·학습 실행 및 소유 리뷰 외 파일 변경은 하지 않았다. supervisor SHA256은 `c963447c36de70c72bbcbbb1dff906b1902b435af0da1004ca4807ba977bf718`, verification SHA256은 `b232ce612f36e4a250b685fb02ca49855e6eac55364fd65e4776c02d13d13545`다.

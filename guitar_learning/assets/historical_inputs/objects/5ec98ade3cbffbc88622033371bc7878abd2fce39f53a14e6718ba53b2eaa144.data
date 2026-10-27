@@ -1,0 +1,36 @@
+"""Static evidence figure from raw q and normalized-quaternion BB trajectories."""
+from pathlib import Path
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from scipy.spatial.transform import Rotation
+from .common import BASE,ROOT,read,save,sha,verify
+
+
+def main():
+    out=BASE/'diagnosis_v2/figures_v1';out.mkdir(exist_ok=False)
+    runs=['native_lower_position_gain1_static_v1','native_lower_position_gain10_static_v1','rotational_stable_pd_static_v1','rotational_stable_pd_interior_static_v1','rotational_stable_pd_interior_release_v1']
+    centre=ROOT/'docs/2026-10-19/stability_adapter_2/results/user_guided_no_left_v1/diagnostic_v1/diagnostic.json'
+    paths=[Path(__file__).resolve(),Path(__file__).with_name('common.py'),centre]
+    for name in runs:paths.extend(BASE/'native'/name/f for f in ('states240.json','initial_values.json','report.json'))
+    pins={str(p):sha(p) for p in paths};save(out/'inputs_before.json',pins)
+    data={}
+    for name in runs:
+        p=BASE/'native'/name;rows=read(p/'states240.json')['rows'];initial=read(p/'initial_values.json');i=initial['joint_names'].index('L_Hip_y');time=np.array([r['time_s'] for r in rows]);q=np.array([r['state']['human_dof_states'][i]['pos'] for r in rows]);gp=np.array([[r['state']['guitar_body_states'][0]['pose']['p'][k] for k in 'xyz'] for r in rows]);gr=Rotation.from_quat([[r['state']['guitar_body_states'][0]['pose']['r'][k] for k in 'xyzw'] for r in rows]);bb=gp+gr.apply(read(centre)['guitar_centre_G_m']);data[name]=(time,q,np.linalg.norm(bb-bb[0],axis=1)*1000)
+    fig,axes=plt.subplots(1,2,figsize=(12,4.5));fig.subplots_adjust(left=.075,right=.98,bottom=.16,top=.75,wspace=.28)
+    labels=['native POS gain1','native POS gain10','rotational SPD, boundary','rotational SPD, interior']
+    for name,label,color in zip(runs[:4],labels,['#d55e00','#cc79a7','#777777','#0072b2']):
+        t,q,_=data[name];mask=t<=.3;axes[0].plot(t[mask],q[mask],label=label,color=color,lw=1.6)
+        if t[-1]<.3:axes[0].plot(t[-1],q[-1],marker='x',color=color,ms=6)
+    axes[0].set(xlabel='Physical time (s)',ylabel='L_Hip_y native scalar q (rad)',xlim=(0,.3));axes[0].legend(loc='lower left',bbox_to_anchor=(0,1.03),fontsize=8,frameon=False)
+    for name,label,color in [(runs[3],'Static5s, interior targets','#0072b2'),(runs[4],'Left-release15s, same control','#009e73')]:
+        t,_,drift=data[name];axes[1].plot(t,drift,label=label,color=color,lw=1.6)
+    for t in (2,5):axes[1].axvline(t,color='#999999',lw=.8,ls='--')
+    axes[1].set(xlabel='Physical time (s)',ylabel='Guitar BB displacement from t0 (mm)',xlim=(0,15));axes[1].legend(loc='lower left',bbox_to_anchor=(0,1.03),fontsize=8,frameon=False)
+    for axis in axes:axis.grid(alpha=.2);axis.spines[['top','right']].set_visible(False)
+    fig.savefig(out/'control_and_guitar.png',dpi=160)
+    save(out/'verification.json',dict(inputs_unchanged=verify(pins),figure=str(out/'control_and_guitar.png'),scope='Left panel first0.3s only, x marks failed-run endpoints. Right panel uses two new full-scene trials, with release target start2s/motion end5s. Native scalar q is not a world-axis angle. BB uses normalized quaternion rotation and original diagnostic centre. Different controllers/targets, not an isolated gain-only comparison.'))
+
+
+if __name__=='__main__':main()

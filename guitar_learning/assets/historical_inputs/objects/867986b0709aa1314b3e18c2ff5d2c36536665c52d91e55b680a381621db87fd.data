@@ -1,0 +1,115 @@
+"""New arm alignment to free guitar; immutable finite world support and feet reused."""
+import isaacgym
+import argparse
+import json
+from pathlib import Path
+from unittest.mock import patch
+from ..lower_body_release_v1 import run_horizontal_v7 as runner, scene_v8, controller_horizontal_v4
+from ..lower_body_release_v1.common import ROOT, BASE, pin, verify, read, save, sha
+from .runtime_v5 import Scene, Controller
+from .runtime_v2 import command_with_final
+from .recording_v3 import ThinStringTrialRecording
+from .. import string_trial_recording_v1 as strings
+from .motion_v7 import Motion, MODE
+from . import runtime_v1
+
+
+def compact_native_save(path, value):
+    path = Path(path)
+    if path.name not in ('states240.json', 'contacts240.json', 'efforts240.json', 'targets60.json'):
+        return save(path, value)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('x') as stream:
+        json.dump(value, stream, separators=(',', ':'), allow_nan=False)
+        stream.write('\n')
+
+
+def main(config, out):
+    cfg = read(config)
+    assert cfg['finger_control_mode'] == MODE and cfg['play_case'] == 'combined'
+    phase = BASE/'grounded_guitar_support_v1'
+    source = Path(cfg['candidate']).parent
+    report = read(cfg['source_report'])
+    assert report['eligible_for_native'] and report['inputs_unchanged'] and verify(read(source/'inputs_before.json'))
+    posture_report = Path(cfg['posture_target_report'])
+    posture = read(posture_report)
+    assert posture['eligible_for_native_target'] and posture['inputs_unchanged'] and verify(read(posture_report.parent/'inputs_before.json'))
+    assert sha(cfg['upper_target105']) == cfg['upper_target105_sha256'] == posture['target_sha256']
+    assert sha(cfg['candidate']) == cfg['candidate_sha256'] == posture['source_candidate_sha256']
+    assert Path(cfg['upper_target105']).resolve() == posture_report.parent/'upper_target105.json'
+    assert Path(cfg['candidate']).resolve() == Path(posture['source_candidate']).resolve()
+    goal_report_path = Path(cfg['finite_right_goal_report'])
+    goal = read(goal_report_path)
+    assert goal['eligible_for_finite_human_goal'] and goal['inputs_unchanged']
+    assert verify(read(goal_report_path.parent/'inputs_before.json'))
+    assert sha(cfg['finite_right_goal_spec']) == cfg['finite_right_goal_spec_sha256'] == goal['spec_sha256']
+    assert read(cfg['finite_right_goal_spec'])['initial_candidate_sha256'] == cfg['candidate_sha256']
+    assert goal['source_candidate_sha256'] == cfg['candidate_sha256']
+    assert Path(cfg['finite_right_goal_spec']).resolve() == goal_report_path.parent/'right_goal_spec.json'
+    bias_report_path = Path(cfg['hip_load_bias_report'])
+    bias = read(bias_report_path)
+    assert bias['eligible_for_finite_hip_load_bias'] and bias['inputs_unchanged']
+    assert verify(read(bias_report_path.parent/'inputs_before.json'))
+    assert sha(cfg['hip_load_bias_spec']) == cfg['hip_load_bias_spec_sha256'] == bias['spec_sha256']
+    assert bias['source_candidate_sha256'] == cfg['candidate_sha256']
+    assert read(cfg['hip_load_bias_spec'])['initial_candidate_sha256'] == cfg['candidate_sha256']
+    assert Path(cfg['hip_load_bias_spec']).resolve() == bias_report_path.parent/'hip_load_bias_spec.json'
+    assert cfg['hip_load_bias_mode'] == 'finite_constant_native_RHip_load_bias_v1'
+    assert cfg['chest_extra_goal_depth_m'] == .00025
+    assert cfg['seconds'] == 16 and cfg['mode'] == 'static'
+    assert cfg['validation_protocol'] == 'finite_prepare5_hold5_fret_strike_distal_hold6_v1'
+    assert cfg['preparation_s'] == 5 and cfg['hold_interval_s'] == [5, 10]
+    assert cfg['play_action_interval_s']==[10,16] and cfg['strike_start_s']==11.3 and cfg['right_strike_interval_s']==[11.3,14.4] and cfg['distal_hold_interval_s']==[14.4,16] and cfg['finger_hold_end_s']==16
+    assert cfg['play_start_s'] == 10 and cfg['play_case'] in ('baseline','press','strike','combined')
+    preflight_path = Path(cfg['play_preflight_report'])
+    preflight = read(preflight_path)
+    assert preflight['eligible_for_native'] and preflight['inputs_unchanged']
+    assert verify(read(preflight_path.parent/'inputs_before.json'))
+    assert sha(cfg['play_spec']) == cfg['play_spec_sha256'] == preflight['spec_sha256']
+    assert preflight['source_candidate_sha256'] == cfg['candidate_sha256']
+    repeat_path = phase/'prepared_repeat_verification_v1.json'
+    repeat = read(repeat_path)
+    assert repeat['passed'] and verify(repeat['input_sha256'])
+    assert preflight['reference_run'] == str(phase/'native_prepared_v17')
+    assert preflight['repeat_run'] == str(phase/'native_prepared_repeat_v18')
+    extras = [ROOT/'docs/plans/grounded_guitar_terminal_hold_20261016.md',ROOT/'docs/plans/grounded_guitar_coordinated_strike_20261016.md',ROOT/'docs/plans/grounded_guitar_slow_return_20261016.md',ROOT/'docs/plans/grounded_guitar_recording_fix_20261016.md']
+    extras += list(Path(__file__).resolve().parent.glob('*.py'))
+    extras += [ROOT/'docs/plans/grounded_guitar_contact_press_20261016.md', ROOT/'docs/plans/grounded_guitar_contact_press_v2_20261016.md', ROOT/'docs/plans/grounded_guitar_recorded_press_20261016.md']
+    extras += list((ROOT/'stability_adapter_2/grounded_guitar_support_v1').glob('*.py'))
+    extras += list((ROOT/'stability_adapter_2/horizontal_play_test_v1').glob('*.py'))
+    extras += [preflight_path, preflight_path.parent/'inputs_before.json', Path(cfg['play_spec']), repeat_path, ROOT/'docs/plans/grounded_guitar_prepared_play_20261016.md']
+    for reference in (phase/'native_prepared_v17', phase/'native_prepared_repeat_v18'):
+        extras += [reference/n for n in ('attempt.json','report.json','initial_values.json','native_properties.json','final_state.json','states240.json','contacts240.json','efforts240.json','targets60.json','support_wrapper.json')]
+    extras += list((ROOT/'stability_adapter_2/seated_foot_support_v1').glob('*.py'))
+    extras += [ROOT/'docs/plans/grounded_guitar_support_20261016.md',
+               BASE/'seated_foot_support_v1/artifact_inventory.json',
+               Path(cfg['source_report']), Path(cfg['upper_target105']), source/'inputs_before.json', ROOT/'docs/plans/grounded_guitar_world_anchor_20261016.md', ROOT/'docs/plans/grounded_guitar_spine_clearance_20261016.md', ROOT/'docs/plans/grounded_guitar_arm_alignment_20261016.md', ROOT/'docs/plans/grounded_guitar_arm_audit_20261016.md', ROOT/'stability_adapter_2/AGENTS.md', ROOT/'docs/plans/grounded_guitar_chest_preload_20261016.md', ROOT/'docs/plans/grounded_guitar_aligned_preload_20261016.md', ROOT/'docs/plans/grounded_guitar_contact_margin_20261016.md', ROOT/'docs/plans/grounded_guitar_load_ramp_20261016.md', ROOT/'docs/plans/grounded_guitar_normal_cap_20261016.md', ROOT/'docs/plans/grounded_guitar_chest_orientation_20261016.md']
+    extras += [posture_report, posture_report.parent/'inputs_before.json', ROOT/'docs/plans/grounded_guitar_relative_translation_20261016.md']
+    extras += [goal_report_path, Path(cfg['finite_right_goal_spec']), goal_report_path.parent/'inputs_before.json', ROOT/'docs/plans/grounded_guitar_right_goal_20261016.md']
+    extras += [ROOT/'docs/plans/grounded_guitar_contact_margin_v2_20261016.md', ROOT/'docs/plans/grounded_guitar_prepared_hold_20261016.md']
+    extras += [bias_report_path, Path(cfg['hip_load_bias_spec']), bias_report_path.parent/'inputs_before.json', ROOT/'docs/plans/grounded_guitar_hip_load_bias_20261016.md']
+    extras += [Path(read(cfg['candidate'])['support_candidate'])]
+    inputs = pin(config, extra=extras)
+    before = phase/'provenance'/(out.name+'_before.json')
+    save(before, inputs)
+    try:
+        with patch.object(strings, 'StringTrialRecording', ThinStringTrialRecording), patch.object(Scene, 'command', command_with_final), patch.object(scene_v8, 'Scene', Scene), patch.object(controller_horizontal_v4, 'Controller', Controller), patch.object(runner, 'save', compact_native_save):
+            runner.run(config, out)
+    finally:
+        save(out/'support_wrapper.json', dict(input_sha256=inputs, inputs_unchanged=verify(inputs),
+             before_manifest=str(before), actual_scene_class='grounded_guitar_play_v1.runtime_v1.Scene',
+             controller='grounded_guitar_play_v1.runtime_v5.Controller', play_case=cfg['play_case'],
+             finger_motion_class='grounded_guitar_play_v1.motion_v7.Motion',
+             scene_command='grounded_guitar_play_v1.runtime_v2.command_with_final', finger_control_mode=MODE,
+             image_capture_hz=10,camera_matrix_telemetry_hz=30,physical_seconds=16,
+             native_raw_encoding='Compact JSON; all numeric values, fields and array order retained. Existing raw files remain unchanged.',
+             scope='Recorded finite finger joint requests,60Hz actual contact-triggered last-submitted human finger target hold, held until16s without rest return; original strike shifted1.3s after actual press. No live finger IK; reference solver evidence belongs to the recorded original run. No state replay.  Original Scene and inherited targets method are used with explicit16s constructor, Motion7 and post-command diagnostic patches. Prescribed finite preparation0to5s and hold5to10s, then named finite human playing10to16s; right distal targets stay latched until11.3 and strike runs11.3to14.4 after capture, then distal6 last submitted3452 target holds through16s without hover return or further pick IK. Native images10fps; numerical240Hz and target60Hz unchanged. R12 IK stops before10s recalculation and last submitted R12 is latched; Motion controls finger4/distal6 and FootScene command remains once. Original0to5s contact failure is retained. Source V4 arm alignment with original native filters and float32 Elbow margin at unchanged source V2 guitar placement. V2 world human support and successful finite feet, Target2 posture and7to9mm preload unchanged. Constant affine correction of finite human right palm/material/task world goals from settled support geometry; no guitar command. Extra finite Chest virtual preload0to0.25mm at.75to1.25s with original20N cap. Observed bounded human R_Hip3 load compensation before original native cap; implicit RHS, human gravity diagnostics and all other gains/caps/restrictions retained.'))
+    assert verify(inputs)
+
+
+if __name__ == '__main__':
+    p = argparse.ArgumentParser()
+    p.add_argument('--config', type=Path, required=True)
+    p.add_argument('--out', type=Path, required=True)
+    a = p.parse_args()
+    main(a.config.resolve(), a.out.resolve())

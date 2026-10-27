@@ -1,0 +1,137 @@
+"""Isolated geometry-frame and spherical-coordinate passive limit-perturbation boundary correction diagnostic V7; no full-scene stability claim."""
+import isaacgym
+from isaacgym import gymapi
+import argparse
+import copy
+import json
+import traceback
+import xml.etree.ElementTree as ET
+from pathlib import Path
+import numpy as np
+from .common import HUMAN, BASE, save, sha
+from . import common
+from stability_adapter_2 import native_contacts
+from stability_adapter_2.native_contacts import plain
+
+
+
+def serialize(names,props):
+    return [{'name':n,'mass_kg':float(v.mass),'COM_body_m':[float(getattr(v.com,k)) for k in 'xyz'],'inertia_COM_kg_m2':[[float(getattr(getattr(v.inertia,i),j)) for j in 'xyz'] for i in 'xyz']} for n,v in zip(names,props)]
+
+
+def run(out):
+    out.mkdir(parents=True, exist_ok=False)
+    pins = {str(p): sha(p) for p in (Path(__file__).resolve(), HUMAN,
+            Path(common.__file__), Path(native_contacts.__file__), BASE/'diagnosis_v2/PLAN.md', BASE/'diagnosis_v2/LIMIT_BOUNDARY_PLAN.md')}
+    save(out/'inputs_before.json', pins)
+    gym = gymapi.acquire_gym()
+    params = gymapi.SimParams()
+    params.dt = 1/240
+    params.up_axis = gymapi.UP_AXIS_Z
+    params.gravity = gymapi.Vec3(0, 0, 0)
+    params.physx.use_gpu = False
+    params.use_gpu_pipeline = False
+    params.physx.solver_type = 1
+    params.physx.num_position_iterations = 4
+    params.physx.num_velocity_iterations = 2
+    sim = gym.create_sim(0, -1, gymapi.SIM_PHYSX, params)
+    assert sim is not None
+    cases = []
+    source = ET.parse(HUMAN)
+    try:
+        for label, geometry, limited, initial in [
+            ('capsule_z_out', 'original', True, [-1.5957963466644287,0.,.0001]),
+            ('capsule_y_out', 'original', True, [-1.5957963466644287,-.0001,0.]),
+            ('capsule_yin_zout', 'original', True, [-1.5957963466644287,.001,.0001]),
+            ('capsule_zout_unlimited', 'original', False, [-1.5957963466644287,0.,.0001]),
+            ('sphere_z_out', 'sphere', True, [-1.5957963466644287,0.,.0001]),
+            ('sphere_y_out', 'sphere', True, [-1.5957963466644287,-.0001,0.]),
+            ('capsule_zeroX_zout', 'original', True, [0.,0.,.0001]),
+            ('sphere_zeroX_zout', 'sphere', True, [0.,0.,.0001]),
+        ]:
+            axes, gain = (0,1,2), 0.
+            root = ET.Element('mujoco', model=label)
+            ET.SubElement(root, 'compiler', angle='degree')
+            world = ET.SubElement(root, 'worldbody')
+            base = ET.SubElement(world, 'body', name='base')
+            ET.SubElement(base, 'geom', type='sphere', size='.05', mass='1')
+            hip = copy.deepcopy(source.find(".//body[@name='L_Hip']"))
+            for child in list(hip):
+                if child.tag == 'body': hip.remove(child)
+            joints = hip.findall('joint')
+            for joint in joints: hip.remove(joint)
+            for k in axes:
+                joint = joints[k]
+                joint.set('limited', 'true' if limited else 'false')
+                hip.insert(list(axes).index(k), joint)
+            if geometry != 'original':
+                geom = hip.find('geom')
+                geom.attrib.clear()
+                if geometry == 'sphere': geom.attrib.update(type='sphere', size='.06', mass='5')
+                elif geometry == 'box': geom.attrib.update(type='box', size='.06 .07 .15', mass='5', pos='.03 .005 -.19')
+                else: geom.attrib.update(type='capsule', size='.0605', fromto='0 0 -.0758 0 0 -.303', mass='5')
+            base.append(hip)
+            asset_path = out/(label+'.xml')
+            ET.ElementTree(root).write(str(asset_path))
+            pins[str(asset_path)] = sha(asset_path)
+            options = gymapi.AssetOptions()
+            options.fix_base_link = True
+            asset = gym.load_asset(sim, str(out), asset_path.name, options)
+            assert asset is not None
+            env = gym.create_env(sim, gymapi.Vec3(-1,-1,-1), gymapi.Vec3(1,1,1), 1)
+            actor = gym.create_actor(env, asset, gymapi.Transform(), label, len(cases), 1)
+            props = gym.get_actor_dof_properties(env, actor)
+            props['driveMode'] = gymapi.DOF_MODE_EFFORT
+            props['stiffness'] = gain
+            props['damping'] = 75. if gain else 0.
+            props['effort'] = 300.
+            assert gym.set_actor_dof_properties(env, actor, props) is not False
+            actual_props = gym.get_actor_dof_properties(env, actor)
+            assert all(np.array_equal(props[k],actual_props[k]) for k in props.dtype.names)
+            assert list(gym.get_actor_dof_names(env,actor)) == [joints[k].get('name') for k in axes]
+            assert len(actual_props) == 3 and bool(np.all(actual_props['hasLimits'] == limited))
+            assert gym.enable_actor_dof_force_sensors(env, actor) is not False
+            cases.append(dict(label=label, env=env, actor=actor, q0=np.array(initial,dtype=np.float32)[list(axes)],
+                              names=list(gym.get_actor_dof_names(env,actor)), asset_sha256=sha(asset_path),
+                              properties={k:props[k].tolist() for k in props.dtype.names}, body_properties=serialize(gym.get_actor_rigid_body_names(env,actor),gym.get_actor_rigid_body_properties(env,actor)), rows=[]))
+        save(out/'all_inputs_before_simulation.json',pins)
+        assert gym.prepare_sim(sim)
+        for case in cases:
+            state = np.zeros(3, dtype=gymapi.DofState.dtype)
+            state['pos'] = case['q0']
+            assert gym.set_actor_dof_states(case['env'],case['actor'],state,gymapi.STATE_ALL) is not False
+            assert gym.set_actor_dof_position_targets(case['env'],case['actor'],case['q0']) is not False
+        for step in range(1201):
+            for case in cases:
+                env, actor = case['env'],case['actor']
+                state = gym.get_actor_dof_states(env,actor,gymapi.STATE_ALL)
+                bodies = gym.get_actor_rigid_body_states(env,actor,gymapi.STATE_ALL)
+                contact_count = len(gym.get_env_rigid_contacts(env))
+                assert contact_count == 0
+                assert np.isfinite(state['pos']).all() and np.isfinite(state['vel']).all()
+                if step == 0: assert np.array_equal(state['pos'],case['q0'])
+                case['rows'].append(dict(step=step, q=state['pos'].astype(float).tolist(),
+                                        qd=state['vel'].astype(float).tolist(), bodies=plain(bodies),
+                                        contact_count=contact_count,force_sensor=gym.get_actor_dof_forces(env,actor).astype(float).tolist(),
+                                        target=gym.get_actor_dof_position_targets(env,actor).astype(float).tolist()))
+            if step < 1200:
+                gym.simulate(sim)
+                gym.fetch_results(sim,True)
+        for case in cases:
+            del case['env'],case['actor']
+            case['q0'] = case['q0'].astype(float).tolist()
+        save(out/'results.json', dict(scope='Isolated fixed-root 3DOF hip; zero gravity, no ground, no guitar, no contacts; not a stability trial.',dt_s=1/240,cases=cases))
+        print(json.dumps([dict(label=c['label'],q0=c['q0'],q1=c['rows'][1]['q'],qd1=c['rows'][1]['qd'],qend=c['rows'][-1]['q']) for c in cases]))
+    except BaseException:
+        partial=[{**{k:v for k,v in c.items() if k not in ('env','actor','q0')},'q0':np.asarray(c['q0']).tolist()} for c in cases]
+        save(out/'failure.json',dict(traceback=traceback.format_exc(),cases=partial,inputs_unchanged=all(sha(p)==h for p,h in pins.items())))
+        raise
+    finally:
+        gym.destroy_sim(sim)
+    save(out/'verification.json',dict(inputs_unchanged=all(sha(p)==h for p,h in pins.items()),physics_steps=1200,seconds=5.,cases=len(cases),runtime_state_writes=0))
+
+
+if __name__ == '__main__':
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--out',type=Path,required=True)
+    run(parser.parse_args().out.resolve())

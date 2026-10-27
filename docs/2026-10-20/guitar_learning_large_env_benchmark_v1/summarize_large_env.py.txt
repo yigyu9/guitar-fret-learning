@@ -1,0 +1,45 @@
+from pathlib import Path
+import ast,gzip,hashlib,json,sys
+import numpy as np
+import torch
+r=Path('/home/ajou/yigyu/3');base=r/'docs/2026-10-20/guitar_learning_large_env_benchmark_v1'
+sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+source=json.loads((base/'source_manifest.json').read_text())
+assert source=={str(p.resolve()):sha(p) for p in (r/'guitar_learning').rglob('*.py') if 'archive' not in p.parts}
+rows=[]
+reference_settings=json.loads((base/'n2/settings.json').read_text())
+for name in sys.argv[1:]:
+ p=base/name;d=json.loads((p/'report.json').read_text());s=d['settings'];n=s['num_envs'];u=s['updates']
+ assert s['size']=='large' and s['horizon']==1969 and s['device']=='cpu' and s['specialist']['role']=='left'
+ checks=dict(same_configuration_except_envs_updates={k:v for k,v in s.items() if k not in ('num_envs','updates')}=={k:v for k,v in reference_settings.items() if k not in ('num_envs','updates')},process_completed=d['completed'],persistent_audit=d.get('persistent_audit',{}).get('completed',False),expected_transitions=d['transitions']==n*1969*u,expected_updates=d['optimizer_updates']==u)
+ for f in ('changed_inputs','guard_violations','missing_import_pins','original_source_parity_errors','physical_flags_errors','worker_failures','missing_worker_audits','cleanup_errors'):checks[f]=not d[f]
+ checks['all_input_pins_current']=all(sha(Path(p))==h for p,h in json.loads((p/'inputs_before.json').read_text()).items())
+ contract=json.loads((p/'training_contract.json').read_text());checks['left512']=contract['observation']['dimension']==512
+ checkpoint=torch.load(p/'final.pt',map_location='cpu',weights_only=False)
+ checks['finite_model']=all(torch.isfinite(v).all() for v in checkpoint['model'].values())
+ checks['checkpoint_updates']=checkpoint['updates']==u
+ def finite(value):
+  if isinstance(value,torch.Tensor):return bool(torch.isfinite(value).all())
+  if isinstance(value,dict):return all(finite(v) for v in value.values())
+  if isinstance(value,(tuple,list)):return all(finite(v) for v in value)
+  return True
+ checks['finite_optimizers']=finite(checkpoint['actor_optimizer']) and finite(checkpoint['value_optimizer'])
+ resources=[]
+ for line in (p/'resources.jsonl').open():resources.append(json.loads(line))
+ phases={}
+ for a in resources:
+  phase=a['phase'];record=phases.setdefault(phase,dict(samples=0,min_available_gib=100.,parent_lifetime_hwm_observed_max_gib=0.,parent_pss_max_gib=0.,parent_rss_current_max_gib=0.,worker_rss_current_sum_max_gib=0.,worker_lifetime_hwm_sum_observed_max_gib=0.,worker_pss_sum_max_gib=0.))
+  record['parent_rss_current_max_gib']=max(record['parent_rss_current_max_gib'],(a['parent_memory']['rss_current_bytes'] or 0)/2**30)
+  record['worker_rss_current_sum_max_gib']=max(record['worker_rss_current_sum_max_gib'],sum((w['memory']['rss_current_bytes'] or 0) for w in a['workers'])/2**30)
+  record['samples']+=1;record['min_available_gib']=min(record['min_available_gib'],a['available_memory_bytes']/2**30)
+  record['parent_lifetime_hwm_observed_max_gib']=max(record['parent_lifetime_hwm_observed_max_gib'],a['parent_memory']['rss_peak_bytes']/2**30)
+  record['parent_pss_max_gib']=max(record['parent_pss_max_gib'],(a['parent_memory']['pss_current_bytes'] or 0)/2**30)
+  record['worker_lifetime_hwm_sum_observed_max_gib']=max(record['worker_lifetime_hwm_sum_observed_max_gib'],sum((w['memory']['rss_peak_bytes'] or 0) for w in a['workers'])/2**30)
+  record['worker_pss_sum_max_gib']=max(record['worker_pss_sum_max_gib'],sum((w['memory']['pss_current_bytes'] or 0) for w in a['workers'])/2**30)
+ song=json.loads((p/'song_report.json').read_text())
+ row=dict(run=name,num_envs=n,updates=u,checks=checks,all_checks_passed=all(checks.values()),minimum_available_gib=d['resources']['min_available_memory_bytes']/2**30,wall_s=d['wall_s'],runner_transitions_per_s=d['transitions']/d['wall_s'],collection_s=d['timers']['collection_s'],update_s=d['timers']['update_s'],collection_transitions_per_s=d['collection_transitions_per_s'],transitions=d['transitions'],phases=phases,completed_episodes=song['completed_episodes'],full_safe_episodes=song['full_safe_episodes'],physical_failure_episodes=song['physical_failure_episodes'],whole_song_successful_episodes=song['whole_song_successful_episodes'],final_sha256=sha(p/'final.pt'))
+ rows.append(row)
+result=dict(scope='current left512 large CPU whole-song horizon1969; resource/execution evidence, not convergence or long-term leak proof',resource_scope='phase metrics: approximately5s and phase-transition samples; HWM is lifetime highwater and sum of worker HWM is not simultaneous peak; overall available minimum also includes step samples; runner throughput excludes outer CLI setup/final song summary',source_files=len(source),source_unchanged=True,runs=rows)
+(base/'comparison.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
+print(json.dumps({k:v for k,v in result.items() if k!='runs'}))
+for row in rows:print(json.dumps({k:v for k,v in row.items() if k not in ('phases','checks')},ensure_ascii=False))

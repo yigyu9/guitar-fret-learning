@@ -1,0 +1,181 @@
+"""Fixed timing settings, spawn dispatch, actor initialization and native I/O contracts."""
+import copy
+import gzip
+import json
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+import numpy as np
+import torch
+from guitar_learning.training import parallel, ppo
+from guitar_learning.timing import timing_environment, timing_transfer
+from guitar_learning.training import runner as train_parallel
+from guitar_learning.skills import specialist_parallel
+from guitar_learning.tool.training import train_specialists
+from guitar_learning.tool.evaluation.evaluate_timing import evaluate
+from guitar_learning.tool.training.train_timing import settings_document, run, summarize_run, timing_native_environment, timing_compact
+
+
+class TimingRunnerTests(unittest.TestCase):
+    def test_settings_are_explicit_fixed_and_preserve_safety_cost(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            actor = Path(temporary)/'actor.pt'; actor.touch()
+            source = dict(specialist=dict(role='left'), timing=dict(stage_index=0, pre_roll_s=1.),
+                          actor_initialization=str(actor), actor_initialization_kind='ppo')
+            before = copy.deepcopy(source)
+            result = settings_document(source)
+            self.assertEqual(before, source)
+            self.assertEqual(result['timing']['stage_index'], 0)
+            self.assertEqual(result['ppo']['cost_weight'], 1.)
+            self.assertEqual(result['skill'], 'timed')
+            for modification in (dict(timing=None), dict(timing=dict(stage_index=5)),
+                dict(actor_initialization_kind='auto'), dict(actor_initialization='relative.pt'),
+                dict(specialist=dict(role='joint')), dict(skill='hold'), dict(tempo_scale=.5),
+                dict(specialist=dict(role='left', left_checkpoint=str(actor)))):
+                with self.subTest(modification=modification), self.assertRaises(ValueError):
+                    settings_document(dict(source, **modification))
+
+    def test_worker_dispatch_preserves_fixed_stage_and_timing_logs(self):
+        spec = dict(config={}, out='/unused', bundle='unused', stage='B',
+            specialist=dict(role='right'), timing=dict(stage_index=1, pre_roll_s=1.))
+        with patch.dict(sys.modules, {'isaacgym': SimpleNamespace()}), \
+             patch.object(timing_environment, 'build_environment', return_value='environment') as build, \
+             patch.object(parallel, '_compact', parallel._compact), \
+             patch.object(torch, 'set_num_threads'):
+            self.assertEqual(timing_native_environment(spec, 2), 'environment')
+            self.assertIs(parallel._compact, timing_compact)
+            self.assertEqual(build.call_args.kwargs['role'], 'right')
+            self.assertEqual(build.call_args.kwargs['timing'].stage_index, 1)
+            self.assertNotIn('skill', build.call_args.kwargs)
+
+    def dispatch(self, resume=False, failure=False):
+        from guitar_learning.native.lower_body_release_v1 import common
+        from guitar_learning.training.recording import digest
+        calls = []
+        class Trainer:
+            def __init__(self, model, config=None): calls.append('optimizer')
+        def transfer(model, path, *, kind):
+            self.assertEqual(kind, 'ppo')
+            calls.append('actor_transfer')
+            return {'scope': 'synthetic test'}
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            actor = folder/'actor.pt'; actor.write_bytes(b'unchanged actor fixture')
+            settings_path = folder/'settings.json'; settings_path.write_text('{}')
+            settings = settings_document(dict(specialist=dict(role='left'), timing=dict(stage_index=0),
+                actor_initialization=str(actor), actor_initialization_kind='ppo'))
+            args = SimpleNamespace(out=folder/'run', settings=settings_path,
+                                   resume=folder/'resume.pt' if resume else None)
+            args.out.mkdir()
+            base_pool = parallel.Pool
+            original_stage_pool = specialist_parallel.SpecialistPool
+            original_argv = sys.argv
+            def core():
+                self.assertEqual(train_parallel.settings_document({}), settings)
+                self.assertEqual(sys.argv[1:5], ['--settings', str(settings_path), '--out', str(args.out)])
+                with patch.object(base_pool, '__init__', return_value=None) as pool:
+                    parallel.Pool([dict(out='unused')])
+                self.assertIs(pool.call_args.kwargs['worker_factory'], timing_native_environment)
+                self.assertEqual(pool.call_args.args[0][0]['timing'], settings['timing'])
+                self.assertEqual(common.pin('unused')[str(actor.resolve())], digest(actor))
+                ppo.PPOTrainer(object())
+                if failure: raise KeyboardInterrupt()
+            def pin(config, extra=()): return {str(p.resolve()): digest(p) for p in extra}
+            with patch.dict(sys.modules, {'isaacgym': SimpleNamespace()}), \
+                 patch.object(ppo, 'PPOTrainer', Trainer), patch.object(common, 'pin', pin), \
+                 patch.object(timing_transfer, 'apply_actor_initialization', transfer), \
+                 patch.object(train_parallel, 'main', core):
+                if failure:
+                    with self.assertRaises(KeyboardInterrupt): run(settings, args)
+                else: self.assertIsNone(run(settings, args))
+                self.assertIs(ppo.PPOTrainer, Trainer)
+                self.assertIs(common.pin, pin)
+                self.assertIs(specialist_parallel.SpecialistPool, original_stage_pool)
+                self.assertIs(sys.argv, original_argv)
+            metadata = json.loads((args.out/'timing_initialization.json').read_text())
+            self.assertEqual(metadata['mode'], 'strict_resume' if resume else 'actor_only_new_timing_critics_and_optimizers')
+        return calls
+
+    def test_actor_transfer_precedes_optimizer_and_interrupt_restores_dispatch(self):
+        self.assertEqual(self.dispatch(), ['actor_transfer', 'optimizer'])
+        self.assertEqual(self.dispatch(failure=True), ['actor_transfer', 'optimizer'])
+
+    def test_resume_pins_source_but_does_not_reinitialize_actor(self):
+        self.assertEqual(self.dispatch(resume=True), ['optimizer'])
+
+    def test_timing_summary_preserves_original_music_without_promotion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)
+            (out/'report.json').write_text(json.dumps(dict(completed=True, transitions=1,
+                settings=dict(specialist=dict(role='right'), timing=dict(stage_index=0)))))
+            episode = dict(reason='timeline_complete', reward=1., cost=0., steps=300,
+                score_time_s=4., timing=dict(stage_success=True), music=dict(matched50=0))
+            with gzip.open(out/'transitions.jsonl.gz', 'wt') as stream:
+                stream.write(json.dumps(dict(infos=[dict(timing=episode['timing'], score_time_s=4., episode=episode)]))+'\n')
+            result = summarize_run(out)
+            self.assertEqual(result['successful_episodes'], 1)
+            self.assertEqual(result['episodes'][0]['music']['matched50'], 0)
+            self.assertIn('independent', result['scope'])
+
+
+class TimingEvaluationTests(unittest.TestCase):
+    def test_full_five_second_evaluation_records_both_clocks_and_four_native_samples(self):
+        from guitar_learning.imitation import imitation_io
+        from guitar_learning.skills import specialist_policy
+        from guitar_learning.tool.training import train_timing
+        contract = {'explicit': 'synthetic CPU interface fixture'}
+        class Environment:
+            task = SimpleNamespace(duration_s=5.)
+            def __init__(self): self.contract = contract; self.closed = False
+            def observation(self):
+                return dict(state=np.zeros(536, np.float32), events=np.zeros((64, 24), np.float32),
+                    mask=np.ones(64, bool), priority_events=np.zeros((2, 24), np.float32), priority_mask=np.ones(2, bool))
+            def reset(self): self.ticks = 0; return self.observation(), {'training_contract': contract}
+            def step(self, action):
+                self.ticks += 1
+                timing = dict(stage_success=self.ticks == 300)
+                info = dict(timing=timing, score_time_s=self.ticks/60.-1., music=dict(matched50=0),
+                    physics_measurements=[{'physics_step': self.ticks*4+i} for i in range(4)],
+                    native_control=dict(physics_samples240=[{'native': {'physics_step': self.ticks*4+i}} for i in range(4)]))
+                if self.ticks == 300:
+                    info['episode'] = dict(reason='timeline_complete', timing=timing, music=info['music'])
+                return self.observation(), 0., self.ticks == 300, False, info
+            def close(self): self.closed = True
+        class Model:
+            architecture = dict(contract=contract)
+            def __init__(self, state_dim, **kwargs):
+                self.dimension = state_dim
+            def to(self, device): return self
+            def eval(self): return self
+            def act(self, *args, **kwargs): return {'action': torch.zeros(1, 39)}
+        env = Environment()
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            actor = folder/'bc.pt'; torch.save(dict(architecture=dict(role='left')), actor)
+            settings_path = folder/'settings.json'; settings_path.write_text('{}')
+            settings = dict(specialist=dict(role='left'), timing=dict(stage_index=0), actor_initialization=str(actor),
+                actor_initialization_kind='bc', size='small', device='cpu')
+            args = SimpleNamespace(initialization=actor, run=None, out=folder/'evaluation', settings=settings_path, episodes=2)
+            with patch.dict(sys.modules, {'isaacgym': SimpleNamespace()}), \
+                 patch.object(timing_environment, 'build_environment', return_value=env), \
+                 patch.object(specialist_policy, 'SpecialistPolicy', Model), \
+                 patch.object(imitation_io, 'pin_inputs', return_value={'fixture': 'sha'}), \
+                 patch.object(imitation_io, 'verify_inputs', return_value=True), \
+                 patch.object(timing_transfer, 'apply_actor_initialization', return_value={'scope': 'synthetic'}), \
+                 patch.object(train_timing, 'timing_compact', lambda env, info, action: {'timing': info['timing'], 'score_time_s': info['score_time_s']}):
+                result = evaluate(settings, args)
+            self.assertEqual(result['successful_episodes'], 2)
+            self.assertTrue(result['completed'] and env.closed)
+            with gzip.open(args.out/'transitions.json.gz', 'rt') as stream: rows = json.load(stream)
+            self.assertEqual(len(rows), 600)
+            self.assertEqual(len(rows[0]['observation']['state']), 536)
+            self.assertEqual(len(rows[-1]['native_physics_samples240']), 4)
+            self.assertEqual(len(rows[-1]['physics_measurements']), 4)
+            self.assertEqual(rows[-1]['info']['score_time_s'], 4.)
+            self.assertEqual(result['episodes'][0]['music']['matched50'], 0)
+
+
+if __name__ == '__main__': unittest.main()

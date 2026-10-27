@@ -1,0 +1,86 @@
+"""Fill the initial right-thigh support gap without moving the guitar."""
+from pathlib import Path
+import numpy as np
+from scipy.optimize import brentq, least_squares
+from scipy.spatial.transform import Rotation
+from .common import ROOT, A, BASE, HUMAN, read, save, sha, pin, verify
+from .upright_source_v1 import INITIAL, NATIVE, full_fk, make_state, metrics
+from .source_geometry_v1 import foot_vertices
+from stability_adapter_2.om_axilla_source_geometry_v3 import CapsuleBodyDistance
+
+
+def main():
+    source = BASE/'upright_horizontal_v1/source_v3'
+    out = BASE/'upright_horizontal_v1/source_v4'
+    out.mkdir(exist_ok=False)
+    plans = [ROOT/'docs/plans'/n for n in ('upright_horizontal_20261015.md', 'upright_horizontal_yaw_20261015.md',
+              'upright_horizontal_left_clearance_20261015.md', 'upright_horizontal_hip_contact_20261015.md')]
+    pins = pin(extra=plans+[source/'candidate.json', source/'report.json', INITIAL, NATIVE/'native_properties.json'])
+    save(out/'inputs_before.json', pins)
+    candidate, report, initial = read(source/'candidate.json'), read(source/'report.json'), read(INITIAL)
+    names, bodies = initial['joint_names'], initial['human_body_names']
+    q0 = np.array(candidate['q_ref_rad'])
+    fk, _ = full_fk(names, bodies, candidate['expected_initial_state'], q0)
+    before = fk(q0)
+    q = q0.copy()
+    gp = np.array(candidate['guitar_position_W_m'])
+    gr = Rotation.from_quat(candidate['guitar_quaternion_xyzw'])
+    distance = CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']), HUMAN)
+    hip = names.index('R_Hip_x')
+    def hip_gap(delta):
+        trial = q0.copy()
+        trial[hip] += delta
+        return distance.measure(fk(trial), 'R_Hip', gp, gr)['gap_m']-.0004
+    delta = brentq(hip_gap, -.1, 0., xtol=1e-10)
+    q[hip] += delta
+    leg = np.array([names.index(n) for n in ('R_Knee_x','R_Ankle_x','R_Ankle_y','R_Ankle_z','R_Toe_x')])
+    bounds = np.column_stack([initial['PD_properties']['lower'], initial['PD_properties']['upper']])
+    def foot_residual(v):
+        trial = q.copy()
+        trial[leg] = v
+        poses = fk(trial)
+        feet = foot_vertices(poses)
+        rows = []
+        for n in ('R_Ankle','R_Toe'):
+            bottom = feet[n][1]
+            rows.extend([2000*np.minimum(bottom[:,2]-.005, 0), 30*(bottom[:,2]-.005),
+                         120*(before[n][1].inv()*poses[n][1]).as_rotvec()])
+        rows.append(.1*(v-q0[leg]))
+        return np.concatenate(rows)
+    low, high = np.maximum(bounds[leg,0]+1e-6,q0[leg]-.5), np.minimum(bounds[leg,1]-1e-6,q0[leg]+.5)
+    fit = least_squares(foot_residual, np.clip(q[leg],low+1e-8,high-1e-8), bounds=(low,high), max_nfev=150)
+    q[leg] = fit.x
+    q = q.astype(np.float32).astype(float)
+    protected = np.ones(len(q), dtype=bool)
+    protected[np.r_[hip,leg]] = False
+    assert np.array_equal(q[protected],q0[protected]) and np.all(q>=bounds[:,0]) and np.all(q<=bounds[:,1])
+    assert np.array_equal(q[initial['zero_range_indices']],q0[initial['zero_range_indices']])
+    poses = fk(q)
+    state = make_state(initial['native_initial_state'],bodies,q,poses,gp,gr)
+    measured = metrics(poses,distance,gp,gr)
+    feet = {n:dict(min_z_m=float(v[:,2].min()),bottom_z_span_m=float(np.ptp(bottom[:,2])))
+            for n,(v,bottom) in foot_vertices(poses).items()}
+    save(out/'support_candidate.json',{'right_block_cradle':{'capsule_body':measured['capsules'],
+         'upper_arm_witness':measured['capsules']['R_Shoulder'],'scope':'Same level/lateral guitar, initial right-thigh gap filled by finite lower initial pose.'}})
+    candidate.update(q_ref_rad=q.tolist(),expected_initial_state=state,support_candidate=str(out/'support_candidate.json'),
+         lower_deltas_rad={n:float(candidate['lower_deltas_rad'].get(n,0.)+q[j]-q0[j]) for j,n in enumerate(names)
+                           if j in initial['lower_indices'] and abs(candidate['lower_deltas_rad'].get(n,0.)+q[j]-q0[j])>1e-10},
+         scope='Source3 guitar/all upper/left lower preserved; right Hip_x and five effective lower-leg axes adjusted at initialization only.')
+    candidate['predicted_corrected_human_body_poses']={n:state['human_body_states'][bodies.index(n)]['pose']
+          for n in ('L_Hip','L_Knee','L_Ankle','L_Toe','R_Hip','R_Knee','R_Ankle','R_Toe')}
+    save(out/'candidate.json',candidate)
+    save(out/'predicted_state.json',state)
+    valid = (all(v['gap_m']>=.00005 for v in measured['capsules'].values())
+             and abs(measured['capsules']['R_Hip']['gap_m']-.0004)<1e-5
+             and min(v['min_z_m'] for v in feet.values())>=.0005
+             and max(feet[n]['bottom_z_span_m'] for n in ('R_Ankle','R_Toe'))<=.003)
+    report.update(local_geometry_reach_eligible=valid,full_collision_audit_complete=False,candidate_metrics=measured,
+                  right_Hip_x_added_rad=delta,final_foot_source_metrics=feet,
+                  candidate_sha256=sha(out/'candidate.json'),inputs_unchanged=verify(pins))
+    save(out/'report.json',report)
+    print('valid',valid,'hip delta',delta,'Rhip gap',measured['capsules']['R_Hip']['gap_m'],'feet',feet,flush=True)
+    assert valid and verify(pins)
+
+
+if __name__=='__main__':
+    main()

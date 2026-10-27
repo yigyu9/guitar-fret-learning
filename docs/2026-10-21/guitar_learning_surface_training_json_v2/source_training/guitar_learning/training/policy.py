@@ -1,0 +1,114 @@
+"""39 active targets: left33 and right elbow/wrist6; no support/grip outputs."""
+import math
+import copy
+import torch
+from torch import nn
+from torch.distributions import Normal
+import torch.nn.functional as F
+
+
+class Encoder(nn.Module):
+    def __init__(self, state_dim, event_dim, fusion):
+        super().__init__()
+        self.state = nn.Sequential(nn.Linear(state_dim, 256), nn.Tanh(), nn.Linear(256, 256), nn.Tanh())
+        self.event = nn.Sequential(nn.Linear(event_dim, 128), nn.Tanh(), nn.Linear(128, 128), nn.Tanh())
+        self.query = nn.Linear(256, 128, bias=False)
+        layers = []
+        width = 640
+        for output in fusion:
+            layers.extend((nn.Linear(width, output), nn.Tanh()))
+            width = output
+        self.output = nn.Sequential(*layers)
+
+    def forward(self, state, events, mask, priority_events, priority_mask):
+        hidden = self.state(state)
+        tokens = self.event(torch.where(mask[..., None], events, torch.zeros_like(events)))
+        logits = (tokens * self.query(hidden)[:, None]).sum(-1) / math.sqrt(128)
+        logits = logits.masked_fill(~mask, -torch.inf)
+        null = torch.where(mask.any(-1, keepdim=True), -torch.inf, 0.)
+        weights = torch.cat((logits, null), -1).softmax(-1)[:, :-1]
+        context = (weights[..., None] * tokens).sum(1)
+        priority = self.event(torch.where(priority_mask[..., None], priority_events, torch.zeros_like(priority_events)))
+        priority = priority * priority_mask[..., None]
+        return self.output(torch.cat((hidden, context, priority.flatten(1)), -1))
+
+
+class Policy(nn.Module):
+    role_sizes = (33, 6)
+
+    def __init__(self, state_dim, event_dim=24, size="medium", contract=None):
+        super().__init__()
+        if min(state_dim, event_dim) < 1:
+            raise ValueError('positive explicit dimensions required')
+        if not isinstance(contract, dict) or not contract:
+            raise ValueError('explicit nonempty input/control contract required')
+        sizes = dict(small=(256, 256, 256), medium=(512, 512, 256), large=(1024, 1024, 512))
+        if size not in sizes or event_dim != 24:
+            raise ValueError('size must be small/medium/large and event_dim must be 24')
+        fusion = sizes[size]
+        if contract.get('schema') != 'guitar_learning.training.v1' or any(
+                not isinstance(contract.get(key), dict) for key in ('observation', 'action', 'task', 'reward', 'termination')):
+            raise ValueError('training schema and observation/action/task/reward/termination dictionaries required')
+        self.architecture = dict(schema='guitar_attention39_v1', state_dim=state_dim, event_dim=event_dim,
+                                 size=size, state_layers=(256,256), event_layers=(128,128), fusion=fusion,
+                                 normalization='fixed_observation_scaling_no_running_updates',
+                                 roles=self.role_sizes, priority_slots=('current','nearest_strict_deadline'),
+                                 contract=copy.deepcopy(contract))
+        self.actor_encoder = Encoder(state_dim,event_dim,fusion)
+        self.value_encoder = Encoder(state_dim,event_dim,fusion)
+        self.actor_heads = nn.ModuleList(nn.Linear(fusion[-1],n) for n in self.role_sizes)
+        for head in self.actor_heads:
+            nn.init.zeros_(head.weight)
+            nn.init.zeros_(head.bias)
+        self.log_std = nn.Parameter(torch.full((39,),-3.))
+        self.reward_critic = nn.Linear(fusion[-1],1)
+        self.cost_critic = nn.Linear(fusion[-1],1)
+
+    def actor_parameters(self):
+        return [*self.actor_encoder.parameters(),*self.actor_heads.parameters(),self.log_std]
+
+    def value_parameters(self):
+        return [*self.value_encoder.parameters(),*self.reward_critic.parameters(),*self.cost_critic.parameters()]
+
+    def _validate(self,state,events,mask,priority_events,priority_mask):
+        if state.ndim!=2 or state.shape[-1]!=self.architecture['state_dim']:
+            raise ValueError('state must be [B,state_dim]')
+        if events.ndim!=3 or events.shape[0]!=state.shape[0] or events.shape[-1]!=self.architecture['event_dim']:
+            raise ValueError('events must be [B,K,event_dim]')
+        if mask.shape!=events.shape[:2] or mask.dtype!=torch.bool:
+            raise ValueError('mask must be bool [B,K]')
+        if priority_events.shape!=(state.shape[0],2,self.architecture['event_dim']) or priority_mask.shape!=(state.shape[0],2) or priority_mask.dtype!=torch.bool:
+            raise ValueError('priority events[B,2,E] and bool priority_mask[B,2] required')
+        if not torch.isfinite(priority_events[priority_mask]).all():
+            raise ValueError('nonfinite valid priority event')
+        if not torch.isfinite(state).all() or not torch.isfinite(events[mask]).all():
+            raise ValueError('nonfinite valid policy input')
+
+    @staticmethod
+    def log_probability(mean,log_std,latent):
+        correction=2*(math.log(2)-latent-F.softplus(-2*latent))
+        return (Normal(mean,log_std.exp()).log_prob(latent)-correction).sum(-1)
+
+    def forward(self,state,events,mask,priority_events,priority_mask):
+        self._validate(state,events,mask,priority_events,priority_mask)
+        actor=self.actor_encoder(state,events,mask,priority_events,priority_mask)
+        value=self.value_encoder(state,events,mask,priority_events,priority_mask)
+        mean=torch.cat([head(actor) for head in self.actor_heads],-1)
+        log_std=self.log_std.clamp(-5,2).expand_as(mean)
+        return dict(mean=mean,log_std=log_std,reward_value=self.reward_critic(value).squeeze(-1),
+                    cost_value=self.cost_critic(value).squeeze(-1))
+
+    def act(self,state,events,mask,priority_events,priority_mask,deterministic=False):
+        result=self(state,events,mask,priority_events,priority_mask)
+        latent=result['mean'] if deterministic else Normal(result['mean'],result['log_std'].exp()).sample()
+        result.update(action=latent.tanh(),latent=latent,
+                      logp=self.log_probability(result['mean'],result['log_std'],latent))
+        return result
+
+    def evaluate(self,state,events,mask,priority_events,priority_mask,latent):
+        if latent.shape!=(state.shape[0],39) or not torch.isfinite(latent).all():
+            raise ValueError('finite latent[B,39] required')
+        result=self(state,events,mask,priority_events,priority_mask)
+        result.update(logp=self.log_probability(result['mean'],result['log_std'],latent),
+                      entropy=Normal(result['mean'],result['log_std'].exp()).entropy().sum(-1))
+        return result

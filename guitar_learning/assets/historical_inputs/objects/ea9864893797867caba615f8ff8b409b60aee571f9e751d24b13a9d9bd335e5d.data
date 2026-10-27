@@ -1,0 +1,59 @@
+"""Finite leg joint targets keep soles level as actual hips move; gains unchanged."""
+import itertools
+import xml.etree.ElementTree as ET
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from ..lower_body_release_v1.common import HUMAN
+from ..lower_body_release_v1.controller_horizontal_v4 import Controller as PreviousController
+from .runtime_v1 import Scene as InitialSeatScene
+
+
+class Scene(InitialSeatScene):
+    def command(self,named):
+        named,diagnostic=self.foot_target_logic.apply(named)
+        row=super().command(named);row['foot_world_target_IK']=diagnostic
+        return row
+
+
+class Controller(PreviousController):
+    def __init__(self,scene):
+        super().__init__(scene)
+        assert scene.cfg['foot_support_mode']=='actual_hip_level_soles_finite_target_v2'
+        self.leg=np.array([scene.names.index(side+'_'+n) for side in ('L','R') for n in ('Knee_x','Ankle_x','Ankle_y','Ankle_z','Toe_x')])
+        self.locals={};self.reference=self.fk(scene.q_ref)
+        signs=np.array(list(itertools.product((-1.,1.),repeat=3)))
+        for body in ET.parse(HUMAN).iter('body'):
+            name=body.get('name')
+            if name in ('L_Ankle','L_Toe','R_Ankle','R_Toe'):
+                geom=body.find('geom');half=np.fromstring(geom.get('size'),sep=' ')
+                center=np.fromstring(geom.get('pos'),sep=' ');rotation=Rotation.from_quat(np.roll(np.fromstring(geom.get('quat','1 0 0 0'),sep=' '),-1))
+                self.locals[name]=center+rotation.apply(signs[signs[:,2]==-1]*half)
+        scene.foot_target_logic=self
+
+    def apply(self,named):
+        s=self.s;q=np.array([r['pos'] for r in s.native()['human_dof_states']]);ix=self.leg
+        u=np.clip((s.steps/240)/.5,0,1);ramp=u*u*(3-2*u);goal=.0005-.002*ramp
+        lo=np.maximum(s.lower[ix]+1e-7,s.q_ref[ix]-.6);hi=np.minimum(s.upper[ix]-1e-7,s.q_ref[ix]+.6)
+        def prediction(x):
+            trial=q.copy();trial[ix]=x;return self.fk(trial)
+        def residual(x):
+            poses=prediction(x);rows=[]
+            for name,local in self.locals.items():
+                p,r=poses[name];bottom=p+r.apply(local)
+                rows.extend([2000*(bottom[:,2]-goal),2*(p[:2]-self.reference[name][0][:2])])
+            rows.append(.02*(x-s.q_ref[ix]));return np.concatenate(rows)
+        fit=least_squares(residual,np.clip(s.target[ix],lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=35,ftol=1e-9,xtol=1e-9,gtol=1e-9)
+        ps=prediction(fit.x);feet={}
+        for name,local in self.locals.items():
+            p,r=ps[name];bottom=p+r.apply(local)
+            feet[name]=dict(min_bottom_z_m=float(bottom[:,2].min()),max_bottom_z_m=float(bottom[:,2].max()),bottom_span_m=float(np.ptp(bottom[:,2])))
+        assert np.isfinite(fit.x).all() and all(abs(row['min_bottom_z_m']-goal)<.0005 and row['bottom_span_m']<.001 for row in feet.values()),feet
+        for side in ('L','R'):
+            ankle=np.array([fit.x[list(ix).index(s.names.index(side+'_Ankle_'+axis))] for axis in 'xyz'])
+            assert np.linalg.norm(ankle)<np.deg2rad(160)
+        request=dict(named)
+        for j,value in zip(ix,fit.x):request[s.names[j]]=float(value)
+        return request,dict(desired_source_bottom_z_m=float(goal),ramp_fraction=float(ramp),predicted_feet=feet,
+                            actual_hip_q_rad={s.names[j]:float(q[j]) for j in s.lower_indices if '_Hip_' in s.names[j]},
+                            scope='Only ten finite joint targets; actual hip q in FK. Desired negative source Z induces compliant ground contact, never state injection. Actual feet measured independently.')

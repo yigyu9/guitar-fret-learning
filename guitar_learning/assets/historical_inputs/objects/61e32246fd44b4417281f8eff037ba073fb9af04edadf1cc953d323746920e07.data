@@ -1,0 +1,106 @@
+"""CPU-only runner faults exercise real accounting/finally without native assets."""
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+import numpy as np
+import torch
+from guitar_learning import train_parallel,parallel,policy,ppo
+from guitar_learning.recording import digest
+from guitar_learning.training_log_io import TransitionJournal
+
+
+class TrainingRunnerLoggingTests(unittest.TestCase):
+    def run_core(self,out,fault=False):
+        from guitar_learning.native.lower_body_release_v1 import common
+        settings=out.parent/'settings.json'
+        settings.write_text(json.dumps(dict(num_envs=1,horizon=2,updates=1,device='cpu')))
+        class Pool:
+            contract={'cpu_fixture':True}
+            def __init__(self,specs,**kwargs):self.specs=specs;self.close_diagnostics=[];self.tick=0
+            def reset(self,indices=None):return {'state':np.zeros((1,2),np.float32)},[{}]
+            def step(self,actions):
+                self.tick+=1
+                info=dict(cost=.1,reward_terms={'fixture':1.},task_time_s=self.tick/60.,resource={'rss_peak_kib':1})
+                done=self.tick==2
+                if done:
+                    info.update(termination_reason='timeline_complete',episode=dict(valid=True,
+                        reason='timeline_complete',reward=2.,cost=.2,steps=2,music={}))
+                return {},np.array([1.],np.float32),np.array([done]),np.array([False]),[info]
+            def close(self):
+                path=Path(self.specs[0]['out']);path.mkdir(parents=True,exist_ok=True)
+                (path/'worker_final_audit.json').write_text(json.dumps(dict(worker_id=0,
+                    human_root_fixed=True,guitar_root_fixed=False,guitar_gravity_disabled=False,
+                    headless_description={'camera_count':0})))
+        class Policy:
+            log_std=torch.zeros(39)
+            def __init__(self,*args,**kwargs):pass
+            def to(self,device):return self
+        class Trainer:
+            updates=0
+            def __init__(self,*args):pass
+            def save(self,path,metadata):Path(path).write_text(json.dumps(metadata))
+            def update(self,buffer,completed):self.updates+=1;return {'actor_loss':0.}
+        class Collector:
+            def __init__(self,policy,pool,**kwargs):self.pool=pool
+            def collect(self,horizon,progress_callback):
+                for tick in range(horizon):
+                    self.pool.step(np.zeros((1,39)))
+                    progress_callback({'ticks':tick+1,'horizon':horizon})
+                return {},[]
+        class FaultJournal(TransitionJournal):
+            def write(self,row):
+                super().write(row)
+                raise OSError('injected post-write failure')
+        def publish(trainer,out,**kwargs):
+            trainer.save(out/'final.pt',metadata={})
+            return {'mode':'fixture'}
+        with patch.dict(sys.modules,{'isaacgym':SimpleNamespace()}), \
+             patch.object(sys,'argv',['train','--settings',str(settings),'--out',str(out)]), \
+             patch.object(parallel,'Pool',Pool),patch.object(parallel,'Collector',Collector), \
+             patch.object(policy,'Policy',Policy),patch.object(ppo,'PPOTrainer',Trainer), \
+             patch.object(common,'pin',lambda config,extra:{str(config):digest(config)}), \
+             patch.object(train_parallel,'project_source_paths',return_value=set()), \
+             patch.object(train_parallel,'publish_final_checkpoint',publish), \
+             patch.object(train_parallel,'TransitionJournal',FaultJournal if fault else TransitionJournal):
+            if fault:
+                with self.assertRaisesRegex(OSError,'injected post-write failure'):train_parallel.main()
+            else:train_parallel.main()
+        return json.loads((out/'report.json').read_text())
+
+    def test_completed_update_has_one_final_checkpoint_and_consistent_stream_summary(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out=Path(temporary)/'run';report=self.run_core(out)
+            self.assertTrue(report['completed'])
+            self.assertEqual(report['accounting']['committed_transitions'],2)
+            self.assertEqual(report['accounting']['durable_transitions'],2)
+            self.assertEqual(report['accounting']['discarded_transitions'],0)
+            self.assertFalse((out/'checkpoint_000000.pt').exists())
+            self.assertTrue((out/'final.pt').exists())
+            self.assertFalse((out/'rollout_first.pt').exists())
+            summary=json.loads((out/'training_summary.json').read_text())
+            self.assertEqual(summary['completed_episodes'],1)
+            self.assertEqual(summary['reward_terms']['fixture'],2.)
+            self.assertEqual(report['committed_updates_in_run'],1)
+
+    def test_parent_failure_after_write_has_authoritative_journal_discard_count(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out=Path(temporary)/'run';report=self.run_core(out,fault=True)
+            self.assertFalse(report['completed'])
+            self.assertEqual(report['failure']['type'],'OSError')
+            self.assertEqual(report['accounting']['sampled_transitions'],1)
+            self.assertEqual(report['accounting']['logged_transitions'],1)
+            self.assertEqual(report['accounting']['discarded_transitions'],1)
+            self.assertEqual(report['partial_collection']['collector_buffered_transitions'],0)
+            self.assertEqual(report['partial_collection']['discarded_transitions'],1)
+            self.assertEqual(report['optimizer_updates'],0)
+            summary=json.loads((out/'training_summary.json').read_text())
+            self.assertEqual(summary['transitions'],1)
+            self.assertEqual(summary['reward_terms']['fixture'],1.)
+            self.assertTrue((out/'failure_last_valid.pt').exists())
+
+
+if __name__=='__main__':unittest.main()

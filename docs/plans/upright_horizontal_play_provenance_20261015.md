@@ -1,0 +1,5 @@
+# 동작 시험 wrapper 입력 보존 보완
+
+baseline은run_v1으로9초완료했고원5초state/sensor가동일하다. 다음run_v2는물리Scene/Controller/Motion을그대로사용하고provenance만보완한다. runtime에필요한5개소스와offlineproducer를명시열거해분석용새파일작성과native입력핀의경쟁을없앤다. source_report와preflight누락보완문서를outerbefore에직접추가한다. baseline의원before/출력은수정하지않는다.
+
+preflight_v1의source4 report직접pin누락은기존sealedinventory SHA 및현재값대조와spec bodycenter일치로보완기록했다. 과거직접before측정을소급추가했다고주장하지않는다. 실제native는innerrunner가source_report를직접pin한다. 모든최종판정은innerreport와outerwrapper입력불변을모두필수로한다. source구성/목표/gain/cap/시각/기간/안전기준변경없음.

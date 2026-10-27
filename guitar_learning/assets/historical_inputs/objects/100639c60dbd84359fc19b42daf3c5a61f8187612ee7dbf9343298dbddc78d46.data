@@ -1,0 +1,115 @@
+import copy
+import unittest
+from unittest.mock import patch
+
+import numpy as np
+
+from guitar_learning.contact_recovery.controller import Controller, validate_perturbation
+from guitar_learning.tests.test_transition_contact_teacher import environment
+from guitar_learning.tests.test_contact_recovery_capture import measured, SAFE
+
+
+class Teacher:
+    def __init__(self, *args): self.diagnostic = dict(contact_feedback_applied=True)
+    def action(self, now, observation=None, env=None): return [0.]*39
+
+
+def fixture():
+    env, task, plan = environment()
+    target = task.targets[0]
+    def music(step, clean=False):
+        result = measured(step, clean)
+        result['targets'][target.target_id] = result['targets'].pop('target')
+        result['physics_step'] = env.last_sample['native']['physics_step']+step
+        return result
+    env.last_measured = music(0)
+    env.last_safety = copy.deepcopy(SAFE)
+    return env, task, plan, music
+
+
+class RecoveryControllerTests(unittest.TestCase):
+    def test_probe_changes_only_named_requested_target_and_leaves_scene_untouched(self):
+        env, task, plan, music = fixture()
+        perturbation = dict(channel='L_Wrist_x', delta_rad=.005, start_s=0.,
+                            duration_s=1/60., eligibility='pre_contact')
+        previous = env.control.codec_previous.copy()
+        sample = copy.deepcopy(env.last_sample)
+        with patch('guitar_learning.contact_recovery.controller.ContactTeacher', Teacher):
+            controller = Controller(plan, task, perturbation)
+            action = np.asarray(controller.action(0., env=env))
+        changed = np.flatnonzero(action)
+        self.assertEqual(changed.tolist(), [9])
+        self.assertTrue(controller.diagnostic['override_active'])
+        self.assertFalse(controller.diagnostic['bc_eligible'])
+        self.assertAlmostEqual(controller.diagnostic['actual_requested_delta_rad'], .005)
+        np.testing.assert_array_equal(previous, env.control.codec_previous)
+        self.assertEqual(sample, env.last_sample)
+        np.testing.assert_array_equal(action[33:], np.zeros(6))
+
+    def test_held_probe_waits_for_actual_50ms_and_expires_by_duration(self):
+        env, task, plan, music = fixture()
+        perturbation = dict(channel='L_Wrist_x', delta_rad=.005, start_s=0.,
+            trigger_until_s=.1, duration_s=1/60., eligibility='held')
+        with patch('guitar_learning.contact_recovery.controller.ContactTeacher', Teacher):
+            controller = Controller(plan, task, perturbation)
+        self.assertEqual(controller.action(0., env=env), [0.]*39)
+        # Initial endpoint is absent; 13 additional samples give12 clean intervals.
+        for step in range(1, 17):
+            row = music(step, True)
+            controller.observe_physics(row, SAFE)
+        env.last_measured = row
+        action = controller.action(16/240., env=env)
+        self.assertNotEqual(action[9], 0.)
+        self.assertTrue(controller.diagnostic['override_active'])
+        for step in range(17, 21):
+            row = music(step, True)
+            controller.observe_physics(row, SAFE)
+        env.last_measured = row
+        self.assertEqual(controller.action(20/240., env=env), [0.]*39)
+        self.assertTrue(controller.diagnostic['probe_finished'])
+
+    def test_missing_substeps_and_unsafe_native_gate_rejected(self):
+        env, task, plan, music = fixture()
+        with patch('guitar_learning.contact_recovery.controller.ContactTeacher', Teacher):
+            controller = Controller(plan, task)
+        controller.action(0., env=env)
+        env.last_measured = music(4)
+        with self.assertRaisesRegex(ValueError, 'must be observed'):
+            controller.action(1/60., env=env)
+
+    def test_only_explicit_left_wrist_or_assigned_finger_small_probes(self):
+        env, task, plan, music = fixture()
+        spec = dict(channel='L_Wrist_x', delta_rad=.005, start_s=0.,
+                    duration_s=1/60., eligibility='pre_contact')
+        for overrides in (dict(channel='R_Wrist_x'), dict(channel='L_Shoulder_x'),
+                          dict(channel='LH:index2'), dict(delta_rad=.02), dict(duration_s=.5),
+                          dict(start_s=task.targets[0].end_s), dict(eligibility='distance'), dict(extra=True)):
+            with self.assertRaises(ValueError): validate_perturbation(dict(spec, **overrides), task)
+
+    def test_all_other_channels_preserve_teacher_bits_before_single_codec_pass(self):
+        env, task, plan, music = fixture()
+        values = [float(np.float32(.017*(i+1))) for i in range(33)]+[0.]*6
+        perturbation = dict(channel='L_Wrist_x', delta_rad=.005, start_s=0.,
+                            duration_s=1/60., eligibility='pre_contact')
+        with patch('guitar_learning.contact_recovery.controller.ContactTeacher', Teacher):
+            controller = Controller(plan, task, perturbation)
+        controller.teacher.action = lambda *args: list(values)
+        action = controller.action(0., env=env)
+        self.assertEqual([v for i,v in enumerate(action) if i != 9],
+                         [v for i,v in enumerate(values) if i != 9])
+        codec = env.control.contract
+        before, _ = codec.targets(values, env.control.codec_previous)
+        requested, _ = codec.targets(action, env.control.codec_previous)
+        self.assertAlmostEqual(requested[codec.active_indices[9]]-before[codec.active_indices[9]], .005)
+
+    def test_live_teacher_retains_measured_state_feedback(self):
+        env, task, plan, music = fixture()
+        controller = Controller(plan, task)
+        output = controller.action(0., env=env)
+        self.assertEqual(len(output), 39)
+        self.assertTrue(controller.diagnostic['teacher_corrective'])
+        self.assertTrue(controller.diagnostic['bc_eligible'])
+        self.assertEqual(output, controller.diagnostic['teacher_action39'])
+
+
+if __name__ == '__main__': unittest.main()

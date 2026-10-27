@@ -1,0 +1,114 @@
+"""검증된 actual-pose 국소 손가락 모델의 명목 source41 도달 검사."""
+import copy
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from .prepare_v1 import PHASE, PLAY, REFERENCE, REPEAT, full_fk, solve_finger, interpolate, pose
+from .finger_fk_v1 import make_finger_fk
+from ..lower_body_release_v1.common import ROOT, read, save, pin, verify, sha
+
+OUT = PLAY/'preflight_v3'
+MODEL = Path(__file__).with_name('finger_fk_v1.py')
+VALIDATION = PHASE/'finger_coordinate_diagnosis_v1/fk_module_test_v1/report.json'
+PLANS = [ROOT/'docs/plans'/n for n in ('grounded_guitar_contact_press_20261016.md', 'grounded_guitar_contact_press_v2_20261016.md')]
+
+
+def main():
+    OUT.mkdir(exist_ok=False)
+    prior = PLAY/'preflight_v1'
+    discovery = pin(extra=[Path(__file__).resolve(), MODEL, VALIDATION, prior/'report.json', prior/'play_spec.json',
+                           PLAY/'preflight_v2/report.json', *PLANS])
+    save(OUT/'discovery_before.json', discovery)
+    oldreport = read(prior/'report.json')
+    source2 = read(PLAY/'preflight_v2/report.json')
+    validation = read(VALIDATION)
+    inputs = pin(extra=list(discovery)+list(oldreport['input_sha256'])+list(source2['input_sha256'])+
+                 list(validation['input_sha256'])+[OUT/'discovery_before.json',
+                 PHASE/'finger_coordinate_diagnosis_v1/analysis_v2/contact_probe_v1/report.json'])
+    save(OUT/'inputs_before.json', inputs)
+    assert verify(discovery) and verify(oldreport['input_sha256']) and verify(source2['input_sha256'])
+    assert verify(validation['input_sha256']) and validation['passed'] and validation['model_sha256'] == sha(MODEL)
+    assert not any('/grounded_guitar_play_v1/'+n in p for p in inputs for n in ('motion_v2.py', 'runtime_v2.py', 'analyze_v3.py'))
+    spec = read(prior/'play_spec.json')
+    spec['finger_control'] = dict(mode='actual_pose_local_FK_contact_target_hold_v1', return_mode='actual13_G_to_actual10_G',
+        full_goal_IK_gate_m=.003, local_prediction_gate_m=.0001, actual4qnorm_gate_rad=.05)
+    initial, state = read(REFERENCE/'initial_values.json'), read(REFERENCE/'final_state.json')
+    names, bodies = initial['joint_names'], initial['human_body_names']
+    qref = np.array(initial['q_ref105_rad'])
+    scene = SimpleNamespace(names=names, human_bodies=bodies, q_ref=qref)
+    actual = np.array([r['pos'] for r in state['human_dof_states']])
+    q = actual.copy()
+    proximal = np.array([names.index(n) for n in oldreport['source_query_latch']['proximal_names']])
+    q[proximal] = oldreport['source_query_latch']['latched_final_command_rad']
+    finger_fk = make_finger_fk(scene, state)
+    global_fk = full_fk(scene, initial['native_initial_state'])
+    finger = finger_fk.indices105
+    distal = np.array([names.index(n+'_'+a) for n in ('R_Elbow', 'R_Wrist') for a in 'xyz'])
+    lower, upper = np.array(initial['PD_properties']['lower']), np.array(initial['PD_properties']['upper'])
+    gp, gr = pose(state['guitar_body_states'][0])
+    origin = gr.inv().apply(pose(state['human_body_states'][bodies.index('LH:index3')])[0]-gp)
+    target = np.array(spec['press']['target_G_m'])
+    seed = q[finger].copy()
+    rows = []
+    for old in oldreport['samples']:
+        time = old['time_s']
+        hover, down = target+[0, 0, .008], target-[0, 0, .004]
+        goal = interpolate(time, [10, 10.8, 11.3, 13, 13.5, 14], np.array([origin, hover, down, down, origin, origin]))
+        values, error64 = solve_finger(finger_fk, q, finger, lower, upper, qref, gp+gr.apply(goal), seed)
+        seed = values.astype(np.float32).astype(float)
+        trial = q.copy(); trial[finger] = seed
+        right = np.array(old['pick_targets_rad']).astype(np.float32).astype(float)
+        trial[distal] = right
+        ferror = float(np.linalg.norm(finger_fk(trial)['LH:index3'][0]-(gp+gr.apply(goal))))
+        rerror = float(np.linalg.norm(global_fk(trial)['RH:pick'][0]-(gp+gr.apply(old['pick_goal_G_m']))))
+        selected = np.r_[finger, distal]
+        frozen = np.setdiff1d(np.arange(105), selected)
+        rows.append(dict(time_s=time, finger_goal_G_m=goal.tolist(), finger_targets_rad=seed.tolist(),
+            finger_IK_error_m=ferror, finger_IK_float64_error_m=error64,
+            inverse_projection_error_rad=finger_fk.last_inverse_projection_error_rad,
+            pick_goal_G_m=old['pick_goal_G_m'], pick_targets_rad=right.tolist(), pick_IK_error_m=rerror,
+            distal_ball_norm_deg=np.degrees(np.linalg.norm(right.reshape(2, 3), axis=1)).tolist(),
+            new10_targets_original_bounds=bool(np.all(trial[selected] >= lower[selected]) and np.all(trial[selected] <= upper[selected])),
+            other95_source_query_q_exact=bool(np.array_equal(trial[frozen], q[frozen]))))
+    original_marker = pose(state['human_body_states'][bodies.index('LH:index3')])[0]
+    anchor_error = float(np.linalg.norm(finger_fk(actual)['LH:index3'][0]-original_marker))
+    gates = dict(oldreport['gates'])
+    gates.update(finger41_float32_reach_under3mm=all(r['finger_IK_error_m'] <= .003 for r in rows),
+        pick41_float32_reach_under2mm=all(r['pick_IK_error_m'] <= .002 for r in rows),
+        new10_float32_targets_original_bounds=all(r['new10_targets_original_bounds'] for r in rows),
+        other95_source_q_exact=all(r['other95_source_query_q_exact'] for r in rows),
+        actual_finger_anchor_under1e_minus12m=anchor_error <= 1e-12,
+        raw_fourstep_fixture_under0p1mm_and_delta0p05=validation['passed'],
+        source1_midpoint_target_exact=spec['press'] == read(prior/'play_spec.json')['press'],
+        original_right_strike_spec_exact=spec['strike'] == read(prior/'play_spec.json')['strike'],
+        inverse_projection_under1e_minus9rad=all(r['inverse_projection_error_rad'] <= 1e-9 for r in rows),
+        original_scene_qref_unchanged=bool(np.array_equal(scene.q_ref, qref)))
+    gates = {k: bool(v) for k, v in gates.items()}
+    assert verify(inputs)
+    save(OUT/'play_spec.json', spec)
+    report = {k: copy.deepcopy(oldreport[k]) for k in ('source_candidate_sha256', 'reference_run', 'repeat_run', 'reference_time_s',
+        'repeat_verification_path', 'repeat_verification_sha256', 'raw_equal_sha256', 'actual10_FK_errors',
+        'actual10_FK_max_position_m', 'actual10_FK_max_rotation_deg', 'actual10_strict_all105_bounds',
+        'inherited_actual_outside_bounds', 'source_query_latch')}
+    report.update(eligible_for_native=all(gates.values()), gates=gates, inputs_unchanged=True,
+        input_sha256=inputs, inputs_after_sha256={p: sha(p) for p in inputs}, spec_sha256=sha(OUT/'play_spec.json'),
+        finger_model_path=str(MODEL), finger_model_sha256=sha(MODEL), raw_local_validation_path=str(VALIDATION),
+        raw_local_validation_sha256=sha(VALIDATION), actual_finger_anchor_error_m=anchor_error,
+        finger_return_target_actual10_G_m=origin.tolist(), press_target=spec['press'], samples=rows, native_simulation_steps=0,
+        scope='실제10초 손가락 pose의 국소 모델에서 명목41 fullgoal 도달을 검사했다. source1 중점/hover/down/오른손은 유지하고 명목13초 requesteddown에서actual10G로 복귀한다. 실제 runtime13초에서는 실제 marker를 새로 capture하므로 그 경로와 이 명목 source 출발점을 구분한다. contact-trigger hold는 이 source에 실행되지 않았다. 41 fullgoal 도달과 before-rate3mm gate는 실제4step.05rad/.1mm 국소검증 및 최종rate된 목표 추적과 별도다. qref/global팔FK/원모델/제어gain·cap은 변경하지 않았다. 실제 압현·접촉·지지 성공을 인증하지 않는다.')
+    save(OUT/'report.json', report)
+    for case in ('press', 'combined'):
+        cfg = read(PLAY/'inputs'/(case+'.json'))
+        cfg.update(play_preflight_report=str(OUT/'report.json'), play_spec=str(OUT/'play_spec.json'),
+            play_spec_sha256=sha(OUT/'play_spec.json'), finger_control_mode=spec['finger_control']['mode'])
+        save(PLAY/'inputs'/(case+'_v3.json'), cfg)
+    assert verify(inputs)
+    save(OUT/'generation.json', dict(input_sha256=inputs, inputs_unchanged=True, eligible_for_native=report['eligible_for_native'], native_simulation_steps=0,
+        output_sha256={str(p): sha(p) for p in (OUT/'play_spec.json', OUT/'report.json', PLAY/'inputs/press_v3.json', PLAY/'inputs/combined_v3.json')}))
+    print(dict(eligible=report['eligible_for_native'], gates=gates, maximum_finger_error_m=max(r['finger_IK_error_m'] for r in rows),
+        maximum_pick_error_m=max(r['pick_IK_error_m'] for r in rows), anchor_error_m=anchor_error), flush=True)
+    assert report['eligible_for_native'], '명목 source 검사 실패: 실제 V3 실행 금지'
+
+
+if __name__ == '__main__':
+    main()

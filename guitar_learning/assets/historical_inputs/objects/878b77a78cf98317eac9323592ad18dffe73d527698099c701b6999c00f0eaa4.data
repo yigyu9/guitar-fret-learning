@@ -1,0 +1,155 @@
+"""Review-gated real reset, original baseline and bounded policy-handoff smoke."""
+import argparse
+import gzip
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+
+def digest(path):
+    value = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            value.update(block)
+    return value.hexdigest()
+
+
+def write(path, value, compressed=False):
+    import numpy as np
+    def encode(value):
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, np.generic):
+            return value.item()
+        raise TypeError(type(value).__name__)
+    opener = gzip.open if compressed else open
+    with opener(path, 'xt') as stream:
+        json.dump(value, stream, allow_nan=False, default=encode)
+        stream.write('\n')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--action-half-range-rad', type=float, required=True)
+    parser.add_argument('--control-steps', type=int, default=60)
+    args = parser.parse_args()
+    if not 1 <= args.control_steps <= 60:
+        parser.error('bounded smoke requires1..60 control steps per segment')
+    import isaacgym
+    import numpy as np
+    from .environment_v2 import FreeGuitarEnvironment, NativeSession
+    from .geometry_v1 import geometry_snapshot
+    from ..front_facing_ready_v1.runtime_v15 import Scene
+    from ..front_facing_ready_v1.runtime_v12 import Controller
+    from ..lower_body_release_v1.common import pin
+    from ..gym_trial_recording import GymTrialRecording
+    config, out = args.config.resolve(), args.out.resolve()
+    out.mkdir(parents=True, exist_ok=False)
+    cfg = json.loads(config.read_text())
+    expected_config = Path(__file__).resolve().parents[2] / 'paper/initial_pose/lower_body_release_v1/front_facing_ready_v1/inputs_spine_margin035_v1/baseline_v1.json'
+    if config != expected_config.resolve() or cfg['ready_case'] != 'baseline':
+        raise ValueError('Only original035 baseline_v1 reset config is accepted')
+    sources = {Path(__file__).resolve(), config}
+    for name, module in list(sys.modules.items()):
+        filename = getattr(module, '__file__', None)
+        if name.startswith('stability_adapter_2.') and filename and filename.endswith('.py'):
+            sources.add(Path(filename).resolve())
+    for value in cfg.values():
+        if isinstance(value, str) and value.startswith('/') and Path(value).is_file():
+            sources.add(Path(value).resolve())
+    pins = pin(config, extra=sources)
+    original_run = expected_config.parent.parent / 'native_baseline_v14'
+    original_manifests = [original_run / name for name in ('attempt.json', 'support_wrapper.json')]
+    expected = {}
+    for manifest in original_manifests:
+        pins[str(manifest.resolve())] = digest(manifest)
+        for filename, value in json.loads(manifest.read_text())['input_sha256'].items():
+            canonical = str(Path(filename).resolve())
+            if canonical in expected and expected[canonical] != value:
+                raise RuntimeError('Conflicting original source SHA: ' + canonical)
+            expected[canonical] = value
+    original_sources = {str(path.resolve()) for path in sources if path.suffix == '.py' and '/free_guitar_learning_v1/' not in str(path)}
+    model_inputs = {filename for filename in pins if Path(filename).suffix.lower() in ('.xml', '.obj', '.stl', '.ply', '.dae')}
+    original_sources.update(model_inputs)
+    original_sources.add(str(config))
+    write(out / 'inputs_before.json', pins)
+    for filename in original_sources:
+        if filename not in expected or expected[filename] != digest(filename):
+            raise RuntimeError('Original source/model expected SHA mismatch: ' + filename)
+    write(out / 'original_source_model_parity.json', {'original_run': str(original_run.resolve()), 'original_manifest_paths': [str(path.resolve()) for path in original_manifests], 'original_expected_SHA_matches_current': True, 'checked_paths': sorted(original_sources)})
+    write(out / 'attempt.json', {'scope': 'New phase1 policy handoff, no learned music reward/policy/checkpoint; not original V3 stability verification', 'config': str(config), 'action_half_range_rad': args.action_half_range_rad, 'action_range_purpose': 'small connection test only, not optimized music range', 'control_steps_per_segment': args.control_steps, 'reset': 'fresh original scene; real22 seconds, never saved-state checkpoint', 'recording': 'original Isaac Gym native whole_body/hands cameras at5fps; no source substitute'})
+    cameras = []
+    def callback_for(kind):
+        recorders = []
+        def callback(scene, phase):
+            if not recorders:
+                state = scene.native()
+                write(out / ('initial_' + kind + '.json'), {
+                    'physics_step': scene.steps, 'native_state': state,
+                    'joint_names': scene.names, 'human_body_names': scene.human_bodies,
+                    'guitar_body_names': scene.guitar_bodies,
+                    'actual_q105_rad': [entry['pos'] for entry in state['human_dof_states']],
+                    'target105_rad': scene.target.astype(float).tolist(),
+                    'native_PD_properties': {key: scene.pd_properties[key].tolist() for key in scene.pd_properties.dtype.names},
+                    'control_K105_Nm_rad': scene.control_kp.tolist(),
+                    'control_D105_Nms_rad': scene.control_kd.tolist(),
+                    'loaded_assets': scene.loaded_assets, 'chair_initial_placement': scene.chair_placement,
+                    'collision_policy': scene.collision_policy, 'actual_shape_properties': scene.shape_properties,
+                    'camera_spec': scene.camera_spec, 'human_rigid_body_properties': scene.human_properties,
+                    'guitar_rigid_body_properties': scene.guitar_properties,
+                    'position_indices': scene.position_indices.tolist(), 'effort_indices': scene.effort_indices.tolist(),
+                    'zero_range_indices': scene.zero_indices.tolist(), 'lower_indices': scene.lower_indices.tolist(),
+                    'human_root_fixed': scene.human_root_fixed, 'guitar_root_fixed': scene.guitar_root_fixed,
+                    'guitar_gravity_disabled': scene.guitar_gravity_disabled})
+                if scene.steps != 0:
+                    raise RuntimeError('Initial native snapshot must precede physics integration')
+                recorder = GymTrialRecording(scene, out / ('media_' + kind))
+                recorder.fps, recorder.interval = 5, 48
+                recorders.append(recorder)
+                cameras.append((kind, recorder))
+            if scene.steps % 48 == 0:
+                recorders[0].capture()
+        return callback
+    baseline = FreeGuitarEnvironment(config, out / 'baseline', action_half_range_rad=args.action_half_range_rad, sample_callback=callback_for('baseline'))
+    policy = FreeGuitarEnvironment(config, out / 'handoff', action_half_range_rad=args.action_half_range_rad, sample_callback=callback_for('handoff'))
+    baseline_rows, zero_rows, nonzero_rows = [], [], []
+    failure = None
+    try:
+        baseline_initial, baseline_meta = baseline.reset()
+        session = baseline.session
+        for _ in range(args.control_steps):
+            target = session.prepare_tick()
+            physics = []
+            for _ in range(4):
+                effort = session.integrate()
+                state = session.scene.native()
+                physics.append({'native': state, 'geometry': geometry_snapshot(state, session.scene.human_bodies, session.scene.guitar_bodies), 'effort': effort})
+                baseline.sample_callback(session.scene, 'original_baseline_continuation')
+            baseline_rows.append({'target105_rad': session.scene.target.astype(float).tolist(), 'target_diagnostic': target, 'physics_samples240': physics})
+        baseline.close()
+        policy_initial, policy_meta = policy.reset()
+        for action, destination in ((np.zeros(39), zero_rows), (np.full(39, .25), nonzero_rows)):
+            for _ in range(args.control_steps):
+                state, metadata = policy.step(action)
+                destination.append(metadata)
+        zero_target_difference = max(float(np.max(np.abs(np.asarray(a['target105_rad']) - np.asarray(b['native_final_target105_rad'])))) for a, b in zip(baseline_rows, zero_rows))
+        write(out / 'comparison.json', {'baseline_initial': baseline_meta, 'handoff_initial': policy_meta, 'zero_policy_vs_original_baseline_max_target_difference_rad': zero_target_difference, 'scope': 'Independent fresh real resets; original dynamic LH maintenance and policy-handoff are intentionally different target experiments; no inherited V3 stability claim', 'baseline_final_physics_step': baseline_rows[-1]['physics_samples240'][-1]['native']['physics_step'], 'handoff_final_physics_step': policy.session.scene.steps, 'policy_forbidden_calls': policy.session.scene.forbidden_calls})
+    except BaseException as error:
+        import traceback
+        failure = {'type': type(error).__name__, 'message': str(error), 'traceback': traceback.format_exc()}
+        raise
+    finally:
+        for environment in (baseline, policy):
+            environment.close()
+        for filename, rows in (('baseline240.json.gz', baseline_rows), ('zero_handoff240.json.gz', zero_rows), ('nonzero_handoff240.json.gz', nonzero_rows)):
+            write(out / filename, {'rows': rows}, compressed=True)
+        videos = {kind: recorder.encode() for kind, recorder in cameras}
+        changed = [path for path, expected in pins.items() if digest(path) != expected]
+        write(out / 'report.json', {'completed': failure is None and not changed, 'failure': failure, 'inputs_unchanged': not changed, 'changed_inputs': changed, 'baseline_ticks': len(baseline_rows), 'zero_policy_ticks': len(zero_rows), 'nonzero_policy_ticks': len(nonzero_rows), 'new_training_updates': 0, 'videos': videos})
+
+
+if __name__ == '__main__':
+    main()

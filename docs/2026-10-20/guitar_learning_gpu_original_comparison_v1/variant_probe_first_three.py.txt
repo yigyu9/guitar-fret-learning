@@ -1,0 +1,81 @@
+"""Isolate one scene change at a time; never edit the active implementation."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import runpy
+import sys
+import types
+
+ROOT=Path(__file__).resolve().parents[3]
+sys.path.insert(0,str(ROOT))
+p=argparse.ArgumentParser()
+p.add_argument('--variant',choices=('flat_state','import_human','cpu_tensor','cpu_physics'),required=True)
+p.add_argument('--out',type=Path,required=True)
+args=p.parse_args()
+import isaacgym
+from isaacgym import gymapi
+source_path=ROOT/'guitar_learning/gpu/scene.py'
+original=source_path.read_text();source=original
+if args.variant=='flat_state':
+    source=source.replace('gymtorch.unwrap_tensor(self._dof)', 'gymtorch.unwrap_tensor(self._dof.view(-1, 2))')
+    source=source.replace('gymtorch.unwrap_tensor(self._roots)', 'gymtorch.unwrap_tensor(self._roots.view(-1, 13))')
+elif args.variant=='import_human':
+    before='''                        _apply_body_properties(props, rows)
+                        if self.gym.set_actor_rigid_body_properties(env, actor, props, False) is False:
+                            raise RuntimeError('GPU rigid-body properties rejected')'''
+    after='''                        if kind == 'guitar':
+                            _apply_body_properties(props, rows)
+                            if self.gym.set_actor_rigid_body_properties(env, actor, props, False) is False:
+                                raise RuntimeError('GPU rigid-body properties rejected')'''
+    assert source.count(before)==1
+    source=source.replace(before,after)
+else:
+    source=source.replace('self.device = torch.device(device)',"self.device = torch.device('cpu')")
+    source=source.replace("if self.device.type != 'cuda' or not torch.cuda.is_available():",'if not torch.cuda.is_available():')
+    source=source.replace('params.use_gpu_pipeline, params.physx.use_gpu = True, True',
+        'params.use_gpu_pipeline, params.physx.use_gpu = False, '+('False' if args.variant=='cpu_physics' else 'True'))
+    source=source.replace('torch.cuda.synchronize(self.device)',"torch.cuda.synchronize('cuda:0')")
+    source=source.replace('if not actual.use_gpu_pipeline or not actual.physx.use_gpu:',
+        'if actual.use_gpu_pipeline or '+('actual.physx.use_gpu:' if args.variant=='cpu_physics' else 'not actual.physx.use_gpu:'))
+    if args.variant=='cpu_physics':source=source.replace('params.physx.solver_type = 1','params.physx.solver_type = 1\n            params.physx.num_threads = 1')
+assert source!=original
+args.out.mkdir(parents=True,exist_ok=False)
+(args.out/'scene_variant.py.txt').write_text(source)
+module=types.ModuleType('guitar_learning.gpu.scene');module.__file__=str(source_path);module.__package__='guitar_learning.gpu'
+exec(compile(source,str(args.out/'scene_variant.py.txt'),'exec'),module.__dict__)
+base=module.GpuScene
+class AuditedScene(base):
+    def __init__(self,*a,**kw):
+        super().__init__(*a,**kw)
+        actor_bad=[];dof_bad=[];body_bad=[]
+        for i,(env,actors) in enumerate(zip(self.envs,self.actors)):
+            for j,actor in enumerate(actors):
+                index=self.gym.get_actor_index(env,actor,gymapi.DOMAIN_SIM)
+                if index!=3*i+j:actor_bad.append([i,j,index])
+            for j in range(105):
+                index=self.gym.get_actor_dof_index(env,actors[0],j,gymapi.DOMAIN_SIM)
+                if index!=105*i+j:dof_bad.append([i,j,index])
+            offset=0
+            for actor,n in zip(actors,(len(self.human_bodies),len(self.guitar_bodies),1)):
+                for j in range(n):
+                    index=self.gym.get_actor_rigid_body_index(env,actor,j,gymapi.DOMAIN_SIM)
+                    if index!=self.body_count*i+offset+j:body_bad.append([i,offset+j,index])
+                offset+=n
+        data=dict(actor_index_errors=actor_bad,dof_index_errors=dof_bad,body_index_errors=body_bad,
+            sim_actor_count=self.gym.get_sim_actor_count(self.sim),sim_dof_count=self.gym.get_sim_dof_count(self.sim),
+            sim_body_count=self.gym.get_sim_rigid_body_count(self.sim),actual_flags=self.diagnostics,
+            variant=args.variant,source_sha256=hashlib.sha256(source.encode()).hexdigest())
+        with (args.out/'native_index_audit.json').open('x') as f:json.dump(data,f,indent=2)
+module.GpuScene=AuditedScene
+sys.modules['guitar_learning.gpu.scene']=module
+probe=ROOT/'docs/2026-10-20/guitar_learning_gpu_force_replay_v1/probe.py'
+tape=ROOT/'docs/2026-10-20/guitar_learning_gpu_force_replay_v1/reference_n1/tape.npz'
+sys.argv=[str(probe),'--out',str(args.out/'run'),'--envs','1024','--tape',str(tape)]
+try:runpy.run_path(str(probe),run_name='__main__')
+finally:
+    with (args.out/'variant.json').open('x') as f:json.dump(dict(variant=args.variant,
+        production_source_unchanged=source_path.read_text()==original,
+        production_sha256=hashlib.sha256(original.encode()).hexdigest(),
+        variant_sha256=hashlib.sha256(source.encode()).hexdigest(),
+        helper_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()),f,indent=2)

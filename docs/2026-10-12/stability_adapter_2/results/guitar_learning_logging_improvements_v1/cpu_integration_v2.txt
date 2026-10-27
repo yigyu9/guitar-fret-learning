@@ -1,0 +1,36 @@
+test_preparation_prefix_summary_exists_after_interrupt (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests) ... ok
+test_quality_prefix_summary_exists_after_interrupt_without_completed_episode (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests) ... ERROR
+test_recovery_writes_new_prefix_summary_and_never_infers_ppo_commit (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests) ... ok
+test_secondary_summary_error_does_not_replace_primary_exception (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests) ... [quality] secondary summary error: fake full disk
+ok
+test_standard_reduction_preserves_environment_and_terminal_quality (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests) ... ok
+test_stream_reports_filter_incomplete_and_do_not_scan_transition_gzip (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests) ... ok
+
+======================================================================
+ERROR: test_quality_prefix_summary_exists_after_interrupt_without_completed_episode (guitar_learning.tests.test_training_logging_integration.LoggingIntegrationTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/ajou/yigyu/3/guitar_learning/tests/test_training_logging_integration.py", line 77, in test_quality_prefix_summary_exists_after_interrupt_without_completed_episode
+    report=self.interrupted(train_musical_quality)
+  File "/home/ajou/yigyu/3/guitar_learning/tests/test_training_logging_integration.py", line 72, in interrupted
+    module.run({},args)
+  File "/home/ajou/yigyu/3/guitar_learning/train_musical_quality.py", line 77, in run
+    from .musical_quality_transfer import apply_actor_initialization
+  File "/home/ajou/yigyu/3/guitar_learning/musical_quality_transfer.py", line 4, in <module>
+    import torch
+  File "/home/ajou/miniconda3/envs/rl38/lib/python3.8/site-packages/torch/__init__.py", line 1481, in <module>
+    from ._tensor import Tensor
+  File "/home/ajou/miniconda3/envs/rl38/lib/python3.8/site-packages/torch/_tensor.py", line 13, in <module>
+    import torch.utils.hooks as hooks
+  File "/home/ajou/miniconda3/envs/rl38/lib/python3.8/site-packages/torch/utils/__init__.py", line 7, in <module>
+    from .backend_registration import rename_privateuse1_backend, generate_methods_for_privateuse1_backend
+  File "/home/ajou/miniconda3/envs/rl38/lib/python3.8/site-packages/torch/utils/backend_registration.py", line 3, in <module>
+    from torch.overrides import (
+  File "/home/ajou/miniconda3/envs/rl38/lib/python3.8/site-packages/torch/overrides.py", line 1661, in <module>
+    has_torch_function = _add_docstr(
+RuntimeError: function '_has_torch_function' already has a docstring
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.574s
+
+FAILED (errors=1)

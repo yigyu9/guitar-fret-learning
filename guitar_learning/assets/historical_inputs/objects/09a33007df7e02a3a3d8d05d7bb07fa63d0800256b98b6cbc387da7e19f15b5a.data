@@ -1,0 +1,78 @@
+"""Controlled release targets; existing finite support/PD, no added task wrench."""
+from unittest.mock import patch
+import numpy as np
+from scipy.optimize import least_squares
+from stability_adapter_2.initial_pose_noise_v1 import pose,save
+from stability_adapter_2.upper_arm_static_geometry_v1 import calibrated_upper_fk
+
+
+def trajectory(t,mode):
+    # Same 3 s wrist path and speed; sequential fingers finish before wrist starts.
+    if mode=='baseline':return 'hold_reference',np.zeros(3),np.zeros(3)
+    finger_start,finger_end=(2.,4.)
+    wrist_start,wrist_end=(4.,7.) if mode=='sequential' else (2.,5.)
+    def smooth(start,end):
+        u=np.clip((t-start)/(end-start),0,1)
+        return u*u*(3-2*u),6*u*(1-u)/(end-start)
+    f,fd=smooth(finger_start,finger_end);w,wd=smooth(wrist_start,wrist_end)
+    stage='prepare' if t<2 else 'finger_open' if mode=='sequential' and t<4 else 'withdraw' if t<wrist_end else 'released_hold'
+    return stage,np.array([0.,w,.30*f]),np.array([0.,wd,.30*fd])
+
+
+def main(run):
+    import isaacgym
+    from stability_adapter_2 import right_block_body_effort_v5 as support
+    from stability_adapter_2 import left_near_scene_v3 as scene_module
+    from stability_adapter_2 import left_near_arm_effort_v3 as tracking
+    from stability_adapter_2 import left_wrist_tracking_off_v2 as off
+    from stability_adapter_2.run_joint_hold import native_state
+    original_factory,original_recording=support.factory,support.EffortRecording
+    def factory(recording,enabled):
+        Parent = original_factory(recording,enabled)
+        class Scene(Parent):
+            def step(self,action):
+                state=native_state(self);q=np.array([x['pos'] for x in state['human_dof_states']])
+                if not hasattr(self,'cycle_rows'):
+                    self.cycle_rows=[];self.cycle_fk,_=calibrated_upper_fk(self.names,self.human_bodies,state,self.contract.q_ref)
+                    self.cycle_arm=np.array([i for i,n in enumerate(self.names) if n.startswith(('L_Thorax','L_Shoulder','L_Elbow','L_Wrist'))])
+                    self.cycle_hand=np.array([i for i,n in enumerate(self.names) if n.startswith('LH:')])
+                    gp,gr=pose(state['guitar_body_states'][0]);wp,wr=pose(state['human_body_states'][self.human_bodies.index('L_Wrist')])
+                    self.cycle_point=gr.inv().apply(wp-gp);self.cycle_rotation=gr.inv()*wr
+                t=self.steps/240;stage,v,vd=trajectory(t,self.contract.config['qualification_mode']);request=self.contract.q_ref.copy();gp,gr=pose(state['guitar_body_states'][0])
+                target_G=self.cycle_point+np.array([.070*v[1],v[0]+.080*v[1],0]);target_R=gr*self.cycle_rotation
+                error=rotation_error=0.
+                if t>=2 and self.contract.config['qualification_mode']!='baseline':
+                    lo=np.maximum(self.contract.lower[self.cycle_arm],self.contract.q_ref[self.cycle_arm]-.8)
+                    hi=np.minimum(self.contract.upper[self.cycle_arm],self.contract.q_ref[self.cycle_arm]+.8)
+                    def residual(values):
+                        fitted=q.copy();fitted[self.cycle_arm]=values;p,r=self.cycle_fk(fitted)['L_Wrist']
+                        return np.r_[1000*(p-gp-gr.apply(target_G)),100*(target_R.inv()*r).as_rotvec(),.05*(values-self.contract.q_ref[self.cycle_arm])]
+                    fit=least_squares(residual,np.clip(self.target[self.cycle_arm],lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=30,ftol=1e-7)
+                    request[self.cycle_arm]=fit.x;pp,rr=self.cycle_fk(np.where(np.isin(np.arange(81),self.cycle_arm),request,q))['L_Wrist']
+                    error=float(np.linalg.norm(pp-gp-gr.apply(target_G)));rotation_error=float((target_R.inv()*rr).magnitude())
+                    if not np.isfinite(fit.x).all() or error>.010 or rotation_error>.05 or np.any(np.linalg.norm(fit.x.reshape(4,3),axis=1)>=np.deg2rad(160)):
+                        raise RuntimeError('left cycle IK bounds/position/orientation gate')
+                    for digit in ('index','middle','ring','pinky'):
+                        for suffix,weight in (('1_x',.7),('2',1.),('3',.6)):
+                            i=self.names.index('LH:'+digit+suffix)
+                            request[i]=np.clip(request[i]-weight*v[2],self.contract.lower[i],self.contract.upper[i])
+                    for suffix,weight in (('thumb2',1.),('thumb3',.6)):
+                        i=self.names.index('LH:'+suffix)
+                        request[i]=np.clip(request[i]-weight*v[2],self.contract.lower[i],self.contract.upper[i])
+                owned=np.r_[self.cycle_arm,self.cycle_hand];mask=np.ones(81,dtype=bool);mask[owned]=False
+                assert np.array_equal(request[mask],self.contract.q_ref[mask])
+                self.cycle_goal_G=target_G;self.cycle_goal_velocity_G=np.array([.070*vd[1],vd[0]+.080*vd[1],0]);self.cycle_goal_rotation=target_R
+                action=np.clip((request-self.contract.mid)/self.contract.half,-1,1)
+                result=super().step(action)
+                assert np.array_equal(self.target[mask].astype(float),self.contract.q_ref[mask])
+                self.cycle_rows.append({'physics_step_before':self.steps-4,'stage':stage,'time_s':t,'trajectory':v.tolist(),'goal_wrist_G_m':target_G.tolist(),
+                    'IK_error_m':error,'IK_rotation_error_rad':rotation_error,'requested81_rad':request.tolist(),'final81_rad':self.target.astype(float).tolist(),'other48_targets_exact':True})
+                return result
+        return Scene
+
+    class Recording(original_recording):
+        def encode(self):
+            save(self.out/'release_targets.json',{'rows':getattr(self.env,'cycle_rows',[]),'scope':'left33 target requests only; inherited finite support controller, no added wrist task'})
+            return super().encode()
+    with patch.object(scene_module.support,'factory',factory),patch.object(scene_module.support,'ArmEffortGuard',support.ArmEffortGuard),patch.object(support.LearningScene,'_create_scene',support.create_effort),patch.object(support.base.string_trial_recording_v1,'StrapTrialRecording',support.base.GymTrialRecording),patch.object(support,'EffortRecording',Recording),patch.object(tracking.EffortRecording,'__init__',off.EffortRecording.__init__):
+        run()

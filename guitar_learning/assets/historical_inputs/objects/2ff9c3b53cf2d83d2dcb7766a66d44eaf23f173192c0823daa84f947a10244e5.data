@@ -1,0 +1,19 @@
+"""원 목표 제어를 상속하고 두 스트로크 뒤 유한 말단 목표를 유지하는 모션만 연결한다."""
+from ..grounded_guitar_support_v1.runtime_v18 import Controller as PreparedController
+from .runtime_v1 import Scene, Controller as OriginalPlayController
+
+
+class Controller(OriginalPlayController):
+    def __init__(self, scene):
+        PreparedController.__init__(self, scene)
+        assert scene.cfg['seconds'] == 16 and scene.cfg['mode'] == 'static'
+        assert scene.cfg['validation_protocol'] == 'finite_prepare5_hold5_fret_strike_distal_hold6_v1'
+        assert scene.cfg['play_case'] == 'combined'
+        assert scene.cfg['play_action_interval_s'] == [10, 16]
+        assert scene.cfg['strike_start_s'] == 11.3
+        assert scene.cfg['right_strike_interval_s'] == [11.3, 14.4]
+        assert scene.cfg['distal_hold_interval_s'] == [14.4, 16]
+        assert scene.cfg['finger_hold_end_s'] == 16
+        from .motion_v7 import Motion
+        scene.play_logic = Motion(scene, self.fk)
+        self.play_latch = None

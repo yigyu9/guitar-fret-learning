@@ -1,0 +1,62 @@
+"""Reuse certified source reach; extend fully-withdrawn hold to13..28s."""
+import copy
+from pathlib import Path
+from ..lower_body_release_v1.common import ROOT, BASE, read, save, pin, verify, sha
+
+PHASE = BASE/'grounded_guitar_support_v1'
+RELEASE = PHASE/'release_v1'
+OUT = RELEASE/'preflight_v2'
+PRIOR = RELEASE/'preflight_v1'
+PLAN = ROOT/'docs/plans/grounded_guitar_full_release15_20261016.md'
+
+
+def main():
+    OUT.mkdir(exist_ok=False)
+    discovery = pin(extra=[Path(__file__).resolve(), PLAN, PRIOR/'report.json', PRIOR/'release_spec.json',
+                           PRIOR/'inputs_before.json', PRIOR/'generation.json', RELEASE/'inputs/release.json'])
+    save(OUT/'discovery_before.json', discovery)
+    oldreport = read(PRIOR/'report.json')
+    oldspec = read(PRIOR/'release_spec.json')
+    inputs = pin(extra=list(discovery)+list(oldreport['input_sha256'])+[OUT/'discovery_before.json'])
+    save(OUT/'inputs_before.json', inputs)
+    assert verify(discovery) and verify(oldreport['input_sha256']) and oldreport['eligible_for_native']
+    assert oldreport['spec_sha256'] == sha(PRIOR/'release_spec.json') and len(oldreport['samples']) == 41
+    spec = copy.deepcopy(oldspec)
+    spec.update(release_interval_s=[10., 28.], completed_withdrawal_test_interval_s=[13., 28.], full_release_interval_s=[13., 28.],
+        scope='Same actual10 world wrist pose,80mm G10+X world-fixed withdrawal,opening weights and thresholds as source1. Release phase10..28 includes3s opening/withdrawal; fully-withdrawn physical evaluation13..28 is15s. No physics or actual no-contact certification.')
+    spec['opening_gate']['evaluation_interval_s'] = [13., 28.]
+    old_geometry, new_geometry = copy.deepcopy(oldspec), copy.deepcopy(spec)
+    for value in (old_geometry, new_geometry):
+        for key in ('release_interval_s', 'completed_withdrawal_test_interval_s', 'full_release_interval_s', 'scope'):
+            value.pop(key, None)
+        value['opening_gate'].pop('evaluation_interval_s')
+    gates = dict(oldreport['gates'])
+    gates.update(source1_inputs_unchanged=verify(oldreport['input_sha256']),
+        source1_geometry_opening_thresholds_and_IK_exact=old_geometry == new_geometry,
+        full_release_interval_exact_15s=spec['full_release_interval_s'] == [13., 28.],
+        opening_evaluation_exact_full_release_interval=spec['opening_gate']['evaluation_interval_s'] == [13., 28.])
+    gates = {k: bool(v) for k, v in gates.items()}
+    assert verify(inputs)
+    save(OUT/'release_spec.json', spec)
+    report = {k: copy.deepcopy(v) for k, v in oldreport.items() if k not in
+              ('input_sha256', 'inputs_after_sha256', 'scope', 'gates', 'spec_sha256', 'eligible_for_native')}
+    report.update(eligible_for_native=all(gates.values()), gates=gates, spec_sha256=sha(OUT/'release_spec.json'),
+        input_sha256=inputs, inputs_after_sha256={p: sha(p) for p in inputs}, inputs_unchanged=verify(inputs),
+        source1_report_path=str(PRIOR/'report.json'), source1_report_sha256=sha(PRIOR/'report.json'),
+        source1_spec_path=str(PRIOR/'release_spec.json'), source1_spec_sha256=sha(PRIOR/'release_spec.json'),
+        source41_reused_exact=True, full_release_interval_s=[13., 28.], native_simulation_steps=0,
+        scope='Explicit reuse of the unchanged source1 actual10/41 float32 wrist reach samples,strict new26 command limits/principal and inherited9 actual limit diagnostics. Only hold/evaluation endpoint changes. Source hold reach does not certify actual28s stability or15s no-contact. Previous25s source/code/cfg remain unchanged; neither release version has physics here.')
+    save(OUT/'report.json', report)
+    cfg = read(RELEASE/'inputs/release.json')
+    cfg.update(seconds=28., validation_protocol='finite_prepare5_hold5_withdraw3_free15_v2', full_release_interval_s=[13., 28.],
+        release_preflight_report=str(OUT/'report.json'), release_spec=str(OUT/'release_spec.json'), release_spec_sha256=sha(OUT/'release_spec.json'))
+    save(RELEASE/'inputs/release_v2.json', cfg)
+    assert verify(inputs)
+    save(OUT/'generation.json', dict(input_sha256=inputs, inputs_unchanged=True, eligible_for_native=report['eligible_for_native'], native_simulation_steps=0,
+        output_sha256={str(p): sha(p) for p in (OUT/'release_spec.json', OUT/'report.json', RELEASE/'inputs/release_v2.json')}))
+    print(dict(eligible=report['eligible_for_native'], gates=gates, input_count=len(inputs), source41_reused_exact=True), flush=True)
+    assert report['eligible_for_native'], 'Source reuse certification failed; release physics forbidden.'
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,83 @@
+"""Exercise reward wrapper through the real frozen runner and real source proofs."""
+import copy
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+import torch
+import torch._dynamo
+from guitar_learning.training import parallel, policy, ppo
+from guitar_learning.training import runner as train_parallel
+from guitar_learning.training import persistent_audit
+from guitar_learning.imitation.imitation import dataset_manifest
+from guitar_learning.historical_inputs import evidence_input_pins
+from guitar_learning.native.paths import resolve_input_path
+from guitar_learning.tool.experiments.song import train as original_train, transfer as original_transfer, worker as original_worker, policy as original_policy
+from guitar_learning.tool.experiments.song_reward_v2 import train, transfer, worker
+from guitar_learning.tool.experiments.song_reward_v2.policy import RewardPolicy
+from guitar_learning.tool.experiments.song_reward_v2.settings import settings_document
+from guitar_learning.tests.test_song_reward_v2_transfer import raw_settings
+from guitar_learning.native.lower_body_release_v1 import common
+
+
+class SongRewardTrainTests(unittest.TestCase):
+    def test_real_source_transfer_with_nested_runner_dispatch_and_restored_bindings(self):
+        torch.set_num_threads(1)
+        settings=settings_document(raw_settings());evidence=transfer.validate_experts(settings)
+        contract=copy.deepcopy(evidence['warmstart_payload']['identity']['architecture']['contract'])
+        contract['reward']['song']=dict(schema='guitar_learning.song_metrics.v2')
+        originals=(original_transfer.validate_experts,original_transfer.apply_experts,original_worker.native_environment,original_policy.SongPolicy)
+        captured={}
+        class Pool:
+            def __init__(self,specs,**kwargs):captured.update(specs=specs,factory=kwargs['worker_factory'])
+        def main():
+            args.out.mkdir();parsed=train_parallel.settings_document(raw_settings())
+            self.assertEqual(parsed['reward_revision'],settings['reward_revision'])
+            source=common.pin(None)
+            physical={str(resolve_input_path(path).resolve()):sha
+                for path,sha in evidence_input_pins(evidence['source_pins']).items()}
+            self.assertTrue(all(source.get(path)==sha for path,sha in physical.items()))
+            self.assertEqual(dataset_manifest(evidence['source_pins']),evidence['source_pins'])
+            parallel.Pool([{'out':'unused'}]);self.assertEqual(captured['specs'][0]['song'],settings['song'])
+            self.assertIs(captured['factory'],worker.native_environment)
+            model=policy.Policy(500,contract=contract);self.assertIsInstance(model,RewardPolicy)
+            critic={k:v.clone() for k,v in model.state_dict().items() if not k.startswith(('actor_encoders.','actor_heads.')) and k!='log_std'}
+            trainer=ppo.PPOTrainer(model,ppo.PPOConfig(**parsed['ppo']))
+            self.assertEqual(trainer.updates,0);self.assertFalse(trainer.actor_optimizer.state)
+            for key,value in model.state_dict().items():
+                torch.testing.assert_close(value,critic[key] if key in critic else evidence['warmstart_payload']['model'][key],rtol=0,atol=0)
+            (args.out/'report.json').write_text(json.dumps(dict(completed=True,optimizer_updates=0,accounting={})))
+        with tempfile.TemporaryDirectory() as folder:
+            args=SimpleNamespace(out=Path(folder)/'run',settings=Path(folder)/'settings.json',resume=None)
+            args.settings.write_text(json.dumps(raw_settings()))
+            with patch.dict('sys.modules',{'isaacgym':SimpleNamespace()}), \
+                    patch('guitar_learning.training.monitoring.available_memory_bytes',return_value=16*1024**3), \
+                    patch('guitar_learning.training.persistent_audit.finalize_persistent_run',return_value=True), \
+                    patch.object(parallel,'Pool',Pool),patch.object(common,'pin',side_effect=lambda config,extra=():dataset_manifest(extra)), \
+                    patch.object(train_parallel,'main',side_effect=main):
+                result=train.run(settings,args)
+            self.assertTrue(result['completed'])
+            init=json.loads((args.out/'song_initialization.json').read_text())
+            self.assertEqual(init['mode'],'whole_score_actor_and_std_reward_v2_fresh_critic_and_Adam')
+            self.assertEqual(init['transfer']['source_ppo_updates'],8)
+        self.assertEqual(originals,(original_transfer.validate_experts,original_transfer.apply_experts,original_worker.native_environment,original_policy.SongPolicy))
+
+    def test_exception_restores_shared_bindings(self):
+        originals=(original_transfer.validate_experts,original_transfer.apply_experts,original_worker.native_environment,original_policy.SongPolicy)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);source=root/'source';source.write_bytes(b'x')
+            settings=dict(min_available_memory_gib=6.,reward_revision={'initialization_checkpoint':str(source)})
+            args=SimpleNamespace(out=root/'run',settings=root/'settings.json',resume=None)
+            with patch.dict('sys.modules',{'isaacgym':SimpleNamespace()}), \
+                    patch.object(transfer,'validate_experts',return_value=dict(source_pins=dataset_manifest([source]))), \
+                    patch('guitar_learning.training.monitoring.available_memory_bytes',return_value=16*1024**3), \
+                    patch('guitar_learning.training.persistent_audit.finalize_persistent_run',return_value=True), \
+                    patch.object(train_parallel,'main',side_effect=ValueError('primary runner error')):
+                with self.assertRaisesRegex(ValueError,'primary runner error'):train.run(settings,args)
+        self.assertEqual(originals,(original_transfer.validate_experts,original_transfer.apply_experts,original_worker.native_environment,original_policy.SongPolicy))
+
+
+if __name__=='__main__':unittest.main()

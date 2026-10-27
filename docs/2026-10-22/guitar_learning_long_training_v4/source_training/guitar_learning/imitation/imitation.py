@@ -1,0 +1,206 @@
+"""Actor-only behavioral cloning of captured native single-hand trajectories.
+
+Training fit is not physical validation or generalization. Initializations have
+an explicit non-PPO schema and never manufacture PPO updates or optimizer state.
+"""
+import copy
+import json
+import math
+import os
+from pathlib import Path
+import tempfile
+import numpy as np
+import torch
+from guitar_learning.training.parallel import FIELDS
+
+SCHEMA = 'guitar_learning.imitation.v1'
+SHAPES = dict(state=(505,), events=(64, 24), mask=(64,),
+              priority_events=(2, 24), priority_mask=(2,), action=(39,))
+SKILLS = dict(left=('reach', 'contact', 'hold', 'timed'), right=('ready', 'cross', 'timed'))
+
+
+def dataset_manifest(paths):
+    from guitar_learning.historical_inputs import fingerprint_paths
+    return fingerprint_paths(paths)
+
+
+def _contract(contract, role):
+    if not isinstance(contract, dict) or contract.get('schema') != 'guitar_learning.training.v1':
+        raise ValueError('native training contract required')
+    if any(not isinstance(contract.get(key), dict)
+           for key in ('observation', 'action', 'task', 'reward', 'termination')):
+        raise ValueError('complete native training contract required')
+    stage = contract['task'].get('specialist', {})
+    observation = contract['observation']
+    if not isinstance(stage, dict):
+        raise ValueError('single-hand stage contract required')
+    if (stage.get('role') != role or stage.get('skill') not in SKILLS.get(role, ()) or
+            observation.get('dimension') != 505 or observation.get('event_dim') != 24 or
+            observation.get('capacity') != 64 or observation.get('priority_slots') != 2):
+        raise ValueError('matching505 single-hand native observation contract required')
+
+
+def _arrays(data):
+    for key, shape in SHAPES.items():
+        value = data.get(key)
+        if not isinstance(value, np.ndarray) or value.shape != (240,)+shape:
+            raise ValueError('captured240 rows with exact dimensions required: '+key)
+        if key in ('mask', 'priority_mask'):
+            if value.dtype != np.bool_:
+                raise ValueError('actual boolean observation masks required')
+        elif value.dtype.kind != 'f' or not np.isfinite(value).all():
+            raise ValueError('finite floating native observations/actions required: '+key)
+    if np.any(np.abs(data['action']) > 1):
+        raise ValueError('normalized bounded action39 required')
+    inactive = slice(33, 39) if data['role'] == 'left' else slice(0, 33)
+    if np.any(data['action'][:, inactive] != 0):
+        raise ValueError('inactive hand action must be exactly zero')
+
+
+def load_dataset(folder, role, expected_contract=None):
+    if role not in SKILLS:
+        raise ValueError('single left/right hand required')
+    folder = Path(folder)
+    paths = [folder/'result.json', folder/'reset.json', folder/'demonstration.npz']
+    manifest = dataset_manifest(paths)
+    result, reset = (json.loads(path.read_text()) for path in paths[:2])
+    if (not isinstance(result, dict) or not isinstance(reset, dict) or
+            result.get('success') is not True or type(result.get('ticks')) is not int or
+            result['ticks'] != 240 or type(result.get('observation_dimension')) is not int or
+            result['observation_dimension'] != 505):
+        raise ValueError('successful actual native240-tick505 capture required')
+    contract = reset.get('training_contract')
+    _contract(contract, role)
+    if expected_contract is not None and contract != expected_contract:
+        raise ValueError('captured native training contract mismatch')
+    with np.load(paths[2], allow_pickle=False) as archive:
+        if set(archive.files) != set(SHAPES):
+            raise ValueError('exact captured observation/action fields required')
+        data = {key: archive[key].copy() for key in SHAPES}
+    data.update(role=role, contract=copy.deepcopy(contract), manifest=manifest)
+    _arrays(data)
+    if dataset_manifest(paths) != manifest:
+        raise RuntimeError('capture inputs changed during loading')
+    return data
+
+
+def _model(model):
+    role = getattr(model, 'role', None)
+    architecture = getattr(model, 'architecture', {})
+    if (role not in SKILLS or architecture.get('schema') != 'guitar_specialists39_v1' or
+            architecture.get('state_dim') != 505 or getattr(model, 'frozen_partner', True)):
+        raise ValueError('single-hand505 SpecialistPolicy without partner required')
+    _contract(architecture.get('contract'), role)
+    return role
+
+
+def fit_actor(model, data, *, steps=2000, lr=3e-4, batch_size=120,
+              tolerance=1e-6, log_callback=None, seed=7):
+    role = _model(model)
+    if data.get('role') != role or data.get('contract') != model.architecture['contract']:
+        raise ValueError('demonstration role/contract must match policy exactly')
+    _arrays(data)
+    if (type(steps) is not int or steps < 1 or type(batch_size) is not int or batch_size < 1 or
+            type(seed) is not int or isinstance(lr, bool) or isinstance(tolerance, bool) or
+            not math.isfinite(lr) or lr <= 0 or not math.isfinite(tolerance) or tolerance < 0):
+        raise ValueError('positive fit budget/rate and finite nonnegative tolerance required')
+    device = next(model.parameters()).device
+    inputs = {key: torch.as_tensor(data[key], device=device,
+        dtype=torch.bool if 'mask' in key else torch.float32) for key in FIELDS}
+    selection = model.role_slices[role]
+    target = torch.as_tensor(data['action'][:, selection], dtype=torch.float32, device=device)
+    parameters = list(model.actor_encoders[role].parameters())+list(model.actor_heads[role].parameters())
+    optimizer = torch.optim.Adam(parameters, lr=lr)
+    generator = torch.Generator().manual_seed(seed)
+    log = []
+
+    def prediction(indices=None):
+        values = [inputs[key] if indices is None else inputs[key][indices] for key in FIELDS]
+        return model.actor_heads[role](model.actor_encoders[role](*values)).tanh()
+
+    def measure(step):
+        with torch.no_grad():
+            delta = prediction()-target
+            row = dict(step=step, training_mse=float(delta.square().mean()),
+                       max_abs_error=float(delta.abs().max()))
+        if not np.isfinite([row['training_mse'], row['max_abs_error']]).all():
+            raise ValueError('nonfinite imitation fit')
+        log.append(row)
+        if log_callback is not None:
+            log_callback(copy.deepcopy(row))
+        return row
+
+    final = measure(0)
+    initial = final['training_mse']
+    for step in range(1, steps+1):
+        if final['training_mse'] <= tolerance:
+            break
+        indices = torch.randperm(240, generator=generator)[:min(batch_size, 240)].to(device)
+        error = prediction(indices)-target[indices]
+        optimizer.zero_grad(set_to_none=True)
+        error.square().mean().backward()
+        optimizer.step()
+        # Full-dataset checks determine stopping, not a sampled minibatch loss.
+        if step % 100 == 0 or step == steps:
+            final = measure(step)
+    optimizer.zero_grad(set_to_none=True)
+    return dict(steps=final['step'], training_mse=final['training_mse'],
+        max_abs_error=final['max_abs_error'], initial_training_mse=initial,
+        converged=final['training_mse'] <= tolerance, tolerance=tolerance,
+        learning_rate=lr, batch_size=min(batch_size, 240), seed=seed, log=log,
+        scope='training action fit only; native policy execution and generalization require separate evaluation')
+
+
+def _valid_model_state(model, state):
+    expected = model.state_dict()
+    if not isinstance(state, dict) or state.keys() != expected.keys() or any(
+            not isinstance(value, torch.Tensor) or value.shape != expected[key].shape or
+            value.dtype != expected[key].dtype or not bool(torch.isfinite(value).all())
+            for key, value in state.items()):
+        raise ValueError('complete finite model keys/shapes/dtypes required')
+
+
+def save_initialization(model, path, *, dataset_manifest, fit_result):
+    role = _model(model)
+    state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+    _valid_model_state(model, state)
+    if not isinstance(dataset_manifest, dict) or not dataset_manifest or not isinstance(fit_result, dict):
+        raise ValueError('dataset manifest and imitation fit metadata required')
+    payload = dict(schema=SCHEMA, architecture=copy.deepcopy(model.architecture), role=role,
+        model=state, dataset_manifest=copy.deepcopy(dataset_manifest), training=copy.deepcopy(fit_result),
+        scope='actor initialization only; no PPO optimizer, update counter or performance certification')
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix='imitation-', suffix='.pt', dir=str(path.parent))
+    os.close(descriptor)
+    try:
+        torch.save(payload, temporary)
+        os.link(temporary, path)
+    finally:
+        os.unlink(temporary)
+
+
+def apply_actor_initialization(model, path):
+    role = _model(model)
+    path = Path(path)
+    manifest = dataset_manifest([path])
+    payload = torch.load(path, map_location='cpu', weights_only=False)
+    if (not isinstance(payload, dict) or payload.get('schema') != SCHEMA or
+            payload.get('role') != role or payload.get('architecture') != model.architecture or
+            not isinstance(payload.get('dataset_manifest'), dict) or not payload['dataset_manifest'] or
+            not isinstance(payload.get('training'), dict) or 'updates' in payload or 'identity' in payload):
+        raise ValueError('own exact architecture/contract imitation initialization required')
+    _valid_model_state(model, payload.get('model'))
+    if dataset_manifest([path]) != manifest:
+        raise RuntimeError('imitation initialization changed during loading')
+    expected = model.state_dict()
+    with torch.no_grad():
+        for prefix in ('actor_encoders.'+role+'.', 'actor_heads.'+role+'.'):
+            for key, value in payload['model'].items():
+                if key.startswith(prefix):
+                    expected[key].copy_(value)
+        selection = model.role_slices[role]
+        model.log_std[selection].copy_(payload['model']['log_std'][selection])
+    return dict(schema=SCHEMA, path=str(path.resolve()), sha256=manifest[str(path.resolve())],
+        role=role, dataset_manifest=copy.deepcopy(payload['dataset_manifest']),
+        training=copy.deepcopy(payload['training']), scope='actor/std only; fresh PPO critics/optimizers/update counter')

@@ -1,0 +1,99 @@
+"""Meaningful physics-mode and reset tests with an instrumented native API stand-in."""
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from types import SimpleNamespace
+import numpy as np
+from scipy.spatial.transform import Rotation
+from .lab import Lab
+from .model import body_pose, body_fields, joint_value
+
+VEC=np.dtype([(a,'f8') for a in 'xyz'])
+QUAT=np.dtype([(a,'f8') for a in 'xyzw'])
+BODY=np.dtype([('pose',[('p',VEC),('r',QUAT)]),('vel',[('linear',VEC),('angular',VEC)])])
+DOF=np.dtype([('pos','f4'),('vel','f4')])
+
+
+class FakeScene:
+    def __init__(self):
+        self.names=['joint%d'%i for i in range(81)]
+        self.lower=np.full(81,-1,dtype='f4'); self.upper=np.full(81,1,dtype='f4')
+        self.target=np.zeros(81,dtype='f4'); self.steps=0; self.env=0; self.human=0; self.guitar=1
+        self.gym=self; self.dofs=np.zeros(81,dtype=DOF); self.states=np.zeros(2,dtype=BODY)
+        self.states['pose']['r']['w']=1
+        self.states['pose']['p']['z']=[1,1.5]
+        self.writes={'guitar':0,'joints':0,'targets':0}
+    def bodies(self, actor): return self.states.copy()
+    def _submit_targets(self): self.writes['targets']+=1
+    def get_actor_dof_states(self,*args): return self.dofs.copy()
+    def set_actor_dof_states(self,env,actor,states,flags):
+        self.writes['joints']+=1; self.dofs=states.copy(); return True
+    def set_actor_rigid_body_states(self,env,actor,states,flags):
+        self.writes['guitar']+=1; self.states=states.copy(); return True
+    def step_physics(self):
+        self.steps+=1; self.states['pose']['p']['z']-=.01
+
+
+def make_lab():
+    scene=FakeScene()
+    initial={'joint_names':scene.names,'native_initial_state':{
+        'human_dof_states':[{'pos':.2,'vel':0} for _ in range(81)],
+        'guitar_body_states':[{'pose':{'p':{'x':.1,'y':.2,'z':1},'r':dict(zip('xyzw',[0,0,0,1]))}}]}}
+    return Lab(scene,initial,SimpleNamespace(STATE_ALL=3))
+
+
+class LabTests(unittest.TestCase):
+    def test_off_does_not_integrate(self):
+        lab=make_lab(); before=lab.scene.states.copy(); writes=dict(lab.scene.writes)
+        lab.advance(240)
+        self.assertEqual(lab.scene.steps,0); np.testing.assert_array_equal(before,lab.scene.states)
+        self.assertEqual(writes,lab.scene.writes)
+    def test_on_advances_without_pose_writes(self):
+        lab=make_lab(); lab.toggle(); writes=dict(lab.scene.writes)
+        lab.advance(8)
+        self.assertEqual(lab.scene.steps,8); self.assertEqual(writes,lab.scene.writes)
+        self.assertLess(lab.pose()[0][2],1)
+    def test_live_joint_edit_is_target_only(self):
+        lab=make_lab(); lab.toggle(); before=lab.scene.dofs.copy(); writes=dict(lab.scene.writes)
+        lab.set_joint(3,10)
+        np.testing.assert_array_equal(before,lab.scene.dofs)
+        self.assertEqual(lab.scene.writes['guitar'],writes['guitar'])
+        self.assertEqual(lab.scene.writes['joints'],writes['joints'])
+        self.assertAlmostEqual(lab.scene.target[3],np.radians(10),places=6)
+    def test_live_guitar_edit_rejected(self):
+        lab=make_lab(); lab.toggle()
+        with self.assertRaises(RuntimeError): lab.set_guitar([0,0,1],[0,0,0,1])
+    def test_reset_restores_pose_zeroes_velocity_and_stops(self):
+        lab=make_lab(); lab.set_joint(0,20); lab.set_guitar([.3,.4,2],[0,0,1,0]); lab.toggle(); lab.advance(12)
+        lab.reset()
+        self.assertFalse(lab.running); self.assertEqual(lab.scene.steps,0)
+        np.testing.assert_allclose(lab.pose()[0],lab.start_p)
+        np.testing.assert_allclose(lab.scene.dofs['pos'],lab.start_q)
+        self.assertTrue(np.all(lab.scene.dofs['vel']==0))
+        self.assertTrue(np.all(lab.scene.states['vel']['linear']['z']==0))
+    def test_rigid_guitar_parts_stay_together(self):
+        lab=make_lab(); p=[1,2,3]; q=Rotation.from_euler('x',90,degrees=True).as_quat()
+        lab.set_guitar(p,q)
+        root=lab.pose()[0]
+        body=np.array([lab.scene.states[1]['pose']['p'][a] for a in 'xyz'])
+        np.testing.assert_allclose(body-root,Rotation.from_quat(q).apply([0,0,.5]),atol=1e-12)
+    def test_body_centre_rotation_keeps_centre(self):
+        centre=np.array([.1,.2,.8]); local=np.array([0,-.4,-.05]); ref=Rotation.from_euler('y',22,degrees=True).as_quat()
+        p,q=body_pose(centre,[15,20,-10],ref,local)
+        actual,angles=body_fields(p,q,ref,local)
+        np.testing.assert_allclose(actual,centre); np.testing.assert_allclose(angles,[15,20,-10])
+    def test_limits_and_bad_values(self):
+        for angle in (100,float('nan'),float('inf')):
+            with self.assertRaises(ValueError): joint_value(angle,-1,1)
+    def test_save_actual_off_initial_values(self):
+        lab=make_lab(); lab.set_joint(5,15)
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'pose.json'; lab.save(path); data=json.loads(path.read_text())
+            self.assertEqual(data['joint_names'],lab.names)
+            self.assertAlmostEqual(data['joint_angles_rad'][5],np.radians(15),places=6)
+            self.assertFalse(data['strap_enabled'])
+            with self.assertRaises(FileExistsError): lab.save(path)
+
+
+if __name__=='__main__': unittest.main()

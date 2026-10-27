@@ -1,0 +1,113 @@
+"""Human-only nearest-normal support with independent fixed-world tangent anchors."""
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..strap import point_kinematics
+from ..lower_body_release_v1.controller_horizontal_v4 import skew, vec
+from .runtime_v14 import Controller as PreviousController
+
+
+def contact_frame_force(normal, gap, material, material_anchor, material_velocity,
+                        skin_velocity, goal_velocity):
+    """One combined 20 N cap; normal points from guitar toward the human."""
+    normal = np.asarray(normal, dtype=float)
+    assert abs(np.linalg.norm(normal)-1.) < 1e-10
+    raw_normal = float(-2000*(gap+.002)+30*np.dot(np.asarray(goal_velocity)-skin_velocity, normal))
+    normal_request = min(raw_normal, 0.)
+    world_restore = 2000*(np.asarray(material_anchor)-material)-30*np.asarray(material_velocity)
+    raw_tangent = world_restore-normal*np.dot(normal, world_restore)
+    combined = raw_tangent+normal*normal_request
+    scale = float(min(1., 20./max(np.linalg.norm(combined), 1e-12)))
+    return raw_normal, raw_tangent, scale, scale*normal_request, scale*raw_tangent
+
+
+class Controller(PreviousController):
+    def __init__(self, scene):
+        super().__init__(scene)
+        assert scene.cfg['right_contact_control_mode'] == 'actual_normal_world_tangent_v1'
+        assert scene.cfg['right_normal_goal_depth_m'] == .002
+        assert self.right_reference['cap_N'] == 20.
+        self.goal_correction['scope'] += (' Palm/material and legacy4mm task anchors remain constant affine world goals. '
+            'The legacy task anchor is diagnostic only; actual normal goal follows the nearest guitar surface, '
+            'while tangent restoration uses the fixed material anchor. No guitar force or state command.')
+
+    def targets(self):
+        row = super().targets()
+        row['right_task_anchor_scope'] = 'Legacy4mm diagnostic anchor only; normal goal is actual nearest surface minus2mm.'
+        return row
+
+    def effort(self):
+        effort, row = super().effort()
+        s = self.s
+        state = s.native()
+        old = next(v for v in row['support_points'] if v['body'] == 'R_Shoulder')
+        old_point = dict(old)
+        ref = self.right_reference
+        ix = np.asarray(ref['indices'], dtype=int)
+        assert len(ix) == 15 and not set(ix) & set(s.lower_indices)
+        body = state['human_body_states'][ref['index']]
+        p, r = pose(body)
+        guitar = state['guitar_body_states'][0]
+        gp, gr = pose(guitar)
+        poses = {n: pose(b) for n, b in zip(s.human_bodies, state['human_body_states'])}
+        witness = self.chest_distance.measure(poses, 'R_Shoulder', gp, gr)
+        axis = np.array(witness['capsule_axis_G_m'])
+        surface = np.array(witness['guitar_surface_G_m'])
+        normal_G = axis-surface
+        normal_G /= np.linalg.norm(normal_G)
+        normal = gr.apply(normal_G)
+        skin_G = axis-self.chest_distance.capsules['R_Shoulder'][1]*normal_G
+        skin_local = r.inv().apply(gp+gr.apply(skin_G)-p)
+        material_local = np.asarray(ref['local_m'])
+        material, vm = point_kinematics(p, r.as_quat(), vec(body, 'linear'), vec(body, 'angular'), material_local, s.hcom[ref['index']])
+        skin, vh = point_kinematics(p, r.as_quat(), vec(body, 'linear'), vec(body, 'angular'), skin_local, s.hcom[ref['index']])
+        goal_G = surface-.002*normal_G
+        goal, vg = point_kinematics(gp, gr.as_quat(), vec(guitar, 'linear'), vec(guitar, 'angular'), goal_G, s.com[s.guitar_bodies[0]])
+        block = s.jacobian.detach().cpu().numpy()[0].astype(float)[ref['index']-1]
+        com = s.hcom[ref['index']] if s.jacobian_mode == 'COM' else np.zeros(3)
+        jmat = block[:3]-skew(r.apply(material_local-com))@block[3:]
+        jskin = block[:3]-skew(r.apply(skin_local-com))@block[3:]
+        qd = np.array([v['vel'] for v in state['human_dof_states']])
+        velocity_error = float(np.linalg.norm(jskin@qd-vh))
+        assert velocity_error <= .01, 'R nearest skin Jacobian velocity frame mismatch'
+        raw_normal, raw_tangent, scale, fn, ft = contact_frame_force(normal, witness['gap_m'], material, self.material_W, vm, vh, vg)
+        normal_force = normal*fn
+        force = normal_force+ft
+        old_force = np.asarray(old['virtual_force_request_W_N'])
+        old_torque = jmat[:, ix].T@old_force
+        new_torque = jmat[:, ix].T@ft+jskin[:, ix].T@normal_force
+        delta = np.zeros(105)
+        delta[ix] = new_torque-old_torque
+        old_raw = np.array(row['raw_requested105_Nm'])
+        old_support = np.array(row['support_task105_Nm'])
+        old_submitted = effort.copy()
+        request = old_raw+delta
+        effort[s.upper_effort_indices] = np.clip(request[s.upper_effort_indices],
+            -s.pd_properties['effort'][s.upper_effort_indices], s.pd_properties['effort'][s.upper_effort_indices]).astype(np.float32)
+        effort[s.zero_indices] = 0
+        assert np.array_equal(effort[s.lower_indices], old_submitted[s.lower_indices])
+        row['replaced_legacy_world_right_task'] = old_point
+        evidence = dict(mode=s.cfg['right_contact_control_mode'], depth_m=.002, K_N_m=2000., D_Ns_m=30., combined_cap_N=20.,
+            nearest_source_gap_m=float(witness['gap_m']), witness=witness, normal_G=normal_G.tolist(), normal_W=normal.tolist(),
+            skin_local_m=skin_local.tolist(), material_local_m=material_local.tolist(),
+            material_W_m=material.tolist(), material_anchor_W_m=self.material_W.tolist(), material_velocity_W_m_s=vm.tolist(),
+            skin_W_m=skin.tolist(), skin_velocity_W_m_s=vh.tolist(), goal_W_m=goal.tolist(), goal_velocity_W_m_s=vg.tolist(),
+            raw_normal_request_N=raw_normal, unilateral_normal_request_N=min(raw_normal, 0.), raw_tangent_request_W_N=raw_tangent.tolist(),
+            combined_cap_scale=scale, normal_force_N=fn, tangent_force_W_N=ft.tolist(), combined_force_W_N=force.tolist(),
+            Jacobian6x105=block.tolist(), jacobian_frame=s.jacobian_mode, indices=ix.tolist(), joint_names=[s.names[j] for j in ix], Jmat15=jmat[:, ix].tolist(), Jskin15=jskin[:, ix].tolist(),
+            Jskin_qd_W_m_s=(jskin@qd).tolist(), point_velocity_error_m_s=velocity_error,
+            material_point_velocity_error_m_s=float(np.linalg.norm(jmat@qd-vm)),
+            jacobian_lower_columns_max_abs=float(max(abs(jmat[:, s.lower_indices]).max(), abs(jskin[:, s.lower_indices]).max())),
+            qd15_rad_s=qd[ix].tolist(), old_force_W_N=old_force.tolist(), old_torque15_Nm=old_torque.tolist(), new_torque15_Nm=new_torque.tolist(),
+            delta105_Nm=delta.tolist(), previous_raw_requested105_Nm=old_raw.tolist(), previous_support_task105_Nm=old_support.tolist(),
+            previous_submitted105_Nm=old_submitted.astype(float).tolist(), lower_unchanged=True, state_preserved=True,
+            scope='Finite human effort only. Normal at instantaneous skin witness, tangent at fixed material point; source gap is not cooked penetration or measured pressure.')
+        old.update(point_W_m=skin.tolist(), goal_W_m=goal.tolist(), goal_velocity_W_m_s=vg.tolist(),
+            legacy_world_goal_W_m=self.task_goal_W.tolist(), world_tangent_anchor_W_m=self.material_W.tolist(),
+            virtual_force_request_W_N=force.tolist(), point_world_velocity_m_s=vh.tolist(),
+            point_world_error_m=float(np.linalg.norm(skin-goal)), material_world_error_m=float(np.linalg.norm(material-self.material_W)),
+            material_world_velocity_m_s=vm.tolist(), nearest_source_gap_m=float(witness['gap_m']), normal_G=normal_G.tolist(),
+            point_velocity_error_m_s=velocity_error, mode='Actual nearest normal2mm plus fixed-world tangent; human-only combined20N cap.')
+        row.update(right_contact_frame=evidence, support_task105_Nm=(old_support+delta).tolist(),
+            raw_requested105_Nm=request.tolist(), submitted105_Nm=effort.astype(float).tolist())
+        assert np.isfinite(effort).all() and s.native() == state
+        return effort, row

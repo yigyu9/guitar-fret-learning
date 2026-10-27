@@ -1,0 +1,137 @@
+"""New scene condition: move chair only; preserve V2 human/G geometry exactly."""
+import copy
+import json
+import traceback
+from pathlib import Path
+
+import mujoco
+import numpy as np
+
+from . import source_geometry_v1 as v1
+from .common import BASE,A,H0,read,save,sha
+
+OUT=BASE/'analysis/source_geometry_v4'
+CORRECTIONS=BASE/'inputs/source_corrections_v4'
+PLAN=Path(__file__).with_name('SOURCE_GEOMETRY_V4_PLAN.md')
+BASELINE=BASE/'inputs/source_corrections_v2/knee_minus_0p15.json'
+MINIMUM_GAP_M=.0022
+
+
+def chair_pairs(probe):
+    model,data,shapes,_=probe;seat=next(s for s in shapes if s['actor']=='chair');rows=[]
+    for shape in shapes:
+        if shape['actor'] not in ('human','guitar'):continue
+        points=np.zeros(6)
+        gap=float(mujoco.mj_geomDistance(model,data,shape['geom_id'],seat['geom_id'],.5,points))
+        if not np.isfinite(gap) or not np.isfinite(points).all():raise FloatingPointError('nonfinite chair gap')
+        rows.append({'actor':shape['actor'],'body':shape['body'],'geom':shape['geom_name'],
+            'signed_gap_m':gap,'witness_points_W_m':points.reshape(2,3).tolist(),
+            'fixed_root_pair':shape['actor']=='human' and shape['body']=='Pelvis',
+            'cutoff_m':.5})
+    return rows
+
+
+def geom_invariants(before,after):
+    bm,bd,bs,_=before;am,ad,ash,_=after
+    assert len(bs)==len(ash)
+    rows=[]
+    for b,a in zip(bs,ash):
+        assert (a['actor'],a['body'],a['geom_name'])==(b['actor'],b['body'],b['geom_name'])
+        if a['actor']=='chair':continue
+        bi,ai=b['geom_id'],a['geom_id']
+        rows.append({'actor':a['actor'],'body':a['body'],'geom':a['geom_name'],
+            'position_W_exact':bool(np.array_equal(bd.geom_xpos[bi],ad.geom_xpos[ai])),
+            'rotation_W_exact':bool(np.array_equal(bd.geom_xmat[bi],ad.geom_xmat[ai])),
+            'type_exact':bool(bm.geom_type[bi]==am.geom_type[ai]),
+            'size_exact':bool(np.array_equal(bm.geom_size[bi],am.geom_size[ai]))})
+    assert all(r[k] for r in rows for k in ('position_W_exact','rotation_W_exact','type_exact','size_exact'))
+    bc=next(s for s in bs if s['actor']=='chair')['geom_id'];ac=next(s for s in ash if s['actor']=='chair')['geom_id']
+    assert np.array_equal(bm.geom_size[bc],am.geom_size[ac]) and np.array_equal(bd.geom_xmat[bc],ad.geom_xmat[ac])
+    return {'all_nonchair_geom_transforms_types_sizes_exact':True,'per_geom':rows,
+        'chair_size_rotation_exact':True,'actual_chair_translation_W_m':(ad.geom_xpos[ac]-bd.geom_xpos[bc]).tolist()}
+
+
+def main():
+    OUT.mkdir(parents=True,exist_ok=False);CORRECTIONS.mkdir(parents=True,exist_ok=False)
+    baseline=read(BASELINE);state_path=Path(baseline['predicted_corrected_source_state_path'])
+    pins=v1.input_pins()
+    extra=(Path(__file__),PLAN,BASELINE,state_path,Path(__file__).with_name('source_geometry_v2.py'),
+        Path(__file__).with_name('SOURCE_GEOMETRY_V2_PLAN.md'),BASE/'analysis/source_geometry_v2/report.json',
+        BASE/'analysis/source_geometry_v3/report.json')
+    pins.update({str(p.resolve()):sha(p) for p in extra});save(OUT/'inputs_before.json',pins)
+    report={'schema':'lower_body_source_chair_translation_v4','status':'started','input_sha256':pins,
+        'scope':'new chair-initial-position scene condition; source diagnostic only; no native/cooked/no-contact certification',
+        'baseline_candidate':str(BASELINE),'required_dynamic_human_guitar_chair_gap_m':MINIMUM_GAP_M,
+        'fixed_root_pelvis_pair_excluded_from_selection_only':True,'fixed_pelvis_pairs_still_reported':True,
+        'chair_y_translation_options_m':[-.0025,-.003],'stages':[],'selected_candidate':None}
+    try:
+        assert baseline['source_candidate_valid']
+        state=read(state_path);bodies=read(H0/'report.json')['human_body_names']
+        assert len(bodies)==len(state['human_body_states'])
+        poses={n:v1.pose(s) for n,s in zip(bodies,state['human_body_states'])}
+        geometry=read(A/'assets/om_body_geometry_v3/manifest.json');asset=Path(geometry['asset'])
+        cfg=read(A/'config.json');chair=read(v1.ROOT/cfg['pose_source'])['params']['chair']
+        center=np.array([*chair['center_xy'],chair['half'][2]],dtype=float)
+        base_probe=v1.probe(baseline,bodies,poses,asset,chair);base_pairs=chair_pairs(base_probe)
+        save(OUT/'v2_baseline_all_chair_pairs.json',base_pairs)
+        parents={c.get('name'):p.get('name') for p in v1.ET.parse(v1.HUMAN).iter('body') for c in p.findall('body')}
+        base_audit,_=v1.audit(baseline,bodies,poses,parents,asset,chair)
+        save(OUT/'v2_baseline_lower_audit.json',base_audit)
+        for dy in (-.0025,-.003):
+            condition='chair_Y_minus_2p5mm_v1' if dy==-.0025 else 'chair_Y_minus_3mm_v1'
+            delta=np.array([0.,dy,0.]);new_center=center+delta
+            moved=copy.deepcopy(chair);moved['center_xy']=new_center[:2].tolist()
+            new_probe=v1.probe(baseline,bodies,poses,asset,moved)
+            invariants=geom_invariants(base_probe,new_probe);pairs=chair_pairs(new_probe)
+            assert np.allclose(invariants['actual_chair_translation_W_m'],delta,atol=1e-16,rtol=0.)
+            eligible=[r for r in pairs if not r['fixed_root_pair']]
+            valid=bool(min(r['signed_gap_m'] for r in eligible)>=MINIMUM_GAP_M-1e-7)
+            after_audit,_=v1.audit(baseline,bodies,poses,parents,asset,moved)
+            for k in ('feet','lower_ground_pairs','lower_guitar_pairs','lower_human_pairs'):
+                assert after_audit[k]==base_audit[k],k+' changed despite fixed human/G geometry'
+            changes=[]
+            for before,after in zip(base_pairs,pairs):
+                assert (before['actor'],before['body'],before['geom'])==(after['actor'],after['body'],after['geom'])
+                changes.append({'actor':after['actor'],'body':after['body'],'geom':after['geom'],
+                    'fixed_root_pair':after['fixed_root_pair'],
+                    'baseline_signed_gap_m':before['signed_gap_m'],'corrected_signed_gap_m':after['signed_gap_m'],
+                    'gap_change_m':after['signed_gap_m']-before['signed_gap_m'],
+                    'baseline_witness_points_W_m':before['witness_points_W_m'],
+                    'corrected_witness_points_W_m':after['witness_points_W_m']})
+            summary={'condition':condition,'chair_translation_W_m':delta.tolist(),
+                'chair_baseline_center_W_m':center.tolist(),'chair_initial_center_W_m':new_center.tolist(),
+                'chair_initial_half_extents_m':chair['half'],
+                'source_candidate_valid':valid,
+                'minimum_dynamic_human_chair_gap_m':min(r['signed_gap_m'] for r in eligible if r['actor']=='human'),
+                'minimum_guitar_chair_gap_m':min(r['signed_gap_m'] for r in eligible if r['actor']=='guitar'),
+                'minimum_all_human_chair_gap_m':min(r['signed_gap_m'] for r in pairs if r['actor']=='human'),
+                'fixed_pelvis_pairs':[r for r in changes if r['fixed_root_pair']],
+                'all_human_guitar_ground_self_foot_geometry_exact':True}
+            save(OUT/(condition+'_all_chair_pairs.json'),pairs)
+            save(OUT/(condition+'_chair_gap_changes.json'),changes)
+            save(OUT/(condition+'_geometry_invariants.json'),invariants)
+            save(OUT/(condition+'_lower_audit.json'),after_audit)
+            candidate=copy.deepcopy(baseline)
+            candidate.update(chair_translation_W_m=delta.tolist(),chair_baseline_center_W_m=center.tolist(),
+                chair_initial_center_W_m=new_center.tolist(),chair_initial_half_extents_m=chair['half'],
+                chair_condition=condition,chair_minimum_dynamic_source_gap_m=MINIMUM_GAP_M,
+                source_geometry_report=str(OUT/'report.json'),source_candidate_valid=valid)
+            candidate['scope']='New initial chair-position condition; human105/root/allangles/guitar and V2 predictedlower8/expected81 unchanged. Fixed Pelvis-seat source overlap remains separately reported; not unchanged-chair stabilization or whole-body clearance.'
+            for k in ('q_ref_rad','lower_deltas_rad','lower24_q_rad','expected_initial_state',
+                      'predicted_corrected_human_body_poses','predicted_corrected_source_state_path'):
+                assert candidate[k]==baseline[k],k+' must remain exact V2'
+            path=CORRECTIONS/(condition+'.json');save(path,candidate)
+            summary['candidate_path']=str(path);report['stages'].append(summary)
+            print(json.dumps(summary,indent=2),flush=True)
+            if valid:
+                report['selected_candidate']=str(path);break
+        report['status']='completed';report['source_candidate_found']=report['selected_candidate'] is not None
+    except Exception:
+        report.update(status='failed',error=traceback.format_exc());raise
+    finally:
+        report['input_sha256_after']={p:sha(p) for p in pins};report['inputs_unchanged']=pins==report['input_sha256_after']
+        save(OUT/'report.json',report)
+        assert report['inputs_unchanged'],'input changed; preserve failure and version source'
+
+
+if __name__=='__main__':main()

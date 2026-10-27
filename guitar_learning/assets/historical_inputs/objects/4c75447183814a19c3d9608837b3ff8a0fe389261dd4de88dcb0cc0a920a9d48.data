@@ -1,0 +1,46 @@
+"""Independent analytic convex/capsule audit; retain unreliable MJ signed queries."""
+import itertools
+import xml.etree.ElementTree as ET
+import numpy as np
+from scipy.spatial import ConvexHull
+from scipy.optimize import lsq_linear
+from .upright_audit_v1 import *
+from .common import HUMAN
+from stability_adapter_2.om_axilla_source_geometry_v3 import CapsuleBodyDistance,segment_convex
+
+
+def audit(candidate,i):
+    names,bodies=i['joint_names'],i['human_body_names'];fk,parents=full_fk(names,bodies,i['native_initial_state'],np.array(i['q_ref105_rad']));poses=fk(np.array(candidate['q_ref_rad']));asset=Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']);chair=read(ROOT/read(A/'config.json')['pose_source'])['params']['chair'];chair['center_xy']=(np.array(chair['center_xy'])+np.array(candidate['chair_translation_W_m'])[:2]).tolist();model,data,shapes,_=probe(candidate,bodies,poses,asset,chair);distance=CapsuleBodyDistance(asset,HUMAN);props=read(NATIVE/'native_properties.json')['actual_shape_properties'];excluded={frozenset((e.get('body1'),e.get('body2'))) for e in ET.parse(HUMAN).findall('./contact/exclude')}
+    def enabled(a,b):
+        if parents.get(a)==b or parents.get(b)==a or frozenset((a,b)) in excluded:return False
+        return any((x['filter']&y['filter'])==0 for x in props['human'][a] for y in props['human'][b])
+    hulls=[]
+    for s in shapes:
+        if s['actor'] not in ('guitar','chair'):continue
+        ix=s['geom_id'];typ=model.geom_type[ix]
+        if typ==mujoco.mjtGeom.mjGEOM_MESH:
+            mid=model.geom_dataid[ix];v=model.mesh_vert[model.mesh_vertadr[mid]:model.mesh_vertadr[mid]+model.mesh_vertnum[mid]]
+        elif typ==mujoco.mjtGeom.mjGEOM_BOX:v=np.array(list(itertools.product((-1.,1.),repeat=3)))*model.geom_size[ix]
+        else:continue
+        v=v@data.geom_xmat[ix].reshape(3,3).T+data.geom_xpos[ix];hulls.append((s,v,ConvexHull(v).equations))
+    caps={n:(poses[n][0]+poses[n][1].apply(seg),radius) for n,(seg,radius) in distance.capsules.items()};rows=[]
+    for n,(seg,radius) in caps.items():
+        for s,v,planes in hulls:
+            delta=np.maximum(np.maximum(v.min(0)-seg.max(0),seg.min(0)-v.max(0)),0)
+            if np.linalg.norm(delta)-radius>.02:continue
+            gap=segment_convex(seg[0],seg[1],v,planes)[0]-radius
+            rows.append(dict(a=n,b=s['body'],b_actor=s['actor'],geom=s['geom_name'],gap_m=gap,collision_relevant=True))
+    for a,b in itertools.combinations(caps,2):
+        x,ra=caps[a];y,rb=caps[b];matrix=np.column_stack([x[1]-x[0],y[0]-y[1]]);fit=lsq_linear(matrix,y[0]-x[0],bounds=([0.,0.],[1.,1.]),tol=1e-12);gap=np.linalg.norm(matrix@fit.x-(y[0]-x[0]))-ra-rb
+        if gap<.02:rows.append(dict(a=a,b=b,b_actor='human',gap_m=float(gap),collision_relevant=enabled(a,b)))
+    return rows
+
+
+def main():
+    out=BASE/'upright_chest_support_v1/source_audit_v3';out.mkdir(exist_ok=False);source=BASE/'upright_chest_support_v1/source_v4';paths=[source/n for n in ('candidate.json','predicted_state.json','report.json','support_candidate.json')];pins=pin(extra=paths+[INITIAL,NATIVE/'native_properties.json',PLAN]);save(out/'inputs_before.json',pins);i=read(INITIAL);c=read(source/'candidate.json');baseline=read(BASE/'inputs/source_corrections_v4/chair_Y_minus_2p5mm_v1.json');old=audit(baseline,i);new=audit(c,i)
+    def key(r):return r['a'],r['b'],r.get('geom','')
+    before={key(r):r['gap_m'] for r in old};negative=[dict(r,baseline_gap_m=before.get(key(r))) for r in new if r['collision_relevant'] and r['gap_m']<-.0001 and r['gap_m']<before.get(key(r),.02)-.0002 and not(r['a']=='Pelvis' and r['b_actor']=='chair')]
+    result=dict(candidate_pairs=new,baseline_pairs=old,new_or_worsened_intersections=negative,eligible_for_native=not negative and read(source/'report.json')['local_geometry_reach_eligible'],scope='Analytic source convex/capsule check. MJ signed query audit V1 disagreed with independent segment-convex optimization on identical transformed mesh vertices (e.g. Spine -18.8mm versus +0.10mm); its negative values are not accepted penetration depths. Hand meshes are not certified here; their guitar-relative palm pose is preserved to 0.12mm/0.055deg and native contacts/safety must be checked. Existing lower/feet placement unchanged. inherited source_candidate_valid/source_geometry_report/predicted_corrected_source_state_path fields refer only to prior lower correction, not this upright audit.',inputs_unchanged=verify(pins));save(out/'report.json',result);print('eligible',result['eligible_for_native'],'new intersections',negative,flush=True)
+
+
+if __name__=='__main__':main()

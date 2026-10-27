@@ -1,0 +1,25 @@
+from pathlib import Path
+import hashlib,json,sys
+import numpy as np
+import torch
+base=Path('/home/ajou/yigyu/3/docs/2026-10-20/guitar_learning_large_env_benchmark_v1');name=sys.argv[1];p=base/(name+'_repeat')
+d=json.loads((p/'report.json').read_text());s=d['settings'];source=json.loads((base/'source_manifest.json').read_text());sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+a=torch.load(base/name/'final.pt',map_location='cpu',weights_only=False)
+b=torch.load(p/'initial.pt',map_location='cpu',weights_only=False)
+c=torch.load(p/'final.pt',map_location='cpu',weights_only=False)
+def equal(x,y):
+ if isinstance(x,torch.Tensor):return isinstance(y,torch.Tensor) and x.dtype==y.dtype and torch.equal(x,y)
+ if isinstance(x,np.ndarray):return isinstance(y,np.ndarray) and x.dtype==y.dtype and np.array_equal(x,y)
+ if isinstance(x,dict):return isinstance(y,dict) and x.keys()==y.keys() and all(equal(x[k],y[k]) for k in x)
+ if isinstance(x,(tuple,list)):return type(x)==type(y) and len(x)==len(y) and all(equal(a,b) for a,b in zip(x,y))
+ return x==y
+def finite(x):
+ if isinstance(x,torch.Tensor):return bool(torch.isfinite(x).all())
+ if isinstance(x,dict):return all(finite(v) for v in x.values())
+ if isinstance(x,(tuple,list)):return all(finite(v) for v in x)
+ return True
+baseline_settings=json.loads((base/name/'settings.json').read_text())
+checks=dict(same_configuration_except_horizon_updates={k:v for k,v in s.items() if k not in ('horizon','updates')}=={k:v for k,v in baseline_settings.items() if k not in ('horizon','updates')},completed=d['completed'],persistent_audit=d['persistent_audit']['completed'],source_unchanged=all(sha(Path(p))==h for p,h in source.items()),input_pins=all(sha(Path(p))==h for p,h in json.loads((p/'inputs_before.json').read_text()).items()),restored_payload_exact_except_metadata=equal({k:v for k,v in a.items() if k!='metadata'},{k:v for k,v in b.items() if k!='metadata'}),transitions=d['transitions']==s['num_envs']*256*2,horizon=s['horizon']==256,two_updates=s['updates']==2,updates_continued=d['optimizer_updates']==a['updates']+2==c['updates'],finite_final_model_optimizer=finite(c['model']) and finite(c['actor_optimizer']) and finite(c['value_optimizer']))
+for f in ('changed_inputs','guard_violations','missing_import_pins','original_source_parity_errors','physical_flags_errors','worker_failures','cleanup_errors'):checks[f]=not d[f]
+result=dict(completed=all(checks.values()),checks=checks,num_envs=s['num_envs'],horizon=256,new_updates=2,total_optimizer_updates=d['optimizer_updates'],transitions=d['transitions'],minimum_available_gib=d['resources']['min_available_memory_bytes']/2**30,wall_s=d['wall_s'],collection_s=d['timers']['collection_s'],update_s=d['timers']['update_s'],scope='short H256 resume and repeated PPO/session reuse check; full H1969 peak-load evidence belongs to baseline run, not this repeat',initial_sha256=sha(p/'initial.pt'),final_sha256=sha(p/'final.pt'))
+(base/'repeat_verification.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n');print(json.dumps(result,ensure_ascii=False,indent=2));assert result['completed']

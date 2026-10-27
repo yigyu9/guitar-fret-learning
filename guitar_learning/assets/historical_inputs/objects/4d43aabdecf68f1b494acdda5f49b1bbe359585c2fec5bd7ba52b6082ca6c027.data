@@ -1,0 +1,87 @@
+"""Root-owned navigation, independent media check, and finished-log preservation."""
+import hashlib
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+PHASE = ROOT/'paper/initial_pose/lower_body_release_v1/upright_horizontal_play_v1'
+CONTEXT = ('README.md', 'PROJECT_CONTEXT.md', 'stability_adapter_2/README.md', 'stability_adapter_2/PLAN.md')
+
+
+def sha(path):
+    h = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(8*1024*1024), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def save(path, data):
+    assert not path.exists(), str(path)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2)+'\n')
+
+
+def main():
+    context = PHASE/'context_before_v1'
+    context.mkdir(exist_ok=False)
+    copies = []
+    for name in CONTEXT:
+        target = context/name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT/name, target)
+        copies.append(target)
+    video_maps = sorted(PHASE.glob('native_*/media/videos.json'))
+    assert len(video_maps)==4
+    videos = [(m, name, record) for m in video_maps for name, record in json.loads(m.read_text()).items()]
+    assert len(videos)==16
+    logs = sorted(Path('/tmp').glob('hplay*.log'))
+    assert len(logs)==10
+    files = [Path(__file__).resolve(), PHASE/'README_v2.md', PHASE/'media_index_v2.md',
+             PHASE/'attempt_summary.json', ROOT/'docs/plans/upright_horizontal_play_result_v2_20261015.md']
+    files += copies+video_maps+[Path(v['path']) for _, _, v in videos]+logs
+    pins = {str(p): sha(p) for p in files}
+    save(PHASE/'finalize_materials_before.json', pins)
+    block = f'''## 2026-10-15 최신: 교정 자세의 압현·타현 시험, 연주 중 안정성 미달
+
+기존 교정 자세를 같은 제어로5초 재현한 뒤 정지 대조·압현·타현·결합을 각각4초 더 실행했다. 네 조건 모두9초를 완료했지만 세 동작 조건의 안정성 통과는0회다. 기타 몸통의5초 대비 최대이동/회전은 압현10.511mm/5.278°, 타현26.831mm/17.505°, 결합11.135mm/7.634°였다. 내려치기는6줄 모두 검출됐지만 올려치기는 누락이 있었으며, 가슴 실제 접촉은0이다. 압현은 실제 검지 움직임과 접촉·위치·유지 후보 판정이고 타현은 비충돌 가상 피크 통과 판정이다. 압현력·현 진동·음향 성공을 뜻하지 않는다.
+
+Root고정·하체유한제어·기타자유/중력ON/스트랩OFF를 유지했다. 새15초 손해제/PPO는0회이며 현재 설정을 연주 안정 설정으로 채택하지 않는다. [최신 상세 결과]({PHASE}/README_v2.md) · [실제 영상]({PHASE}/media_index_v2.md) · [결과 계획]({ROOT}/docs/plans/upright_horizontal_play_result_v2_20261015.md). 아래 교정과 이전 연구는 당시 조건의 기록이다.
+
+'''
+    mutations = []
+    for name, source in zip(CONTEXT, copies):
+        text = source.read_text()
+        text = text.replace('## 2026-10-15 사용자 교정: 기타 좌우 복원·넥 수평화, 전체 안정화 미완료',
+                            '## 2026-10-15 이전 교정: 기타 좌우 복원·넥 수평화, 전체 안정화 미완료', 1)
+        heading, rest = text.split('\n', 1)
+        (ROOT/name).write_text(heading+'\n\n'+block+rest.lstrip('\n'))
+        mutations.append(dict(path=str(ROOT/name), before=sha(source), after=sha(ROOT/name), preserved_before=str(source)))
+    media_results = []
+    for manifest, name, record in videos:
+        result = subprocess.run(record['ffprobe_command'], capture_output=True, text=True, check=True)
+        stream = json.loads(result.stdout)['streams'][0]
+        checks = dict(sha_matches=sha(record['path'])==record['sha256'], metadata_exact=stream==record['stream'],
+                      expected_stream=stream==dict(width=1280, height=720, avg_frame_rate='30/1', duration='9.033333', nb_read_frames='271'))
+        assert all(checks.values()), record['path']
+        media_results.append(dict(path=record['path'], manifest=str(manifest), camera=name, checks=checks, stream=stream))
+    save(PHASE/'media_verification_v1.json', dict(video_count=len(videos), all_match=True, videos=media_results,
+         scope='Independent ffprobe decode count and SHA; 271 CFR frames include t0 for 9 physical seconds.'))
+    logdir = PHASE/'logs_final_v1'
+    logdir.mkdir(exist_ok=False)
+    records = []
+    for source in logs:
+        target = logdir/source.name
+        shutil.copyfile(source, target)
+        assert sha(target)==pins[str(source)]
+        records.append(dict(original=str(source), preserved=str(target), sha256=sha(target)))
+    save(logdir/'manifest.json', dict(files=records, all_match=True))
+    assert all(sha(p)==h for p, h in pins.items())
+    save(PHASE/'finalize_materials.json', dict(inputs_unchanged=True, intended_context_mutations=mutations,
+         media_all_match=True, log_count=len(records)))
+    print(dict(videos_verified=len(videos), logs_preserved=len(records), context_documents=len(mutations)))
+
+
+if __name__=='__main__':
+    main()

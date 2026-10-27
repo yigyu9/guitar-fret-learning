@@ -1,0 +1,224 @@
+"""One free-guitar physics session, two original hand views, joint coordination."""
+import copy
+from dataclasses import replace
+from unittest.mock import patch
+import numpy as np
+from .. import training_environment
+from ..training_environment import TrainingEnvironment
+from ..actionable_preparation_environment import PersistentContactEnvironment
+from ..persistent_environment import _CONSTRUCTION_LOCK
+from ..task_measurement_v2 import TaskMeasurementV2
+from ..music_task import ScoreTask
+from ..timing_environment import execution_task
+from ..timing_curriculum import TimingConfig
+from ..imitation_environment import profile_settings
+from ..musical_quality_environment import MusicalQualityEnvironment
+from ..skill_environment import skill_pick_guide
+from . import spec
+from .metrics import CoordinationLedger, joint_quality, metadata
+
+
+class JointEnvironment(TrainingEnvironment):
+    def __init__(self, *args, task, timing=TimingConfig(pre_roll_s=3., stage_index=1),
+                 preparation_seconds=0., **kwargs):
+        if not isinstance(timing, TimingConfig) or timing.pre_roll_s != 3. or preparation_seconds != 0.:
+            raise ValueError('joint requires original policy pre-roll3 and native preparation0')
+        self.role, self.frozen_partner = 'joint', False
+        self.original_task, self.timing_config = task, timing
+        self.hand_views = {}
+        self.coordination_ledger = None
+        super().__init__(*args, task=execution_task(task, timing), preparation_seconds=0., **kwargs)
+
+    def _hand_view(self, role, info):
+        # Reuse the original reset metadata and observation chain without a second
+        # native reset. This private shadow owns its builder, ledgers and contract;
+        # the native snapshot/control object is shared read-only.
+        view = MusicalQualityEnvironment.__new__(MusicalQualityEnvironment)
+        view.__dict__.update(role=role, skill='hold' if role == 'left' else 'cross',
+            task=self.task, original_task=self.original_task, timing_config=self.timing_config,
+            builder=copy.deepcopy(self.builder), contract=copy.deepcopy(self.contract),
+            last_sample=self.last_sample, last_measured=self.last_measured, last_safety=self.last_safety,
+            control=self.control, previous_action=self.previous_action,
+            skill_ledger=None, timing_ledger=None, quality_ledger=None)
+        skill, guide, _ = profile_settings(role, view.skill)
+        view.skill_config = replace(skill, horizon_s=self.task.duration_s)
+        view.guide_config = guide
+        def snapshot_reset(shadow):
+            return shadow._observation(), copy.deepcopy(info)
+        with _CONSTRUCTION_LOCK, patch.object(TrainingEnvironment, 'reset', snapshot_reset):
+            MusicalQualityEnvironment.reset(view)
+        if view.contract['observation']['dimension'] != spec.HAND_STATE_DIM:
+            raise ValueError('exact original563 hand view required')
+        return view
+
+    def reset(self):
+        self.hand_views = {}
+        self.coordination_ledger = None
+        with _CONSTRUCTION_LOCK, patch.object(training_environment, 'TaskMeasurement', TaskMeasurementV2):
+            _, info = super().reset()
+        base_contract = copy.deepcopy(self.contract)
+        for role in ('left', 'right'):
+            self.contract = copy.deepcopy(base_contract)
+            self.hand_views[role] = self._hand_view(role, info)
+        self.contract = base_contract
+        self.coordination_ledger = CoordinationLedger(self.task, self.last_measured, self.timing_config)
+        hands = {role: copy.deepcopy(view.contract) for role, view in self.hand_views.items()}
+        left, right = (hands[role]['observation'] for role in ('left', 'right'))
+        observation = copy.deepcopy(left)
+        observation.update(dimension=spec.STATE_DIM,
+            fields=['left.'+name for name in left['fields']]+['right.'+name for name in right['fields']]
+                +['coordination.'+name for name in spec.COORDINATION_FIELDS],
+            scales=left['scales']+right['scales']+list(spec.COORDINATION_SCALES),
+            hand_views=dict(left=[0, spec.HAND_STATE_DIM], right=[spec.HAND_STATE_DIM, 2*spec.HAND_STATE_DIM]),
+            coordination=dict(offset=2*spec.HAND_STATE_DIM, fields=list(spec.COORDINATION_FIELDS),
+                              scales=list(spec.COORDINATION_SCALES)))
+        self.contract = copy.deepcopy(hands['left'])
+        self.contract['task']['specialist'] = dict(schema=spec.SCHEMA, role='joint', frozen_partner=False,
+            success=metadata()['success'], action_combination='left33 then right6 applied once per shared physical tick')
+        self.contract['observation'] = observation
+        self.contract['task']['joint'] = dict(metadata(), hand_contracts=hands)
+        self.contract['reward']['joint'] = metadata()
+        info['training_contract'] = self.contract
+        self._joint_info(info, completed=False)
+        return self._observation(), info
+
+    def _observation(self):
+        if not self.hand_views:
+            return TrainingEnvironment._observation(self)
+        observations = []
+        for role in ('left', 'right'):
+            view = self.hand_views[role]
+            view.last_sample, view.last_measured, view.last_safety = self.last_sample, self.last_measured, self.last_safety
+            view.previous_action = self.previous_action
+            observations.append(view._observation())
+        first, second = observations
+        for name in ('events', 'mask', 'priority_events', 'priority_mask'):
+            if not np.array_equal(first[name], second[name]):
+                raise ValueError('joint hands must receive identical measured event tokens')
+        coordination = np.zeros(spec.COORDINATION_DIM) if self.coordination_ledger is None else np.asarray(self.coordination_ledger.history())
+        result = dict(first)
+        result['state'] = np.r_[first['state'], second['state'], np.clip(coordination/np.asarray(spec.COORDINATION_SCALES), -10, 10)].astype(np.float32)
+        if result['state'].shape != (spec.STATE_DIM,) or not np.isfinite(result['state']).all():
+            raise ValueError('finite1132 joint observation required')
+        return result
+
+    def _joint_info(self, info, completed):
+        timings = {role: view.timing_ledger.summary(completed=completed) for role, view in self.hand_views.items()}
+        qualities = {role: view.quality_ledger.summary(timings[role]) for role, view in self.hand_views.items()}
+        coordination = self.coordination_ledger.summary(completed=completed)
+        quality = joint_quality(qualities['left'], qualities['right'], coordination)
+        # Common existing loggers can read concrete hand diagnostics at the top,
+        # while full per-hand timing/quality evidence is retained below.
+        quality.update({key: copy.deepcopy(qualities['left'][key]) for key in (
+            'fretting_state', 'clean_audible_fraction', 'wrong_press_s', 'missing_press_s',
+            'audible_wrong_s', 'dropouts', 'release_complete', 'release_clear_dwell_s', 'release_late_s')})
+        quality['strike'] = copy.deepcopy(qualities['right']['strike'])
+        timing = dict(role='joint', schema=spec.SCHEMA, left=timings['left'], right=timings['right'],
+            stage_success=quality['stage_success'], provisional_success=quality['provisional_success'],
+            timing_only_stage_success=all(row['stage_success'] for row in timings.values()),
+            safety_invalidated=coordination['safety_invalidated'], safety_reasons=coordination['safety_reasons'],
+            completed=bool(completed), policy_time_s=self.last_measured['task_time_s'],
+            score_time_s=self.last_measured['task_time_s']-self.timing_config.pre_roll_s)
+        specialist = dict(schema=spec.SCHEMA, role='joint', frozen_partner=False,
+            stage_success=quality['stage_success'], provisional_success=quality['provisional_success'],
+            safety_invalidated=coordination['safety_invalidated'], safety_reasons=coordination['safety_reasons'],
+            left=self.hand_views['left'].skill_ledger.summary(completed=completed, music=self.last_measured['summary']),
+            right=self.hand_views['right'].skill_ledger.summary(completed=completed, music=self.last_measured['summary']),
+            timing=copy.deepcopy(timing), success_criterion=metadata()['success'])
+        joint = copy.deepcopy(coordination)
+        joint.update(role='joint', stage_success=quality['stage_success'], provisional_success=quality['provisional_success'])
+        info.update(musical_quality=quality, timing=timing, specialist=specialist,
+                    joint=joint, coordination=coordination, score_time_s=timing['score_time_s'])
+        if 'episode' in info:
+            for name in ('musical_quality', 'timing', 'specialist', 'joint', 'coordination', 'score_time_s'):
+                info['episode'][name] = copy.deepcopy(info[name])
+
+    def _role_terms(self, view, measured, sample, failed_tick=False):
+        previous = view.quality_ledger.previous
+        guide = skill_pick_guide(self.task, sample, measured['task_time_s'], 'timed', view.guide_config) if view.role == 'right' else None
+        skill_guide = skill_pick_guide(self.task, sample, measured['task_time_s'], view.skill, view.guide_config) if view.role == 'right' else None
+        view.skill_ledger.update(measured, skill_guide)
+        terms = view.timing_ledger.update(measured, guide)
+        before_audible = view.quality_ledger.clean_audible_s
+        quality = view.quality_ledger.update(measured)
+        quality['quality_post_note_hold_correction'] = 0.
+        quality['quality_audible_success'] = 0.
+        quality['quality_timing_success_correction'] = -terms['timing_success'] if view.role == 'left' and not failed_tick else 0.
+        preparation = 0.
+        if view.role == 'left' and not failed_tick:
+            target = self.task.targets[0]
+            both = previous['targets'][target.target_id]['candidate'] and measured['targets'][target.target_id]['candidate']
+            if both:
+                if self.timing_config.stage_index < 4:
+                    post = max(0., min(measured['task_time_s'], view.timing_ledger.window_end)
+                        - max(previous['task_time_s'], target.end_s, view.timing_ledger.window_start))
+                    quality['quality_post_note_hold_correction'] = -self.timing_config.held_second*post
+                preparation = .2*max(0., min(measured['task_time_s'], 2.)-max(previous['task_time_s'], 0.))
+            required = view.timing_ledger.left_required_dwell_s
+            if before_audible+1e-12 < required <= view.quality_ledger.clean_audible_s+1e-12:
+                quality['quality_audible_success'] = self.timing_config.success_bonus
+        # Keep timing-only acquisition historical, but remove its duplicate LH
+        # success bonus before failure suppression as in the original chain.
+        terms.update(quality)
+        terms['preparation_contact'] = preparation
+        return {view.role+'_'+key: value for key, value in terms.items()}
+
+    def step(self, action):
+        try:
+            _, base_reward, terminated, truncated, info = TrainingEnvironment.step(self, action)
+            rows, samples = info['physics_measurements'], info['native_control']['physics_samples240']
+            if len(rows) != 4 or len(samples) != 4:
+                raise ValueError('exact four native240Hz samples per joint tick required')
+            additions = {}
+            for sample, row in zip(samples, rows):
+                if sample['native']['physics_step'] != row['physics_step'] or sample['geometry']['physics_step'] != row['physics_step']:
+                    raise ValueError('same-step joint physical evidence required')
+                terms = {}
+                for view in self.hand_views.values():
+                    terms.update(self._role_terms(view, row['music'], sample, bool(info['failure_reasons'])))
+                terms.update(self.coordination_ledger.update(row['music']))
+                reasons = row['stability']['failure_reasons']
+                if reasons:
+                    for view in self.hand_views.values():
+                        view.skill_ledger.invalidate(reasons)
+                        view.timing_ledger.invalidate(reasons)
+                    self.coordination_ledger.invalidate(reasons)
+                row['joint_reward_terms'] = terms
+            if info['failure_reasons']:
+                for view in self.hand_views.values():
+                    view.skill_ledger.invalidate(info['failure_reasons'])
+                    view.timing_ledger.invalidate(info['failure_reasons'])
+                self.coordination_ledger.invalidate(info['failure_reasons'])
+                for row in rows:
+                    row['joint_reward_terms'] = {key: min(0., value) for key, value in row['joint_reward_terms'].items()}
+            for row in rows:
+                for key, value in row['joint_reward_terms'].items():
+                    additions[key] = additions.get(key, 0.)+value
+            terms = {key: info['reward_terms'][key] for key in ('action_change', 'terminal_failure')}
+            terms.update(additions)
+            reward = float(sum(terms.values()))
+            if not np.isfinite(reward):
+                raise ValueError('finite joint reward required')
+            self.total_reward += reward-base_reward
+            info['reward_terms'] = terms
+            completed = bool(terminated and info['termination_reason'] == 'timeline_complete')
+            self._joint_info(info, completed)
+            if 'episode' in info:
+                info['episode']['reward'] = self.total_reward
+            return self._observation(), reward, terminated, truncated, info
+        except BaseException:
+            self.finished = True
+            raise
+
+
+def build_environment(config, out, *, bundle, timing=TimingConfig(pre_roll_s=3., stage_index=1),
+        stage='B', start_event_index=0, phrase_events=8, tempo_scale=1., seed=7, worker_id=0, music=None, **kwargs):
+    music = dict(music or {})
+    if (stage != 'B' or start_event_index != 0 or tempo_scale != 1.
+            or set(music)-{'reward_mode', 'goal_event_indices'}
+            or music.get('reward_mode', 'legacy') != 'legacy' or music.get('goal_event_indices') is not None):
+        raise ValueError('joint v1 requires original first fretted note at tempo1 and no goal pool')
+    task = ScoreTask.from_bundle(bundle, stage=stage, start_event_index=start_event_index,
+        phrase_events=phrase_events, tempo_scale=tempo_scale)
+    with _CONSTRUCTION_LOCK, patch.object(training_environment, 'ContactEnvironment', PersistentContactEnvironment):
+        return JointEnvironment(config, out, task=task, timing=timing, **kwargs)

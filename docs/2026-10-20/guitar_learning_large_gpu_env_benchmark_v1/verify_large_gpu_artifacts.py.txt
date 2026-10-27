@@ -1,0 +1,78 @@
+"""Seal verified GPU benchmark evidence without importing native simulation or Torch."""
+import ast
+import hashlib
+import json
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+from types import ModuleType
+from unittest.mock import patch
+
+ROOT = Path('/home/ajou/yigyu/3')
+BASE = ROOT/'docs/2026-10-20/guitar_learning_large_gpu_env_benchmark_v1'
+sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+load = lambda name: json.loads((BASE/name).read_text())
+comparison, repeat, review = load('comparison.json'), load('repeat_verification.json'), load('review.json')
+manifest, probe = load('source_manifest.json'), load('cuda_probe.json')
+cpu_base = BASE.parent/'guitar_learning_large_env_benchmark_v1'
+cpu_seal = json.loads((cpu_base/'verification.json').read_text())
+assert all(sha(cpu_base/name) == digest for name,digest in cpu_seal['artifacts_sha256'].items())
+assert len(manifest) == 410
+assert manifest == {str(p.resolve()):sha(p) for p in (ROOT/'guitar_learning').rglob('*.py') if 'archive' not in p.parts}
+assert comparison['source_unchanged'] and {r['num_envs'] for r in comparison['runs']} == {2,4,8}
+assert all(r['all_checks_passed'] for r in comparison['runs'])
+assert repeat['completed'] and repeat['num_envs'] == 8 and repeat['total_optimizer_updates'] == 3
+assert review['completed'] and not review['unresolved_findings']
+assert probe['available'] and probe['device_count'] == 1 and probe['tensor_device'] == 'cuda:0' and probe['tensor_value'] == 512
+best = max(comparison['runs'], key=lambda r:r['runner_transitions_per_s'])
+assert best['minimum_available_gib'] >= 6 and best['global_gpu_sample_min_free_mib'] >= 2048
+for name in ('n2','n4','n8','n8_repeat'):
+    supervisor = load(name+'_supervisor.json')
+    assert supervisor['completed'] and supervisor['returncode'] == 0 and supervisor['guard_trigger'] is None
+    if name != 'n2':
+        assert supervisor['cleanup']['completed'] and not supervisor['cleanup']['group_alive']
+        assert not supervisor['cleanup']['residual_members']
+        assert all(not g['group_alive'] for g in supervisor['prior_group_checks'])
+        assert supervisor['wrapper']['sha256'] == sha(BASE/'controller_v2.py.txt')
+text = (BASE/'README.md').read_text()
+links = re.findall(r'\[[^\]]+\]\(([^)]+)\)', text)
+for link in links:
+    assert not link.startswith(('http:', 'https:'))
+    assert (BASE/link).resolve().exists(), link
+bash = re.search(r'```bash\n(.*?)\n```', text, re.S).group(1)
+subprocess.run(['/bin/bash','-n'], input=bash, text=True, check=True)
+command = bash.split('\n',1)[1].replace('\\\n',' ')
+argv = shlex.split(command)
+assert argv[:3] == ['python','-m','guitar_learning.train']
+sys.path.insert(0,str(ROOT))
+from guitar_learning.training import start
+with patch.object(sys,'argv',['guitar_learning.train']+argv[3:]), \
+     patch.dict(sys.modules, {'isaacgym':ModuleType('isaacgym')}), \
+     patch.object(start,'settings_document',return_value={}) as settings, \
+     patch.object(start,'run',return_value=None) as run:
+    start.main()
+    args = run.call_args[0][1]
+    assert args.device == 'cuda:0' and args.size == 'large' and args.hand == 'left'
+    assert args.num_envs == best['num_envs'] and args.horizon == 1969 and args.updates == 1
+    assert args.song == '05_BN2-131-B_solo' and args.seed == 7
+    assert not args.out.exists() and args.resume is None
+pyc = [str(p) for p in (ROOT/'guitar_learning').rglob('*.pyc') if 'archive' not in p.parts]
+assert not pyc, pyc
+names = ['README.md','comparison.json','repeat_verification.json','review.json','source_manifest.json',
+         'cuda_probe.json','PLAN.md','progress.json','controller_v1.py.txt','controller_v2.py.txt',
+         'controller_versions.json','controller_cleanup_tests.py.txt','controller_cleanup_tests.log',
+         'summarize_large_gpu_env.py.txt','verify_large_gpu_repeat.py.txt','write_large_gpu_readme.py.txt',
+         'verify_large_gpu_artifacts.py.txt']
+for name in names:
+    if name.endswith('.py.txt'):
+        ast.parse((BASE/name).read_text(),filename=name)
+result = dict(completed=True,device='cuda:0',physics_device='cpu',recommend_num_envs=best['num_envs'],
+    tested_env_counts=[2,4,8],source_python_files=410,source_unchanged=True,all_baselines_verified=True,
+    repeat_verified=True,independent_review_passed=True,doc_links=len(links),
+    command_verified_against_actual_parser=True,active_pyc=0,previous_cpu_evidence_preserved=True,
+    artifacts_sha256={name:sha(BASE/name) for name in names},
+    scope='current large left512 CUDA policy/PPO and CPU physics; resource/execution checks; N16, 100update longevity, GPU physics and musical convergence unmeasured')
+(BASE/'verification.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
+print(json.dumps(result,ensure_ascii=False,indent=2))

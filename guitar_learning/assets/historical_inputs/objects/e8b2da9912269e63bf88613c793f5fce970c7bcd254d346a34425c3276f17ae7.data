@@ -1,0 +1,19 @@
+"""Close source/config and every declared native XML mesh before each execution."""
+from pathlib import Path
+import xml.etree.ElementTree as ET
+from stability_adapter_2.initial_pose_noise_v1 import read,sha
+from stability_adapter_2.environment_contract_v1 import EnvironmentContract
+ROOT=Path(__file__).resolve().parents[2]
+A=ROOT/'stability_adapter_2'
+
+def pin_inputs(config):
+    contract=EnvironmentContract(config)
+    old=ROOT/'docs/2026-10-19/stability_adapter_2/results/contact_three_view_v1/native_v1/attempt.json'
+    paths=set(map(Path,read(old)['input_sha256']))|set(A.glob('*.py'))|set(map(Path,contract.inputs))|{old}
+    paths|=set((A/'pose_experiments_v1').glob('*.py'))|{A/'pose_experiments_v1/PLAN.md',A/'working_initial_pose_v1/manifest.json',A/'working_initial_pose_v1/static.json'}
+    geometry=A/'assets/om_body_geometry_v3/manifest.json';paths.add(geometry)
+    for xml in (A/'assets/humanoid_fixed_lower.xml',Path(read(geometry)['asset'])):
+        paths.add(xml);tree=ET.parse(xml);compiler=tree.find('compiler');meshdir=compiler.get('meshdir','') if compiler is not None else ''
+        for mesh in tree.findall('./asset/mesh'):
+            paths.add((xml.parent/meshdir/mesh.attrib['file']).resolve())
+    return {str(p.resolve()):sha(p) for p in sorted(paths)}

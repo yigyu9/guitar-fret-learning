@@ -1,0 +1,29 @@
+"""Preserve sequential release, then10mm neck shift and measured re-approach."""
+import isaacgym
+import argparse
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from stability_adapter_2.initial_pose_noise_v1 import read,save,sha
+from stability_adapter_2.pose_experiments_v1 import motion,run as native
+base_trajectory=motion.trajectory
+
+def trajectory(t,_=None):
+    if t<=7:return base_trajectory(t,'sequential')
+    times=[7.,8.,10.,13.,15.,18.]
+    values=np.array([[0,1,.3],[0,1,.3],[.01,1,.3],[.01,0,.3],[.01,0,0],[.01,0,0]])
+    stages=['released_hold','neck_shift_10mm','approach_new_station','fingers_return','new_station_hold']
+    k=min(max(np.searchsorted(times,t,side='right')-1,0),len(times)-2);u=np.clip((t-times[k])/(times[k+1]-times[k]),0,1);s=u*u*(3-2*u)
+    return stages[k],values[k]+s*(values[k+1]-values[k]),6*u*(1-u)*(values[k+1]-values[k])/(times[k+1]-times[k])
+
+
+def main():
+    p=argparse.ArgumentParser();p.add_argument('--config',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();cfg=a.config.resolve();out=a.out.resolve();assert read(cfg)['qualification_mode']=='neck_recontact'
+    leaf=Path(__file__).with_name('NECK_RECONTACT_PLAN.md');pins={str(f):sha(f) for f in (Path(__file__).resolve(),leaf,cfg,Path(motion.__file__),Path(native.__file__))};before=out.parent/(out.name+'_wrapper_before.json');assert not before.exists();save(before,pins)
+    try:
+        with patch.object(motion,'trajectory',trajectory):motion.main(lambda:native.run(cfg,out))
+    finally:
+        unchanged=all(sha(f)==h for f,h in pins.items());save(out.parent/(out.name+'_wrapper_after.json'),{'input_sha256':pins,'inputs_unchanged':unchanged})
+    assert unchanged
+
+if __name__=='__main__':main()

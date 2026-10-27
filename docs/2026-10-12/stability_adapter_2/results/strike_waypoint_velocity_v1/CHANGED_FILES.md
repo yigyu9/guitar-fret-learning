@@ -1,0 +1,13 @@
+# 변경 파일 색인 — Strike waypoint velocity v1
+
+| 자료 | 용도 |
+|---|---|
+| [README.md](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/README.md:1) | 결과·해석 범위·저장된 native PNG/MP4 embeds |
+| [progress.md](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/progress.md:1) | 문서 작성 및 saved data 대조 상태 |
+| [Native report](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/native/data/report.json), [closure](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/native/inputs_after.json) | 1,200 physics steps·151 camera frames·24 checks·1,100 inputs unchanged |
+| [Analysis summary](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/analysis/summary.json), [analysis inputs before](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/analysis/inputs_before.json), [after](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/analysis/inputs_after.json) | 결과 집계와 분석 input 7개 SHA 비교 |
+| [Velocity goal audit](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/velocity_goal_audit.json) | 6 input SHA, PREPARE/native prefix, goal/velocity 산식 감사 |
+| [Initial values](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/native/data/initial_values.json), [initial audit](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/native/data/initial_audit.json), [checkpoint connection](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/native/data/checkpoint_connection.json) | 시작 상태 및 checkpoint 연결 근거 |
+| [Controls](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/native/data/controls.json), [trace](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_waypoint_velocity_v1/native/data/trace.json) | 300 control rows와 152 trace rows; terminal 시점 중복 행 설명은 README 참조 |
+| `native/data/images/frames/{whole_body,hands}/{00000,00044,00060,00150}.png`, `native/data/images/{whole_body,hands}.mp4` | README에 embed한 native 0/1.466667/2/5초 frame 및 영상 |
+| [Velocity goal implementation](/home/ajou/yigyu/3/stability_adapter_2/run_strike_waypoint_velocity.py:173), [phase and source-waypoint logic](/home/ajou/yigyu/3/stability_adapter_2/run_strike_waypoint_velocity.py:157), [plan](/home/ajou/yigyu/3/stability_adapter_2/STRIKE_WAYPOINT_VELOCITY_PLAN.md:1) | 실제 위치 차분·보정 제한·phase별 목표 소유권 |

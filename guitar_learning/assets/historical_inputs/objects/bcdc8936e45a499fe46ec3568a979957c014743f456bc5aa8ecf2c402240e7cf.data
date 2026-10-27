@@ -1,0 +1,55 @@
+"""추가margin의독립actualpoint/JTF/f32감사와정확한부모row복원."""
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.controller_horizontal_v4 import skew
+
+MODE='finite_human_Chest_extra0p25mm_v1'
+
+
+def restore_margin_rows(efforts):
+    # 중첩자료는읽기전용공유하고바뀌는topdict/points목록만복사한다.부모감사는이를수정하지않는다.
+    result=[]
+    for original in efforts:
+        row=dict(original);row['support_points']=list(original['support_points']);result.append(row)
+        if 'ready_chest_margin' not in row:continue
+        margin=row.pop('ready_chest_margin')
+        for key in ('raw_requested105_Nm','support_task105_Nm','submitted105_Nm'):row[key]=margin['previous_'+key]
+        j=next(j for j,p in enumerate(row['support_points']) if p['body']=='Chest');row['support_points'][j]=margin['previous_Chest']
+    return result
+
+
+def margin_evidence(initial,properties,states,efforts,cfg):
+    N=round(240*cfg['seconds']);names=initial['joint_names'];ref=next(r for r in properties['support_references'] if r['body']=='Chest');ix=np.array(ref['indices'],dtype=int)
+    lower=initial['lower_indices'];position=initial['position_indices'];zero=initial['zero_range_indices'];upper=np.setdiff1d(initial['effort_indices'],lower);outside=np.setdiff1d(np.arange(105),ix);caps=np.array(initial['PD_properties']['effort']);hcom=np.array(properties['human'][ref['index']]['COM_body_m']);bystep={s['physics_step']:s['state'] for s in states}
+    checks=dict(fullN=len(efforts)==N,contiguousN=[r['physics_step_before'] for r in efforts]==list(range(N)),states_N_plus1=[s['physics_step'] for s in states]==list(range(N+1)),
+        config=cfg.get('ready_chest_margin_mode')==MODE and cfg.get('ready_chest_margin_extra_m')==.00025 and cfg.get('ready_chest_margin_ramp_s')==[10,10.5],
+        Chest9_only=len(ix)==9 and [names[j] for j in ix]==[n+'_'+a for n in ('Torso','Spine','Chest') for a in 'xyz'] and not set(ix)&set(lower+position+zero),
+        records=True,constants=True,finite=True,parent_metadata_preserved=True,previous_Chest_preserved=True,outside9_exact=True,lower_POS_zero_exact=True,state_target_assertions=True,force_cap20=True,additional_force_at_most0p5N=True,pre2400_exact=True)
+    limits=dict(geometry_m=1e-9,normal=1e-8,depth_m=1e-15,force_N=1e-6,jacobian=1e-8,torque_Nm=1e-6);errors={k:[] for k in limits};samples=[]
+    def err(kind,a,b):
+        a=np.asarray(a,dtype=float);b=np.asarray(b,dtype=float);checks['finite'] &= bool(np.isfinite(a).all() and np.isfinite(b).all());errors[kind].append(float(np.max(abs(a-b))))
+    restored=restore_margin_rows(efforts)
+    for row,base in zip(efforts,restored):
+        k=row['physics_step_before']
+        if k<2400:
+            checks['pre2400_exact'] &= row==base and 'ready_chest_margin' not in row
+            continue
+        if 'ready_chest_margin' not in row or k not in bystep:checks['records']=False;continue
+        m=row['ready_chest_margin'];old=m['previous_Chest'];new=next(p for p in row['support_points'] if p['body']=='Chest');parent=row['chest_action_preload'];st=bystep[k];body=st['human_body_states'][ref['index']];p,r=pose(body);_,gr=pose(st['guitar_body_states'][0]);normal=gr.apply(old['normal_G']);normal/=np.linalg.norm(normal);local=r.inv().apply(np.array(old['point_W_m'])-p);block=np.array(parent['Jacobian6x105']);J=block[:3]-skew(r.apply(local-(hcom if parent['jacobian_frame']=='COM' else np.zeros(3))))@block[3:]
+        u=float(np.clip((k/240-10)/.5,0,1));ramp=u*u*(3-2*u);extra=.00025*ramp;depth=.00925+.0005*ramp;raw=old['raw_normal_request_N']-2000*extra;force=normal*np.clip(raw,-20,0);delta=np.zeros(105);delta[ix]=(J.T@(force-np.array(old['virtual_force_request_W_N'])))[ix]
+        oldraw=np.array(m['previous_raw_requested105_Nm']);oldtask=np.array(m['previous_support_task105_Nm']);oldsubmitted=np.array(m['previous_submitted105_Nm']);request=oldraw+delta;task=oldtask+delta;submitted=oldsubmitted.copy();submitted[upper]=np.clip(request[upper],-caps[upper],caps[upper]).astype(np.float32).astype(float);goal=np.array(old['goal_W_m'])-extra*normal
+        checks['constants'] &= m['mode']==MODE and m['final_extra_m']==.00025 and m['ramp_s']==[10,10.5] and m['K_N_m']==2000 and m['D_Ns_m']==30 and m['cap_N']==20 and m['indices']==ix.tolist() and m['joint_names']==[names[j] for j in ix] and m['jacobian_frame']==parent['jacobian_frame'] and new['depth_velocity_feedforward'] is False
+        for a,b in ((m['extra_m'],extra),(m['ramp_fraction'],ramp),(m['base_depth_m'],depth),(m['total_depth_m'],depth+extra),(old['human_virtual_goal_depth_m'],depth),(new['human_virtual_goal_depth_m'],depth+extra),(new['ready_margin_extra_depth_m'],extra),(new['ready_margin_final_extra_depth_m'],.00025)):err('depth_m',a,b)
+        for a,b in ((m['point_local_m'],local),(new['point_W_m'],p+r.apply(local)),(new['goal_W_m'],goal),(m['goal_W_m'],goal),(m['source_gap_m'],old['nearest_source_gap_m'])):err('geometry_m',a,b)
+        err('normal',m['normal_W'],normal);err('normal',m['normal_G'],old['normal_G']);err('normal',new['normal_G'],old['normal_G']);err('jacobian',m['Jacobian6x105'],block);err('jacobian',m['point_J9'],J[:,ix]);err('force_N',new['raw_normal_request_N'],raw);err('force_N',new['virtual_force_request_W_N'],force)
+        for a,b in ((m['delta105_Nm'],delta),(row['raw_requested105_Nm'],request),(row['support_task105_Nm'],task),(row['submitted105_Nm'],submitted)):err('torque_Nm',a,b)
+        changed={'goal_W_m','raw_normal_request_N','virtual_force_request_W_N','human_virtual_goal_depth_m','mode'};checks['previous_Chest_preserved'] &= all(key in new and new[key]==v for key,v in old.items() if key not in changed)
+        checks['parent_metadata_preserved'] &= row['chest_action_preload']==base['chest_action_preload'] and row['distal_rotational_feedback']==base['distal_rotational_feedback']
+        checks['outside9_exact'] &= all(np.array_equal(np.array(row[key])[outside],np.array(m['previous_'+key])[outside]) for key in ('raw_requested105_Nm','support_task105_Nm','submitted105_Nm')) and np.all(delta[outside]==0)
+        checks['lower_POS_zero_exact'] &= all(np.array_equal(np.array(row['submitted105_Nm'])[ids],oldsubmitted[ids]) for ids in (lower,position,zero)) and np.all(np.array(row['submitted105_Nm'])[position+zero]==0) and np.all(abs(np.array(row['submitted105_Nm']))<=caps)
+        checks['state_target_assertions'] &= all(m.get(key) is True for key in ('target_preserved','state_preserved','outside9_unchanged','lower_unchanged','position48_unchanged','zero8_unchanged'))
+        increment=float(np.linalg.norm(force-np.array(old['virtual_force_request_W_N'])));checks['force_cap20'] &= np.linalg.norm(force)<=20+1e-12;checks['additional_force_at_most0p5N'] &= increment<=.5+1e-12
+        samples.append(dict(step=k,time_s=k/240,extra_m=extra,raw_normal_N=raw,force_increment_norm_N=increment))
+    maxima={k:max(v) if v else None for k,v in errors.items()};checks['full_postN_math']=len(samples)==N-2400 and all(maxima[k] is not None and maxima[k]<=v for k,v in limits.items());checks={k:bool(v) for k,v in checks.items()}
+    return dict(passed=all(checks.values()),checks=checks,max_errors=maxima,limits=limits,samples=samples,
+        scope='Newboundedmargin JTF/f32/actualnativepoint-normal-J reconstruction. Restored parent source geometry/gap/velocity/SO3/Chest math must independently pass unchanged duration audit. Parent nativeJacobian block and sourcewitness remain subject to original audit; no futureclearance/physicalsuccess certificate.')

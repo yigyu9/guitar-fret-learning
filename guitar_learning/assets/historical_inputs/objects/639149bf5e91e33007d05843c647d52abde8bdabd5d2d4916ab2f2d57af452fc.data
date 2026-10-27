@@ -1,0 +1,54 @@
+"""Preserve prepared control exactly before10s; latch right12 then distal-only play."""
+import numpy as np
+from ..seated_foot_support_v1.runtime_v6 import Scene as FootScene
+from ..grounded_guitar_support_v1.runtime_v18 import Controller as PreparedController
+from .motion_v1 import Motion
+
+
+class Scene(FootScene):
+    def command(self, named):
+        motion = getattr(self,'play_logic',None)
+        if motion is not None:
+            named = motion.apply(named)
+        row = super().command(named)
+        if motion is not None and motion.started:
+            row['play'] = motion.info.copy()
+        return row
+
+
+class Controller(PreparedController):
+    def __init__(self,scene):
+        super().__init__(scene)
+        assert scene.cfg['seconds']==14 and scene.cfg['mode']=='static'
+        assert scene.cfg['play_case'] in ('baseline','press','strike','combined')
+        scene.play_logic=Motion(scene,self.fk)
+        self.play_latch=None
+
+    def targets(self):
+        s=self.s
+        if s.steps<2400:
+            return super().targets()
+        if self.play_latch is None:
+            assert s.steps==2400 and self.target_rows[-1]['physics_step_before']==2396
+            final=s.target.astype(float).copy()
+            assert np.array_equal(final,np.array(self.target_rows[-1]['final105_rad']))
+            self.play_latch=dict(latch_step=2400,source_target_step=2396,
+                indices105=self.right_arm.tolist(),joint_names=[s.names[j] for j in self.right_arm],
+                final12_rad=final[self.right_arm].tolist(),
+                mode='final_submitted_R12_latch_then_distal6_motion_v1',
+                scope='Finite target latch only, not actual state fixation. R12 world palm IK is inactive after10s; world material effort remains active.')
+        request=self.base_target.copy()
+        bias=s.cfg['lower_target_bias_rad']
+        assert bias=={'L_Hip_y':.01,'L_Hip_z':-.01,'R_Hip_y':-.01,'R_Hip_x':-.08}
+        for name,value in bias.items():
+            request[s.names.index(name)]+=value
+        request[self.right_arm]=self.play_latch['final12_rad']
+        row=s.command(dict(zip(s.names,request.tolist())))
+        row.update(stage=s.play_logic.stage,right_control_mode='final_submitted_R12_latch_then_distal6_motion_v1',
+            right_target_latch=self.play_latch,right_world_palm_IK_active=False,
+            right_palm_anchor_W_m=self.palm_W.tolist(),right_palm_anchor_xyzw=self.palm_rotation_W.as_quat().tolist(),
+            right_material_anchor_W_m=self.material_W.tolist(),right_task_anchor_W_m=self.task_goal_W.tolist(),
+            right_reference_mode=s.cfg['right_arm_reference_mode'],finite_human_right_goal=self.goal_correction,
+            right_source_IK_scope='Post10 no R12 solve and no current fixed-palm IK error claim; Motion source error is logged separately.')
+        self.target_rows.append(row)
+        return row

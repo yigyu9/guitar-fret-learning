@@ -1,0 +1,102 @@
+"""Recorded-body CPU interfaces; these checks do not simulate native dynamics."""
+import copy
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+import numpy as np
+from guitar_learning import training_environment
+from guitar_learning.curriculum.environment import (build_environment, QualityCurriculumEnvironment,
+    settings_document, validate_pool_task)
+from guitar_learning.tests.test_skill_environment import LongRecordedSession
+
+BUNDLE = 'data/song_bundles/05_BN2-131-B_solo'
+
+
+def environment(folder, role='left', worker_id=0):
+    sessions = []
+    def factory(config, out):
+        session = LongRecordedSession(config, out); sessions.append(session); return session
+    def contacts(scene): return copy.deepcopy(sessions[-1].row()['native_contacts']['contacts'])
+    env = build_environment({}, Path(folder), role=role, bundle=BUNDLE,
+        curriculum=dict(goal_event_indices=[0, 2]), worker_id=worker_id,
+        session_factory=factory, contact_reader=contacts)
+    return env, sessions
+
+
+class CurriculumEnvironmentTests(unittest.TestCase):
+    def test_balanced_pool_rebuilds_every_ledger_and_stable_contract(self):
+        for role in ('left', 'right'):
+            with tempfile.TemporaryDirectory() as folder:
+                binding = training_environment.ContactEnvironment
+                env, sessions = environment(folder, role)
+                self.assertIs(training_environment.ContactEnvironment, binding)
+                self.assertIsInstance(env, QualityCurriculumEnvironment)
+                contracts, selected, old_ledgers = [], [], []
+                try:
+                    for _ in range(4):
+                        obs, info = env.reset()
+                        index = info['episode_task']['event_index']; selected.append(index)
+                        contracts.append(copy.deepcopy(info['training_contract']))
+                        candidates = validate_pool_task(env.contract['task'])
+                        actual = next(x['task'] for x in candidates if x['event_index'] == index)
+                        self.assertEqual(actual, info['episode_task']['task'])
+                        target = env.task.targets[0]
+                        self.assertEqual(target.event_id, 'event-%06d' % index)
+                        self.assertEqual(target.string+1, 2 if index == 0 else 3)
+                        self.assertEqual(env.original_task.targets[0].onset_s+3, target.onset_s)
+                        for ledger in (env.measurement, env.measurement.ledger, env.skill_ledger,
+                                       env.timing_ledger, env.builder.environment):
+                            self.assertIs(ledger.task, env.task)
+                        self.assertIs(env.quality_ledger.target, target)
+                        for old, new in zip(old_ledgers, (env.measurement, env.skill_ledger, env.timing_ledger, env.quality_ledger)):
+                            self.assertIsNot(old, new)
+                        old_ledgers = [env.measurement, env.skill_ledger, env.timing_ledger, env.quality_ledger]
+                        self.assertEqual(obs['state'].shape, (563,))
+                        self.assertEqual(env.task.duration_s, 7.)
+                        self.assertEqual(env.contract['termination']['preparation_seconds'], 0.)
+                        self.assertEqual(env.contract['action']['dimension'], 39)
+                        if role == 'right':
+                            self.assertEqual(info['pick_guide']['target_id'], target.target_id)
+                        _, reward, _, _, step = env.step(np.zeros(39))
+                        self.assertEqual(step['episode_task'], info['episode_task'])
+                        self.assertEqual(len(step['physics_measurements']), 4)
+                        self.assertEqual(step['musical_quality']['strike']['target_id'], target.target_id)
+                        self.assertAlmostEqual(reward, sum(step['reward_terms'].values()))
+                    self.assertEqual(sorted(selected[:2]), [0, 2])
+                    self.assertEqual(sorted(selected[2:]), [0, 2])
+                    self.assertTrue(all(c == contracts[0] for c in contracts))
+                    self.assertEqual(len(sessions), 1)
+                    self.assertEqual(sessions[0].reset_calls, 3)
+                finally: env.close()
+
+    def test_contract_is_worker_independent_and_terminal_keeps_actual_note(self):
+        with tempfile.TemporaryDirectory() as folder:
+            env0, _ = environment(Path(folder)/'0')
+            env1, _ = environment(Path(folder)/'1', worker_id=1)
+            try:
+                _, a = env0.reset(); _, b = env1.reset()
+                self.assertEqual(a['training_contract'], b['training_contract'])
+                # A short CPU limit tests terminal metadata only, not song success.
+                env0.time_limit_s = 1/60
+                _, _, terminated, truncated, info = env0.step(np.zeros(39))
+                self.assertTrue(terminated or truncated)
+                self.assertEqual(info['episode']['episode_task'], a['episode_task'])
+                self.assertEqual(info['episode']['musical_quality'], info['musical_quality'])
+            finally: env0.close(); env1.close()
+
+    def test_invalid_or_unsupported_pool_rejected_before_environment_construction(self):
+        for value in (None, {}, {'goal_event_indices': []}, {'goal_event_indices': [0, 0]},
+                      {'goal_event_indices': [True]}, {'goal_event_indices': [0], 'extra': 1}):
+            with self.assertRaises(ValueError): settings_document(value)
+        with patch('guitar_learning.curriculum.environment.QualityCurriculumEnvironment') as constructor:
+            with self.assertRaisesRegex(ValueError, 'unsupported'):
+                build_environment({}, 'unused', role='left', bundle=BUNDLE,
+                    curriculum=dict(goal_event_indices=[0, 42]))
+            constructor.assert_not_called()
+        with self.assertRaises(ValueError):
+            build_environment({}, 'unused', role='left', bundle=BUNDLE,
+                curriculum=dict(goal_event_indices=[0, 2]), music=dict(goal_event_indices=[0, 2]))
+
+
+if __name__ == '__main__': unittest.main()

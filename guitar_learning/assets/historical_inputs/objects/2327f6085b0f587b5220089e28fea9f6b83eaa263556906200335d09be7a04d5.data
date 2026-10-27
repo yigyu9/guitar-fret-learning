@@ -1,0 +1,162 @@
+"""Source reach for open10..11, withdraw11..13, then hold through25s."""
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from ..lower_body_release_v1.common import ROOT, A, BASE, read, save, pin, verify, sha
+from ..lower_body_release_v1.controller_horizontal_v4 import full_fk
+from ..initial_pose_noise_v1 import pose
+from .motion_v1 import solve_wrist, smoothstep
+
+PHASE = BASE/'grounded_guitar_support_v1'
+OUT = PHASE/'release_v1/preflight_v1'
+REFERENCE = PHASE/'native_prepared_v17'
+REPEAT = PHASE/'native_prepared_repeat_v18'
+CERTIFICATE = PHASE/'prepared_repeat_verification_v1.json'
+PLAN = ROOT/'docs/plans/grounded_guitar_prepared_release_20261016.md'
+
+
+def main():
+    OUT.mkdir(parents=True, exist_ok=False)
+    baseline = PHASE/'prepared_hold_v17.json'
+    discovery = pin(extra=[baseline, CERTIFICATE, PLAN, Path(__file__).resolve(),
+                           Path(__file__).with_name('__init__.py'), Path(__file__).with_name('motion_v1.py')])
+    save(OUT/'discovery_before.json', discovery)
+    cfg = read(baseline)
+    cert = read(CERTIFICATE)
+    paths = list(cert['input_sha256'])+list(discovery)+[OUT/'discovery_before.json', A/'AGENTS.md']
+    paths += [Path(cfg[k]) for k in ('candidate', 'source_report', 'upper_target105', 'posture_target_report',
+                                    'finite_right_goal_spec', 'finite_right_goal_report', 'hip_load_bias_spec', 'hip_load_bias_report')]
+    paths += list((A/'seated_foot_support_v1').glob('*.py'))
+    paths += [A/'grounded_guitar_support_v1'/n for n in ('__init__.py', 'runtime_v2.py', 'runtime_v11.py',
+                                                      'runtime_v14.py', 'runtime_v17.py', 'runtime_v18.py')]
+    inputs = pin(extra=paths)
+    save(OUT/'inputs_before.json', inputs)
+    assert verify(discovery) and verify(cert['input_sha256'])
+    assert cert['passed'] and cert['all23_gates_both_passed']
+    assert cert['reference_run'] == str(REFERENCE) and cert['repeat_run'] == str(REPEAT)
+    exact = {n: sha(REFERENCE/n) == sha(REPEAT/n) for n in ('states240.json', 'contacts240.json', 'efforts240.json', 'targets60.json')}
+    assert all(exact.values()) and all(cert['raw_exact_sha256'].values())
+    summaries = [read(PHASE/n/'summary.json') for n in ('analysis_prepared_v17', 'analysis_prepared_repeat_v18')]
+    assert all(s['passed'] and len(s['gates']) == 23 and all(s['gates'].values()) for s in summaries)
+    initial = read(REFERENCE/'initial_values.json')
+    state = read(REFERENCE/'final_state.json')
+    assert state['physics_step'] == 2400 and state == read(REPEAT/'final_state.json')
+    names, bodies = initial['joint_names'], initial['human_body_names']
+    qref = np.array(initial['q_ref105_rad'])
+    actual = np.array([r['pos'] for r in state['human_dof_states']])
+    lower, upper = np.array(initial['PD_properties']['lower']), np.array(initial['PD_properties']['upper'])
+    base = np.array(read(cfg['upper_target105'])['q_target_rad105'])
+    fk = full_fk(SimpleNamespace(names=names, q_ref=qref, human_bodies=bodies), initial['native_initial_state'])
+    reproduced = fk(actual)
+    fk_errors = {n: dict(position_m=float(np.linalg.norm(reproduced[n][0]-pose(b)[0])),
+                        rotation_deg=float(np.degrees((reproduced[n][1]*pose(b)[1].inv()).magnitude())))
+                 for n, b in zip(bodies, state['human_body_states'])}
+    arm = np.array([names.index(n+'_'+a) for n in ('L_Thorax', 'L_Shoulder', 'L_Elbow', 'L_Wrist') for a in 'xyz'])
+    origin, rotation = pose(state['human_body_states'][bodies.index('L_Wrist')])
+    gp, gr = pose(state['guitar_body_states'][0])
+    delta = gr.apply([.08, 0., 0.])
+    weights = {'LH:'+digit+suffix: w for digit in ('index', 'middle', 'ring', 'pinky') for suffix, w in (('1_x', .7), ('2', 1.), ('3', .6))}
+    weights.update({'LH:thumb2': 1., 'LH:thumb3': .6})
+    fingers = np.array([names.index(n) for n in weights])
+    lo, hi = np.maximum(lower[arm], qref[arm]-.8), np.minimum(upper[arm], qref[arm]+.8)
+    reference_command = read(REFERENCE/'targets60.json')['rows'][-1]
+    assert reference_command['physics_step_before'] == 2396 and reference_command['joint_names'] == names
+    opening_rows = []
+    for n, weight in weights.items():
+        j = names.index(n)
+        command = float(reference_command['final105_rad'][j])
+        goal = float(np.float32(np.clip(base[j]-.3*weight, lower[j], upper[j])))
+        amount = abs(command-goal)
+        opening_rows.append(dict(name=n, index105=j, reference_command_rad=command,
+            open_goal_rad=goal, expected_command_opening_rad=amount, direction=float(np.sign(command-goal)),
+            required_signed_opening_rad=min(.10, .5*amount)))
+    opening_gate = dict(selection_min_command_change_rad=.02, evaluation_interval_s=[13., 25.],
+        actual_reference_time_s=10., threshold_cap_rad=.10, expected_command_fraction=.5,
+        actual_signed_opening_formula='direction * (actual10_q - current_actual_q)',
+        active_joints=[row for row in opening_rows if row['expected_command_opening_rad'] >= .02],
+        excluded_joints=[dict(row, reason='Expected clipped command opening is below0.02rad; excluded before physics.')
+                         for row in opening_rows if row['expected_command_opening_rad'] < .02])
+    spec = dict(reference_run=str(REFERENCE), repeat_run=str(REPEAT), reference_time_s=10.,
+        reference_state_sha256=sha(REFERENCE/'final_state.json'), initial_candidate_sha256=cfg['candidate_sha256'],
+        repeat_verification_path=str(CERTIFICATE), repeat_verification_sha256=sha(CERTIFICATE),
+        wrist_origin_W_m=origin.tolist(), wrist_rotation_xyzw=rotation.as_quat().tolist(),
+        withdraw_delta_W_m=delta.tolist(), withdraw_delta_G10_m=[.08, 0., 0.],
+        open_interval_s=[10., 11.], withdraw_interval_s=[11., 13.], opening_rad=.3,
+        finger_opening_weights=weights, finger_base_targets_rad={n: float(base[names.index(n)]) for n in weights},
+        opening_gate=opening_gate,
+        joint_names=[names[j] for j in arm], joint_indices105=arm.tolist(),
+        arm_qref_radius_rad=.8, principal_limit_deg=160.,
+        runtime_hard_position_error_m=.01, runtime_hard_rotation_error_rad=.05,
+        release_interval_s=[10., 25.], completed_withdrawal_test_interval_s=[13., 25.],
+        scope='World wrist translation and rotation latched from actual10s; G10+X side direction stays constant in world. Finger targets subtract weighted opening from unchanged base targets and clip to original limits. Fifteen seconds release phase includes withdrawal; only13..25 is the12s fully-withdrawn test interval.')
+    seed = actual[arm].copy()
+    samples = []
+    for time in np.linspace(10., 13., 41):
+        opening = .3*smoothstep(time, 10., 11.)
+        goal = origin+delta*smoothstep(time, 11., 13.)
+        values, error64, rotation_error64, nfev = solve_wrist(fk, actual, arm, lower, upper, qref, goal, rotation, seed)
+        seed = values.astype(np.float32).astype(float)
+        trial = actual.copy(); trial[arm] = seed
+        for n, w in weights.items():
+            j = names.index(n)
+            trial[j] = float(np.float32(np.clip(base[j]-w*opening, lower[j], upper[j])))
+        p, r = fk(trial)['L_Wrist']
+        selected = np.r_[arm, fingers]
+        frozen = np.setdiff1d(np.arange(105), selected)
+        samples.append(dict(time_s=float(time), opening_rad=opening, withdraw_fraction=smoothstep(time, 11., 13.),
+            goal_wrist_W_m=goal.tolist(), goal_wrist_xyzw=rotation.as_quat().tolist(),
+            arm_targets_rad=seed.tolist(), finger_targets_rad={n: float(trial[names.index(n)]) for n in weights},
+            float32_position_error_m=float(np.linalg.norm(p-goal)), float32_rotation_error_rad=float((rotation.inv()*r).magnitude()),
+            principal_ball_norm_deg=np.degrees(np.linalg.norm(seed.reshape(4, 3), axis=1)).tolist(),
+            new26_strict_original_bounds=bool(np.all(trial[selected] >= lower[selected]) and np.all(trial[selected] <= upper[selected])),
+            arm_strict_qref_radius=bool(np.all(seed >= lo) and np.all(seed <= hi)),
+            other79_source_actual_q_exact=bool(np.array_equal(trial[frozen], actual[frozen])),
+            float64_position_error_m=error64, float64_rotation_error_rad=rotation_error64, solver_nfev=int(nfev)))
+    maxp = max(e['position_m'] for e in fk_errors.values())
+    maxr = max(e['rotation_deg'] for e in fk_errors.values())
+    candidate_q = np.array(read(cfg['candidate'])['q_ref_rad'])
+    gates = dict(prepared_repeat_all23_pass=all(s['passed'] for s in summaries), four_raw_SHA_exact=all(exact.values()),
+        actual10_fullFK_under10um_0p01deg=maxp < 1e-5 and maxr < .01,
+        original_initial105_source_strict_bounds=bool(np.all(candidate_q >= lower) and np.all(candidate_q <= upper)),
+        new26_float32_strict_original_bounds=all(s['new26_strict_original_bounds'] for s in samples),
+        left12_float32_strict_qref_radius0p8=all(s['arm_strict_qref_radius'] for s in samples),
+        left12_float32_principal_under160=all(max(s['principal_ball_norm_deg']) < 160 for s in samples),
+        source41_position_under2mm=all(s['float32_position_error_m'] <= .002 for s in samples),
+        source41_rotation_under0p02rad=all(s['float32_rotation_error_rad'] <= .02 for s in samples),
+        new_commands_exclude_zero8=not bool(set(np.r_[arm, fingers]) & set(initial['zero_range_indices'])),
+        other79_source_actual_q_exact=all(s['other79_source_actual_q_exact'] for s in samples),
+        opening14_named_commands_partitioned_before_physics=len(opening_rows) == 14 and len(opening_gate['active_joints'])+len(opening_gate['excluded_joints']) == 14,
+        active_opening_thresholds_positive=all(row['required_signed_opening_rad'] > 0 for row in opening_gate['active_joints']),
+        fixed_world_withdraw80mm=abs(float(np.linalg.norm(delta))-.08) < 1e-12,
+        source_candidate_SHA_exact=sha(cfg['candidate']) == cfg['candidate_sha256'],
+        upper_target_SHA_exact=sha(cfg['upper_target105']) == cfg['upper_target105_sha256'])
+    gates = {k: bool(v) for k, v in gates.items()}
+    assert verify(inputs)
+    save(OUT/'release_spec.json', spec)
+    report = dict(eligible_for_native=all(gates.values()), gates=gates, inputs_unchanged=True,
+        input_sha256=inputs, inputs_after_sha256={p: sha(p) for p in inputs},
+        spec_sha256=sha(OUT/'release_spec.json'), source_candidate_sha256=cfg['candidate_sha256'],
+        reference_run=str(REFERENCE), repeat_run=str(REPEAT), reference_time_s=10.,
+        repeat_verification_path=str(CERTIFICATE), repeat_verification_sha256=sha(CERTIFICATE),
+        actual10_FK_errors=fk_errors, actual10_FK_max_position_m=maxp, actual10_FK_max_rotation_deg=maxr,
+        actual10_strict_all105_bounds=bool(np.all(actual >= lower) and np.all(actual <= upper)),
+        inherited_actual_outside_bounds=[dict(name=names[j], actual_rad=float(actual[j]), lower_rad=float(lower[j]), upper_rad=float(upper[j])) for j in np.flatnonzero((actual < lower) | (actual > upper))],
+        actual10_LHpalm_G_m=gr.inv().apply(pose(state['human_body_states'][bodies.index('LH:palm')])[0]-gp).tolist(),
+        samples=samples, native_simulation_steps=0,
+        scope='Source wrist reach only; no native release or no-contact certification. Actual inherited zero8/thumb drift is disclosed without clamp/reset/epsilon. Only new12 arm+14 finger float32 commands are strict checked. Actual right12 world support remains active; source query fixes other actual posture. Release phase10..25 lasts15s; full withdrawal physical test13..25 lasts12s. No direct guitar command/force, human state overwrite, fixed hip or new PPO.')
+    save(OUT/'report.json', report)
+    cfg.update(seconds=25., mode='static', release_preflight_report=str(OUT/'report.json'),
+        release_spec=str(OUT/'release_spec.json'), release_spec_sha256=sha(OUT/'release_spec.json'),
+        release_start_s=10., validation_protocol='finite_prepare5_hold5_release15_v1')
+    save(PHASE/'release_v1/inputs/release.json', cfg)
+    assert verify(inputs)
+    save(OUT/'generation.json', dict(input_sha256=inputs, inputs_unchanged=True, eligible_for_native=report['eligible_for_native'],
+        output_sha256={str(p): sha(p) for p in (OUT/'release_spec.json', OUT/'report.json', PHASE/'release_v1/inputs/release.json')}, native_simulation_steps=0))
+    print(dict(eligible=report['eligible_for_native'], gates=gates, max_position_error_m=max(s['float32_position_error_m'] for s in samples),
+        max_rotation_error_rad=max(s['float32_rotation_error_rad'] for s in samples),
+        max_principal_deg=max(max(s['principal_ball_norm_deg']) for s in samples)), flush=True)
+    assert report['eligible_for_native'], 'Source reach gate failed; physical release forbidden.'
+
+
+if __name__ == '__main__':
+    main()

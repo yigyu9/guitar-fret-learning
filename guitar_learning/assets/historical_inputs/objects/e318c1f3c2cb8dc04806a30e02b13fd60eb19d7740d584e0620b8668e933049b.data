@@ -1,0 +1,50 @@
+"""Root after-audit of the six previously sealed posture phases."""
+import hashlib
+import json
+from pathlib import Path
+
+ROOT=Path(__file__).resolve().parents[2]
+PHASE=ROOT/'paper/initial_pose/lower_body_release_v1/front_facing_pose_v1'
+CACHE={}
+
+
+def sha(path):
+    path=Path(path); stat=path.stat(); key=(stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns)
+    if key not in CACHE:
+        h=hashlib.sha256()
+        with path.open('rb') as stream:
+            for block in iter(lambda:stream.read(1024*1024),b''): h.update(block)
+        CACHE[key]=h.hexdigest()
+    return CACHE[key]
+
+
+def main():
+    before=json.loads((PHASE/'preservation_before_v1.json').read_text())
+    assert len(before['inventories'])==6 and len({r['inventory'] for r in before['inventories']})==6
+    expected={}; conflicts=[]; inventories=[]
+    for item in before['inventories']:
+        path=Path(item['inventory']); assert sha(path)==item['inventory_sha256']
+        entries=json.loads(path.read_text())['files']; assert entries
+        inventories.append(dict(path=str(path),sha256=sha(path),entries=len(entries)))
+        for row in entries:
+            if row['path'] in expected and expected[row['path']]!=row['sha256']: conflicts.append(row['path'])
+            expected[row['path']]=row['sha256']
+    inputs=Path(before['latest_inputs']); assert sha(inputs)==before['latest_inputs_sha256']
+    union=json.loads(inputs.read_text())['expected_sha256']; assert isinstance(union,dict) and union
+    for path,wanted in union.items():
+        if path in expected and expected[path]!=wanted: conflicts.append(path)
+        expected[path]=wanted
+    mismatches=[]
+    for count,(path,wanted) in enumerate(expected.items(),1):
+        if not Path(path).is_file() or sha(path)!=wanted: mismatches.append(path)
+        if count%20000==0: print(dict(checked=count,total=len(expected)),flush=True)
+    result=dict(passed=not conflicts and not mismatches,inventories=inventories,
+                inventory_entries=sum(r['entries'] for r in inventories),input_union_entries=len(union),
+                unique_protected_paths=len(expected),unique_hashed_inodes=len(CACHE),conflicts=conflicts,mismatches=mismatches,
+                scope='Full after SHA audit of all six previously sealed posture inventories and the latest closed input union. Byte preservation, distinct from docs cleanup inode/mtime changes.')
+    with (PHASE/'preservation_after_v1.json').open('x') as stream: json.dump(result,stream,indent=2);stream.write('\n')
+    assert result['passed'],result
+    print(dict(passed=True,protected_paths=len(expected)),flush=True)
+
+
+if __name__=='__main__':main()

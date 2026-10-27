@@ -1,0 +1,9 @@
+# Strike EFFORT geometry PI v1 — 진행 기록
+
+- **상태:** 5초 native diagnostic/analysis 완료; **NOT ADOPTED**.
+- **실행:** 1,200 physics steps·151 frames·24 checks, PREPARE/PLAY/HOLD 49/251/0. Native closure 1,082개 changed 0; analyzer 입력 SHA 7개 unchanged. Learning 0, music success false.
+- **제어:** PLAY R9 EFFORT/stiffness0 + explicit clipped original-kp spring, native damping source phase 0/2 baseline·phase1 quarter; other72 POSITION. Source actor 30-output computed, R9 outputs logged only when geometry PI owns arm, policy retains RH21 finger control. Closed wait uses actual-angle IK; RECOVERY uses previous goal+2δ. Original source POSITION/torque or CPU/GPU equivalence is unverified.
+- **Pulse/geometry:** hit/physical hit/accepted=1 at 3.766667s, event index before/after 7/8, string index2, timing +29.438972ms. Release2, miss9, wrong1, partial running F1=.166666657. Rotation max/end 44.868319°/44.009573°, position max/end 46.353646/33.588116mm; playable region control49/300·policy3/251. No source terminal through 5s.
+- **Provenance:** `effort_audit.json` records both EFFORT phases at 49 PREPARE control rows, 25 exact native prefix rows and first actor observation/action exact; 1,004 torque records are R9-only, formula max error 0. Numerical regression is 3/3 old false vs 3/3 current true, branch-only/no Gym scope. `contact_diagnosis.json` is readonly raw pose/contact math; first positive RH/Gbody sample was G:body–RH:ring3 at 1.2s (raw SDK lambda, not force); temporal observation only, not cause.
+- **다른 단계:** POSITION geometry PI는 [별도 계획](/home/ajou/yigyu/3/stability_adapter_2/STRIKE_POSITION_GEOMETRY_PI_PLAN.md:1)으로 관리된다. 이 단계의 진행/결과를 대신해 서술하지 않는다.
+- **참조:** [README](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_effort_geometry_pi_v1/README.md:1), [summary](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_effort_geometry_pi_v1/analysis/summary.json).

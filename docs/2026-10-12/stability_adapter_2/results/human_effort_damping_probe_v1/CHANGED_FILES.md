@@ -1,0 +1,12 @@
+# 변경 파일 색인 — HUMAN EFFORT damping probe v1
+
+| 파일/자료 | 설명 |
+|---|---|
+| [README.md](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/human_effort_damping_probe_v1/README.md:1) | 네 조건 결과, 제한된 scalar q 해석, native 이미지/영상, 분석 입력 및 실행 근거 |
+| [analysis/summary.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/human_effort_damping_probe_v1/analysis/summary.json), [analysis/rows.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/human_effort_damping_probe_v1/analysis/rows.json) | 초기 상태·152표본 재현·조건별 closure와 step별 전체 q/qdot 및 선택 shoulder scalar q 차이 |
+| [analysis inputs before](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/human_effort_damping_probe_v1/analysis/inputs_before.json), [after](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/human_effort_damping_probe_v1/analysis/inputs_after.json) | 분석 입력 27개 SHA 불변 기록 |
+| [d0_off](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/human_effort_damping_probe_v1/d0_off/data/report.json), [d0_on](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/human_effort_damping_probe_v1/d0_on/data/report.json), [d1_off](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/human_effort_damping_probe_v1/d1_off/data/report.json), [d1_on](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/human_effort_damping_probe_v1/d1_on/data/report.json) | 각 1,200-step·151-frame 실행 보고서와 9개 검증, native closure 결과 |
+| 각 조건 `data/commands.json`, `states.json`, `initial_values.json`, `native_EFFORT_PD_properties.json`, `mass_matrix_initial.json` | 요청 torque·native state·초기 목표 및 properties/readback·초기 read-only mass matrix. 경로는 위 조건별 결과 폴더 아래 |
+| 각 조건 `data/images/frames/{whole_body,hands}/{00000,00060,00150}.png`, `data/images/{whole_body,hands}.mp4` | native 전신 및 손의 0·2·5초 저장 frame과 151-frame 영상. README에 직접 삽입 |
+| [실행 계획](/home/ajou/yigyu/3/stability_adapter_2/HUMAN_EFFORT_DAMPING_PROBE_PLAN.md:1), [runner](/home/ajou/yigyu/3/stability_adapter_2/run_human_effort_damping_probe.py:26), [analyzer](/home/ajou/yigyu/3/stability_adapter_2/analyze_human_effort_damping_probe.py:23), [사전 검수 PASS](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/human_effort_damping_probe_v1/pre_review.md) | 실행·분석·사전 검수 근거 |
+| [후속 Strike EFFORT 계획](/home/ajou/yigyu/3/stability_adapter_2/STRIKE_EFFORT_DAMPED_ARM_PLAN.md:1), [별도 사전 검수](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_effort_damped_arm_v1/pre_review.md) | 다음 연주 단계는 별도 범위에서 진행 |

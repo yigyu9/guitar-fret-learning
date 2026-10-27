@@ -1,0 +1,19 @@
+# 넥 방향 몸통 회전·숙임 감소 최종 검수
+
+판정: **문제없음 — 완료된 새 정지·±5° 한 주기 진단 자료의 정리 승인.** 미결 Critical 0 / Warning 2 / Suggestion 0. 저장 코드·원자료·실제 PNG·문서/해시를 대조했으며 새 물리·학습·봉인 실행은 하지 않았다. 전체 과거 inventory 보존 감사와 최종 source/inventory 생성은 root 범위다.
+
+- [native 독립 검수](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/neckward_torso_turn_v1/review_native_v1.md:1)의 제어 합산/clip·guard·초기값·실제 방향·동시점 비교 결과가 최신 설명에 정확히 반영됐다. 새 두 조건 각각5초/1200 physics/300 control, 같은 native 초기 state·2.5초까지 trace exact이다. 이전 정지 자료는 재사용한 참고 조건이며 새 물리 실행으로 세지 않는다.
+- [완료 기록:4](/home/ajou/yigyu/3/stability_adapter_2/NECKWARD_TORSO_TURN_COMPLETION_V1.md:4)은 실제 전경53.575657°→48.347770°/heading12.643226°→22.198890°와 전체 경사 감소를 구분한다. source 추가2°/12°나 바디 쪽6°를 실제 절대 경사·heading·측경으로 오해하지 않는다. 기존/새 자세는 여러 초기각·기타 위치가 함께 바뀐 서로 다른 초기 조건이다.
+- 새 정지 BB 중심3.944391mm/SO3 1.472679°, 운동3.876188mm/1.454971°와 동시점 정지 대비 최대0.099629mm/0.053043°가 원자료와 맞다. 실제 moving scalar 왕복10.083668°와 moving−static 증분 왕복10.099138°, 증분 RMSE0.048544°와 절대 RMSE0.131056°를 구분한다. body BB 중심은 root 원점/질량중심과 다른 양이다.
+- [canonical README_V3](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/neckward_torso_turn_v1/artifacts_v1/README_V3.md:1)는 V1의 기타 yaw 오표기와 V2의 이전/새 접촉 수 혼합을 원본 보존 후 바로잡았다. 새 두 조건 상완1169/Hip1193/strict35%영역0, 이전 조건1187/1196/1171을 분리한다. 몸통 yaw가 바뀐 것이며 기타 초기 quaternion은 유지됐다는 설명이 맞다.
+- 실제 [자세 trace 그림](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/neckward_torso_turn_v1/artifacts_v1/torso_posture_old_new_traces_v2.png), 이전/새0·5초 전신/동일 좌표 crop, ±5° 증분 응답 그림을 열어 확인했다. 좌표 정의·곡선·mm/도/시간 단위·범례·캡션이 이미 재계산한 원자료와 맞고 데이터/문자를 가리지 않는다. crop은 표시용2D 확대이며 hands 영상은 왼손/넥 camera여서 오른 상완 접촉 증거가 아니다.
+- provenance1 입력32/출력15, v2 before/after 입력5/출력2, v3 입력4/출력1 및 생성기 SHA 현재 일치를 직접 확인했다. [영상 manifest](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/video/neckward_torso_turn_v1/manifest_v1.json:1)의 이전 참고2개+새4개 source/copy SHA·151프레임/30fps 기록 일치. side-by-side는 별도 파생 비교본이며 실제 ffprobe 1280×434/151프레임/30fps/5.033333초를 확인했다. 물리5초와 MP45.033초를 구분하며 영상 전체 decode/재생 인증은 하지 않았다.
+- [navigation](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/neckward_torso_turn_v1/navigation_update_v1.json:1)의 main 원문 snapshot·현재 SHA·prefix와 실제 추가 행 PLAN1148/A README2242/D README75를 확인했다. root 결과 README의 [canonical 추가 기록](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/neckward_torso_turn_v1/canonical_append_v1.json:1)도 원문 prefix/SHA와46행 추가가 맞다. canonical 문서50개 링크의 존재/유효 행을 확인했다.
+
+해결된 감사 발견 1건 — 기존 미실행 seal v1이 v2/v3 provenance의 flat producer에 TypeError를 내며 `inputs_before_after`도 놓치는 문제가 있었다. 원본 보존 후 [새 seal v2:54](/home/ajou/yigyu/3/docs/2026-10-19/stability_adapter_2/results/neckward_torso_turn_v1/seal_outputs_v2.py:54)가 path-map/flat producer와 before/after 양쪽 SHA·unchanged를 처리하여 해결됐다. 실제 schema·해시 및 문법을 대조했다. current 입력·영상·main append 예외/최신 README prefix·review 존재 검사 후 exclusive 최종 파일 생성 구조이며 reviewer는 실행하지 않았다. 아직 없는 root 감사 산출물을 완료 증거로 취급하지 않는다.
+
+Warning 1 — [접촉 변화:8](/home/ajou/yigyu/3/stability_adapter_2/NECKWARD_TORSO_TURN_COMPLETION_V1.md:8): 실제 접촉의 strict 근위35% 지정영역이 이전1171에서 새0/1200으로 바뀌었다. 상완 전체 접촉과 짧은 기타 유지를 겨드랑이/근위 구간 접촉 유지로 등록하지 않는다. source30% 접근·actual35% 분류·해부학적 조직·지지 힘은 서로 다른 범위다. 최신 문서에 변화와 한계가 반영됨.
+
+Warning 2 — [진단 범위:11](/home/ajou/yigyu/3/stability_adapter_2/NECKWARD_TORSO_TURN_COMPLETION_V1.md:11): 한 후보·한 팔꿈치 scalar·0.5Hz 한 주기·5초의 결과다. 직접 기구학적 child J0도 간접 관성/접촉 영향 제거를 뜻하지 않는다. 이전/새 자세 비교의 개별 원인·자연스러움·큰 운동·반복/장시간·fret/strike 연주를 인증하지 않는다. 기존 학습 기본값 자동 변경이 없다는 설명도 명시됐다.
+
+핵심 SHA256: root README `0a63bc5b65b12b56687e1d40fbd07cba2f846f668f02f472eed82f2a5535d02d`; canonical README_V3 `93ce598bc3c042e36704401924a3e61f6b0f97e7ceb2ed66961fbb200d789831`; 완료 기록 `0f0befb0d569a92fd3faeb40f634ca8ebd841f97f1407a55529c054d7c58a45b`; 실제 봉인 코드v2 `fc41608667a9ec1315f8f1510186efb041a2018aa5c91494a27c04bcee9ec1d5`. 잔여 수정 요구 없음.

@@ -1,0 +1,27 @@
+{
+  "schema": "negative_native_snapshot_audit_precommit.v1",
+  "created_at": "2026-10-27T13:35:53.879943+09:00",
+  "scope": "Read-only CPU actual native snapshots; static counterfactual target clocks/scopes explicitly differ; no GPU, no synthetic contact/pose/force",
+  "source_order": [
+    "baseline/trace_initial/trace_env0000.npz",
+    "baseline/trace_final/trace_env0000.npz",
+    "existing stage2 static/teacher240Hz traces",
+    "existing stage2 actual-clock ledger"
+  ],
+  "baseline_frames": "For each predeclared env0 trace: uniform16 endpoints plus first candidate for each finger and first wrong target; at most24 unique endpoints in ascending actual time. No pilot input.",
+  "counterfactual": "Repeat each immutable actual q/body/force snapshot for compiled67 original targets. Each row scopes only one original note and uses its audible midpoint. Do not invent string/fret/finger/onset/end.",
+  "selection": "First qualifying source in source_order; within source earliest actual time then lowest original target index; retain unavailable if no case found in declared scope",
+  "cases": {
+    "far": "assigned pad distance>=20mm and candidate=false; record load separately",
+    "own_wrong_string": "current own_wrong_string provenance true, assigned positive=false, candidate=false",
+    "own_wrong_fret": "current own_wrong_fret provenance true, assigned positive=false, candidate=false",
+    "other_finger_only": "assigned positive=false; another loaded facing distal pad has exact target string+fret; candidate=false; wrong may correctly remain false for same/lower fret",
+    "other_higher": "current other_higher provenance true; separately state whether assigned positive=true so competing veto is demonstrated",
+    "back_facing": "assigned body loaded>=0.01N, at least one SAME pad sample passes cell/lateral/height, but all such valid pad samples fail facing cos>=0.1; no artificial dorsal patch",
+    "near_unloaded": "assigned facing geometry true but body resultant<0.01N and candidate=false (optional nonpenalty control)",
+    "short_contact": "prefer actual-ledger episode final0<contact_progress<1 and noachievement; else label static segment0<streak<tau50ms only, without payment claim; partial progress reward is allowed",
+    "release": "actual240Hz commanded release phase: candidate true\u2192false and positive_before_wrong false at next endpoint; label geometric candidate release, not certified pair contact detachment"
+  },
+  "evidence": "sourcefile SHA, row/env, actual physics tick/time, source target ID, diagnostic target ID/time/scope, native body force and independently recomputed same-point/positive/wrong witnesses",
+  "unavailable_policy": "absence only within declared stored sample scope; no pose synthesis, target invention, relaxed pass rules, music success or causal contact-pair claim"
+}

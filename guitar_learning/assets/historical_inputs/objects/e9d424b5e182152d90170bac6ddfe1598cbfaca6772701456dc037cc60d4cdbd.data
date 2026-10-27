@@ -1,0 +1,297 @@
+"""Capture an old scripted teacher on timing inputs, then clone the active actor.
+
+The source teacher supplies240 actions. The new five-second episode replays
+those actions and holds its final action for60 additional control ticks.
+Native safety and timing success remain authoritative; fit is not evaluation.
+"""
+import argparse
+import copy
+import json
+import math
+import os
+from pathlib import Path
+import random
+import tempfile
+
+CAPTURE_SCHEMA = 'guitar_learning.timing_demonstration.v1'
+TICKS = 300
+STATE_DIM = 536
+
+
+def replay_actions(actions, role):
+    import numpy as np
+    if (role not in ('left', 'right') or not isinstance(actions, np.ndarray) or
+            actions.shape != (240, 39) or actions.dtype.kind != 'f' or
+            not np.isfinite(actions).all() or np.any(np.abs(actions) > 1)):
+        raise ValueError('finite bounded240x39 source teacher actions required')
+    inactive = slice(33, 39) if role == 'left' else slice(0, 33)
+    if np.any(actions[:, inactive] != 0):
+        raise ValueError('source teacher inactive hand must be exactly zero')
+    return np.concatenate((actions.copy(), np.repeat(actions[-1:], 60, axis=0)), axis=0)
+
+
+def _shapes():
+    return dict(state=(STATE_DIM,), events=(64, 24), mask=(64,),
+                priority_events=(2, 24), priority_mask=(2,), action=(39,))
+
+
+def _arrays(data):
+    import numpy as np
+    if data.get('role') not in ('left', 'right'):
+        raise ValueError('single left/right timing role required')
+    for key, shape in _shapes().items():
+        value = data.get(key)
+        if not isinstance(value, np.ndarray) or value.shape != (TICKS,)+shape:
+            raise ValueError('actual300-row timing capture required: '+key)
+        if 'mask' in key:
+            if value.dtype != np.bool_: raise ValueError('boolean timing observation masks required')
+        elif value.dtype.kind != 'f' or not np.isfinite(value).all():
+            raise ValueError('finite floating timing observation/action required')
+    if np.any(np.abs(data['action']) > 1): raise ValueError('bounded normalized actions required')
+    inactive = slice(33, 39) if data['role'] == 'left' else slice(0, 33)
+    if np.any(data['action'][:, inactive] != 0):
+        raise ValueError('inactive teacher hand must be exactly zero')
+
+
+def _contract(contract, settings):
+    from .imitation_v2 import canonical_contract
+    from .timing_transfer import validate_contracts
+    role = settings['specialist']['role']
+    validate_contracts(contract, contract, role)
+    if (contract['observation']['dimension'] != STATE_DIM or
+            contract['task']['duration_s'] != 5. or
+            canonical_contract(contract['task']['timing']['config']) != canonical_contract(settings['timing'])):
+        raise ValueError('exact five-second536 timing role/configuration required')
+
+
+def load_dataset(folder, settings):
+    import numpy as np
+    from .imitation import dataset_manifest
+    from .imitation_v2 import canonical_contract
+    folder = Path(folder)
+    paths = [folder/name for name in ('result.json', 'reset.json', 'demonstration.npz', 'inputs_before.json')]
+    manifest = dataset_manifest(paths)
+    result, reset = (json.loads(path.read_text()) for path in paths[:2])
+    role = settings['specialist']['role']
+    if (result.get('schema') != CAPTURE_SCHEMA or result.get('role') != role or
+            result.get('completed') is not True or result.get('success') is not True or
+            result.get('source_unchanged') is not True or type(result.get('ticks')) is not int or
+            result['ticks'] != TICKS or result.get('observation_dimension') != STATE_DIM or
+            result.get('issued_action_rows') != TICKS or result.get('failure') is not None or
+            result.get('cleanup_error') is not None or
+            canonical_contract(result.get('config')) != canonical_contract(settings['timing']) or
+            result.get('episode', {}).get('reason') != 'timeline_complete' or
+            result['episode'].get('timing', {}).get('stage_success') is not True):
+        raise ValueError('successful actual complete300x536 native timing capture required')
+    contract = reset.get('training_contract')
+    _contract(contract, settings)
+    with np.load(paths[2], allow_pickle=False) as archive:
+        if set(archive.files) != set(_shapes()): raise ValueError('exact timing observation/action fields required')
+        data = {key: archive[key].copy() for key in archive.files}
+    data.update(role=role, contract=copy.deepcopy(contract), manifest=manifest)
+    _arrays(data)
+    if dataset_manifest(paths) != manifest: raise RuntimeError('timing capture changed during loading')
+    return data
+
+
+def capture(settings, args):
+    import isaacgym
+    import numpy as np
+    from .imitation import load_dataset as load_teacher
+    from .imitation_io import CONFIG, BUNDLE, pin_inputs_with_evidence, verify_inputs
+    from .parallel import FIELDS
+    from .recording import write
+    from .timing_curriculum import TimingConfig
+    from .timing_environment import build_environment
+    role = settings['specialist']['role']
+    timing = TimingConfig(**settings['timing'])
+    if timing.horizon_s != 5.:
+        raise ValueError('this teacher adapter requires1s policy pre-roll and5s horizon')
+    teacher = load_teacher(args.teacher, role)
+    actions = replay_actions(teacher['action'], role)
+    out = args.out.resolve(); out.mkdir(parents=True, exist_ok=False)
+    pinned = pin_inputs_with_evidence([args.settings.resolve()], teacher['manifest'])
+    write(out/'inputs_before.json', pinned); write(out/'settings.json', settings)
+    arrays = {key: [] for key in _shapes()}
+    rows, info, env, failure, cleanup_error = [], {}, None, None, None
+    source_unchanged = False
+    try:
+        env = build_environment(CONFIG, out/'environment', role=role, timing=timing, bundle=BUNDLE)
+        observation, reset = env.reset(); write(out/'reset.json', reset)
+        _contract(reset['training_contract'], settings)
+        for tick, action in enumerate(actions):
+            for key in FIELDS: arrays[key].append(np.array(observation[key], copy=True))
+            arrays['action'].append(action.copy())
+            observation, reward, terminated, truncated, info = env.step(action)
+            rows.append(dict(tick=tick, action=action, reward=reward, cost=info['cost'],
+                timing=copy.deepcopy(info['timing']), specialist=copy.deepcopy(info['specialist']),
+                score_time_s=info['score_time_s'], music=copy.deepcopy(info['music']),
+                samples240=info['native_control']['physics_samples240'], measurements=info['physics_measurements']))
+            if terminated or truncated: break
+    except BaseException as error:
+        failure = error
+    finally:
+        if env is not None:
+            try: env.close()
+            except BaseException as error:
+                cleanup_error = dict(type=type(error).__name__, message=str(error))
+                if failure is None: failure = error
+    try:
+        source_unchanged = verify_inputs(pinned)
+    except BaseException as error:
+        if failure is None: failure = error
+    packed = {key: np.stack(values) if values else np.empty((0,)+shape,
+              dtype=bool if 'mask' in key else np.float32)
+              for key, shape in _shapes().items() for values in (arrays[key],)}
+    np.savez_compressed(out/'demonstration.npz', **packed)
+    write(out/'trace.json.gz', rows, compressed=True)
+    episode = info.get('episode')
+    completed = len(rows) == TICKS and episode is not None and episode.get('reason') == 'timeline_complete'
+    result = dict(schema=CAPTURE_SCHEMA, role=role, ticks=len(rows),
+        issued_action_rows=len(arrays['action']), completed=completed,
+        success=bool(completed and failure is None and info['timing']['stage_success']),
+        observation_dimension=STATE_DIM, config=settings['timing'], episode=episode,
+        teacher=teacher['manifest'], replay=dict(source_ticks=240, final_action_hold_ticks=60,
+            rule='source240 in order, then final source action held60; no interpolation or time warp'),
+        source_unchanged=source_unchanged, cleanup_error=cleanup_error,
+        failure=None if failure is None else dict(type=type(failure).__name__, message=str(failure)),
+        scope='scripted teacher in new timing observations; native safety/timing authoritative; not learned-policy evaluation')
+    write(out/'result.json', result)
+    if failure is not None: raise failure
+    return result
+
+
+def fit_actor(model, data, *, steps=2000, lr=3e-4, batch_size=240, tolerance=1e-6,
+              seed=7, log_callback=None):
+    """The original BC objective, using all300 rows and536 inputs without patches."""
+    import numpy as np
+    import torch
+    from .parallel import FIELDS
+    from .imitation_v2 import canonical_contract
+    _arrays(data)
+    role = data['role']
+    if (getattr(model, 'role', None) != role or getattr(model, 'frozen_partner', True) or
+            model.architecture.get('state_dim') != STATE_DIM or
+            canonical_contract(model.architecture['contract']) != canonical_contract(data['contract'])):
+        raise ValueError('same single-hand536 policy/data contract required')
+    if (type(steps) is not int or steps < 1 or type(batch_size) is not int or batch_size < 1 or
+            type(seed) is not int or isinstance(lr, bool) or isinstance(tolerance, bool) or
+            not math.isfinite(lr) or lr <= 0 or not math.isfinite(tolerance) or tolerance < 0):
+        raise ValueError('positive fit budget/rate and finite nonnegative tolerance required')
+    device = next(model.parameters()).device
+    inputs = [torch.as_tensor(data[key], device=device,
+        dtype=torch.bool if 'mask' in key else torch.float32) for key in FIELDS]
+    selection = model.role_slices[role]
+    target = torch.as_tensor(data['action'][:, selection], device=device, dtype=torch.float32)
+    parameters = [*model.actor_encoders[role].parameters(), *model.actor_heads[role].parameters()]
+    before = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+    optimizer = torch.optim.Adam(parameters, lr=lr)
+    generator = torch.Generator().manual_seed(seed)
+    log = []
+    def prediction(indices=None):
+        values = inputs if indices is None else [value[indices] for value in inputs]
+        return model.actor_heads[role](model.actor_encoders[role](*values)).tanh()
+    def measure(step):
+        with torch.no_grad(): delta = prediction()-target
+        row = dict(step=step, training_mse=float(delta.square().mean()), max_abs_error=float(delta.abs().max()))
+        if not np.isfinite([row['training_mse'], row['max_abs_error']]).all():
+            raise ValueError('nonfinite timing BC fit')
+        log.append(row)
+        if log_callback is not None: log_callback(copy.deepcopy(row))
+        return row
+    final = measure(0); initial = final['training_mse']
+    for step in range(1, steps+1):
+        if final['training_mse'] <= tolerance: break
+        indices = torch.randperm(TICKS, generator=generator)[:min(batch_size, TICKS)].to(device)
+        optimizer.zero_grad(set_to_none=True)
+        (prediction(indices)-target[indices]).square().mean().backward()
+        optimizer.step()
+        if step % 100 == 0 or step == steps: final = measure(step)
+    optimizer.zero_grad(set_to_none=True)
+    changed = [key for key, value in model.state_dict().items() if not torch.equal(before[key], value.detach().cpu())]
+    allowed = ('actor_encoders.'+role+'.', 'actor_heads.'+role+'.')
+    if any(not key.startswith(allowed) for key in changed):
+        raise RuntimeError('BC changed critic, inactive actor, exploration std or partner state')
+    if not all(torch.isfinite(value).all() for value in model.state_dict().values()):
+        raise ValueError('nonfinite fitted policy')
+    return dict(steps=final['step'], training_mse=final['training_mse'], max_abs_error=final['max_abs_error'],
+        initial_training_mse=initial, converged=final['training_mse'] <= tolerance, tolerance=tolerance,
+        learning_rate=lr, batch_size=min(batch_size, TICKS), seed=seed, log=log,
+        rows=TICKS, observation_dimension=STATE_DIM, changed_model_keys=changed,
+        scope='training action fit only; independent native learned-policy evaluation required')
+
+
+def save_initialization(model, path, *, data, fit_result):
+    """Preserve the existing BC-only schema and atomic exclusive checkpoint write."""
+    import torch
+    from .imitation import SCHEMA, _valid_model_state
+    state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+    _valid_model_state(model, state)
+    payload = dict(schema=SCHEMA, dataset_schema=CAPTURE_SCHEMA, architecture=copy.deepcopy(model.architecture),
+        role=data['role'], model=state, dataset_manifest=copy.deepcopy(data['manifest']),
+        training=copy.deepcopy(fit_result), scope='timing536 actor initialization only; no PPO optimizer/update counter/native success claim')
+    path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix='timing-imitation-', suffix='.pt', dir=str(path.parent))
+    os.close(descriptor)
+    try:
+        torch.save(payload, temporary); os.link(temporary, path)
+    finally: os.unlink(temporary)
+
+
+def fit(settings, args):
+    import isaacgym
+    import numpy as np
+    import torch
+    from .imitation_io import pin_inputs_with_evidence, verify_inputs
+    from .recording import digest, write
+    from .specialist_policy import SpecialistPolicy
+    from .timing_transfer import apply_actor_initialization
+    data = load_dataset(args.dataset, settings)
+    out = args.out.resolve(); out.mkdir(parents=True, exist_ok=False)
+    pinned = pin_inputs_with_evidence([args.settings.resolve(), settings['actor_initialization']], data['manifest'])
+    write(out/'inputs_before.json', pinned); write(out/'settings.json', settings)
+    torch.set_num_threads(1); torch.backends.cuda.matmul.allow_tf32 = False
+    random.seed(settings['seed']); np.random.seed(settings['seed']); torch.manual_seed(settings['seed'])
+    model = SpecialistPolicy(STATE_DIM, size=settings['size'], role=data['role'],
+        frozen_partner=False, contract=data['contract']).to(settings['device'])
+    with torch.no_grad(): model.log_std.fill_(math.log(settings['initial_std']))
+    initialization = apply_actor_initialization(model, settings['actor_initialization'],
+                                               kind=settings['actor_initialization_kind'])
+    write(out/'actor_initialization.json', initialization)
+    with (out/'fit.jsonl').open('xt') as stream:
+        def log(row):
+            stream.write(json.dumps(row, allow_nan=False)+'\n'); stream.flush()
+            print('[timing BC] '+json.dumps(row), flush=True)
+        result = fit_actor(model, data, steps=args.steps, batch_size=len(data['action']),
+                           seed=settings['seed'], log_callback=log)
+    checkpoint = out/'actor_initialization.pt'
+    save_initialization(model, checkpoint, data=data, fit_result=result)
+    report = dict(completed=True, role=data['role'], fit=result,
+        checkpoint=dict(path=str(checkpoint), sha256=digest(checkpoint)),
+        source_unchanged=verify_inputs(pinned), ppo_updates=0,
+        scope='single scripted timing trajectory fit; learned-policy native evaluation remains separate')
+    write(out/'report.json', report)
+    return report
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest='command', required=True)
+    capture_parser = sub.add_parser('capture')
+    capture_parser.add_argument('--teacher', type=Path, required=True)
+    fit_parser = sub.add_parser('fit')
+    fit_parser.add_argument('--dataset', type=Path, required=True)
+    fit_parser.add_argument('--steps', type=int, default=2000)
+    for command in (capture_parser, fit_parser):
+        command.add_argument('--settings', type=Path, required=True)
+        command.add_argument('--out', type=Path, required=True)
+    args = parser.parse_args()
+    for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+        os.environ[name] = '1'
+    import isaacgym
+    from .train_timing import settings_document
+    settings = settings_document(json.loads(args.settings.read_text()))
+    (capture if args.command == 'capture' else fit)(settings, args)
+
+
+if __name__ == '__main__': main()

@@ -1,0 +1,135 @@
+"""Compare saved native torso geometry with the original and current waist poses."""
+import argparse
+import json
+import xml.etree.ElementTree as ET
+from pathlib import Path
+import numpy as np
+from .initial_pose_noise_v1 import pose, sha
+
+R = Path(__file__).resolve().parents[1]
+D = R / 'docs/2026-10-19/stability_adapter_2/results'
+REFERENCES = {
+    'original_waist': D / 'right_thigh_waist_v1/native_static_v2/initial_values.json',
+    'previous_upright': D / 'waist_straighten_v1/native_add8_static/initial_values.json',
+}
+
+
+def read(path):
+    return json.loads(path.read_text())
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--cases', type=Path, nargs='+', required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    args = parser.parse_args()
+    asset = R / 'stability_adapter_2/assets/humanoid_fixed_lower.xml'
+    files = list(REFERENCES.values()) + [Path(__file__), R / 'stability_adapter_2/initial_pose_noise_v1.py', asset]
+    for case in args.cases:
+        files += [case / name for name in ('initial_values.json', 'final_state.json', 'report.json', 'media/physics_endpoint_contacts.json')]
+    inputs = {str(f.resolve()): sha(f) for f in files}
+    refs = {name: read(file) for name, file in REFERENCES.items()}
+    names = refs['previous_upright']['human_body_names']
+    joints = refs['previous_upright']['joint_names']
+
+    def poses(state):
+        return {name: pose(value) for name, value in zip(names, state['human_body_states'])}
+
+    current = poses(refs['previous_upright']['native_initial_state'])
+    right = current['R_Hip'][0] - current['L_Hip'][0]
+    right[2] = 0
+    right /= np.linalg.norm(right)
+    front = np.array([-right[1], right[0], 0.])
+
+    def geometry(state):
+        ps = poses(state)
+        return {name: float(np.rad2deg(np.arctan2(ps[name][1].apply([0, 0, 1]) @ front,
+                                                  ps[name][1].apply([0, 0, 1])[2])))
+                for name in ('Torso', 'Spine', 'Chest')}
+
+    shape = next(b for b in ET.parse(asset).iter('body') if b.get('name') == 'R_Shoulder').find('geom')
+    a, b = np.fromstring(shape.get('fromto'), sep=' ').reshape(2, 3)
+    axis = b - a
+    results = {}
+    for case in args.cases:
+        initial = read(case / 'initial_values.json')
+        assert initial['human_body_names'] == names and initial['joint_names'] == joints
+        report=read(case / 'report.json')
+        assert report['inputs_unchanged'] and report['physics_steps']>0
+        state = initial['native_initial_state']
+        ps = poses(state)
+        comparisons = {}
+        for label, ref in refs.items():
+            original = poses(ref['native_initial_state'])
+            relatives = {}
+            for parent, child in (('Pelvis', 'Torso'), ('Torso', 'Spine'), ('Spine', 'Chest')):
+                before = original[parent][1].inv() * original[child][1]
+                after = ps[parent][1].inv() * ps[child][1]
+                relatives[parent + '->' + child] = float(np.rad2deg((before.inv() * after).magnitude()))
+            errors = []
+            old_guitar = ref['native_initial_state']['guitar_body_states']
+            assert len(old_guitar) == len(state['guitar_body_states']) == 39
+            for old, new in zip(old_guitar, state['guitar_body_states']):
+                p0, r0 = pose(old)
+                p1, r1 = pose(new)
+                errors.append((np.linalg.norm(p1 - p0), (r0.inv() * r1).magnitude()))
+            root0, _ = pose(old_guitar[0])
+            root1, _ = pose(state['guitar_body_states'][0])
+            translation = root1 - root0
+            residuals = [np.linalg.norm(pose(new)[0] - pose(old)[0] - translation)
+                         for old, new in zip(old_guitar, state['guitar_body_states'])]
+            assert max(residuals) < 3e-6 and max(e[1] for e in errors) < 1e-5
+            comparisons[label] = {
+                'initial_tilt_reduction_deg': {name: geometry(ref['native_initial_state'])[name] - geometry(state)[name]
+                                               for name in ('Torso', 'Spine', 'Chest')},
+                'initial_parent_child_rotation_difference_deg': relatives,
+                'guitar_initial_translation_W_m': translation.tolist(),
+                'guitar39_max_translation_residual_m': float(max(residuals)),
+                'guitar39_max_position_difference_m': float(max(e[0] for e in errors)),
+                'guitar39_max_rotation_difference_rad': float(max(e[1] for e in errors)),
+            }
+        rows = read(case / 'media/physics_endpoint_contacts.json')['rows']
+        assert len(rows) == report['physics_steps'] and all('chest_guitar_contacts' in r for r in rows)
+        chest_presence = [bool(r['chest_guitar_contacts']) for r in rows]
+        chest_positive = [any(c['lambda'] > 0 for c in r['chest_guitar_contacts']) for r in rows]
+        assert all('trunk_guitar_contacts' in r for r in rows)
+        upper = []
+        for row in rows:
+            fractions = []
+            for contact in row['right_upper_arm_body_contacts']:
+                key = 'localPos0' if contact['body0_name'] == 'human/R_Shoulder' else 'localPos1'
+                local = np.array([contact[key][k] for k in 'xyz'])
+                fractions.append((float((local - a) @ axis / (axis @ axis)), contact['lambda']))
+            upper.append({'physics_step': row['physics_step'], 'fractions': [f for f, _ in fractions],
+                          'raw_full_presence':any(0<=f<=1 for f,_ in fractions),
+                          'clamped_full_presence':bool(fractions),
+                          'clamped_nonpivot_presence':any(np.clip(f,0,1)>=.2 for f,_ in fractions),
+                          'raw45_presence': any(0 <= f <= .45 for f, _ in fractions),
+                          'clamped45_presence': any(np.clip(f, 0, 1) <= .45 for f, _ in fractions),
+                          'clamped45_positive': any(np.clip(f, 0, 1) <= .45 and lam > 0 for f, lam in fractions)})
+        results[case.name] = {'completed_5s':report['completed'],'physics_steps':report['physics_steps'],
+                              'full_upper_raw_presence_steps':sum(r['raw_full_presence'] for r in upper),
+                              'full_upper_clamped_presence_steps':sum(r['clamped_full_presence'] for r in upper),
+                              'nonpivot_clamped_presence_steps':sum(r['clamped_nonpivot_presence'] for r in upper),
+                              'late_4p5_to_5s_window_reached':report['completed'],
+                              'upper45_raw_presence_steps': sum(r['raw45_presence'] for r in upper),
+                              'upper45_clamped_presence_steps': sum(r['clamped45_presence'] for r in upper),
+                              'upper45_clamped_last120_presence_steps': sum(r['clamped45_presence'] for r in upper[1080:]),
+                              'upper45_clamped_last120_positive_steps': sum(r['clamped45_positive'] for r in upper[1080:]),
+                              'upper45_classification_rows': upper,
+                              'Trunk_guitar_endpoint_presence_steps': sum(bool(r['trunk_guitar_contacts']) for r in rows),
+                              'Chest_guitar_endpoint_presence_steps': sum(chest_presence),
+                              'Chest_guitar_endpoint_positive_raw_lambda_steps': sum(chest_positive),
+                              'initial_forward_tilt_proxy_deg': geometry(state),
+                              'final_forward_tilt_proxy_deg': geometry(read(case / 'final_state.json')),
+                              'comparisons': comparisons}
+    assert all(sha(path) == digest for path, digest in inputs.items())
+    with args.out.open('x') as stream:
+        json.dump({'input_sha256': inputs, 'references': {k: str(v) for k, v in REFERENCES.items()},
+                   'reference_forward_tilt_proxy_deg': {k: geometry(v['native_initial_state']) for k, v in refs.items()},
+                   'cases': results, 'scope': 'native local-Z world-forward tilt proxies and parent-child rotations; not clinical spine angles or scalar DOF sums'},
+                  stream, ensure_ascii=False, indent=2, allow_nan=False)
+
+
+if __name__ == '__main__':
+    main()

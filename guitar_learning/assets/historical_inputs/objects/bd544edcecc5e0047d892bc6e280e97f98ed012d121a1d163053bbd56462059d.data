@@ -1,0 +1,141 @@
+"""Keep the original guitar-body lateral coordinate and an exactly level neck."""
+from pathlib import Path
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from .common import ROOT, A, BASE, HUMAN, read, save, sha, pin, verify
+from .upright_source_v1 import full_fk, make_state, metrics, INITIAL, NATIVE
+from .upright_polytope_v2 import GuitarBoxes
+from stability_adapter_2.initial_pose_noise_v1 import pose
+from stability_adapter_2.om_axilla_source_geometry_v3 import CapsuleBodyDistance
+
+
+def main():
+    source = BASE/'upright_chest_support_v1/source_v9'
+    out = BASE/'upright_horizontal_v1/source_v2'
+    out.mkdir(exist_ok=False)
+    pins = pin(extra=[source/'candidate.json', source/'report.json', INITIAL,
+                      NATIVE/'native_properties.json', ROOT/'docs/plans/upright_horizontal_yaw_20261015.md'])
+    save(out/'inputs_before.json', pins)
+    candidate = read(source/'candidate.json')
+    initial = read(INITIAL)
+    names, bodies = initial['joint_names'], initial['human_body_names']
+    q0 = np.array(candidate['q_ref_rad'])
+    q = q0.copy()
+    fk, _ = full_fk(names, bodies, candidate['expected_initial_state'], q0)
+    original = fk(q0)
+    oldgp, oldgr = pose(initial['native_initial_state']['guitar_body_states'][0])
+    reference_gp = np.array(candidate['guitar_position_W_m'])
+    reference_gr = Rotation.from_quat(candidate['guitar_quaternion_xyzw'])
+    distance = CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']), HUMAN)
+    boxes = GuitarBoxes(distance)
+    vertices = np.concatenate([v for v, _, _, _ in distance.pieces])
+    center_G = (vertices.min(0)+vertices.max(0))/2
+    center_W = oldgp+oldgr.apply(center_G)
+    right = original['R_Hip'][0]-original['L_Hip'][0]
+    right[2] = 0
+    right /= np.linalg.norm(right)
+    front = np.cross([0., 0., 1.], right)
+    neck = oldgr.apply([0., 1., 0.])
+    level_neck = neck.copy()
+    level_neck[2] = 0
+    level_neck /= np.linalg.norm(level_neck)
+    axis = np.cross(neck, level_neck)
+    level = Rotation.from_rotvec(axis/np.linalg.norm(axis)*np.arctan2(np.linalg.norm(axis), neck@level_neck))*oldgr
+
+    def guitar(z):
+        rotation = Rotation.from_rotvec([0., 0., z[3]])*level*Rotation.from_rotvec([0., z[2], 0.])
+        center = center_W+front*z[0]+np.array([0., 0., z[1]])
+        return center-rotation.apply(center_G), rotation
+
+    def residual(z):
+        gp, gr = guitar(z)
+        gaps = {n: distance.measure(original, n, gp, gr)['gap_m']
+                for n in ('Chest', 'Spine', 'Torso', 'R_Hip', 'L_Hip')}
+        return np.r_[5000*(gaps['Chest']-.0004), 2000*(gaps['R_Hip']-.0004),
+                     200*(gaps['L_Hip']-.0004),
+                     15000*min(gaps['Spine']-.002, 0), 15000*min(gaps['Torso']-.001, 0),
+                     15000*min(gaps['R_Hip']-.0001, 0), 15000*min(gaps['L_Hip']-.0001, 0),
+                     20000*min(boxes.measure(original, 'Pelvis', gp, gr)-.002, 0),
+                     2*z[:2], .1*z[2:]]
+
+    fits = []
+    for seed in ([-.02, .04, .05, .20], [.02, .06, -.2, .30]):
+        fit = least_squares(residual, seed, bounds=([-.1, 0., -.6, -.35], [.1, .08, .2, .35]),
+                            max_nfev=120, diff_step=1e-4, ftol=1e-9, xtol=1e-9)
+        fits.append(fit)
+        print('fixed lateral / level guitar fit', fit.cost, fit.x, flush=True)
+    best = min(fits, key=lambda f: f.cost)
+    gp, gr = guitar(best.x)
+    bounds = np.column_stack([initial['PD_properties']['lower'], initial['PD_properties']['upper']])
+    hands = {}
+    for side in ('R', 'L'):
+        ix = np.array([j for j, n in enumerate(names)
+                       if n.startswith(tuple(side+'_'+b+'_' for b in ('Thorax', 'Shoulder', 'Elbow', 'Wrist')))])
+        palm = side+'H:palm'
+        op, ori = original[palm]
+        goalp = gp+gr.apply(reference_gr.inv().apply(op-reference_gp))
+        goalr = gr*reference_gr.inv()*ori
+
+        def arm(v):
+            trial = q.copy()
+            trial[ix] = v
+            poses = fk(trial)
+            p, r = poses[palm]
+            rows = [1000*(p-goalp), 80*(goalr.inv()*r).as_rotvec(), .1*(v-q0[ix])]
+            if side=='R':
+                gap = distance.measure(poses, 'R_Shoulder', gp, gr)['gap_m']
+                rows.append(np.array([5000*(gap-.0004), 15000*min(gap-.0001, 0),
+                                      6000*min(distance.measure(poses, 'R_Elbow', gp, gr)['gap_m']-.008, 0)]))
+            return np.concatenate(rows)
+
+        low, high = np.maximum(bounds[ix, 0]+1e-6, q0[ix]-1.1), np.minimum(bounds[ix, 1]-1e-6, q0[ix]+1.1)
+        fit = least_squares(arm, np.clip(q[ix], low+1e-8, high-1e-8), bounds=(low, high),
+                            max_nfev=150, diff_step=1e-4, ftol=1e-9, xtol=1e-9)
+        q[ix] = fit.x
+        p, r = fk(q)[palm]
+        hands[side] = dict(position_error_m=float(np.linalg.norm(p-goalp)),
+                           rotation_error_deg=float(np.rad2deg((goalr.inv()*r).magnitude())))
+        print('hand', side, hands[side], flush=True)
+    q = q.astype(np.float32).astype(float)
+    gp = gp.astype(np.float32).astype(float)
+    poses = fk(q)
+    state = make_state(initial['native_initial_state'], bodies, q, poses, gp, gr)
+    measured = metrics(poses, distance, gp, gr)
+    save(out/'support_candidate.json', {'right_block_cradle': {
+        'capsule_body': measured['capsules'], 'upper_arm_witness': measured['capsules']['R_Shoulder'],
+        'scope': 'Level neck and original lateral guitar-body coordinate, finite native validation required.'}})
+    for j, n in enumerate(names):
+        if j not in initial['lower_indices']:
+            candidate['upper_deltas_rad'][n] = float(candidate['upper_deltas_rad'].get(n, 0.)+q[j]-q0[j])
+    assert np.array_equal(q[initial['lower_indices']], q0[initial['lower_indices']])
+    assert np.all(q>=bounds[:, 0]) and np.all(q<=bounds[:, 1])
+    candidate.update(q_ref_rad=q.tolist(), expected_initial_state=state,
+                     guitar_position_W_m=gp.tolist(), guitar_quaternion_xyzw=gr.as_quat().tolist(),
+                     support_candidate=str(out/'support_candidate.json'),
+                     scope='New initial free guitar, original lateral body coordinate, level neck; source9 trunk/head/lower unchanged.')
+    save(out/'candidate.json', candidate)
+    save(out/'predicted_state.json', state)
+    lateral_error = float((gp+gr.apply(center_G)-center_W)@right)
+    neck_angle = float(np.rad2deg(np.arcsin(np.clip(gr.apply([0., 1., 0.])[2], -1., 1.))))
+    valid = (abs(lateral_error)<1e-6 and abs(neck_angle)<1e-6
+             and all(v['position_error_m']<.005 and v['rotation_error_deg']<2 for v in hands.values())
+             and all(v['gap_m']>=.00005 for v in measured['capsules'].values())
+             and measured['capsules']['Spine']['gap_m']>=.001
+             and measured['capsules']['Chest']['gap_m']<.002
+             and measured['capsules']['R_Shoulder']['gap_m']<.002
+             and boxes.measure(poses, 'Pelvis', gp, gr)>=.0001)
+    save(out/'report.json', dict(local_geometry_reach_eligible=valid, full_collision_audit_complete=False,
+         candidate_metrics=measured, hand_metrics=hands, fit_parameters=best.x.tolist(), fit_cost=float(best.cost),
+         reference_body_center_G_m=center_G.tolist(), reference_body_center_W_m=center_W.tolist(),
+         reference_lateral_coordinate_m=float((center_W-original['Pelvis'][0])@right),
+         final_lateral_error_m=lateral_error, final_neck_elevation_deg=neck_angle,
+         Pelvis_source_SAT_gap_m=boxes.measure(poses, 'Pelvis', gp, gr),
+         candidate_sha256=sha(out/'candidate.json'), inputs_unchanged=verify(pins)))
+    print('valid', valid, 'level angle', neck_angle, 'lateral error', lateral_error,
+          'gaps', {n: v['gap_m'] for n, v in measured['capsules'].items()}, flush=True)
+    assert valid and verify(pins)
+
+
+if __name__=='__main__':
+    main()

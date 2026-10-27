@@ -1,0 +1,32 @@
+"""Finite control target only; safe source9 initialization is unchanged."""
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from .common import ROOT,A,BASE,HUMAN,read,save,sha,pin,verify
+from .upright_source_v1 import full_fk,upright_rotation,metrics,INITIAL
+from stability_adapter_2.initial_pose_noise_v1 import pose
+from stability_adapter_2.om_axilla_source_geometry_v3 import CapsuleBodyDistance
+
+
+def main():
+    source=BASE/'upright_horizontal_v1/source_v4';out=BASE/'upright_horizontal_v1/upper_target_v1';out.mkdir(exist_ok=False);pins=pin(extra=[source/'candidate.json',source/'report.json',INITIAL,ROOT/'docs/plans/upright_horizontal_posture_20261015.md']);save(out/'inputs_before.json',pins);c=read(source/'candidate.json');i=read(INITIAL);names=i['joint_names'];bodies=i['human_body_names'];q0=np.array(c['q_ref_rad']);q=q0.copy();fk,_=full_fk(names,bodies,c['expected_initial_state'],q0);original=fk(q0);bounds=np.column_stack([i['PD_properties']['lower'],i['PD_properties']['upper']]);right=original['R_Hip'][0]-original['L_Hip'][0];right[2]=0;right/=np.linalg.norm(right);up=Rotation.from_rotvec(-right*np.deg2rad(4.2));body=np.array([j for j,n in enumerate(names) if n.startswith(('Torso_','Spine_','Chest_'))]);goals={n:Rotation.from_rotvec(-right*np.deg2rad(4.8))*upright_rotation(original[n][1]) for n in ('Torso','Spine','Chest')}
+    def fit_indices(ix,res):
+        lo=np.maximum(bounds[ix,0]+1e-6,q0[ix]-.2);hi=np.minimum(bounds[ix,1]-1e-6,q0[ix]+.2);fit=least_squares(res,np.clip(q[ix],lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=100,ftol=1e-10,xtol=1e-10);q[ix]=fit.x
+    def body_res(v):
+        z=q.copy();z[body]=v;ps=fk(z);return np.r_[np.concatenate([100*(goals[n].inv()*ps[n][1]).as_rotvec() for n in goals]),.001*(v-q0[body])]
+    fit_indices(body,body_res);gp=np.array(c['guitar_position_W_m']);gr=Rotation.from_quat(c['guitar_quaternion_xyzw']);distance=CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']),HUMAN);hands={}
+    for side in ('R','L'):
+        ix=np.array([j for j,n in enumerate(names) if n.startswith(tuple(side+'_'+n+'_' for n in ('Thorax','Shoulder','Elbow','Wrist')))]);palm=side+'H:palm';goalp,goalr=original[palm]
+        def residual(v):
+            z=q.copy();z[ix]=v;ps=fk(z);p,r=ps[palm];rows=[1000*(p-goalp),80*(goalr.inv()*r).as_rotvec(),.05*(v-q0[ix])]
+            if side=='R':rows.append(np.array([1000*(distance.measure(ps,'R_Shoulder',gp,gr)['gap_m']-.0004)]))
+            return np.concatenate(rows)
+        fit_indices(ix,residual);p,r=fk(q)[palm];hands[side]=dict(position_error_m=float(np.linalg.norm(p-goalp)),rotation_error_deg=float(np.rad2deg((goalr.inv()*r).magnitude())))
+    head=np.array([j for j,n in enumerate(names) if n.startswith(('Neck_','Head_'))]);goalr=original['Head'][1]
+    def head_res(v):
+        z=q.copy();z[head]=v;return np.r_[100*(goalr.inv()*fk(z)['Head'][1]).as_rotvec(),.01*(v-q0[head])]
+    fit_indices(head,head_res);q=q.astype(np.float32).astype(float);assert np.array_equal(q[i['lower_indices']],q0[i['lower_indices']]) and np.all(q>=bounds[:,0]) and np.all(q<=bounds[:,1]);m=metrics(fk(q),distance,gp,gr);valid=all(v['position_error_m']<.005 and v['rotation_error_deg']<2 for v in hands.values()) and all(m[n]['tilt_deg']<=(4.81) and abs(m[n]['right_tilt_deg'])<.01 for n in goals);save(out/'target105.json',dict(joint_names=names,q_target_rad105=q.tolist(),initial_candidate=str(source/'candidate.json'),initial_candidate_sha256=sha(source/'candidate.json'),scope='Finite control target only, not initial state; all lower24 unchanged. Body rate limited by existing command API.'));save(out/'report.json',dict(valid=valid,target_metrics=m,hand_errors=hands,inputs_unchanged=verify(pins),target_sha256=sha(out/'target105.json')));print('valid',valid,'hands',hands,'Chest',m['Chest'],'gap',m['capsules']['Chest']['gap_m'],flush=True);assert valid and verify(pins)
+
+
+from pathlib import Path
+if __name__=='__main__':main()

@@ -1,0 +1,103 @@
+"""First-pair tasks on the unchanged persistent free-guitar native controller."""
+import copy
+from unittest.mock import patch
+
+import numpy as np
+
+from guitar_learning.runtime.persistent_environment import _CONSTRUCTION_LOCK
+from guitar_learning.song.reward_environment import RewardEnvironment
+from guitar_learning.song import environment as original
+from guitar_learning.tool.experiments.transition.task import make_task, validate
+from guitar_learning.tool.experiments.transition.metrics import TransitionLedger
+
+LEFT_TERMS = frozenset(('action_change', 'terminal_failure', 'song_clean_hold',
+    'song_left_success', 'song_wrong_press', 'song_missing_press',
+    'song_left_approach', 'song_left_missed'))
+SONG = dict(schema='guitar_learning.song.v1', pre_roll_s=3., tail_s=.5,
+            window_s=.5, left_fraction=.4)
+
+
+class TransitionEnvironment(RewardEnvironment):
+    def __init__(self, *args, transition, **kwargs):
+        self.transition_config = validate(transition)
+        self.transition_ledger = None
+        super().__init__(*args, **kwargs)
+        self.role = self.transition_config['role']
+
+    def reset(self):
+        self.transition_ledger = None
+        _, info = super().reset()
+        plan = self.task.provenance['transition']
+        duration, count = plan['normalization_duration_s'], plan['normalization_target_count']
+        scales = [duration, count, count, count, duration*count, count, 2., duration]
+        indices = [i for i, name in enumerate(self.builder.fields) if name.startswith('music.')]
+        if len(indices) != 8:
+            raise ValueError('canonical eight music observation channels required')
+        self.builder.scales[indices] = scales
+        self.builder.spec['scales'] = self.builder.scales.tolist()
+        for index in indices:
+            self.contract['observation']['scales'][index] = float(self.builder.scales[index])
+        self.transition_ledger = TransitionLedger(self.task, self.last_measured, self.transition_config)
+        self.contract['task']['transition'] = copy.deepcopy(self.task.provenance['transition'])
+        self.contract['task']['specialist'] = dict(role=self.role,
+            schema='guitar_learning.transition.v1', frozen_partner=False)
+        self.contract['reward']['transition'] = dict(schema='guitar_learning.transition.v1',
+            role=self.role, projection=sorted(LEFT_TERMS) if self.role == 'left' else 'all song reward-v2 terms',
+            partner='right six normalized actions must be exactly zero' if self.role == 'left' else 'both actors active')
+        info['training_contract'] = self.contract
+        self._transition_info(info, False)
+        return self._observation(), info
+
+    def _transition_info(self, info, completed):
+        report = self.transition_ledger.summary(completed)
+        song = info['song']
+        safe = not song['safety_invalidated'] and not info.get('failure_reasons')
+        musical = (song['left_success_count'] == song['target_count'])
+        if self.role == 'joint':
+            musical = bool(musical and song['coupled_hit_count'] == song['target_count']
+                and song['strict_music']['matched100'] == song['target_count']
+                and song['wrong_crossings'] == song['repeat_crossings'] == 0)
+        success = bool(report['diagnostic_success'] and safe and musical)
+        report.update(safety_valid=safe, role_music_pass=bool(musical),
+                      stage_success=success, successful=success,
+                      music_criterion=('all LH audible holds; preparation coverage separate for pair' if self.role == 'left'
+                          else 'all LH holds, coupled crossings, strict100, no wrong/repeat crossings; strict50 separate'),
+                      strict_music=copy.deepcopy(song['strict_music']))
+        info['transition'] = report
+        info['musical_quality'].update(schema='guitar_learning.transition.v1', role=self.role,
+            stage_success=success, provisional_success=bool(report['provisional_diagnostic_success'] and safe and musical))
+        if 'episode' in info:
+            info['episode']['transition'] = copy.deepcopy(report)
+            info['episode']['musical_quality'] = copy.deepcopy(info['musical_quality'])
+
+    def step(self, action):
+        if self.finished:
+            raise RuntimeError('reset required before stepping a finished/uninitialized episode')
+        action = np.asarray(action, dtype=float)
+        if self.role == 'left' and (action.shape != (39,) or np.any(action[33:] != 0.)):
+            raise ValueError('left transition requires39 actions and exactly zero right six channels')
+        try:
+            observation, reward, terminated, truncated, info = super().step(action)
+            for row in info['physics_measurements']:
+                self.transition_ledger.update(row['music'])
+            if self.role == 'left':
+                old = reward
+                info['unprojected_reward_terms'] = copy.deepcopy(info['reward_terms'])
+                info['reward_terms'] = {k: v for k, v in info['reward_terms'].items() if k in LEFT_TERMS}
+                reward = float(sum(info['reward_terms'].values()))
+                self.total_reward += reward-old
+                if 'episode' in info:
+                    info['episode']['reward'] = self.total_reward
+            completed = bool(terminated and info['termination_reason'] == 'timeline_complete')
+            self._transition_info(info, completed)
+            return observation, reward, terminated, truncated, info
+        except BaseException:
+            self.finished = True
+            raise
+
+
+def build_environment(config, out, *, bundle, transition, song=None, **kwargs):
+    task = make_task(bundle, transition)
+    with _CONSTRUCTION_LOCK, patch.object(original.training_environment, 'ContactEnvironment', original.PersistentContactEnvironment):
+        return TransitionEnvironment(config, out, task=task, transition=transition,
+                                     song=SONG if song is None else song, **kwargs)

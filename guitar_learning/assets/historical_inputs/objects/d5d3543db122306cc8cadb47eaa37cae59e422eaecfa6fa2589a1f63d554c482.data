@@ -1,0 +1,9 @@
+# 04. 오른손 타현
+
+기준일: 2026-10-19. 이 문서는 양손 연주 경로의 타현을 다룬다. 왼손 진단 경로의 오른손 정책 행동은0이다.
+
+오른팔꿈치·손목6축을 주된 타현 출력으로 사용하고 오른손의 피크 파지 목표를 유지한다. 어깨·상완은 유한한 지지 제어를 받는다.
+
+실제240Hz 표본의 피크 선분과 움직이는 기타의 유한 현 영역을 검사한다. 깊이·속도·위치·방향·재무장 조건과고유crossing ID를 사용한다. 원 검출기는 반복 타현을 위해 연속 재무장한다.
+
+공통 검출은 [StrikeDetector](/home/ajou/yigyu/3/guitar_learning/core/strike.py), 원곡 판정은 [SongLedger](/home/ajou/yigyu/3/guitar_learning/tool/experiments/song/metrics.py)다. [전곡 보상 V2](/home/ajou/yigyu/3/guitar_learning/tool/experiments/song_reward_v2/README.md)는 검출·성공 기준을 유지하면서 오른손 연속 거리 보상을 같은 미달성 목표의 potential 차이로 바꾼다. 정지·목표 교체로 준비 보상을 계속 얻는 문제를 줄이기 위한 변경이며, 기하 통과는 실제 현 반력·진동·음향과 다르다.

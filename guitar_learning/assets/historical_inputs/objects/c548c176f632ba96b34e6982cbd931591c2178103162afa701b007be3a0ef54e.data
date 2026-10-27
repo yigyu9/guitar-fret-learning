@@ -1,0 +1,279 @@
+"""Actual seated foot contact and sole geometry; no state/control mutations."""
+import argparse
+import csv
+import itertools
+import traceback
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import numpy as np
+from scipy.spatial.transform import Rotation
+
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import ROOT, A, BASE, HUMAN, read, save, pin, verify
+from ..lower_body_release_v1 import upright_native_audit_v3, upright_analyze_v2
+
+
+FEET = ('L_Ankle', 'L_Toe', 'R_Ankle', 'R_Toe')
+RAW = ('attempt.json', 'report.json', 'initial_values.json', 'native_properties.json',
+       'states240.json', 'contacts240.json', 'efforts240.json', 'targets60.json')
+REFERENCE = BASE/'upright_horizontal_v1/native_static_v6'
+LAYOUT_REFERENCE = BASE/'upright_horizontal_v1/source_v4/report.json'
+PLAN = ROOT/'docs/plans/seated_foot_support_20261016.md'
+
+
+def foot_boxes():
+    result = {}
+    signs = np.array(list(itertools.product((-1., 1.), repeat=3)))
+    for body in ET.parse(HUMAN).iter('body'):
+        name = body.get('name')
+        if name in FEET:
+            geom = body.find('geom')
+            assert geom.get('type') == 'box'
+            half = np.fromstring(geom.get('size'), sep=' ')
+            center = np.fromstring(geom.get('pos'), sep=' ')
+            rotation = Rotation.from_quat(np.roll(np.fromstring(geom.get('quat', '1 0 0 0'), sep=' '), -1))
+            result[name] = dict(vertices=center+rotation.apply(signs*half), bottom=signs[:, 2] == -1,
+                                normal_body=rotation.apply([0., 0., 1.]))
+    assert set(result) == set(FEET)
+    return result
+
+
+def physical_guitar_bodies():
+    manifest = read(A/'assets/om_body_geometry_v3/manifest.json')
+    return {'guitar/'+b.get('name') for b in ET.parse(manifest['asset']).iter('body')
+            if b.find('geom') is not None and 'proxy' not in b.get('name', '').lower()
+            and not b.get('name', '').startswith(('G:string', 'G:pluck_range'))}
+
+
+def statistics(values):
+    if not values:
+        return dict(count=0, min=None, median=None, p95=None, max=None)
+    return dict(count=len(values), min=float(np.min(values)), median=float(np.median(values)),
+                p95=float(np.quantile(values, .95)), max=float(np.max(values)))
+
+
+def measure(run):
+    initial = read(run/'initial_values.json')
+    properties = read(run/'native_properties.json')
+    states = read(run/'states240.json')['rows']
+    contacts = read(run/'contacts240.json')['rows']
+    by_step = {r['physics_step']: r for r in contacts}
+    names = initial['human_body_names']
+    com = {r['name']: np.array(r['COM_body_m']) for r in properties['human']}
+    boxes = foot_boxes()
+    physical_guitar = physical_guitar_bodies()
+    reference = read(LAYOUT_REFERENCE)
+    center_G = np.array(reference['reference_body_center_G_m'])
+    first = states[0]['state']
+    right = pose(first['human_body_states'][names.index('R_Hip')])[0]-pose(first['human_body_states'][names.index('L_Hip')])[0]
+    right[2] = 0
+    right /= np.linalg.norm(right)
+    gp0, gr0 = pose(first['guitar_body_states'][0])
+    center0 = gp0+gr0.apply(center_G)
+    rows, ground_rows = [], []
+    for sample in states:
+        step, t, state = sample['physics_step'], sample['time_s'], sample['state']
+        cs = by_step.get(step)
+        native_contacts = cs['contacts'] if cs else []
+        row = dict(step=step, time_s=t, contacts_row_available=cs is not None)
+        for name in FEET:
+            body = state['human_body_states'][names.index(name)]
+            p, r = pose(body)
+            vertices = p+r.apply(boxes[name]['vertices'])
+            bottom = vertices[boxes[name]['bottom']]
+            up = r.apply(boxes[name]['normal_body'])
+            angular = np.array([body['vel']['angular'][a] for a in 'xyz'])
+            linear_com = np.array([body['vel']['linear'][a] for a in 'xyz'])
+            # Native Gym pose is at body origin; linear velocity is at COM.
+            linear_origin = linear_com-np.cross(angular, r.apply(com[name]))
+            matches = [c for c in native_contacts if {c['body0_name'], c['body1_name']} == {'human/'+name, 'ground'}]
+            for contact in matches:
+                ground_rows.append(dict(physics_step=step, time_s=t, foot_body=name,
+                                        positive_lambda=bool(float(contact['lambda']) > 0), raw_contact=contact))
+            for axis, value in zip('xyz', p):
+                row[name+'_body_origin_W_'+axis+'_m'] = float(value)
+            row.update({name+'_source_vertices_min_z_m': float(vertices[:, 2].min()),
+                        name+'_source_vertices_max_z_m': float(vertices[:, 2].max()),
+                        name+'_source_bottom_min_z_m': float(bottom[:, 2].min()),
+                        name+'_source_bottom_max_z_m': float(bottom[:, 2].max()),
+                        name+'_source_bottom_span_m': float(np.ptp(bottom[:, 2])),
+                        name+'_source_sole_tilt_deg': float(np.rad2deg(np.arccos(np.clip(up[2], -1., 1.)))),
+                        name+'_native_COM_linear_speed_m_s': float(np.linalg.norm(linear_com)),
+                        name+'_body_origin_linear_speed_m_s': float(np.linalg.norm(linear_origin)),
+                        name+'_angular_speed_rad_s': float(np.linalg.norm(angular)),
+                        name+'_ground_raw_contacts': len(matches),
+                        name+'_ground_positive_contacts': sum(float(c['lambda']) > 0 for c in matches),
+                        name+'_ground_lambda_sum_raw': float(sum(float(c['lambda']) for c in matches))})
+        for side in ('L', 'R'):
+            row[side+'_foot_positive_ground'] = any(row[side+'_'+part+'_ground_positive_contacts'] > 0 for part in ('Ankle', 'Toe'))
+        row['both_feet_positive_ground'] = bool(row['L_foot_positive_ground'] and row['R_foot_positive_ground'])
+        gp, gr = pose(state['guitar_body_states'][0])
+        center = gp+gr.apply(center_G)
+        pelvis = pose(state['human_body_states'][names.index('Pelvis')])[0]
+        neck = gr.apply([0., 1., 0.])
+        row.update(guitar_body_displacement_from_initial_m=float(np.linalg.norm(center-center0)),
+                   guitar_rotation_from_initial_deg=float(np.rad2deg((gr0.inv()*gr).magnitude())),
+                   guitar_body_right_coordinate_m=float((center-pelvis)@right),
+                   lateral_error_m=float((center-pelvis)@right-reference['reference_lateral_coordinate_m']),
+                   neck_elevation_deg=float(np.rad2deg(np.arcsin(np.clip(neck[2], -1., 1.)))))
+        for name in ('Torso', 'Chest'):
+            _, rotation = pose(state['human_body_states'][names.index(name)])
+            up = rotation.apply([0., 0., 1.])
+            row[name+'_total_tilt_deg'] = float(np.rad2deg(np.arccos(np.clip(up[2], -1., 1.))))
+            row[name+'_right_tilt_deg'] = float(np.rad2deg(np.arctan2(up@right, up[2])))
+        for name in ('Chest', 'R_Shoulder'):
+            row[name+'_guitar_positive_contacts'] = sum(float(c['lambda']) > 0 and
+                ((c['body0_name'] == 'human/'+name and c['body1_name'] in physical_guitar) or
+                 (c['body1_name'] == 'human/'+name and c['body0_name'] in physical_guitar)) for c in native_contacts)
+        rows.append(row)
+    return rows, ground_rows
+
+
+def contact_interval(rows, raw_contacts):
+    if not rows:
+        return dict(samples=0, both_feet_positive_fraction=None, bodies={})
+    steps = {r['step'] for r in rows}
+    bodies = {}
+    for name in FEET:
+        lambdas = [float(c['raw_contact']['lambda']) for c in raw_contacts if c['physics_step'] in steps and c['foot_body'] == name]
+        bodies[name] = dict(raw_contact_samples=sum(r[name+'_ground_raw_contacts'] > 0 for r in rows),
+                            positive_contact_samples=sum(r[name+'_ground_positive_contacts'] > 0 for r in rows),
+                            positive_fraction=sum(r[name+'_ground_positive_contacts'] > 0 for r in rows)/len(rows),
+                            raw_contact_count=sum(r[name+'_ground_raw_contacts'] for r in rows),
+                            positive_contact_count=sum(r[name+'_ground_positive_contacts'] for r in rows),
+                            lambda_raw_distribution=statistics(lambdas),
+                            positive_lambda_raw_distribution=statistics([v for v in lambdas if v > 0]))
+    return dict(samples=len(rows), first_time_s=rows[0]['time_s'], last_time_s=rows[-1]['time_s'],
+                L_foot_positive_fraction=sum(r['L_foot_positive_ground'] for r in rows)/len(rows),
+                R_foot_positive_fraction=sum(r['R_foot_positive_ground'] for r in rows)/len(rows),
+                both_feet_positive_fraction=sum(r['both_feet_positive_ground'] for r in rows)/len(rows),
+                all_contact_rows_present=all(r['contacts_row_available'] for r in rows), bodies=bodies)
+
+
+def sole_summary(rows):
+    last = [r for r in rows if r['time_s'] >= max(0., rows[-1]['time_s']-1.)]
+    result = {}
+    for name in FEET:
+        position = np.array([[r[name+'_body_origin_W_'+a+'_m'] for a in 'xyz'] for r in last])
+        metrics = dict(min_bottom_z_m=min(r[name+'_source_bottom_min_z_m'] for r in last),
+                       max_bottom_min_z_m=max(r[name+'_source_bottom_min_z_m'] for r in last),
+                       max_bottom_z_m=max(r[name+'_source_bottom_max_z_m'] for r in last),
+                       max_bottom_span_m=max(r[name+'_source_bottom_span_m'] for r in last),
+                       max_sole_tilt_deg=max(r[name+'_source_sole_tilt_deg'] for r in last),
+                       body_origin_position_ptp_xyz_m=np.ptp(position, axis=0).tolist(),
+                       body_origin_position_ptp_norm_m=float(np.linalg.norm(np.ptp(position, axis=0))),
+                       max_body_origin_linear_speed_m_s=max(r[name+'_body_origin_linear_speed_m_s'] for r in last),
+                       max_native_COM_linear_speed_m_s=max(r[name+'_native_COM_linear_speed_m_s'] for r in last),
+                       max_angular_speed_rad_s=max(r[name+'_angular_speed_rad_s'] for r in last))
+        gates = dict(sole_full_bottom_height_minus1_to3mm=metrics['min_bottom_z_m'] >= -.001 and metrics['max_bottom_z_m'] <= .003,
+                     sole_tilt_2deg=metrics['max_sole_tilt_deg'] <= 2., body_origin_ptp_3mm=metrics['body_origin_position_ptp_norm_m'] <= .003,
+                     body_origin_linear_speed_002m_s=metrics['max_body_origin_linear_speed_m_s'] <= .02,
+                     angular_speed_02rad_s=metrics['max_angular_speed_rad_s'] <= .2)
+        result[name] = dict(metrics=metrics, gates=gates, passed=all(gates.values()))
+    return dict(actual_first_time_s=last[0]['time_s'], actual_last_time_s=last[-1]['time_s'], samples=len(last),
+                bodies=result, all_four_parts_passed=all(r['passed'] for r in result.values()))
+
+
+def main(run, out):
+    out.mkdir(exist_ok=False)
+    attempt = read(run/'attempt.json')
+    cfg_path = Path(attempt['config'])
+    cfg = read(cfg_path)
+    paths = [Path(__file__).resolve(), PLAN, HUMAN, cfg_path, LAYOUT_REFERENCE, A/'strap.py',
+             ROOT/'docs/plans/seated_foot_support_control_20261016.md',
+             ROOT/'docs/plans/seated_foot_support_reach_20261016.md',
+             ROOT/'docs/plans/seated_foot_support_hip_20261016.md',
+             ROOT/'docs/plans/seated_foot_support_anchor_20261016.md']
+    paths += list(Path(__file__).resolve().parent.glob('*.py'))+[run/n for n in RAW]+[REFERENCE/n for n in RAW]
+    for key in ('candidate', 'source_report', 'upper_target105', 'play_spec'):
+        if cfg.get(key):
+            paths.append(Path(cfg[key]))
+    wrapper_path = run/'seat_wrapper.json'
+    if wrapper_path.is_file():
+        paths.append(wrapper_path)
+    pins = pin(extra=paths)
+    save(out/'inputs_before.json', pins)
+    helpers = {}
+    for name, call, result in (
+        ('integrity', lambda: upright_native_audit_v3.main([run], out/'integrity'), out/'integrity/report.json'),
+        ('posture', lambda: upright_analyze_v2.analyze(run, out/'posture'), out/'posture/summary.json')):
+        try:
+            call()
+            helpers[name] = read(result)
+        except Exception:
+            helpers[name] = dict(error=traceback.format_exc())
+            save(out/(name+'_failure.json'), helpers[name])
+    rows, ground = measure(run)
+    old_rows, old_ground = measure(REFERENCE)
+    with (out/'samples.csv').open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    save(out/'ground_contacts.json', dict(rows=ground, scope='Unmodified native contact data including localPos0/localPos1, normal, raw lambda and t0. Local positions are kept in native pair frames; no inferred forceN or cooked penetration claim.'))
+    after0 = contact_interval([r for r in rows if r['time_s'] > 0], ground)
+    steady = contact_interval([r for r in rows if 1 <= r['time_s'] <= 5], ground)
+    soles = sole_summary(rows)
+    old = dict(reference_run=str(REFERENCE), after_t0=contact_interval([r for r in old_rows if r['time_s'] > 0], old_ground),
+               settle_1_to5s=contact_interval([r for r in old_rows if 1 <= r['time_s'] <= 5], old_ground), last1s=sole_summary(old_rows))
+    posture_rows = [r for r in rows if r['time_s'] <= 5]
+    support_rows = [r for r in rows if 1 <= r['time_s'] <= 5]
+    posture_metrics = dict(max_guitar_body_displacement_from_initial_m=max(r['guitar_body_displacement_from_initial_m'] for r in posture_rows),
+                           max_guitar_rotation_from_initial_deg=max(r['guitar_rotation_from_initial_deg'] for r in posture_rows),
+                           max_abs_neck_elevation_deg=max(abs(r['neck_elevation_deg']) for r in posture_rows),
+                           max_abs_lateral_error_m=max(abs(r['lateral_error_m']) for r in posture_rows),
+                           max_Torso_Chest_total_tilt_deg=max(r[n+'_total_tilt_deg'] for r in posture_rows for n in ('Torso', 'Chest')),
+                           max_abs_Torso_Chest_right_tilt_deg=max(abs(r[n+'_right_tilt_deg']) for r in posture_rows for n in ('Torso', 'Chest')),
+                           simultaneous_Chest_RShoulder_contact_fraction=sum(r['Chest_guitar_positive_contacts'] > 0 and r['R_Shoulder_guitar_positive_contacts'] > 0 for r in support_rows)/len(support_rows) if support_rows else 0.)
+    posture_gates = dict(body_displacement_30mm=posture_metrics['max_guitar_body_displacement_from_initial_m'] <= .03,
+                         guitar_rotation_5deg=posture_metrics['max_guitar_rotation_from_initial_deg'] <= 5.,
+                         neck_3deg=posture_metrics['max_abs_neck_elevation_deg'] <= 3., lateral_20mm=posture_metrics['max_abs_lateral_error_m'] <= .02,
+                         Torso_Chest_total_5deg=posture_metrics['max_Torso_Chest_total_tilt_deg'] <= 5.,
+                         Torso_Chest_right_3deg=posture_metrics['max_abs_Torso_Chest_right_tilt_deg'] <= 3.,
+                         simultaneous_Chest_RShoulder_95pct=posture_metrics['simultaneous_Chest_RShoulder_contact_fraction'] >= .95)
+    report = read(run/'report.json')
+    integrity = helpers['integrity'].get('runs', [{}])[0].get('all_checks', False)
+    wrapper_checks = dict(expected_file_exists=wrapper_path.is_file(),
+                          input_sha256_nonempty_map=False, declared_inputs_unchanged=False,
+                          all_consumed_inputs_unchanged=False, actual_scene_class_exact=False,
+                          original_controller_exact=False)
+    wrapper_error = None
+    if wrapper_path.is_file():
+        try:
+            wrapper = read(wrapper_path)
+            mapping = wrapper.get('input_sha256')
+            wrapper_checks['input_sha256_nonempty_map'] = isinstance(mapping, dict) and bool(mapping)
+            wrapper_checks['declared_inputs_unchanged'] = wrapper.get('inputs_unchanged') is True
+            if wrapper_checks['input_sha256_nonempty_map']:
+                wrapper_checks['all_consumed_inputs_unchanged'] = verify(mapping)
+            wrapper_checks['actual_scene_class_exact'] = wrapper.get('actual_scene_class') == 'seated_foot_support_v1.runtime_v5.Scene'
+            wrapper_checks['original_controller_exact'] = wrapper.get('controller') == 'seated_foot_support_v1.runtime_v5.Controller'
+        except Exception:
+            wrapper_error = traceback.format_exc()
+    save(out/'wrapper_evidence.json', dict(expected_path=str(wrapper_path), checks=wrapper_checks,
+                                          error=wrapper_error, passed=all(wrapper_checks.values()),
+                                          missing_file_not_pinned=not wrapper_path.is_file()))
+    gates = dict(completed_static_5s=bool(report['completed'] and report['mode'] == 'static' and report['physics_steps'] == 1200),
+                 runner_safety=bool(not report['failure'] and not report['cleanup_errors'] and all(report['initial_checks'].values()) and not report['forbidden_calls'] and report['root_fixed'] and report['guitar_free'] and not report['strap_enabled'] and report['training_updates'] == 0),
+                 native_integrity=bool(integrity), runner_inputs_unchanged=bool(report['inputs_unchanged'] and verify(attempt['input_sha256'])),
+                 wrapper_inputs_unchanged=all(wrapper_checks.values()), contact_rows_present=bool(steady.get('all_contact_rows_present', False)),
+                 simultaneous_foot_ground_95pct=steady['both_feet_positive_fraction'] is not None and steady['both_feet_positive_fraction'] >= .95,
+                 all_four_sole_parts_geometry_and_stillness=soles['all_four_parts_passed'], analysis_inputs_unchanged=verify(pins))
+    initial_source = {n: {k: rows[0][n+k] for k in ('_source_vertices_min_z_m', '_source_bottom_span_m', '_source_sole_tilt_deg')} for n in FEET}
+    summary = dict(run=str(run), report_completed=report['completed'], failure=report['failure'], actual_last_time_s=rows[-1]['time_s'],
+                   initial_source_box_geometry=initial_source, after_t0=after0, settle_1_to5s=steady, actual_last1s=soles,
+                   foot_support_gates=gates, foot_support_passed=all(gates.values()),
+                   posture_and_guitar=dict(metrics=posture_metrics, gates=posture_gates, passed=all(posture_gates.values())),
+                   overall_foot_and_posture_passed=bool(all(gates.values()) and all(posture_gates.values())), prior_reference_comparison=old,
+                   helper_results=helpers, wrapper_checks=wrapper_checks, inputs_unchanged=verify(pins),
+                   scope='Physical support: at least one positive native ground contact on Ankle or Toe per foot, separately from four-part full sole source-box geometry. 8 source corners and local-bottom4 use normalized native body rotation and original geom frame. Full bottom-height gate requires all four bottom corners in[-1,+3]mm at every last1s sample; bottom span is separately reported. These are source boxes, not cooked clearance. Body-origin linear velocity = nativeCOMlinear minus omega cross R*COM_body, using native properties; angular world velocity unchanged. Pose ptp norm is norm of component peak-to-peak. Lambda is raw solver response, never measuredN. Root remains fixed, so this is not free-root balance or restored playing stability. Source targets, t0 contact records and actual poststep support are distinct. Prior comparison is specifically original horizontal native_static_v6, not the9s play baseline.')
+    save(out/'summary.json', summary)
+    print('foot_support_gates', gates, 'posture_gates', posture_gates, flush=True)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--run', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    args = parser.parse_args()
+    main(args.run.resolve(), args.out.resolve())

@@ -1,0 +1,120 @@
+"""Export a bounded finite hip actuator bias from a frozen native run; no physics."""
+from pathlib import Path
+import numpy as np
+from ..lower_body_release_v1.common import ROOT, A, BASE, read, save, sha, pin, verify
+
+PHASE = BASE/'grounded_guitar_support_v1'
+RUN = PHASE/'native_static_v12'
+PLAN = ROOT/'docs/plans/grounded_guitar_hip_load_bias_20261016.md'
+MODE = 'finite_constant_native_RHip_load_bias_v1'
+
+
+def main():
+    out = PHASE/'hip_load_bias_v1'
+    out.mkdir(exist_ok=False)
+    baseline = PHASE/'right_goal_v2/static5.json'
+    paths = [Path(__file__).resolve(), PLAN, A/'AGENTS.md', baseline,
+             PHASE/'diagnosis_hip_load_hypothesis_v1/report.json',
+             PHASE/'diagnosis_hip_load_hypothesis_v1/README.md',
+             ROOT/'docs/plans/grounded_guitar_right_goal_20261016.md',
+             ROOT/'docs/plans/grounded_guitar_relative_translation_20261016.md']
+    paths += [RUN/n for n in ('initial_values.json', 'native_properties.json', 'efforts240.json',
+                             'targets60.json', 'report.json', 'attempt.json', 'support_wrapper.json')]
+    paths += [PHASE/'analysis_static_v12/summary.json']
+    paths += [PHASE/'source_v4'/n for n in ('candidate.json', 'report.json', 'support_candidate.json')]
+    paths += [PHASE/'posture_target_v2'/n for n in ('upper_target105.json', 'report.json')]
+    paths += [PHASE/'right_goal_v2'/n for n in ('right_goal_spec.json', 'report.json')]
+    paths += [Path(__file__).with_name(n) for n in ('__init__.py', 'runtime_v2.py', 'runtime_v11.py',
+                                                   'runtime_v14.py', 'run_v14.py', 'analyze_v14.py')]
+    paths += list((A/'seated_foot_support_v1').glob('*.py'))
+    inputs = pin(extra=paths)
+    save(out/'inputs_before.json', inputs)
+    cfg = read(baseline)
+    initial = read(RUN/'initial_values.json')
+    native_report = read(RUN/'report.json')
+    analysis = read(PHASE/'analysis_static_v12/summary.json')
+    efforts = read(RUN/'efforts240.json')['rows']
+    target = read(RUN/'targets60.json')['rows'][-1]
+    names = initial['joint_names']
+    selected = ['R_Hip_'+a for a in 'xyz']
+    indices = np.array([names.index(n) for n in selected])
+    lower = initial['lower_indices']
+    local = np.array([lower.index(int(j)) for j in indices])
+    rows = efforts[960:1200]
+    assert len(efforts) == 1200 and len(rows) == 240
+    assert all(e['physics_step_before'] == k for k, e in enumerate(efforts))
+    assert all(e['joint_names'] == names and e['lower_stable_pd']['lower_indices'] == lower for e in rows)
+    submitted = np.array([e['lower_stable_pd']['submitted_lower24_Nm'] for e in rows])
+    gravity = np.array([e['lower_stable_pd']['gravity_lower24_Nm'] for e in rows])
+    residual = submitted[:, local]-gravity[:, local]
+    bias = residual.mean(axis=0)
+    std = residual.std(axis=0)
+    caps = np.array(initial['PD_properties']['effort'])[indices]
+    limits = np.column_stack((initial['PD_properties']['lower'], initial['PD_properties']['upper']))
+    q0 = np.array(read(cfg['candidate'])['q_ref_rad'])
+    final_goal = np.array(target['final105_rad'])
+    zero = initial['zero_range_indices']
+    checks = dict(
+        reference_completed5s=bool(native_report['completed'] and native_report['physics_steps'] == 1200),
+        reference_inputs_unchanged=bool(native_report['inputs_unchanged'] and not native_report['forbidden_calls']),
+        baseline_config_matches_actual12=native_report['config'] == str(baseline),
+        source_candidate_SHA_exact=cfg['candidate_sha256'] == sha(cfg['candidate']),
+        upper_target_SHA_exact=cfg['upper_target105_sha256'] == sha(cfg['upper_target105']),
+        right_goal_SHA_exact=cfg['finite_right_goal_spec_sha256'] == sha(cfg['finite_right_goal_spec']),
+        selected3_are_original_lower_effort_not_zero8=bool(all(j in lower and j in initial['effort_indices'] and j not in zero for j in indices)),
+        zero8_reference_efforts_exact_zero=bool(np.all(np.array([e['submitted105_Nm'] for e in rows])[:, zero] == 0)),
+        baseline_original105_q_within_limits=bool(np.all(q0 >= limits[:, 0]) and np.all(q0 <= limits[:, 1])),
+        final_hip3_goal_within_original_limits=bool(np.all(final_goal[indices] >= limits[indices, 0]) and np.all(final_goal[indices] <= limits[indices, 1])),
+        all_samples_finite=bool(np.isfinite(submitted).all() and np.isfinite(gravity).all()),
+        each_bias_component_under2Nm=bool(np.all(abs(bias) <= 2.)),
+        bias_vector_norm_under2Nm=float(np.linalg.norm(bias)) <= 2.,
+        bias_under_original_native_caps=bool(np.all(abs(bias) <= caps)),
+        reference_plus_bias_under_original_native_caps=bool(np.all(abs(submitted[:, local]+bias) <= caps)),
+        baseline_right4mm_mode=cfg['right_arm_reference_mode'] == 'initial_world_finite_human_v2' and 'right_task_preload_m' not in cfg,
+        original_final_hip_y_goal_minus0p01=final_goal[names.index('R_Hip_y')] == float(np.float32(-.01)),
+        foot_mode_unchanged=cfg['foot_support_mode'] == 'coherent_interior_hip_soles_v6' and cfg['right_hip_final_bias_rad'] == -.01)
+    checks = {k: bool(v) for k, v in checks.items()}
+    spec = dict(schema='finite_native_RHip_load_bias_v1', joint_names=selected,
+        joint_indices105=indices.tolist(), bias_Nm=bias.tolist(), ramp_s=[.15, .75], ramp='smoothstep',
+        component_limit_Nm=2., vector_norm_limit_Nm=2., native_effort_caps_Nm=caps.tolist(),
+        apply_stage='lower_raw_before_original_native_cap', implicit_PD_RHS_unchanged=True,
+        query_reference_run=str(RUN), initial_candidate_sha256=cfg['candidate_sha256'],
+        initial_candidate_path=cfg['candidate'], reference_efforts_sha256=sha(RUN/'efforts240.json'),
+        scope='Add only this finite actuator bias to human R_Hip3 raw effort before the original native cap; do not alter the implicit PD RHS. Keep original clipping and zero8 exclusion. No G force, pose/state overwrite, hip lock, altered joint target, foot IK or gain/cap change.')
+    assert verify(inputs)
+    save(out/'hip_load_bias_spec.json', spec)
+    report = dict(eligible_for_finite_hip_load_bias=all(checks.values()), checks=checks,
+        spec_path=str(out/'hip_load_bias_spec.json'), spec_sha256=sha(out/'hip_load_bias_spec.json'),
+        source_candidate_path=cfg['candidate'], source_candidate_sha256=cfg['candidate_sha256'],
+        baseline_config_path=str(baseline), baseline_config_sha256=sha(baseline),
+        reference_run=str(RUN), reference_physical_success=analysis['passed'],
+        reference_selection='V12 keeps right-arm support and small guitar rotation but is not full static success; Chest criterion failed.',
+        averaging=dict(steps_before=[960, 1199], time_s=[4., 1199/240], samples=240,
+            formula='mean(submitted_lower24_Nm - gravity_lower24_Nm), using named R_Hip3 local indices',
+            joint_names=selected, joint_indices105=indices.tolist(), lower24_local_indices=local.tolist(),
+            mean_Nm=bias.tolist(), population_std_Nm=std.tolist(), min_Nm=residual.min(0).tolist(),
+            max_Nm=residual.max(0).tolist(), norm_of_mean_Nm=float(np.linalg.norm(bias)),
+            units='Native generalized actuator Nm; suffixes are not world axes. No contact force sensor used.'),
+        native_caps_Nm=caps.tolist(), original_bounds_rad=limits[indices].tolist(),
+        initial_q_rad=q0[indices].tolist(), final_command_q_rad=final_goal[indices].tolist(),
+        hypothesis_report_path=str(PHASE/'diagnosis_hip_load_hypothesis_v1/report.json'),
+        hypothesis_report_sha256=sha(PHASE/'diagnosis_hip_load_hypothesis_v1/report.json'),
+        interpretation='Hip source-only query predicts +1.871mm center height; this spec is an unverified finite actuator hypothesis, not a new initial pose or successful controller. Invalid net-contact-force N readings do not define this bias.',
+        physics_steps=0, adopted=False, input_sha256=inputs,
+        inputs_after_sha256={p: sha(p) for p in inputs}, inputs_unchanged=verify(inputs))
+    save(out/'report.json', report)
+    cfg.update(hip_load_bias_spec=str(out/'hip_load_bias_spec.json'),
+        hip_load_bias_spec_sha256=sha(out/'hip_load_bias_spec.json'),
+        hip_load_bias_report=str(out/'report.json'), hip_load_bias_mode=MODE)
+    save(out/'static5.json', cfg)
+    assert verify(inputs)
+    save(PHASE/'hip_load_bias_generation_v1.json', dict(input_sha256=inputs, inputs_unchanged=True,
+        output_sha256={str(p): sha(p) for p in out.iterdir() if p.is_file()},
+        eligible_for_finite_hip_load_bias=report['eligible_for_finite_hip_load_bias'], physics_steps=0))
+    print(dict(eligible=report['eligible_for_finite_hip_load_bias'], bias_Nm=bias.tolist(),
+               norm_Nm=float(np.linalg.norm(bias)), checks=checks), flush=True)
+    assert report['eligible_for_finite_hip_load_bias'], 'Spec checks failed; native run forbidden.'
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,110 @@
+from pathlib import Path
+import ast,gzip,hashlib,json,re
+import numpy as np
+import torch
+root=Path('/home/ajou/yigyu/3');phase=root/'docs/2026-10-26/learning_flow/flexible_fingers_v1'
+sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+write=lambda p,d:p.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n')
+source=json.loads((phase/'source_manifest.json').read_text())
+current={str(p.resolve()):sha(p) for p in (root/'guitar_learning').rglob('*.py') if 'archive' not in p.parts}
+assert source==current
+for p in source:ast.parse(Path(p).read_text())
+backup=root/'guitar_learning/archive/20261020_before_flexible_fingers'
+manifest=json.loads((backup/'manifest.json').read_text())['files']
+for row in manifest:assert sha(backup/row['backup'])==row['sha256']
+for name in ('song/task.py','song/__init__.py','music_task.py'):
+ assert sha(root/'guitar_learning'/name)==sha(backup/'guitar_learning'/name)
+for p in (root/'guitar_learning/native').rglob('*'):
+ if p.is_file():assert sha(p)==sha(backup/p.relative_to(root))
+index=json.loads((root/'guitar_learning/assets/historical_inputs/index.json').read_text())['entries']
+old=json.loads((backup/'guitar_learning/assets/historical_inputs/index.json').read_text())['entries']
+for name,value in old.items():
+ assert index[name].get('default_sha256')==value.get('default_sha256')
+ for digest,entry in value['versions'].items():assert index[name]['versions'][digest]==entry
+objects=set()
+for value in index.values():
+ for digest,entry in value['versions'].items():
+  objects.add(digest);p=root/'guitar_learning/assets/historical_inputs/objects'/(digest+'.data')
+  assert p.stat().st_size==entry['bytes'] and sha(p)==digest
+for relative in ('assets/native_provenance.json','tool/provenance.json'):
+ data=json.loads((root/'guitar_learning'/relative).read_text())
+ for row in data['files']:assert sha(Path(row['internal']))==row['internal_sha256']
+preserve=dict(backup_files=len(manifest),prior_versions_preserved=sum(len(v['versions']) for v in old.values()),current_versions=sum(len(v['versions']) for v in index.values()),cas_objects=len(objects),protected_tasks_unchanged=True,native_files_unchanged=True,source_files=len(source),source_frozen=True)
+write(phase/'preservation_verified.json',preserve)
+summary=json.loads((phase/'module_tests_summary.json').read_text());assert summary['completed']
+assert summary['failed_modules']==['guitar_learning.tests.test_transition_teacher_proof']
+regressions=[dict(module=summary['failed_modules'][0],initial_result='SIGFPE',scope='existing teacher-proof CPU preflight JSON serialization; no native scene',original_log='module_tests/test_transition_teacher_proof.log')]
+retry=phase/'module_tests/test_transition_teacher_proof_retry.log'
+retry_text=retry.read_text()
+retry_ok=bool(re.search(r'\nOK\s*$',retry_text))
+regressions[0]['isolated_retry']='OK' if retry_ok else 'not_passed'
+retry_count=int(re.search(r'Ran (\d+) tests? in ',retry_text)[1]) if retry_ok else 0
+for row in summary['results']:
+ text=(phase/row['log']).read_text()
+ if row['returncode']!=0:
+  assert row['result']=='SIGFPE' and row['module']==summary['failed_modules'][0]
+  continue
+ assert re.search(r'\nOK\s*$',text)
+ assert int(re.search(r'Ran (\d+) tests? in ',text)[1])==row['tests']
+motions={}
+for name in ('flexible','legacy'):
+ folder=phase/('motion_'+name);report=json.loads((folder/'report.json').read_text())
+ assert report['completed'] and report['physics_steps']==960 and report['policy_ticks']==240
+ assert not report['failure_reasons'] and not report['changed_inputs'] and report['training_updates']==0
+ for p,digest in json.loads((folder/'inputs_before.json').read_text()).items():assert sha(Path(p))==digest
+ a=json.loads((folder/'reset_initial.json').read_text());b=json.loads((folder/'reset_again.json').read_text())
+ assert a['prepared_reset']['actual_initial_state']==b['prepared_reset']['actual_initial_state']
+ assert b['prepared_reset']['persistent_reset']['native_properties_unchanged']
+ assert b['prepared_reset']['persistent_reset']['previous_episode_physics_steps']==960
+ expected=(4. if name=='flexible' else 1.5)/60.
+ assert abs(report['first_index_native_target_delta_rad']-expected)<1e-6
+ if name=='flexible':
+  control=report['finger_control'];names=json.loads((folder/'initial_values.json').read_text())['joint_names']
+  before,after=control['native_pd_before'],control['native_pd_after']
+  for field,values in before.items():
+   for i,x in enumerate(values):
+    expected=x
+    if names[i].startswith('LH:') and field in ('stiffness','damping'):
+     expected=(8. if names[i].startswith('LH:thumb') else 12.) if field=='stiffness' else (1.25 if names[i].startswith('LH:thumb') else 1.5)
+    assert after[field][i]==expected,(field,names[i])
+ motions[name]={k:report[k] for k in ('completed','physics_steps','policy_ticks','training_updates','first_index_native_target_delta_rad','max_joint_speed_rad_s','max_guitar_displacement_m','max_guitar_rotation_rad','finger_joint_ranges')}
+video=json.loads((phase/'video/report.json').read_text());assert video['completed'] and video['frames']==121
+assert sha(phase/'video/finger_motion.mp4')==video['video_sha256']
+for p,digest in video['inputs_sha256'].items():assert sha(Path(p))==digest
+runs={}
+for name,steps,updates,dim,role in [('native_left',32,1,512,'left'),('native_right',20,1,500,'right'),('native_resume',32,2,512,'left')]:
+ folder=phase/name;report=json.loads((folder/'report.json').read_text());song=json.loads((folder/'song_report.json').read_text())
+ assert report['completed'] and report['transitions']==steps and report['optimizer_updates']==updates,(name,report)
+ for field in ('changed_inputs','guard_violations','missing_import_pins','original_source_parity_errors','physical_flags_errors','worker_failures'):assert not report[field],(name,field)
+ assert report['persistent_audit']['completed']
+ contract=json.loads((folder/'training_contract.json').read_text());assert contract['observation']['dimension']==dim
+ for p,digest in json.loads((folder/'inputs_before.json').read_text()).items():assert sha(Path(p))==digest,(name,p)
+ count=0;last={}
+ with gzip.open(folder/'transitions.jsonl.gz','rt') as f:
+  for line in f:
+   row=json.loads(line)
+   for worker,info in enumerate(row['infos']):
+    count+=1;now=info['task_time_s'];assert abs(now-last.get(worker,0)-1/60)<1e-8;last[worker]=now
+    assert abs(float(row['reward'][worker])-sum(info['reward_terms'].values()))<1e-6
+    assert info['cost']>=0 and not info['failure_reasons']
+    assert ('left_curriculum' in info)==(role=='left')
+ assert count==steps and song['completed_episodes']==0
+ runs[name]=dict(completed=True,transitions=steps,optimizer_updates=updates,observation_dimension=dim,persistent_audit=True,input_pins_valid=True,last_clock_by_worker=last)
+a=torch.load(phase/'native_left/final.pt',map_location='cpu',weights_only=False);b=torch.load(phase/'native_resume/initial.pt',map_location='cpu',weights_only=False)
+def equal(a,b):
+ if isinstance(a,torch.Tensor):return isinstance(b,torch.Tensor) and a.dtype==b.dtype and torch.equal(a,b)
+ if isinstance(a,np.ndarray):return isinstance(b,np.ndarray) and np.array_equal(a,b)
+ if isinstance(a,dict):return a.keys()==b.keys() and all(equal(a[k],b[k]) for k in a)
+ if isinstance(a,(tuple,list)):return type(a)==type(b) and len(a)==len(b) and all(equal(x,y) for x,y in zip(a,b))
+ return a==b
+assert equal({k:v for k,v in a.items() if k!='metadata'},{k:v for k,v in b.items() if k!='metadata'})
+links=0
+for path in [root/'guitar_learning/README.md',root/'guitar_learning/song/README.md',root/'guitar_learning/tool/README.md',root/'guitar_learning/docs/CODE_STRUCTURE.md',phase.parent/'README.md',phase/'README.md']:
+ for ref in re.findall(r'\]\(([^)]+)\)',path.read_text()):
+  if '://' in ref:continue
+  p=Path(ref.split('#')[0]);p=p if p.is_absolute() else path.parent/p
+  assert p==phase/'verification.json' or p.exists(),(path,ref)
+  links+=1
+assert not [p for p in (root/'guitar_learning').rglob('*.pyc') if 'archive' not in p.parts]
+result=dict(completed=True,source_files=len(source),tests_passed_first_run=summary['passed_tests'],tests_passed_in_isolated_retry=retry_count,first_run_passed_modules=summary['passed_modules'],first_run_all_passed=False,regressions=regressions,modules=summary['modules'],test_mode='one subprocess per module; two concurrent',preservation=preserve,native_motion=motions,video_frames=121,native_training=runs,resume_payload_exact_except_metadata=True,resume_optimizer_updates='1 -> 2',doc_links=links,doc_link_errors=0,scope='control implementation and short physical/PPO checks; not learned fretting, force quality, whole song convergence or native curriculum advancement')
+write(phase/'verification.json',result);print(json.dumps(result,ensure_ascii=False,indent=2))

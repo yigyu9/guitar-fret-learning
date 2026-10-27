@@ -1,12 +1,11 @@
-# 문서 안내
+# 문서 안내 — 2026-10-19
 
-[문서 목차](DOCUMENT_INDEX.md)에서 필요한 항목 하나를 선택한다.
+[현재 프로젝트 상태](/home/ajou/yigyu/3/CURRENT_STATUS.md)에서현재 조건과확인된결과를읽고, [목적별 문서 목차](/home/ajou/yigyu/3/docs/DOCUMENT_INDEX.md)에서필요한상세문서로이동한다.
 
-- **기타 자세 복원·유지 학습:** [StabilityAdapter 사용 안내](../stability_adapter/README.md)
-- **프로젝트 현황과 다음 과제:** [현재 상태](../PROJECT_CONTEXT.md)
-- **전체 연구 설계:** [Master Plan](../master_plan/README.md)
-- **2026-09-14 작업 결과:** [날짜별 목차](2026-09-14/README.md)
-
-현재 안내는 모듈 README에, 변경 근거와 결과는 해당 보고서에 기록한다.
-이전 버전은 [보관소](archive/README.md)에서 찾는다. 학습을 개선할 때는
-[실험 변경 절차](TRAINING_IMPROVEMENT_PROCESS.md)와 해당 환경의 이력을 먼저 읽는다.
+- 신규학습·양손·전곡: [현재 학습 경로와 버전 구분](/home/ajou/yigyu/3/guitar_learning/README.md)
+- 논문본문·주장근거: [논문 안내](/home/ajou/yigyu/3/paper/README.md)
+- 학습기준초기 자세: [035/v14·실용V3](/home/ajou/yigyu/3/paper/initial_pose/current_v3/README.md)
+- 완료된단음 joint실험: [결과·실행법](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_joint_v1/README.md)
+- 전곡 학습: [계획](/home/ajou/yigyu/3/docs/plans/guitar_learning_full_song_20261019.md) · [실제 결과폴더](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_full_song_v1)
+- 과거 연구 계획(2026-10-19): [외부 보관본](</media/ajou/새 볼륨1/Guitar/master_plan_20261019_archived_20261027/README.md>)
+- 논문 PDF·과거 원고: [자료 목록](papers/README.md)

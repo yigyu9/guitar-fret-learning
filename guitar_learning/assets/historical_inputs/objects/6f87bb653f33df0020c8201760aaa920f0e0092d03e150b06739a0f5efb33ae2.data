@@ -1,0 +1,199 @@
+"""Refined exploration, native-action rehearsal and transactional PPO checks."""
+import copy
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import numpy as np
+import torch
+
+from guitar_learning.training.parallel import FIELDS
+from guitar_learning.training.ppo import PPOConfig, KLGuardError, PPOTrainer as PlainTrainer
+from guitar_learning.tests.test_ppo import assert_tree
+from guitar_learning.tests.test_transition_transfer import contract
+from guitar_learning.transition.learning import SHAPES
+from guitar_learning.transition.policy import SpecialistPolicy as PlainPolicy
+from guitar_learning.transition_refinement.policy import ExplorationConfig, SpecialistPolicy
+from guitar_learning.transition_refinement.ppo import (PPOTrainer, RefinementConfig,
+    demonstration_digest)
+
+
+def data(target=.1):
+    arrays = {key: np.zeros((8,)+shape,
+        dtype=np.bool_ if 'mask' in key else np.float32) for key,shape in SHAPES.items()}
+    arrays['state'][:,0] = np.linspace(-1,1,8)
+    arrays['action'][:,:33] = target
+    return arrays
+
+
+def rollout(model, arrays):
+    fields = {key:torch.as_tensor(arrays[key]) for key in FIELDS}
+    with torch.no_grad():
+        output = model.act(*(fields[key] for key in FIELDS))
+    return dict({key:value[:,None] for key,value in fields.items()},
+        latent=output['latent'][:,None],logp=output['logp'][:,None],
+        old_mean=output['mean'][:,None],old_log_std=output['log_std'][:,None].clone(),
+        reward_value=output['reward_value'][:,None],cost_value=output['cost_value'][:,None],
+        next_reward_value=torch.zeros(8,1),next_cost_value=torch.zeros(8,1),
+        reward=torch.arange(8.).reshape(8,1)/10,cost=torch.zeros(8,1),
+        terminated=torch.zeros(8,1,dtype=torch.bool),truncated=torch.zeros(8,1,dtype=torch.bool))
+
+
+class RefinementLearningTests(unittest.TestCase):
+    def setUp(self):
+        torch.set_num_threads(1)
+        torch.manual_seed(17)
+
+    def model(self, initial=.003):
+        return SpecialistPolicy(size='small',contract=contract(),
+            exploration=dict(initial_std=initial))
+
+    def trainer(self, model=None, demonstration=None, **config):
+        return PPOTrainer(model or self.model(),
+            PPOConfig(actor_lr=1e-6,epochs=1,target_kl=.1,**config),
+            demonstration=data() if demonstration is None else demonstration)
+
+    def test_small_std_active_gradient_and_inactive_exact_zero(self):
+        model=self.model(.001);arrays=data()
+        inputs=[torch.as_tensor(arrays[key]) for key in FIELDS]
+        output=model.act(*inputs)
+        torch.testing.assert_close(output['log_std'][:,:33].exp(),torch.full((8,33),.001))
+        self.assertGreater(float(output['latent'][:,:33].abs().sum()),0)
+        self.assertTrue(torch.equal(output['action'][:,33:],torch.zeros(8,6)))
+        (-model.evaluate(*inputs,output['latent'])['logp'].mean()).backward()
+        self.assertGreater(float(model.log_std.grad[:33].abs().sum()),0)
+        self.assertTrue(torch.equal(model.log_std.grad[33:],torch.zeros(6)))
+        with torch.no_grad():model.log_std[:33].fill_(-100)
+        lower=model(*inputs)['log_std'][:,:33].exp()
+        torch.testing.assert_close(lower,torch.full_like(lower,1e-4))
+        with torch.no_grad():model.log_std[:33].fill_(100)
+        upper=model(*inputs)['log_std'][:,:33].exp()
+        torch.testing.assert_close(upper,torch.full_like(upper,.05))
+        for values in (dict(initial_std=0),dict(initial_std=float('nan')),dict(min_std=True)):
+            with self.assertRaises(ValueError):ExplorationConfig(**values)
+
+    def test_mean_matches_original_actor_without_hard_bound_and_no_partner_changes(self):
+        model=self.model();plain=PlainPolicy(size='small',contract=contract())
+        plain.load_state_dict(model.state_dict())
+        with torch.no_grad():
+            model.actor_heads['left'].bias.fill_(.1)
+            plain.actor_heads['left'].bias.fill_(.1)
+        inputs=[torch.as_tensor(data()[key]) for key in FIELDS]
+        torch.testing.assert_close(model(*inputs)['mean'],plain(*inputs)['mean'],rtol=0,atol=0)
+        self.assertGreater(float(model(*inputs)['mean'][:,:33].min()),.09)
+        self.assertNotEqual(model.architecture['schema'],plain.architecture['schema'])
+
+    def test_combined_loss_bc_decreases_and_critic_not_fit_from_demonstrations(self):
+        # Constant normalized advantage removes PPO's Actor gradient, isolating
+        # the real combined-loss rehearsal term without replacing that loss.
+        model=self.model(.02);trainer=self.trainer(model)
+        batch=rollout(model,data())
+        batch['reward'].zero_();batch['cost'].zero_()
+        batch['reward_value'].zero_();batch['cost_value'].zero_()
+        before=float(trainer._measure_bc())
+        frozen={key:value.clone() for key,value in model.state_dict().items()
+            if key.startswith(('actor_encoders.right.','actor_heads.right.'))}
+        critics=[parameter.detach().clone() for parameter in model.value_parameters()]
+        result=trainer.update(batch)
+        self.assertLess(result['bc_mse'],before)
+        self.assertEqual(trainer.updates,1)
+        self.assertEqual(result['std_lr'],1e-5)
+        self.assertEqual(result['diagnostics']['rehearsal']['demonstration_rows'],8)
+        self.assertTrue(any(not torch.equal(a,b) for a,b in zip(critics,model.value_parameters())))
+        for key,value in frozen.items():torch.testing.assert_close(model.state_dict()[key],value,rtol=0,atol=0)
+        self.assertEqual([group['name'] for group in trainer.actor_optimizer.param_groups],
+                         ['selected_actor','active_log_std'])
+
+    def test_demonstration_validation_identity_and_owned_copy(self):
+        arrays=data();trainer=self.trainer(demonstration=arrays)
+        digest=trainer.demonstration_sha256
+        arrays['action'][:,:33]=.9
+        self.assertEqual(digest,demonstration_digest(trainer._demonstration))
+        self.assertNotEqual(digest,demonstration_digest(arrays))
+        for mutation in ('mask','nan','inactive','shape','out_of_bounds'):
+            arrays=data()
+            if mutation=='mask':arrays['mask']=arrays['mask'].astype(np.float32)
+            if mutation=='nan':arrays['state'][0,0]=np.nan
+            if mutation=='inactive':arrays['action'][0,33]=.1
+            if mutation=='shape':arrays['events']=arrays['events'][:,:1]
+            if mutation=='out_of_bounds':arrays['action'][0,0]=1.01
+            with self.assertRaises(ValueError):self.trainer(demonstration=arrays)
+        with self.assertRaisesRegex(ValueError,'SHA256'):
+            PPOTrainer(self.model(),demonstration=data(),demonstration_sha256='wrong')
+
+    def test_resume_binds_data_weight_std_lr_exploration_and_rejects_old(self):
+        trainer=self.trainer();trainer.update(rollout(trainer.policy,data()))
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'own.pt';trainer.save(path,{'scope':'test'})
+            fresh=self.trainer();self.assertEqual(fresh.load(path),{'scope':'test'})
+            assert_tree(self,trainer.actor_optimizer.state_dict(),fresh.actor_optimizer.state_dict())
+            for fresh in (self.trainer(demonstration=data(.2)),
+                          PPOTrainer(self.model(),trainer.config,demonstration=data(),
+                              refinement=RefinementConfig(bc_weight=2)),
+                          PPOTrainer(self.model(),trainer.config,demonstration=data(),
+                              refinement=RefinementConfig(std_lr=2e-5)),
+                          self.trainer(self.model(.001))):
+                with self.assertRaises(ValueError):fresh.load(path)
+            plain=PlainTrainer(PlainPolicy(size='small',contract=contract()),trainer.config)
+            old=Path(folder)/'old.pt';plain.save(old)
+            with self.assertRaises(ValueError):trainer.load(old)
+            with self.assertRaises(ValueError):plain.load(path)
+
+    def test_kl_rejection_restores_both_groups_and_rng_with_rehearsal_present(self):
+        model=self.model();trainer=PPOTrainer(model,
+            PPOConfig(actor_lr=.1,target_kl=1e-12,kl_retries=1,epochs=1),
+            demonstration=data(),refinement=RefinementConfig(std_lr=.1))
+        # Existing moments in both optimizer groups must also be restored.
+        sum(parameter.sum() for parameter in model.actor_parameters()).backward()
+        trainer.actor_optimizer.step();trainer.actor_optimizer.zero_grad()
+        model.reset_exploration()
+        batch=rollout(model,data());state=copy.deepcopy(model.state_dict())
+        adam=copy.deepcopy(trainer.actor_optimizer.state_dict());rng=torch.get_rng_state()
+        with self.assertRaises(KLGuardError):trainer.update(batch)
+        assert_tree(self,state,model.state_dict());assert_tree(self,adam,trainer.actor_optimizer.state_dict())
+        self.assertTrue(torch.equal(rng,torch.get_rng_state()))
+        self.assertEqual(trainer.updates,0)
+
+    def test_accepted_retry_scales_both_learning_rates_and_records_bc_loss(self):
+        trainer=self.trainer();batch=rollout(trainer.policy,data())
+        with patch('guitar_learning.transition_refinement.ppo.gaussian_kl',
+                   side_effect=[torch.tensor(1.),torch.tensor(0.)]):
+            result=trainer.update(batch)
+        self.assertEqual(result['kl_retries'],1)
+        self.assertEqual(result['actor_lr'],2.5e-7)
+        self.assertEqual(result['std_lr'],2.5e-6)
+        accepted=result['diagnostics']['minibatches']['actor_accepted']
+        self.assertIn('bc_mse',accepted['sample_weighted_mean'])
+
+    def test_resume_restores_rehearsal_sampling_rng_and_exact_next_update(self):
+        trainer=self.trainer();batch=rollout(trainer.policy,data())
+        trainer.update(batch)
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'own.pt';trainer.save(path)
+            expected=trainer.update(batch)
+            restored=self.trainer();restored.load(path)
+            actual=restored.update(batch)
+            self.assertEqual(expected,actual)
+            assert_tree(self,trainer.policy.state_dict(),restored.policy.state_dict())
+            assert_tree(self,trainer.actor_optimizer.state_dict(),restored.actor_optimizer.state_dict())
+
+    def test_value_nonfinite_rolls_back_model_optimizers_and_rehearsal_rng(self):
+        trainer=self.trainer();batch=rollout(trainer.policy,data())
+        model=copy.deepcopy(trainer.policy.state_dict())
+        actor=copy.deepcopy(trainer.actor_optimizer.state_dict())
+        value=copy.deepcopy(trainer.value_optimizer.state_dict());rng=torch.get_rng_state()
+        original=trainer.value_optimizer.step
+        def fail(*args,**kwargs):
+            original(*args,**kwargs)
+            with torch.no_grad():next(iter(trainer.policy.value_parameters())).fill_(float('nan'))
+        with patch.object(trainer.value_optimizer,'step',fail),self.assertRaises(FloatingPointError):
+            trainer.update(batch)
+        assert_tree(self,model,trainer.policy.state_dict())
+        assert_tree(self,actor,trainer.actor_optimizer.state_dict())
+        assert_tree(self,value,trainer.value_optimizer.state_dict())
+        self.assertTrue(torch.equal(rng,torch.get_rng_state()))
+        self.assertEqual(trainer.updates,0)
+
+
+if __name__=='__main__':unittest.main()

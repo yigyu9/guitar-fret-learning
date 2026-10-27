@@ -1,0 +1,184 @@
+"""Minimal left-hip source correction to remove initial chair overlap.
+
+V2 right-leg correction is immutable. The 1mm chair gap is geometric overlap
+removal, not no-contact: the native contact-offset sum is about2.1mm.
+"""
+import copy
+import json
+import traceback
+from pathlib import Path
+
+import mujoco
+import numpy as np
+from scipy.optimize import minimize
+
+from . import source_geometry_v1 as v1
+from .common import BASE,A,H0,MANIFEST,read,save,sha,restore
+
+OUT=BASE/'analysis/source_geometry_v3'
+CORRECTIONS=BASE/'inputs/source_corrections_v3'
+PLAN=Path(__file__).with_name('SOURCE_GEOMETRY_V3_PLAN.md')
+BASELINE=BASE/'inputs/source_corrections_v2/knee_minus_0p15.json'
+VARIABLES=('L_Hip_x','L_Hip_y','L_Hip_z')
+LEFT_BODIES=('L_Hip','L_Knee','L_Ankle','L_Toe')
+CHAIR_GAP_M=.001
+# A0.1micrometre solver cushion keeps float32 serialization above1mm.
+SOLVER_CHAIR_GAP_M=CHAIR_GAP_M+1e-7
+HIP_DELTA_LIMIT_RAD=.03
+
+
+def left_feet(poses):
+    result={}
+    for n,(vertices,bottom) in v1.foot_vertices(poses).items():
+        if not n.startswith('L_'):continue
+        normal=poses[n][1].apply([0.,0.,1.])
+        result[n]={'minimum_z_m':float(vertices[:,2].min()),
+            'bottom_face_z_span_m':float(np.ptp(bottom[:,2])),
+            'sole_normal_W':normal.tolist(),
+            'sole_tilt_deg':float(np.rad2deg(np.arccos(np.clip(normal[2],-1,1)))),
+            'vertices_W_m':vertices.tolist()}
+    return result
+
+
+def optimizer(baseline,bodies,qbase,names,fk,bounds,asset,chair,original_audit):
+    ix=np.array([names.index(n) for n in VARIABLES]);lo=np.maximum(bounds[ix,0],qbase[ix]-.03);hi=np.minimum(bounds[ix,1],qbase[ix]+.03)
+    model,data,shapes,_=v1.probe(baseline,bodies,fk(qbase),asset,chair)
+    byname={s['geom_name']:s for s in shapes}
+    hip=next(s for s in shapes if s['actor']=='human' and s['body']=='L_Hip')
+    seat=next(s for s in shapes if s['actor']=='chair')
+    body_ids={n:mujoco.mj_name2id(model,mujoco.mjtObj.mjOBJ_BODY,'human/'+n) for n in LEFT_BODIES}
+    relevant=[r for r in original_audit['lower_human_pairs'] if r['source_candidate_collision_relevant'] and (r['a'] in LEFT_BODIES or r['b'] in LEFT_BODIES)]
+    chair_pairs=[r for r in original_audit['lower_chair_pairs'] if r['a'] in LEFT_BODIES and r['a']!='L_Hip']
+    def trial(x):
+        q=qbase.copy();q[ix]=x;return q
+    def update(x):
+        poses=fk(trial(x))
+        for n in LEFT_BODIES:
+            p,r=poses[n];model.body_pos[body_ids[n]]=p;model.body_quat[body_ids[n]]=np.roll(r.as_quat(),1)
+        mujoco.mj_forward(model,data)
+        return poses
+    def gap(a,b):
+        points=np.zeros(6)
+        value=float(mujoco.mj_geomDistance(model,data,a['geom_id'],b['geom_id'],.5,points))
+        if not np.isfinite(value) or not np.isfinite(points).all():raise FloatingPointError('nonfinite source gap')
+        return value
+    def constraints(x):
+        poses=update(x);rows=[1000*(gap(hip,seat)-SOLVER_CHAIR_GAP_M)]
+        for n,(vertices,_) in v1.foot_vertices(poses).items():
+            if n.startswith('L_'):rows.extend(1000*(vertices[:,2]-.001))
+        for r in relevant+chair_pairs:
+            value=gap(byname[r['a_geom']],byname[r['b_geom']])
+            rows.append(1000*(value-min(-.001,r['signed_gap_m']-.001)))
+        return np.array(rows)
+    def cost(x):return float(np.sum(((x-qbase[ix])/HIP_DELTA_LIMIT_RAD)**2))
+    seeds=[qbase[ix],qbase[ix]+[-.005,0.,0.],qbase[ix]+[0.,.005,-.005]]
+    attempts=[];solutions=[]
+    for seed_id,seed in enumerate(seeds):
+        fit=minimize(cost,np.clip(seed,lo,hi),method='SLSQP',bounds=list(zip(lo,hi)),
+            constraints={'type':'ineq','fun':constraints},
+            options={'maxiter':250,'ftol':1e-11,'eps':1e-6,'disp':False})
+        violation=float(max(0.,-constraints(fit.x).min()));q=trial(fit.x)
+        row={'seed_id':seed_id,'success':bool(fit.success),'message':str(fit.message),
+            'iterations':int(fit.nit),'objective':float(fit.fun),
+            'maximum_constraint_violation_scaled':violation,
+            'left_hip_angles_rad':dict(zip(VARIABLES,fit.x.tolist())),
+            'left_hip_delta_rad':dict(zip(VARIABLES,(fit.x-qbase[ix]).tolist()))}
+        attempts.append(row)
+        if np.isfinite(q).all():solutions.append((violation,cost(fit.x),q))
+    feasible=[r for r in solutions if r[0]<1e-5]
+    if not solutions:raise RuntimeError('all source hip optimizer attempts nonfinite')
+    best=min(feasible,key=lambda r:r[1]) if feasible else min(solutions,key=lambda r:r[0])
+    return best[2],{'variables':list(VARIABLES),'delta_limit_rad':HIP_DELTA_LIMIT_RAD,
+        'effective_lower_rad':lo.tolist(),'effective_upper_rad':hi.tolist(),
+        'chair_gap_target_m':CHAIR_GAP_M,'solver_chair_gap_target_m':SOLVER_CHAIR_GAP_M,
+        'solver_feasible_found':bool(feasible),'attempts':attempts,
+        'scope':'deterministic local minimum-delta search, not a global optimality/infeasibility proof'}
+
+
+def main():
+    OUT.mkdir(parents=True,exist_ok=False);CORRECTIONS.mkdir(parents=True,exist_ok=False)
+    pins=v1.input_pins()
+    extra=(Path(__file__),PLAN,BASELINE,Path(__file__).with_name('source_geometry_v2.py'),
+        Path(__file__).with_name('SOURCE_GEOMETRY_V2_PLAN.md'),BASE/'analysis/source_geometry_v2/report.json')
+    pins.update({str(p.resolve()):sha(p) for p in extra});save(OUT/'inputs_before.json',pins)
+    report={'schema':'lower_body_source_correction_v3','status':'started','input_sha256':pins,
+        'scope':'source-only overlap-removal diagnostic; native steps0; no cooked/no-contact certification',
+        'baseline_candidate':str(BASELINE),'chair_gap_target_m':CHAIR_GAP_M,
+        'native_contact_offset_sum_context_m':.0021,'native_contact_rows_may_remain':True,
+        'selected_candidate':None}
+    try:
+        baseline=read(BASELINE);restored=restore();names=baseline['joint_names']
+        qbase=np.array(baseline['q_ref_rad']);qoriginal=np.array(restored['q_ref_rad']);bounds=v1.limits(names)
+        assert baseline['source_candidate_valid'] and names==restored['joint_names']
+        assert baseline['expected_initial_state']==restored['expected_initial_state']
+        bodies=read(H0/'report.json')['human_body_names']
+        assert bodies==read(Path(read(MANIFEST)['native_initial']))['human_body_names']
+        fk,parents,_=v1.lower_fk(restored,bodies);baseposes=fk(qbase)
+        geometry=read(A/'assets/om_body_geometry_v3/manifest.json');asset=Path(geometry['asset'])
+        cfg=read(A/'config.json');chair=read(v1.ROOT/cfg['pose_source'])['params']['chair']
+        original,original_state=v1.audit(baseline,bodies,baseposes,parents,asset,chair)
+        save(OUT/'v2_baseline_audit.json',original)
+        q,solver=optimizer(baseline,bodies,qbase,names,fk,bounds,asset,chair,original)
+        q=q.astype(np.float32).astype(float);ix=np.array([names.index(n) for n in VARIABLES])
+        mask=np.ones(105,dtype=bool);mask[ix]=False
+        assert np.array_equal(q[mask],qbase[mask]) and np.all(abs(q[ix]-qbase[ix])<=.03+1e-7)
+        assert np.all(q>=bounds[:,0]-1e-6) and np.all(q<=bounds[:,1]+1e-6)
+        poses=fk(q);audit,state=v1.audit(baseline,bodies,poses,parents,asset,chair)
+        save(OUT/'left_hip_chair_audit.json',audit)
+        hip_chair=next(r for r in audit['lower_chair_pairs'] if r['a']=='L_Hip')
+        hip_chair_base=next(r for r in original['lower_chair_pairs'] if r['a']=='L_Hip')
+        self_base={(r['a_geom'],r['b_geom']):r['signed_gap_m'] for r in original['lower_human_pairs'] if r['source_candidate_collision_relevant']}
+        self_worse=[r for r in audit['lower_human_pairs'] if r['source_candidate_collision_relevant'] and r['signed_gap_m']<min(-.001,self_base[(r['a_geom'],r['b_geom'])]-.001)]
+        chair_worse=[r for r,b in zip(audit['lower_chair_pairs'],original['lower_chair_pairs']) if r['a']!='L_Hip' and r['signed_gap_m']<min(-.001,b['signed_gap_m']-.001)]
+        feet=left_feet(poses)
+        valid=bool(hip_chair['signed_gap_m']>=CHAIR_GAP_M-1e-7 and min(r['minimum_z_m'] for r in feet.values())>=.001-1e-7 and not self_worse and not chair_worse)
+        changes=[]
+        for n in LEFT_BODIES:
+            p,r=poses[n];bp,br=baseposes[n]
+            changes.append({'body':n,'translation_W_m':(p-bp).tolist(),
+                'translation_norm_m':float(np.linalg.norm(p-bp)),
+                'relative_rotation_rad':float((br.inv()*r).magnitude()),
+                'position_W_m':p.tolist(),'quaternion_xyzw':r.as_quat().tolist()})
+        thigh_guitar=[]
+        for after,before in zip(audit['lower_guitar_pairs'],original['lower_guitar_pairs']):
+            assert (after['a_geom'],after['b_geom'])==(before['a_geom'],before['b_geom'])
+            if after['a']=='L_Hip':thigh_guitar.append({'human_geom':after['a_geom'],'guitar_body':after['b'],
+                'guitar_geom':after['b_geom'],'baseline_signed_gap_m':before['signed_gap_m'],
+                'corrected_signed_gap_m':after['signed_gap_m'],
+                'gap_change_m':after['signed_gap_m']-before['signed_gap_m'],
+                'baseline_witness_points_W_m':before['witness_points_W_m'],
+                'corrected_witness_points_W_m':after['witness_points_W_m']})
+        unchanged_bodies=[n for n in baseposes if n not in LEFT_BODIES]
+        assert all(np.array_equal(poses[n][0],baseposes[n][0]) and (baseposes[n][1].inv()*poses[n][1]).magnitude()<1e-12 for n in unchanged_bodies)
+        state['human_dof_states']=[dict(pos=float(v),vel=0.) for v in q]
+        save(OUT/'left_hip_chair_source_state.json',state);save(OUT/'optimization.json',solver)
+        candidate=copy.deepcopy(baseline);candidate['q_ref_rad']=q.tolist()
+        candidate['lower_deltas_rad']={n:float(d) for n,d in zip(names,q-qoriginal) if abs(d)>1e-10}
+        candidate['lower24_q_rad']={n:float(q[names.index(n)]) for n in baseline['lower24_q_rad']}
+        candidate['predicted_corrected_human_body_poses']={n:state['human_body_states'][bodies.index(n)]['pose'] for n in v1.LOWER_BODIES}
+        candidate['predicted_corrected_source_state_path']=str(OUT/'left_hip_chair_source_state.json')
+        candidate['source_geometry_report']=str(OUT/'report.json');candidate['source_candidate_valid']=valid
+        candidate['source_correction_constraints'].update(left_hip_delta_limit_rad=.03,left_hip_chair_minimum_source_gap_m=CHAIR_GAP_M)
+        candidate['scope']='V2 right correction preserved; only left hip minimally changed to remove source chair overlap; original expected_initial_state retained; lower8 predictions need independent native FK/contacts.1mm gap can still produce native contact rows.'
+        path=CORRECTIONS/'left_hip_chair_1mm.json';save(path,candidate)
+        report.update(status='completed',source_candidate_valid=valid,selected_candidate=str(path) if valid else None,
+            candidate_path=str(path),left_hip_delta_rad=dict(zip(VARIABLES,(q[ix]-qbase[ix]).tolist())),
+            baseline_hip_chair_pair=hip_chair_base,corrected_hip_chair_pair=hip_chair,
+            left_feet=feet,left_lower_body_changes=changes,left_thigh_guitar_gap_changes=thigh_guitar,
+            maximum_left_thigh_guitar_gap_absolute_change_m=max(abs(r['gap_change_m']) for r in thigh_guitar),
+            source_self_worsening_pairs=self_worse,source_chair_worsening_pairs=chair_worse,
+            baseline_relevant_self_negative_count=len(original['source_negative_relevant_self_pairs']),
+            corrected_relevant_self_negative_count=len(audit['source_negative_relevant_self_pairs']),
+            unchanged_scalar_target_count=102,only_left_hip3_scalar_targets_permitted_to_change=True,
+            root_upper_right_body_poses_exact=True,
+            next_step='Independent native initial FK and first-step comparison against V2 right-only; do not infer cause/contact removal from source geometry alone')
+        print(json.dumps({k:v for k,v in report.items() if k in ('status','source_candidate_valid','selected_candidate','left_hip_delta_rad','maximum_left_thigh_guitar_gap_absolute_change_m')},indent=2),flush=True)
+    except Exception:
+        report.update(status='failed',error=traceback.format_exc());raise
+    finally:
+        report['input_sha256_after']={p:sha(p) for p in pins};report['inputs_unchanged']=pins==report['input_sha256_after']
+        save(OUT/'report.json',report)
+        assert report['inputs_unchanged'],'input changed; preserve failure and version the source'
+
+
+if __name__=='__main__':main()

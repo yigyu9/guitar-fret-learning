@@ -1,0 +1,109 @@
+"""Source-only upright Chest/right-upper-arm pose candidate; originals immutable."""
+import copy
+import xml.etree.ElementTree as ET
+from pathlib import Path
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from .common import ROOT,A,BASE,HUMAN,read,save,sha,pin,verify
+from stability_adapter_2.initial_pose_noise_v1 import pose
+from stability_adapter_2.om_axilla_source_geometry_v3 import CapsuleBodyDistance
+
+OUT=BASE/'upright_chest_support_v1/source_v1'
+PLAN=ROOT/'docs/plans/upright_chest_support_20261015.md'
+NATIVE=BASE/'native/rotational_stable_pd_interior_static_v1'
+INITIAL=NATIVE/'initial_values.json'
+CANDIDATE=BASE/'inputs/source_corrections_v4/chair_Y_minus_2p5mm_v1.json'
+
+
+def full_fk(names,bodies,state,q0):
+    tree=ET.parse(HUMAN);parents={c.get('name'):p.get('name') for p in tree.iter('body') for c in p.findall('body')}
+    initial={n:pose(s) for n,s in zip(bodies,state['human_body_states'])};rows=[]
+    for b in tree.iter('body'):
+        n=b.get('name');parent=parents.get(n)
+        if n not in initial or parent not in initial:continue
+        p,r=initial[n];pp,pr=initial[parent];ix=[names.index(j.get('name')) for j in b.findall('joint')];basis=np.column_stack([np.fromstring(j.get('axis'),sep=' ') for j in b.findall('joint')]) if ix else np.zeros((3,0));rel=pr.inv()*r;zero=Rotation.from_rotvec(basis@q0[ix]).inv()*rel if ix else rel
+        rows.append((n,parent,pr.inv().apply(p-pp),zero,basis,ix))
+    def fk(q):
+        result=dict(initial)
+        for n,parent,t,zero,basis,ix in rows:
+            p,r=result[parent];result[n]=(p+r.apply(t),r*Rotation.from_rotvec(basis@q[ix])*zero if ix else r*zero)
+        return result
+    return fk,parents
+
+
+def upright_rotation(r):
+    up=r.apply([0.,0.,1.]);axis=np.cross(up,[0.,0.,1.]);length=np.linalg.norm(axis)
+    return Rotation.from_rotvec(axis/length*np.arctan2(length,up[2]))*r if length>1e-12 else r
+
+
+def metrics(poses,distance,gp,gr):
+    result={}
+    right=poses['R_Hip'][0]-poses['L_Hip'][0];right[2]=0;right/=np.linalg.norm(right)
+    front=np.cross([0.,0.,1.],right)
+    for n in ('Torso','Spine','Chest','Head'):
+        up=poses[n][1].apply([0.,0.,1.]);result[n]=dict(up_W=up.tolist(),tilt_deg=float(np.rad2deg(np.arccos(np.clip(up[2],-1,1)))),right_tilt_deg=float(np.rad2deg(np.arctan2(up@right,up[2]))),front_tilt_deg=float(np.rad2deg(np.arctan2(up@front,up[2]))))
+    result['capsules']={n:distance.measure(poses,n,gp,gr) for n in ('Torso','Spine','Chest','R_Thorax','R_Shoulder','R_Elbow','L_Hip','R_Hip')}
+    result['upper_arm_proximal']=distance.measure(poses,'R_Shoulder',gp,gr,.5)
+    return result
+
+
+def make_state(state,bodies,q,poses,gp,gr):
+    out=copy.deepcopy(state);oldp,oldr=pose(state['guitar_body_states'][0]);dr=gr*oldr.inv()
+    for n,(p,r) in poses.items():out['human_body_states'][bodies.index(n)]['pose']={'p':dict(zip('xyz',p.tolist())),'r':dict(zip('xyzw',r.as_quat().tolist()))}
+    for b in out['guitar_body_states']:
+        p,r=pose(b);pp=gp+dr.apply(p-oldp);rr=dr*r;b['pose']={'p':dict(zip('xyz',pp.tolist())),'r':dict(zip('xyzw',rr.as_quat().tolist()))}
+    out['human_dof_states']=[dict(pos=float(v),vel=0.) for v in q]
+    return out
+
+
+def main():
+    OUT.mkdir(parents=True,exist_ok=False)
+    pins=pin(extra=[INITIAL,NATIVE/'native_properties.json',CANDIDATE,PLAN])
+    save(OUT/'inputs_before.json',pins)
+    base=read(INITIAL);state=base['native_initial_state'];names,bodies=base['joint_names'],base['human_body_names'];q0=np.array(base['q_ref105_rad']);bounds=np.column_stack([base['PD_properties']['lower'],base['PD_properties']['upper']]);q=q0.copy();fk,parents=full_fk(names,bodies,state,q0);original=fk(q0);gp0,gr0=pose(state['guitar_body_states'][0]);asset=Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']);distance=CapsuleBodyDistance(asset,HUMAN)
+    body=np.array([i for i,n in enumerate(names) if n.startswith(('Torso_','Spine_','Chest_'))]);right=np.array([i for i,n in enumerate(names) if n.startswith(('R_Thorax_','R_Shoulder_','R_Elbow_','R_Wrist_'))]);left=np.array([i for i,n in enumerate(names) if n.startswith(('L_Thorax_','L_Shoulder_','L_Elbow_','L_Wrist_'))]);head=np.array([i for i,n in enumerate(names) if n.startswith(('Neck_','Head_'))])
+    def limits(ix,delta):return np.maximum(bounds[ix,0]+1e-6,q0[ix]-delta),np.minimum(bounds[ix,1]-1e-6,q0[ix]+delta)
+    targets={n:upright_rotation(original[n][1]) for n in ('Torso','Spine','Chest')}
+    def center(ps,n):
+        segment,_=distance.capsules[n];p,r=ps[n];return p+r.apply(segment.mean(0))
+    def body_res(v):
+        z=q.copy();z[body]=v;ps=fk(z);tc,sc,cc=[center(ps,n) for n in ('Torso','Spine','Chest')]
+        return np.r_[np.concatenate([350*(targets[n].inv()*ps[n][1]).as_rotvec() for n in targets]),1200*(cc-tc)[:2],600*(sc-(tc+cc)/2)[:2],.05*(v-q0[body])]
+    lo,hi=limits(body,.75);fit=least_squares(body_res,np.clip(q[body],lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=100);q[body]=fit.x;ps=fk(q)
+    print('upright body',metrics(ps,distance,gp0,gr0),flush=True)
+    # Move/tilt the initially free guitar to meet the upright chest and thighs.
+    def guitar(z):return gp0+z[:3],Rotation.from_rotvec(z[3:])*gr0
+    def guitar_res(z):
+        gp,gr=guitar(z);g={n:distance.measure(ps,n,gp,gr)['gap_m'] for n in ('Chest','Spine','Torso','L_Hip','R_Hip')}
+        return np.r_[5000*(g['Chest']-.0004),1800*(g['L_Hip']-.0004),1800*(g['R_Hip']-.0004),20000*np.minimum([g[n]-.0001 for n in g],0),15*z[:3],.3*z[3:]]
+    lo=np.r_[-.08,-.14,-.06,np.deg2rad([-15,-15,-15])];hi=-lo
+    seeds=[np.zeros(6),np.array([-.02,-.05,0.,-.12,0.,0.])];gfits=[]
+    for seed in seeds:
+        gfit=least_squares(guitar_res,seed,bounds=(lo,hi),max_nfev=100,diff_step=1e-4,ftol=1e-9,xtol=1e-9);gfits.append(gfit);print('guitar fit',gfit.cost,gfit.x,flush=True)
+    gfit=min(gfits,key=lambda v:v.cost);gp,gr=guitar(gfit.x)
+    # Restore each palm's position/orientation in guitar coordinates.
+    hand_metrics={}
+    for side,ix in (('R',right),('L',left)):
+        palm=side+'H:palm';oldp,oldr=original[palm];goalp=gp+gr.apply(gr0.inv().apply(oldp-gp0));goalr=gr*gr0.inv()*oldr;lo,hi=limits(ix,1.1)
+        def arm_res(v):
+            z=q.copy();z[ix]=v;pp=fk(z);p,r=pp[palm];rows=[1000*(p-goalp),80*(goalr.inv()*r).as_rotvec(),.3*(v-q0[ix])]
+            if side=='R':
+                upper=distance.measure(pp,'R_Shoulder',gp,gr,.5)['gap_m'];full=distance.measure(pp,'R_Shoulder',gp,gr)['gap_m'];elbow=distance.measure(pp,'R_Elbow',gp,gr)['gap_m'];thorax=distance.measure(pp,'R_Thorax',gp,gr)['gap_m'];rows.extend([np.array([5000*(upper-.0004),30000*min(full-.0001,0),6000*min(elbow-.008,0),6000*min(thorax-.0003,0)])])
+            return np.concatenate(rows)
+        fit=least_squares(arm_res,np.clip(q[ix],lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=120,diff_step=1e-4,ftol=1e-9,xtol=1e-9);q[ix]=fit.x;p,r=fk(q)[palm];hand_metrics[side]=dict(position_error_m=float(np.linalg.norm(p-goalp)),rotation_error_deg=float(np.rad2deg((goalr.inv()*r).magnitude())),fit_cost=float(fit.cost));print('arm',side,hand_metrics[side],flush=True)
+    target_head=upright_rotation(original['Head'][1]);lo,hi=limits(head,.65)
+    def head_res(v):
+        z=q.copy();z[head]=v;return np.r_[100*(target_head.inv()*fk(z)['Head'][1]).as_rotvec(),.05*(v-q0[head])]
+    q[head]=least_squares(head_res,np.clip(q[head],lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=80).x
+    q=q.astype(np.float32).astype(float);gp=gp.astype(np.float32).astype(float);ps=fk(q);prediction=make_state(state,bodies,q,ps,gp,gr);m=metrics(ps,distance,gp,gr)
+    support={'right_block_cradle':{'capsule_body':m['capsules'],'proximal_upper_arm30_witness':m['upper_arm_proximal'],'scope':'New Chest + R_Shoulder source witnesses;30 key compatibility only, actual fraction range0..50%.'}}
+    save(OUT/'support_candidate.json',support);candidate=read(CANDIDATE);candidate.update(q_ref_rad=q.tolist(),expected_initial_state=prediction,guitar_position_W_m=gp.tolist(),guitar_quaternion_xyzw=gr.as_quat().tolist(),support_candidate=str(OUT/'support_candidate.json'),upper_deltas_rad={n:float(q[i]-q0[i]) for i,n in enumerate(names) if i not in base['lower_indices'] and abs(q[i]-q0[i])>1e-10},scope='New upright upper pose and free-guitar initial placement; original lower24/chair/zero8 preserved. Requires full source audit and native FK/contact/dynamic verification.')
+    candidate['predicted_corrected_human_body_poses']={n:prediction['human_body_states'][bodies.index(n)]['pose'] for n in ('L_Hip','L_Knee','L_Ankle','L_Toe','R_Hip','R_Knee','R_Ankle','R_Toe')}
+    assert np.array_equal(q[base['lower_indices']],q0[base['lower_indices']]) and np.all(q>=bounds[:,0]) and np.all(q<=bounds[:,1])
+    save(OUT/'candidate.json',candidate);save(OUT/'predicted_state.json',prediction)
+    save(OUT/'report.json',dict(initial_metrics=metrics(original,distance,gp0,gr0),candidate_metrics=m,hand_metrics=hand_metrics,guitar_delta_W_m=(gp-gp0).tolist(),guitar_world_rotation_delta_deg=np.rad2deg((gr*gr0.inv()).as_rotvec()).tolist(),source_only=True,inputs_unchanged=verify(pins),candidate_sha256=sha(OUT/'candidate.json')))
+    print('candidate',m,'hands',hand_metrics,flush=True);assert verify(pins)
+
+
+if __name__=='__main__':main()

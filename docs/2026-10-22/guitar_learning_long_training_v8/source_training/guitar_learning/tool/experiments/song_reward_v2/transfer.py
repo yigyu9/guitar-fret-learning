@@ -1,0 +1,107 @@
+"""Actor-only migration from the frozen full-score PPO evidence to new rewards."""
+import copy
+import json
+from pathlib import Path
+
+import torch
+
+from guitar_learning.imitation.imitation import dataset_manifest
+from guitar_learning.tool.experiments.song.transfer import validate_experts as _ORIGINAL_EXPERTS
+from guitar_learning.tool.experiments.song.policy import SongPolicy
+from guitar_learning.tool.experiments.song_reward_v2.settings import parse_original, SCHEMA
+from guitar_learning.tool.experiments.song_reward_v2.policy import INITIALIZATION
+
+
+def _merge(*manifests):
+    merged = {}
+    for manifest in manifests:
+        for path, sha in manifest.items():
+            if not Path(path).is_absolute():
+                raise ValueError('absolute evidence file required: ' + path)
+            if path in merged and merged[path] != sha:
+                raise ValueError('conflicting source evidence: ' + path)
+            merged[path] = sha
+    return merged
+
+
+def validate_experts(settings):
+    evidence = _ORIGINAL_EXPERTS(settings)
+    revision = settings.get('reward_revision', {})
+    if revision.get('schema') != SCHEMA:
+        raise ValueError('explicit song reward v2 settings required')
+    checkpoint = Path(revision['initialization_checkpoint'])
+    if not checkpoint.is_absolute() or not checkpoint.is_file():
+        raise ValueError('absolute full-score initialization checkpoint required')
+    folder = checkpoint.parent
+    files = {name: folder / name for name in (
+        'settings.json', 'training_contract.json', 'inputs_before.json', 'final_checkpoint.json')}
+    pins = dataset_manifest([checkpoint, *files.values()])
+    inputs = json.loads(files['inputs_before.json'].read_text())
+    if not isinstance(inputs, dict) or not inputs or dataset_manifest(inputs) != inputs:
+        raise RuntimeError('full-score training inputs changed')
+    original = parse_original(json.loads(files['settings.json'].read_text()))
+    if (original['joint_experts'] != settings['joint_experts'] or original['size'] != settings['size']
+            or original['song'] != settings['song']):
+        raise ValueError('full-score source experts, actor size, and task must match')
+    publication = json.loads(files['final_checkpoint.json'].read_text())
+    if (publication.get('schema') != 'guitar_learning.final_checkpoint.v1'
+            or publication.get('path') != str(checkpoint)
+            or publication.get('sha256') != pins[str(checkpoint)]):
+        raise ValueError('published full-score checkpoint identity changed')
+    payload = torch.load(checkpoint, map_location='cpu', weights_only=False)
+    identity = payload.get('identity', {})
+    architecture = identity.get('architecture', {})
+    contract = json.loads(files['training_contract.json'].read_text())
+    if (identity.get('schema') != 'guitar_learning_ppo_v1'
+            or identity.get('config') != original['ppo']
+            or architecture.get('contract') != contract
+            or payload.get('metadata', {}).get('settings') != original
+            or publication.get('metadata') != payload.get('metadata')
+            or publication.get('updates') != payload.get('updates')):
+        raise ValueError('full-score settings/contract/checkpoint evidence mismatch')
+    # Loading source tensors must not reset the current run's initialization RNG.
+    with torch.random.fork_rng(devices=[]):
+        reference = SongPolicy(500, size=original['size'], contract=contract)
+    if reference.architecture != architecture:
+        raise ValueError('full-score source architecture identity changed')
+    expected = reference.state_dict(); actual = payload.get('model', {})
+    if (set(actual) != set(expected) or any(not isinstance(actual[k], torch.Tensor)
+            or actual[k].shape != expected[k].shape or actual[k].dtype != expected[k].dtype
+            or not torch.isfinite(actual[k]).all() for k in expected)):
+        raise ValueError('full-score source tensor layout or finite values changed')
+    merged = _merge(evidence['source_pins'], inputs, pins)
+    if dataset_manifest(merged) != merged:
+        raise RuntimeError('full-score initialization evidence changed during validation')
+    return dict(evidence, source_pins=merged, warmstart_payload=payload,
+        warmstart_checkpoint=str(checkpoint), warmstart_settings=original)
+
+
+def apply_experts(model, settings):
+    evidence = validate_experts(settings)
+    source = evidence['warmstart_payload']['identity']['architecture']
+    target = copy.deepcopy(model.architecture)
+    before = source['contract']['reward']['song']
+    after = target.get('contract', {}).get('reward', {}).get('song', {})
+    if (before.get('schema') != 'guitar_learning.song_metrics.v1'
+            or after.get('schema') != 'guitar_learning.song_metrics.v2'):
+        raise ValueError('only declared song reward v1 to v2 migration is supported')
+    if target.get('initialization') != INITIALIZATION:
+        raise ValueError('explicit whole-score actor warmstart metadata required')
+    target['contract']['reward']['song'] = before
+    target['initialization'] = source['initialization']
+    if target != source:
+        raise ValueError('reward-only migration requires exact observation/action/task/safety/architecture identity')
+    values = model.state_dict()
+    actor_keys = [key for key in values if key == 'log_std'
+        or key.startswith(('actor_encoders.', 'actor_heads.'))]
+    with torch.no_grad():
+        for key in actor_keys:
+            values[key].copy_(evidence['warmstart_payload']['model'][key])
+    if dataset_manifest(evidence['source_pins']) != evidence['source_pins']:
+        raise RuntimeError('full-score evidence changed during actor migration')
+    return dict(schema='guitar_learning.song_reward_initialization.v2',
+        source_pins=evidence['source_pins'], checkpoint=evidence['warmstart_checkpoint'],
+        actor_tensors=len(actor_keys), actors={'left':'full trained actor', 'right':'full trained actor'},
+        critic='fresh', optimizer='fresh', rng='current run preserved', ppo_updates=0,
+        source_ppo_updates=evidence['warmstart_payload']['updates'],
+        scope='reward-only actor/std warmstart; no critic, optimizer, RNG, counters, or musical success inheritance')

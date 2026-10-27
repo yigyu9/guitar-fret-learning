@@ -1,0 +1,69 @@
+"""Viewer decisions never change native state; reset requests rebuild the scene."""
+import time
+
+
+class Playback:
+    def __init__(self):
+        self.running=False
+        self.single=False
+        self.finished=False
+        self.request=None
+
+    def handle(self,key):
+        if key=='SPACE' and not self.finished:self.running=not self.running
+        elif key=='N' and not self.finished:self.running=False;self.single=True
+        elif key=='R':self.request='reset'
+        elif key=='ESCAPE':self.request='close'
+
+    def advance(self):
+        if self.finished or self.request:return False
+        result=self.running or self.single
+        self.single=False
+        return result
+
+
+class Window:
+    def __init__(self,scene,api):
+        self.scene,self.api,self.state=scene,api,Playback()
+        self.camera=0;self.collision=False
+        props=api.CameraProperties();props.width,props.height=1280,720
+        self.viewer=scene.gym.create_viewer(scene.sim,props)
+        if self.viewer is None:raise RuntimeError('Isaac Gym viewer 생성 실패. 그래픽 데스크톱 터미널에서 실행하세요.')
+        for key in ('SPACE','N','R','C','G','ESCAPE'):
+            scene.gym.subscribe_viewer_keyboard_event(self.viewer,getattr(api,'KEY_'+key),key)
+        self.set_camera()
+        print('정지 상태: Space 실행/일시정지, N 한 단계, R 처음부터, C 카메라, G 형상, Esc 종료',flush=True)
+
+    def set_camera(self):
+        from ..run_joint_hold import native_state
+        from ..initial_pose_noise_v1 import pose
+        import numpy as np
+        scene=self.scene;state=native_state(scene);gp,gr=pose(state['guitar_body_states'][0])
+        if self.camera==0:eye,target=np.array([.9,1.8,1.15]),np.array([-.06,0,.68])
+        elif self.camera==1:target=gp+gr.apply([0,.064,0]);eye=target+np.array([.05,.42,.12])
+        else:
+            names=scene.human_bodies
+            target=sum(pose(state['human_body_states'][names.index(n)])[0] for n in ('LH:thumb3','LH:palm'))/2
+            eye=target+gr.apply([.13,.07,-.28])
+        scene.gym.viewer_camera_look_at(self.viewer,scene.env,self.api.Vec3(*eye),self.api.Vec3(*target))
+
+    def wait(self,finished=False):
+        self.state.finished=finished
+        if finished:self.state.running=False
+        while True:
+            start=time.monotonic();scene=self.scene
+            if scene.gym.query_viewer_has_closed(self.viewer):self.state.request='close'
+            for event in scene.gym.query_viewer_action_events(self.viewer):
+                if event.value<=0:continue
+                if event.action=='C':self.camera=(self.camera+1)%3;self.set_camera()
+                elif event.action=='G':self.collision=not self.collision
+                else:self.state.handle(event.action)
+            if self.state.request:return self.state.request
+            scene.gym.step_graphics(scene.sim);scene.gym.draw_viewer(self.viewer,scene.sim,self.collision)
+            advance=self.state.advance()
+            time.sleep(max(0.,1/60-(time.monotonic()-start)))
+            if advance:return 'step'
+
+    def close(self):
+        if self.viewer is not None:
+            self.scene.gym.destroy_viewer(self.viewer);self.viewer=None

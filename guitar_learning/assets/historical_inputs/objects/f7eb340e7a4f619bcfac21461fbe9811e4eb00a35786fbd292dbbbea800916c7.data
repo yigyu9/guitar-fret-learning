@@ -1,0 +1,29 @@
+# 자유 기타 학습 실행 안내
+
+2026-10-19. 이 문서는 실행 목적과 현재 코드 위치를 관리한다. 실험 수치·완료 여부는 [master_plan의 검증 결과](/home/ajou/yigyu/3/master_plan/09_curriculum_and_evaluation.md)와 연결된 원자료를 따른다. 루트 CURRENT_STATUS의 첫 전곡 V1 요약을 최신 실행 경로 전체의 결과로 해석하지 않는다.
+
+| 목적 | 진입점 | 계약·범위 |
+|---|---|---|
+| 접촉 회복 평가·교사 수집 | `guitar_learning.contact_recovery.run evaluate/collect` | 상태500·왼손33/전체39. native 원자료·240Hz 회복 기록. 새 PPO를 시작하지 않음 |
+| 회복 자료 감사·내보내기 | `guitar_learning.contact_recovery.dataset_v2` | 실제 회복·원 음악·안전·교사 보정이 감사된 행만 채택 |
+| 왼손 정밀화 평가·PPO | `guitar_learning.transition_refinement_runtime_v2.run eval/train` | 상태500·오른손0. 새 보상·탐색·시연 자료·초기 평가4회와 runtime 감사 |
+| 전곡 보상 V2 | `guitar_learning.song_reward_v2.train/evaluate` | 전곡67음·500상태·33+6행동·정책 준비3초·1969tick |
+| 단음 양손 기준 경로 | `guitar_learning.joint.train/evaluate` | 상태1132·Actor 각569·33+6행동 |
+| 초기 전문가 생성·검증 | `guitar_learning.local_skills` | 이전563상태 품질 경로. 이후 초기화 검증이 일부 함수를 재사용 |
+| 입력 생성·검수·진단 | `guitar_learning.tool` | [도구별 명령](tool/README.md) 참조 |
+
+실제 명령·설정·전제는 [회복](contact_recovery/README.md), [정밀화 runtime V2](transition_refinement_runtime_v2/README.md), [전곡 V2](song_reward_v2/README.md), [양손 단음](joint/README.md) 문서를 따른다. 기존 결과는 해당 원입력 또는 명시적 이전 절차에서 재현한다. 파일 정리만으로 기존 checkpoint의 계약 불일치를 허용하지 않는다.
+
+## 보존할 조건
+
+Root 고정·하체 유한 제어·기타 자유/중력ON/스트랩OFF·105/97/8 구분·정책39행동·물리240Hz/제어60Hz를 유지한다. 원 gain·관절/속도 제한·안전 종료·실제 접촉/기하 판정을 바꾸지 않는다. 가슴 접촉률을 성공 필수조건으로 추가하지 않는다.
+
+Actor 초기값 이전과 strict resume를 구분한다. 새 목표·보상·탐색·자료 계약에는 명시적 이전·검증이 필요하다. 이미 성공한 초기 모델이나 교사 자료를 새 정책의 성공으로 상속하지 않는다. 정밀화 단음의90% 유지와 전곡의 원 유지 기준·strict50/100ms는 별도 계약이다.
+
+`native/`·`assets/`·`score/`와 루트 공용 모듈은 현재 실행 의존성이다. 버전 접미사나 과거 실행기 이름이 남아 있어도 통째로 보관하지 않는다. `archive/`는 원형 보관용이며 현행 코드에서 import하지 않는다. 과거 입력 SHA는 CAS 원문으로 검증하고 현재 소스는 별도로 pin한다.
+
+## 로그와 결과
+
+`settings.json`·`training_contract.json`·`inputs_before.json`은 실행 계약, `transitions.jsonl.gz`는 전이, `episodes.jsonl`은 실제 에피소드 종료다. `learning_metrics.jsonl`, 최종 `report.json`, native/runtime 감사와 checkpoint를 함께 확인한다. sampled/logged/durable/committed/discarded와 완주·음악·안전·런타임 실패를 구분한다. 상세는 [LOGGING](LOGGING.md)을 따른다.
+
+2026-10-19 구조 정리의 도구 이전·보관 범위·동등성 검증은 [정리 결과](/home/ajou/yigyu/3/docs/2026-10-19/guitar_learning_structure_cleanup_v1/README.md)에 기록했다.

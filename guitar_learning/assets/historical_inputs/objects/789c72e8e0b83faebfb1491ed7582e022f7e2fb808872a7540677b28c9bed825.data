@@ -1,0 +1,35 @@
+"""New immutable config for a finite posture target; initial source stays fixed."""
+import argparse
+from pathlib import Path
+from ..lower_body_release_v1.common import ROOT, A, BASE, read, save, sha, pin, verify
+
+PHASE=BASE/'front_facing_pose_v1'
+
+
+def main(target, out):
+    out.mkdir(exist_ok=False)
+    original=PHASE/'inputs_v1/static10.json'; cfg=read(original)
+    report=read(target/'report.json')
+    assert report['eligible_for_native_target'] and report['inputs_unchanged']
+    assert verify(read(target/'inputs_before.json'))
+    assert report['source_candidate_sha256']==cfg['candidate_sha256']==sha(cfg['candidate'])
+    assert Path(report['source_candidate']).resolve()==Path(cfg['candidate']).resolve()
+    assert sha(target/'upper_target105.json')==report['target_sha256']
+    extras=[Path(__file__).resolve(),original,target/'report.json',target/'inputs_before.json',target/'upper_target105.json',
+            ROOT/'docs/plans/front_facing_chest_target_v1_20261016.md', ROOT/'docs/plans/front_facing_coupled_target_v2_20261016.md']
+    extras+=list((A/'front_facing_pose_v1').glob('*.py'))
+    inputs=pin(original,extra=extras); save(out/'inputs_before.json',inputs)
+    cfg.update(upper_target105=str(target/'upper_target105.json'),upper_target105_sha256=report['target_sha256'],
+               posture_target_report=str(target/'report.json'),upper_posture_mode='finite_coupled_body_upright_Spine_relative_advance_target_only_v2',
+               target_change_reason='Chest-only goal lost chest support and increased Torso/Spine tilt. Shared upright body orientation and relative Spine advance; unchanged initial source/gain/cap/hip/right-world hypotheses.')
+    save(out/'static10.json',cfg)
+    assert verify(inputs)
+    save(out/'binding_result.json',dict(passed=True,inputs_unchanged=True,input_sha256=inputs,
+         config_sha256=sha(out/'static10.json'),initial_candidate_unchanged=True,
+         scope='New target/config only. No dynamic success claimed by config generation.'))
+    print(dict(passed=True,config=str(out/'static10.json')),flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--target',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
+    a=p.parse_args();main(a.target.resolve(),a.out.resolve())

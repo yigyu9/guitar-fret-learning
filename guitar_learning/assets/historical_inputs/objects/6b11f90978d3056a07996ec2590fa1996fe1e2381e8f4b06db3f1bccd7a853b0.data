@@ -1,0 +1,24 @@
+"""Constructor-only protocol6/Motion4 binding; unchanged Scene13/control math."""
+from unittest.mock import patch
+from . import runtime_v12 as previous_runtime,runtime_v10 as motion_runtime
+from .runtime_v12 import Controller as PreviousController
+from .runtime_v13 import Scene
+from .motion_v4 import Motion
+from .protocol_v6 import PROTOCOL,schedule,SETTLED_HOLD
+
+
+class Controller(PreviousController):
+    def __init__(self,scene):
+        assert scene.cfg['validation_protocol']==PROTOCOL
+        assert scene.cfg['ready_schedule']==schedule(scene.cfg['ready_case'])
+        assert scene.cfg['seconds']==83. and scene.cfg['ready_settled_hold_s']==SETTLED_HOLD
+        state=scene.native()
+        original=(previous_runtime.PROTOCOL,previous_runtime.schedule,previous_runtime.SETTLED_HOLD,motion_runtime.Motion)
+        try:
+            with patch.object(previous_runtime,'PROTOCOL',PROTOCOL),patch.object(previous_runtime,'schedule',schedule),patch.object(previous_runtime,'SETTLED_HOLD',SETTLED_HOLD),patch.object(motion_runtime,'Motion',Motion):
+                super().__init__(scene)
+                assert isinstance(scene.play_logic,Motion) and scene.play_logic.plan==schedule(scene.cfg['ready_case'])
+        finally:
+            assert previous_runtime.PROTOCOL is original[0] and previous_runtime.schedule is original[1]
+            assert previous_runtime.SETTLED_HOLD is original[2] and motion_runtime.Motion is original[3]
+            assert scene.native()==state

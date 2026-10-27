@@ -1,0 +1,56 @@
+Importing module 'gym_38' (/home/ajou/yigyu/3/isaacgym/python/isaacgym/_bindings/linux-x86_64/gym_38.so)
+Setting GYM_USD_PLUG_INFO_PATH to /home/ajou/yigyu/3/isaacgym/python/isaacgym/_bindings/linux-x86_64/usd/plugInfo.json
+PyTorch version 2.4.1+cu121
+Device count 1
+/home/ajou/yigyu/3/isaacgym/python/isaacgym/_bindings/src/gymtorch
+Using /tmp/strike_live_guitar_torch_extensions as PyTorch extensions root...
+Emitting ninja build file /tmp/strike_live_guitar_torch_extensions/gymtorch/build.ninja...
+Building extension module gymtorch...
+Allowing ninja to set a default number of workers... (overridable by setting the environment variable MAX_JOBS=N)
+ninja: no work to do.
+Loading extension module gymtorch...
+Not connected to PVD
+Physics Engine: PhysX
+Physics Device: cpu
+GPU Pipeline: disabled
+[Error] [carb.gym.plugin] Could not load visual geom 
+[Error] [carb.gym.plugin] Could not load visual geom 
+[Error] [carb.gym.plugin] Could not load visual geom 
+[Error] [carb.gym.plugin] Could not load visual geom 
+[Error] [carb.gym.plugin] Could not load visual geom 
+[Error] [carb.gym.plugin] Could not load visual geom 
+[Warning] [carb.gym.plugin] Incomplete articulation start index in function setRigidBodyStates
+[Warning] [carb.gym.plugin] Incomplete articulation end index in function setRigidBodyStates
+left_cycle 1.0 seconds
+left_cycle 2.0 seconds
+left_cycle 3.0 seconds
+left_cycle 4.0 seconds
+left_cycle 5.0 seconds
+left_cycle 6.0 seconds
+left_cycle 7.0 seconds
+left_cycle 8.0 seconds
+left_cycle 9.0 seconds
+left_cycle 10.0 seconds
+Traceback (most recent call last):
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_search_v3.py", line 91, in run
+    _,info=scene.step(action);controls.append(info);sample()
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_search_v3.py", line 75, in sample
+    if np.linalg.norm(gp-p0)>.20 or np.rad2deg((r0.inv()*gr).magnitude())>35:raise RuntimeError('guitar safety displacement')
+RuntimeError: guitar safety displacement
+
+Traceback (most recent call last):
+  File "/home/ajou/miniconda3/envs/rl38/lib/python3.8/runpy.py", line 194, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/home/ajou/miniconda3/envs/rl38/lib/python3.8/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_search_v3.py", line 135, in <module>
+    if __name__=='__main__':main()
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_search_v3.py", line 129, in main
+    with patch.object(cycle,'VALUES',values):cycle.main(wrapped)
+  File "/home/ajou/yigyu/3/stability_adapter_2/chest_left_grip_cycle_v1.py", line 133, in main
+    run()
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_search_v3.py", line 128, in wrapped
+    with patch.object(module.support,'factory',factory):run(cfg,args.out.resolve())
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_search_v3.py", line 106, in run
+    if failure or not unchanged or forbidden:raise RuntimeError(failure or 'input/guard violation')
+RuntimeError: {'type': 'RuntimeError', 'message': 'guitar safety displacement', 'traceback': 'Traceback (most recent call last):\n  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_search_v3.py", line 91, in run\n    _,info=scene.step(action);controls.append(info);sample()\n  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_search_v3.py", line 75, in sample\n    if np.linalg.norm(gp-p0)>.20 or np.rad2deg((r0.inv()*gr).magnitude())>35:raise RuntimeError(\'guitar safety displacement\')\nRuntimeError: guitar safety displacement\n'}

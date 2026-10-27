@@ -1,0 +1,95 @@
+"""Meaningful contracts: moving guitar, bounds, time and 81-channel ownership."""
+import unittest
+from types import SimpleNamespace
+import numpy as np
+from scipy.spatial.transform import Rotation
+from stability_adapter_2.environment_contract_v1 import EnvironmentContract, relative_motion, rotation6
+from stability_adapter_2.strap import point_kinematics
+from stability_adapter_2.environment_guard_v2 import InitializationGuard
+
+
+class EnvironmentFoundationTest(unittest.TestCase):
+    def setUp(self): self.c = EnvironmentContract()
+
+    def test_neutral_is_initial_pose_not_zero_action(self):
+        requested, final = self.c.targets(self.c.neutral_action(), self.c.q_ref)
+        np.testing.assert_allclose(requested, self.c.q_ref, atol=1e-14)
+        np.testing.assert_array_equal(final, self.c.q_ref.astype(np.float32))
+        self.assertGreater(np.max(abs(self.c.mid-self.c.q_ref)), .1)
+
+    def test_all_81_channels_can_change_and_rate_limit_runs_once(self):
+        sign = np.where(self.c.neutral_action() > 0, -1, 1)
+        request, final = self.c.targets(sign, self.c.q_ref)
+        delta = abs(final-self.c.q_ref)
+        self.assertTrue(np.all(delta > 0))
+        self.assertTrue(np.all(delta <= self.c.rates/60+1e-7))
+        self.assertTrue(np.all(final >= self.c.effective_lower-1e-7))
+        self.assertTrue(np.all(final <= self.c.effective_upper+1e-7))
+        self.assertTrue(np.all(abs(request[self.c.body]-self.c.q_ref[self.c.body]) <= np.deg2rad(5)+1e-12))
+
+    def test_invalid_action_is_not_silently_clipped(self):
+        for bad in [np.zeros(66), np.full(81, np.nan), np.full(81, 1.001)]:
+            with self.assertRaises(ValueError): self.c.targets(bad, self.c.q_ref)
+
+    def test_rotating_and_translating_guitar_relative_motion(self):
+        rotation = Rotation.from_euler('xyz', [.4, .3, -.2]).as_matrix()
+        local = np.array([.03, .05, -.02])
+        gp, gv, omega = np.array([.1,.2,.7]), np.array([.2,-.1,.05]), np.array([.3,.1,.4])
+        offset = rotation @ local
+        p, v = relative_motion(gp+offset, gv+np.cross(omega, offset), gp, gv, omega, rotation)
+        np.testing.assert_allclose(p, local, atol=1e-16)
+        np.testing.assert_allclose(v, 0, atol=1e-16)
+
+    def test_com_velocity_is_converted_to_body_origin(self):
+        p, v = point_kinematics(np.zeros(3), np.array([0.,0.,0.,1.]), np.array([0.,1.,0.]),
+            np.array([0.,0.,1.]), np.zeros(3), np.array([1.,0.,0.]))
+        np.testing.assert_allclose(v, 0)
+        np.testing.assert_allclose(p, 0)
+
+    def test_quaternion_sign_does_not_change_rotation6(self):
+        q = np.array([-.5,.5,.5,.5])
+        np.testing.assert_array_equal(rotation6(Rotation.from_quat(q).as_matrix()), rotation6(Rotation.from_quat(-q).as_matrix()))
+
+    def test_clock_changes_phase_once_at_two_seconds(self):
+        self.assertEqual(self.c.clock(479)['phase'], 'PREP')
+        self.assertEqual(self.c.clock(480)['phase'], 'PLAY')
+        self.assertEqual(self.c.clock(480)['score_time_s'], 0)
+        self.assertEqual(self.c.clock(1200)['score_time_s'], 3)
+        self.assertTrue(self.c.clock(1200)['diagnostic_time_limit'])
+
+    def test_observation_offsets_and_absent_music_are_explicit(self):
+        r = np.eye(3)
+        obs, manifest = self.c.encode({'q': self.c.q_ref, 'qdot': np.zeros(81)}, self.c.q_ref,
+            r, (np.array([-.23,.08,.70]), r, np.zeros(3), np.zeros(3)),
+            [(np.zeros(3), np.zeros(3)) for _ in range(15)], [r, r], .88, 0)
+        self.assertEqual(obs.shape, (548,))
+        self.assertEqual(obs.dtype, np.float32)
+        self.assertEqual(sum(b['length'] for b in manifest), 548)
+        for i in range(1, len(manifest)):
+            self.assertEqual(manifest[i]['offset'], manifest[i-1]['offset']+manifest[i-1]['length'])
+        self.assertNotIn('music_success', [b['name'] for b in manifest])
+
+    def test_guard_allows_reset_then_only_owned_target_submission(self):
+        calls = []
+        class FakeGym:
+            def __getattr__(self, name):
+                return lambda *a, **k: calls.append(name)
+        owner = SimpleNamespace(initialization_complete=False, target_submission_allowed=False,
+                                forbidden_calls=[], initial_state_write_calls=[])
+        guard = InitializationGuard(FakeGym(), owner)
+        guard.set_actor_dof_states()
+        guard.set_actor_dof_properties()
+        owner.initialization_complete = True
+        for name in ('set_actor_dof_states', 'set_actor_rigid_body_states',
+                     'set_actor_dof_properties', 'set_actor_dof_position_targets',
+                     'set_rigid_transform', 'set_dof_position_target_tensor',
+                     'set_dof_position_target_tensor_indexed',
+                     'apply_body_force_at_pos', 'set_dof_actuation_force_tensor'):
+            with self.assertRaises(RuntimeError): getattr(guard, name)()
+        self.assertEqual(calls, ['set_actor_dof_states', 'set_actor_dof_properties'])
+        owner.target_submission_allowed = True
+        guard.set_actor_dof_position_targets()
+        self.assertEqual(calls[-1], 'set_actor_dof_position_targets')
+
+
+if __name__ == '__main__': unittest.main()

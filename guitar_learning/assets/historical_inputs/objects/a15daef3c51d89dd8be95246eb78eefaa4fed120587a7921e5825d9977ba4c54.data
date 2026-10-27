@@ -1,0 +1,103 @@
+"""Independent actual-state reconstruction of the bounded Chest action preload."""
+import copy
+from pathlib import Path
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import A,HUMAN,read
+from ..lower_body_release_v1.controller_horizontal_v4 import skew,vec
+from ..om_axilla_source_geometry_v3 import CapsuleBodyDistance
+from ..strap import point_kinematics
+
+MODE='finite_human_Chest_0p5mm_v1'
+
+
+def scheduled_extra(step):
+    u=float(np.clip((step/240-10)/.5,0,1));ramp=u*u*(3-2*u)
+    return .0005*ramp,ramp
+
+
+def preload_update(normal,old_raw,extra,J,indices,old_request,old_task,old_submitted,caps,upper):
+    """Independent scalar unilateral force, selected JTF and original joint cap."""
+    oldforce=normal*np.clip(old_raw,-20,0)
+    raw=old_raw-2000*extra;force=normal*np.clip(raw,-20,0)
+    delta=np.zeros(105);delta[indices]=(J.T@(force-oldforce))[indices]
+    request=old_request+delta;task=old_task+delta;submitted=old_submitted.copy()
+    submitted[upper]=np.clip(request[upper],-caps[upper],caps[upper]).astype(np.float32).astype(float)
+    return dict(raw=raw,force=force,delta=delta,request=request,task=task,submitted=submitted,
+        force_increment_norm_N=float(np.linalg.norm(force-oldforce)))
+
+
+def restore_base_rows(efforts):
+    """Return copies of exact runtime18 aggregate fields and its current Chest record."""
+    result=copy.deepcopy(efforts)
+    for row in result:
+        if 'chest_action_preload' not in row:continue
+        extra=row.pop('chest_action_preload')
+        for key in ('raw_requested105_Nm','support_task105_Nm','submitted105_Nm'):
+            row[key]=extra['previous_'+key]
+        index=next(j for j,p in enumerate(row['support_points']) if p['body']=='Chest')
+        row['support_points'][index]=extra['previous_Chest']
+    return result
+
+
+def action_preload_evidence(initial,properties,states,efforts,cfg):
+    distance=CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']),HUMAN)
+    ref=next(r for r in properties['support_references'] if r['body']=='Chest');ix=np.array(ref['indices'],dtype=int)
+    names=initial['joint_names'];lower=np.array(initial['lower_indices'],dtype=int);position=np.array(initial['position_indices'],dtype=int);zero=np.array(initial['zero_range_indices'],dtype=int)
+    upper=np.array([j for j in initial['effort_indices'] if j not in lower]);outside=np.setdiff1d(np.arange(105),ix)
+    caps=np.array(initial['PD_properties']['effort']);hc=np.array(properties['human'][ref['index']]['COM_body_m']);gc=np.array(properties['guitar']['applied'][0]['COM_body_m'])
+    bystep={s['physics_step']:s['state'] for s in states};restored=restore_base_rows(efforts)
+    checks=dict(full3360=len(efforts)==3360,contiguous3360=[e['physics_step_before'] for e in efforts]==list(range(3360)),
+        full3361states=[s['physics_step'] for s in states]==list(range(3361)),
+        fixed_config=cfg.get('chest_action_preload_mode')==MODE and cfg.get('chest_action_preload_extra_m')==.0005 and cfg.get('chest_action_preload_ramp_s')==[10,10.5],
+        Chest9_only=len(ix)==9 and [names[j] for j in ix]==[n for n in names if n.startswith(('Torso_','Spine_','Chest_'))] and not set(ix)&set(lower) and set(ix)<=set(upper),
+        pre2400_no_action_metadata=all('chest_action_preload' not in e and e==r for e,r in zip(efforts,restored) if e['physics_step_before']<2400),
+        post960_metadata=sum('chest_action_preload' in e for e in efforts if e['physics_step_before']>=2400)==960,
+        records_present=True,constants=True,finite=True,outside9_exact=True,base_Chest_fields_preserved=True,lower_POS_zero_exact=True,runtime_state_assertions=True,
+        original_force_cap20=True,additional_force_at_most1N=True,native_point_velocity_consistent=True)
+    limits=dict(geometry_m=1e-9,normal=1e-8,depth_m=1e-15,velocity_m_s=1e-8,force_N=1e-6,jacobian=1e-8,torque_Nm=1e-6)
+    errors={k:[] for k in limits};samples=[]
+    def err(kind,actual,expected):
+        a=np.asarray(actual,dtype=float);b=np.asarray(expected,dtype=float)
+        checks['finite'] &= bool(np.isfinite(a).all() and np.isfinite(b).all())
+        errors[kind].append(float(np.max(abs(a-b))))
+    for row in efforts:
+        k=row['physics_step_before']
+        if k<2400:continue
+        if 'chest_action_preload' not in row or k not in bystep:
+            checks['records_present']=False;continue
+        e=row['chest_action_preload'];old=e['previous_Chest'];new=next(p for p in row['support_points'] if p['body']=='Chest');st=bystep[k]
+        body=st['human_body_states'][ref['index']];guitar=st['guitar_body_states'][0];p,r=pose(body);gp,gr=pose(guitar)
+        poses={n:pose(b) for n,b in zip(initial['human_body_names'],st['human_body_states'])};witness=distance.measure(poses,'Chest',gp,gr)
+        axis=np.array(witness['capsule_axis_G_m']);surface=np.array(witness['guitar_surface_G_m']);ng=axis-surface;ng/=np.linalg.norm(ng);normal=gr.apply(ng)
+        skinG=axis-distance.capsules['Chest'][1]*ng;local=r.inv().apply(gp+gr.apply(skinG)-p)
+        skin,vh=point_kinematics(p,r.as_quat(),vec(body,'linear'),vec(body,'angular'),local,hc)
+        _,vg=point_kinematics(gp,gr.as_quat(),vec(guitar,'linear'),vec(guitar,'angular'),surface-.003*ng,gc)
+        u=float(np.clip((k/240-.75)/.5,0,1));base=.007+.00225*u*u*(3-2*u)
+        oldraw=-2000*(witness['gap_m']+base)+30*np.dot(vg-vh,normal)
+        extra,ramp=scheduled_extra(k);block=np.array(e['Jacobian6x105'])
+        checks['finite'] &= block.shape==(6,105) and bool(np.isfinite(block).all())
+        com=hc if e['jacobian_frame']=='COM' else np.zeros(3);J=block[:3]-skew(r.apply(local-com))@block[3:]
+        oldrequest=np.array(e['previous_raw_requested105_Nm']);oldtask=np.array(e['previous_support_task105_Nm']);oldsubmitted=np.array(e['previous_submitted105_Nm'])
+        calculated=preload_update(normal,oldraw,extra,J,ix,oldrequest,oldtask,oldsubmitted,caps,upper)
+        checks['constants'] &= bool(e['mode']==MODE and e['final_extra_m']==.0005 and e['ramp_s']==[10,10.5] and e['K_N_m']==2000 and e['D_Ns_m']==30 and e['cap_N']==20 and e['indices']==ix.tolist() and e['joint_names']==[names[j] for j in ix] and e['jacobian_frame'] in ('COM','origin') and old['depth_velocity_feedforward'] is False and new['depth_velocity_feedforward'] is False)
+        for actual,expected in [(e['extra_m'],extra),(e['ramp_fraction'],ramp),(e['base_depth_m'],base),(e['total_depth_m'],base+extra),(old['human_virtual_goal_depth_m'],base),(new['human_virtual_goal_depth_m'],base+extra),(new['action_extra_human_virtual_goal_depth_m'],extra),(new['action_final_extra_depth_m'],.0005)]:err('depth_m',actual,expected)
+        for actual,expected in [(old['nearest_source_gap_m'],witness['gap_m']),(new['nearest_source_gap_m'],witness['gap_m']),(old['point_W_m'],skin),(new['point_W_m'],skin),(e['point_local_m'],local),(old['goal_W_m'],gp+gr.apply(surface-base*ng)),(new['goal_W_m'],gp+gr.apply(surface-(base+extra)*ng))]:err('geometry_m',actual,expected)
+        err('normal',old['normal_G'],ng);err('normal',new['normal_G'],ng);err('normal',e['normal_W'],normal)
+        err('force_N',old['raw_normal_request_N'],oldraw);err('force_N',old['virtual_force_request_W_N'],normal*np.clip(oldraw,-20,0));err('force_N',new['raw_normal_request_N'],calculated['raw']);err('force_N',new['virtual_force_request_W_N'],calculated['force'])
+        err('jacobian',e['point_J9'],J[:,ix]);err('torque_Nm',e['delta105_Nm'],calculated['delta']);err('torque_Nm',row['raw_requested105_Nm'],calculated['request']);err('torque_Nm',row['support_task105_Nm'],calculated['task']);err('torque_Nm',row['submitted105_Nm'],calculated['submitted'])
+        qd=np.array([v['vel'] for v in st['human_dof_states']]);velocity_error=float(np.linalg.norm(J@qd-vh));err('velocity_m_s',new['point_velocity_error_m_s'],velocity_error)
+        checks['native_point_velocity_consistent'] &= velocity_error<=.01
+        checks['outside9_exact'] &= bool(np.array_equal(np.array(row['raw_requested105_Nm'])[outside],oldrequest[outside]) and np.array_equal(np.array(row['support_task105_Nm'])[outside],oldtask[outside]) and np.array_equal(np.array(row['submitted105_Nm'])[outside],oldsubmitted[outside]) and abs(J[:,outside]).max()<1e-10)
+        changed_fields={'goal_W_m','raw_normal_request_N','virtual_force_request_W_N','human_virtual_goal_depth_m','mode'}
+        checks['base_Chest_fields_preserved'] &= all(key in new and new[key]==value for key,value in old.items() if key not in changed_fields)
+        checks['lower_POS_zero_exact'] &= bool(all(np.array_equal(np.array(row['submitted105_Nm'])[ids],oldsubmitted[ids]) for ids in (lower,position,zero)) and np.all(np.array(row['submitted105_Nm'])[position]==0) and np.all(np.array(row['submitted105_Nm'])[zero]==0) and np.all(abs(np.array(row['submitted105_Nm']))<=caps))
+        checks['runtime_state_assertions'] &= bool(e['state_preserved'] is True and e['lower_unchanged'] is True and e['position48_unchanged'] is True and e['zero8_unchanged'] is True)
+        checks['original_force_cap20'] &= bool(np.linalg.norm(calculated['force'])<=20+1e-12)
+        checks['additional_force_at_most1N'] &= calculated['force_increment_norm_N']<=1+1e-12
+        samples.append(dict(step=k,time_s=k/240,source_gap_m=witness['gap_m'],extra_m=extra,base_depth_m=base,total_depth_m=base+extra,raw_normal_N=calculated['raw'],force_increment_norm_N=calculated['force_increment_norm_N'],point_velocity_error_m_s=velocity_error))
+    maxima={kind:max(values) if values else None for kind,values in errors.items()}
+    checks['full960_math']=bool(len(samples)==960 and all(maxima[k] is not None and maxima[k]<=limits[k] for k in limits))
+    checks={k:bool(v) for k,v in checks.items()}
+    return dict(passed=all(checks.values()),checks=checks,max_errors=maxima,limits=limits,samples=samples,
+        scope='Full960 post10 native-state/source-witness/velocity/JTF/unilateral20N-cap/f32 joint-cap reconstruction; pre2400 metadata absent and restored copies unchanged. New finite human Chest task only, same scalar q targets, original K/D/caps. Native state-preservation is a runtime equality assertion, independently actual states remain audited by root/prefix checks. Source gap is not cooked clearance or measured load.')

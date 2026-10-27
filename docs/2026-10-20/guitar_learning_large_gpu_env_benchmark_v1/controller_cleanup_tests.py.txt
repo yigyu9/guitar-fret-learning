@@ -1,0 +1,158 @@
+"""Only tiny owned Python process groups; no GPU queries or training."""
+import contextlib
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import select
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+
+SPEC = importlib.util.spec_from_file_location('gpu_supervisor_v2', '/tmp/run_large_gpu_case_v2.py')
+supervisor = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(supervisor)
+POPEN = subprocess.Popen
+
+
+@contextlib.contextmanager
+def owned_child(ignore_int=False, ignore_term=False, descendant=False):
+    code = 'import signal,sys,time,subprocess\n'
+    if descendant:
+        code += "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'])\n"
+        code += 'def stop(s,f):\n child.terminate();child.wait(timeout=2);sys.exit(0)\n'
+        code += 'signal.signal(signal.SIGINT,stop)\n'
+    else:
+        code += ('signal.signal(signal.SIGINT,signal.SIG_IGN)\n' if ignore_int else
+                 'signal.signal(signal.SIGINT,lambda s,f:sys.exit(0))\n')
+    if ignore_term:
+        code += 'signal.signal(signal.SIGTERM,signal.SIG_IGN)\n'
+    code += 'print("READY",flush=True)\nwhile True: signal.pause()\n'
+    child = POPEN([sys.executable, '-u', '-c', code], start_new_session=True,
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        readable, _, _ = select.select([child.stdout], [], [], 5)
+        if not readable or child.stdout.readline().strip() != 'READY':
+            raise RuntimeError('Owned tiny child did not become ready')
+        yield child
+    finally:
+        if child.poll() is None or supervisor.group_exists(child.pid):
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        child.wait(timeout=5)
+        child.stdout.close()
+        child.stderr.close()
+
+
+class CleanupTests(unittest.TestCase):
+    def cleanup(self, child):
+        identity = supervisor.process_identity(child.pid)
+        started = time.monotonic()
+        result = supervisor.cleanup_owned_group(child, identity, (.15, .15, .4))
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertTrue(result['completed'], result)
+        self.assertFalse(result['group_alive'])
+        self.assertEqual(result['residual_members'], [])
+        return result
+
+    def test_parent_sigint_gracefully_reaps_own_descendant(self):
+        with owned_child(descendant=True) as child:
+            result = self.cleanup(child)
+            self.assertEqual([row['action'] for row in result['stages']], ['parent_SIGINT'])
+            self.assertEqual(result['returncode'], 0)
+
+    def test_ignored_sigint_escalates_once_to_group_term(self):
+        with owned_child(ignore_int=True) as child:
+            result = self.cleanup(child)
+            self.assertEqual([row['action'] for row in result['stages']],
+                             ['parent_SIGINT', 'group_SIGTERM'])
+            self.assertEqual(result['returncode'], -signal.SIGTERM)
+
+    def test_ignored_sigint_and_term_escalates_once_to_group_kill(self):
+        with owned_child(ignore_int=True, ignore_term=True) as child:
+            result = self.cleanup(child)
+            self.assertEqual([row['action'] for row in result['stages']],
+                             ['parent_SIGINT', 'group_SIGTERM', 'group_SIGKILL'])
+            self.assertEqual(result['returncode'], -signal.SIGKILL)
+
+    def test_already_exited_parent_requires_no_signal(self):
+        child = POPEN([sys.executable, '-c', 'pass'], start_new_session=True)
+        identity = supervisor.process_identity(child.pid)
+        child.wait(timeout=5)
+        result = supervisor.cleanup_owned_group(child, identity, (.1, .1, .1))
+        self.assertTrue(result['completed'])
+        self.assertEqual(result['stages'], [])
+
+    def test_changed_identity_refuses_signals_and_reports_residual(self):
+        with owned_child() as child:
+            identity = supervisor.process_identity(child.pid)
+            identity['starttime_ticks'] += 1
+            result = supervisor.cleanup_owned_group(child, identity, (.1, .1, .1))
+            self.assertIn('recycled', result['ownership_error'])
+            self.assertFalse(result['completed'])
+            self.assertTrue(result['group_alive'])
+            self.assertEqual(result['stages'], [])
+            self.assertIsNone(child.poll())
+
+    def test_prior_v1_status_and_v2_pgid_are_read_only_and_abort_next_launch(self):
+        with owned_child() as child, tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            (base / 'n2').mkdir()
+            (base / 'n2/status.json').write_text(json.dumps({'parent_pid': child.pid}))
+            rows = supervisor.prior_group_checks(base)
+            self.assertEqual(rows[0]['pgid'], child.pid)
+            self.assertTrue(rows[0]['group_alive'])
+            (base / 'n2_supervisor.json').write_text(json.dumps({'child_pgid': child.pid}))
+            self.assertEqual(supervisor.prior_group_checks(base)[0]['identity_source'],
+                             'supervisor.child_pgid')
+            with patch.object(supervisor, 'BASE', base), \
+                    patch.object(supervisor.subprocess, 'Popen', side_effect=AssertionError('must not launch')):
+                self.assertEqual(supervisor.main(['--name','n4','--num-envs','4']), 1)
+            result = json.loads((base / 'n4_supervisor.json').read_text())
+            self.assertIsNone(result['child_pid'])
+            self.assertTrue(result['prior_group_checks'][0]['group_alive'])
+            self.assertIn('Prior case', result['exception']['message'])
+            self.assertIsNone(child.poll())
+
+    def run_main_with_probe(self, probe):
+        with owned_child() as child, tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            with patch.object(supervisor, 'BASE', base), \
+                    patch.object(supervisor.subprocess, 'Popen', return_value=child), \
+                    patch.object(supervisor.subprocess, 'run', **probe):
+                self.assertEqual(supervisor.main(['--name','n4','--num-envs','4']), 1)
+            result = json.loads((base / 'n4_supervisor.json').read_text())
+            self.assertEqual(result['child_pid'], child.pid)
+            self.assertEqual(result['child_pgid'], child.pid)
+            self.assertTrue(result['cleanup']['completed'])
+            self.assertEqual(result['wrapper']['sha256'],
+                             hashlib.sha256(Path('/tmp/run_large_gpu_case_v2.py').read_bytes()).hexdigest())
+            self.assertEqual(result['command'][result['command'].index('--device')+1], 'cuda:0')
+            self.assertEqual(result['command'][result['command'].index('--size')+1], 'large')
+            self.assertEqual(result['command'][result['command'].index('--horizon')+1], '1969')
+            self.assertFalse(result['completed'])
+            return result
+
+    def test_probe_exception_still_finishes_report_and_owned_cleanup(self):
+        result = self.run_main_with_probe({'side_effect': RuntimeError('injected probe exception')})
+        self.assertEqual(result['exception']['message'], 'injected probe exception')
+        self.assertIsNone(result['guard_trigger'])
+
+    def test_gpu_memory_guard_still_finishes_report_and_owned_cleanup(self):
+        probe = subprocess.CompletedProcess([], 0,
+            stdout='2026-10-20,0,tiny test GPU,8000,7500,500,0\n', stderr='')
+        result = self.run_main_with_probe({'return_value': probe})
+        self.assertEqual(result['guard_trigger']['free_mib'], 500.)
+        self.assertEqual(result['samples'], 1)
+        self.assertIsNone(result['exception'])
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

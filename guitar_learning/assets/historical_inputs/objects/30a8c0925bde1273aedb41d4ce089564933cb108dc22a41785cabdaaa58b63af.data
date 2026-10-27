@@ -1,0 +1,119 @@
+"""원fullFK 실패를보존하고wrist의실제의존chain/명령도달만새로인증한다."""
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from scipy.spatial.transform import Rotation
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import ROOT,A,BASE,read,save,pin,verify,sha
+from ..lower_body_release_v1.controller_horizontal_v4 import full_fk
+from ..grounded_guitar_release_v1.motion_v1 import WEIGHTS,smoothstep
+from ..front_facing_pose_v1.release_prepare_v2 import validate_reference
+from .protocol_v1 import PHASE,PLAN,PROTOCOL,REFERENCE,REPEAT,CERTIFICATE,STRIKE_PHASE,STRIKE_REFERENCE,BASELINE_REFERENCE,CONFIG_REFERENCE,TASK_CHAIN,schedule
+from .motion_v1 import chain_errors,solve_left
+
+PLANS=[PLAN,ROOT/'docs/plans/front_facing_ready_regrasp_20261016.md',ROOT/'docs/plans/front_facing_ready_measurement_20261016.md']
+CASES=('baseline','repeat','release','free_strike','regrasp','continuous')
+RAW=('initial_values.json','native_properties.json','final_state.json','states240.json','contacts240.json','efforts240.json','targets60.json','attempt.json','report.json','support_wrapper.json')
+
+
+def main(out):
+    out=Path(out).resolve();assert out.parent==PHASE and not out.exists()
+    prior_failure=BASE/'front_facing_pose_v1/release_preflight_v1/report.json'
+    anchors=PLANS+[PHASE/'REQUIREMENTS.md',CONFIG_REFERENCE,CERTIFICATE,prior_failure,A/'AGENTS.md']
+    for package in ('front_facing_ready_v1','front_facing_strike_v1','front_facing_pose_v1','grounded_guitar_release_v1','grounded_guitar_support_v1','seated_foot_support_v1'):
+        anchors+=list((A/package).glob('*.py'))
+    anchors += [r/n for r in (REFERENCE,REPEAT,STRIKE_REFERENCE,BASELINE_REFERENCE) for n in RAW]
+    anchors += [STRIKE_PHASE/n/'summary.json' for n in ('analysis_baseline_v6','analysis_strike_v6')]
+    discovery=pin(extra=anchors);out.mkdir(parents=True,exist_ok=False);save(out/'discovery_before.json',discovery)
+    cfg=read(CONFIG_REFERENCE)
+    paths=list(discovery)+[out/'discovery_before.json']+[Path(cfg[k]) for k in ('candidate','source_report','upper_target105','posture_target_report','finite_right_goal_spec','finite_right_goal_report','hip_load_bias_spec','hip_load_bias_report','play_spec','play_preflight_report','source_clearance_report')]
+    maps=[read(CERTIFICATE)['input_sha256']]
+    for r in (REFERENCE,REPEAT,STRIKE_REFERENCE,BASELINE_REFERENCE):maps += [read(r/'attempt.json')['input_sha256'],read(r/'support_wrapper.json')['input_sha256']]
+    for key in ('source_report','posture_target_report','finite_right_goal_report','hip_load_bias_report','play_preflight_report','source_clearance_report'):
+        maps.append(read(Path(cfg[key]).parent/'inputs_before.json'))
+    paths += [Path(p) for m in maps for p in m]
+    inputs=pin(extra=paths)
+    for mapping in maps:
+        assert mapping and verify(mapping)
+        for p,h in mapping.items():assert p not in inputs or inputs[p]==h,p;inputs[p]=h
+    assert verify(discovery) and verify(inputs);save(out/'inputs_before.json',inputs)
+    _,_,summaries,exact,static_cfg=validate_reference(REFERENCE,REPEAT,CERTIFICATE)
+    old_failure=read(prior_failure)
+    successful=[read(STRIKE_PHASE/n/'summary.json') for n in ('analysis_baseline_v6','analysis_strike_v6')]
+    assert all(d['passed'] and all(d['gates'].values()) and d['inputs_unchanged'] for d in successful)
+    initial=read(REFERENCE/'initial_values.json');state=read(REFERENCE/'final_state.json');assert state['physics_step']==2400 and state==read(REPEAT/'final_state.json')
+    names,bodies=initial['joint_names'],initial['human_body_names'];qref=np.array(initial['q_ref105_rad']);actual=np.array([v['pos'] for v in state['human_dof_states']])
+    fk=full_fk(SimpleNamespace(names=names,q_ref=qref,human_bodies=bodies),initial['native_initial_state'])
+    full=fk(actual);full_errors={n:dict(position_m=float(np.linalg.norm(full[n][0]-pose(b)[0])),rotation_deg=float(np.degrees((full[n][1]*pose(b)[1].inv()).magnitude()))) for n,b in zip(bodies,state['human_body_states'])}
+    task=chain_errors(fk,actual,state,bodies)
+    last=read(REFERENCE/'targets60.json')['rows'][-1];assert last['physics_step_before']==2396 and last['joint_names']==names
+    command=np.array(last['final105_rad']);arm=np.array([names.index(n+'_'+a) for n in ('L_Thorax','L_Shoulder','L_Elbow','L_Wrist') for a in 'xyz']);fingers=np.array([names.index(n) for n in WEIGHTS]);left=np.r_[arm,fingers]
+    lower,upper=(np.array(initial['PD_properties'][k]) for k in ('lower','upper'))
+    closed=command[fingers];opened=np.array([np.float32(np.clip(command[names.index(n)]-.3*w,lower[names.index(n)],upper[names.index(n)])) for n,w in WEIGHTS.items()]).astype(float)
+    opening=[]
+    for j,close,open in zip(fingers,closed,opened):
+        change=abs(float(close-open));opening.append(dict(name=names[j],index105=int(j),closed_goal_rad=float(close),open_goal_rad=float(open),expected_command_opening_rad=change,direction=float(np.sign(close-open)),required_signed_opening_rad=min(.10,.5*change)))
+    active=[r for r in opening if r['expected_command_opening_rad']>=.02];excluded=[dict(r,reason='사전명령개방변화.02rad미만') for r in opening if r['expected_command_opening_rad']<.02]
+    assert active
+    closing_candidates=[dict(r,required_signed_closing_rad=r['required_signed_opening_rad']) for r in active]
+    wp,wr=pose(state['human_body_states'][bodies.index('L_Wrist')]);gp,gr=pose(state['guitar_body_states'][0]);delta=gr.apply([.08,0.,0.])
+    query=actual.copy();query[arm]=command[arm];origin,rotation=fk(query)['L_Wrist'];seed=command[arm].copy();samples=[]
+    for time in np.linspace(10.,13.,41):
+        fraction=smoothstep(time,11.,13.);goal=origin+delta*fraction
+        if time<=11.:values=command[arm].copy();trial=query.copy();trial[arm]=values;p,r=fk(trial)['L_Wrist'];proof=dict(position_error_m=float(np.linalg.norm(p-goal)),rotation_error_rad=float((rotation.inv()*r).magnitude()),strict_commands=True,nfev=0)
+        else:values,proof=solve_left(fk,actual,arm,lower,upper,qref,goal,rotation,seed)
+        seed=values.copy();trial=actual.copy();trial[arm]=values;opening_fraction=smoothstep(time,10.,11.);finger_values=(closed+(opened-closed)*opening_fraction).astype(np.float32).astype(float);trial[fingers]=finger_values
+        other=np.setdiff1d(np.arange(105),left)
+        samples.append(dict(time_s=float(time),goal_wrist_W_m=goal.tolist(),goal_wrist_xyzw=rotation.as_quat().tolist(),arm_targets12_rad=values.tolist(),finger_targets14_rad=finger_values.tolist(),**proof,
+            strict26_bounds=bool(np.all(trial[left]>=lower[left]) and np.all(trial[left]<=upper[left])),arm_qref_radius=bool(np.all(abs(values-qref[arm])<=.8)),arm_principal_under160=bool(np.all(np.linalg.norm(values.reshape(4,3),axis=1)<np.deg2rad(160))),other79_actual_query_exact=bool(np.array_equal(trial[other],actual[other]))))
+    # 사전return41은G가10초에고정된sourcequery일뿐미래동적재파지인증은아니다.
+    return_query=actual.copy();return_query[arm]=seed;return_origin,return_rotation=fk(return_query)['L_Wrist'];return_samples=[]
+    for time in np.linspace(28.,30.,41):
+        fraction=smoothstep(time,28.,30.);goal=return_origin+(wp-return_origin)*fraction
+        goal_rotation=Rotation.from_rotvec((wr*return_rotation.inv()).as_rotvec()*fraction)*return_rotation
+        values,proof=solve_left(fk,actual,arm,lower,upper,qref,goal,goal_rotation,seed);seed=values.copy()
+        trial=actual.copy();trial[arm]=values;trial[fingers]=opened;other=np.setdiff1d(np.arange(105),left)
+        return_samples.append(dict(time_s=float(time),goal_wrist_W_m=goal.tolist(),goal_wrist_xyzw=goal_rotation.as_quat().tolist(),arm_targets12_rad=values.tolist(),finger_targets14_rad=opened.tolist(),**proof,
+            strict26_bounds=bool(np.all(trial[left]>=lower[left]) and np.all(trial[left]<=upper[left])),arm_qref_radius=bool(np.all(abs(values-qref[arm])<=.8)),arm_principal_under160=bool(np.all(np.linalg.norm(values.reshape(4,3),axis=1)<np.deg2rad(160))),other79_actual_query_exact=bool(np.array_equal(trial[other],actual[other]))))
+    left_spec=dict(arm_indices105=arm.tolist(),arm_joint_names=[names[j] for j in arm],finger_indices105=fingers.tolist(),finger_joint_names=[names[j] for j in fingers],finger_opening_weights=WEIGHTS,
+        finger_closed_reference14_rad=closed.tolist(),finger_open_goal14_rad=opened.tolist(),reference_submitted26_rad=command[left].tolist(),actual10_q26_rad=actual[left].tolist(),
+        actual10_wrist_W_m=wp.tolist(),actual10_wrist_xyzw=wr.as_quat().tolist(),actual10_wrist_G_m=gr.inv().apply(wp-gp).tolist(),actual10_wrist_G_xyzw=(gr.inv()*wr).as_quat().tolist(),
+        command10_wrist_W_m=origin.tolist(),command10_wrist_xyzw=rotation.as_quat().tolist(),command_minus_actual10_wrist_W_m=(origin-wp).tolist(),command_actual10_position_difference_m=float(np.linalg.norm(origin-wp)),command_actual10_rotation_difference_rad=float((wr.inv()*rotation).magnitude()),withdraw_delta_G_m=[.08,0.,0.],source10_withdraw_delta_W_m=delta.tolist(),
+        opening_gate=dict(active_joints=active,excluded_joints=excluded,selection_min_command_change_rad=.02,threshold_cap_rad=.10,expected_command_fraction=.5,actual_reference_time_s=10.),
+        regrasp_gate=dict(active_joint_candidates=closing_candidates,closed_tolerance_rad=.1,contact_fraction=.95,wrist_G_ref_tolerance_m=.02,neck_body_candidates=['guitar','G:nut']+['G:fret'+str(i) for i in range(1,23)],
+            root_body_scope='기타원root에는neck1/2와headstock형상이함께있다. 이body의양성접촉만으로neck파지를주장하지않고wristG참조·fingerclose를함께검사한다.'),
+        free_wrist_distance_G_from_actual10_m=.06,actual_hand_geometry_min_active_gap_m=.002,task_chain=list(TASK_CHAIN),
+        scope='wrist task-chain only; finger fullFK 정확도·미래오차보장 없음.실제nativehand형상/240Hz접촉을별도판정.')
+    spec=dict(reference_run=str(REFERENCE),repeat_run=str(REPEAT),static_certificate=str(CERTIFICATE),static_certificate_sha256=sha(CERTIFICATE),config_reference=str(CONFIG_REFERENCE),config_reference_sha256=sha(CONFIG_REFERENCE),
+        successful_strike_reference=str(STRIKE_REFERENCE),successful_baseline_reference=str(BASELINE_REFERENCE),initial_candidate_sha256=cfg['candidate_sha256'],left=left_spec,right_strike_spec=read(cfg['play_spec']),schedules={c:schedule(c) for c in CASES})
+    gates=dict(static25_and_repeat_pass=all(s['passed'] for s in summaries),static4raw_exact=all(exact.values()),current_right_and_baseline_success=all(s['passed'] for s in successful),
+        task_chain_original10um_0p01deg=task['max_position_m']<1e-5 and task['max_rotation_deg']<.01,
+        source41_wrist2mm_0p02rad=all(s['position_error_m']<=.002 and s['rotation_error_rad']<=.02 for s in samples),
+        source41_strict26=all(s['strict26_bounds'] and s['arm_qref_radius'] and s['arm_principal_under160'] and s['strict_commands'] for s in samples),
+        source41_other79_exact=all(s['other79_actual_query_exact'] for s in samples),
+        return41_wrist2mm_0p02rad=all(s['position_error_m']<=.002 and s['rotation_error_rad']<=.02 for s in return_samples),
+        return41_strict26=all(s['strict26_bounds'] and s['arm_qref_radius'] and s['arm_principal_under160'] and s['strict_commands'] for s in return_samples),
+        return41_other79_exact=all(s['other79_actual_query_exact'] for s in return_samples),original_zero8_excluded=not bool(set(left)&set(initial['zero_range_indices'])),
+        source_candidate_SHA=sha(cfg['candidate'])==cfg['candidate_sha256'],opening14_partitioned=len(active)+len(excluded)==14 and bool(active))
+    assert verify(inputs);save(out/'ready_spec.json',spec)
+    result=dict(eligible_for_native_task_diagnostic=all(gates.values()),gates={k:bool(v) for k,v in gates.items()},inputs_unchanged=True,input_sha256=inputs,inputs_after_sha256={p:sha(p) for p in inputs},
+        spec_sha256=sha(out/'ready_spec.json'),source_candidate_sha256=cfg['candidate_sha256'],task_chain_FK=task,fullFK_errors_diagnostic=full_errors,
+        original_fullFK_under10um_0p01deg_diagnostic=bool(max(r['position_m'] for r in full_errors.values())<1e-5 and max(r['rotation_deg'] for r in full_errors.values())<.01),
+        previous_fullFK_failure_report=str(prior_failure),previous_fullFK_failure_sha256=sha(prior_failure),previous_fullFK_eligible_for_native=old_failure['eligible_for_native'],
+        reference_config=str(CONFIG_REFERENCE),reference_config_sha256=sha(CONFIG_REFERENCE),samples=samples,return_samples=return_samples,return_source_scope='fixedactual10G goal;futuremovingG/nativecontact/regrasp별도검사',native_simulation_steps=0,
+        scope='새task-chain진단실행자격.원full105FK실패/eligiblefalse를성공으로대체하지않음.원initialcalibration고정,실제10초나미래상태재보정/손가락숨은축추가없음.원bounds/gain/cap/기타자유조건유지.동작중nativehand형상/접촉/재파지/반복성공은별도검사.')
+    save(out/'report.json',result);outputs=[out/'ready_spec.json',out/'report.json']
+    for case in CASES:
+        casecfg=dict(cfg)
+        for key in ('play_case','play_start_s','play_action_interval_s'):casecfg.pop(key,None)
+        casecfg.update(seconds=schedule(case)['seconds'],validation_protocol=PROTOCOL,ready_case=case,ready_schedule=schedule(case),ready_spec=str(out/'ready_spec.json'),ready_spec_sha256=sha(out/'ready_spec.json'),ready_preflight_report=str(out/'report.json'),ready_preflight_report_sha256=sha(out/'report.json'))
+        if case!='baseline':casecfg['ready_baseline_summary']=str(PHASE/'analysis_baseline_v1/summary.json')
+        path=PHASE/'inputs'/(case+'_v1.json');save(path,casecfg);outputs.append(path)
+    assert verify(inputs);save(out/'generation.json',dict(input_sha256=inputs,inputs_unchanged=True,eligible_for_native_task_diagnostic=result['eligible_for_native_task_diagnostic'],output_sha256={str(p):sha(p) for p in outputs},native_simulation_steps=0))
+    print(dict(eligible_for_native_task_diagnostic=result['eligible_for_native_task_diagnostic'],gates=gates,task_FK=task['max_position_m'],max_source_wrist_error_m=max(s['position_error_m'] for s in samples)),flush=True)
+    assert result['eligible_for_native_task_diagnostic'],'task-chain source gate실패.새native금지.'
+
+
+if __name__=='__main__':
+    import argparse
+    p=argparse.ArgumentParser();p.add_argument('--out',type=Path,required=True);main(p.parse_args().out)

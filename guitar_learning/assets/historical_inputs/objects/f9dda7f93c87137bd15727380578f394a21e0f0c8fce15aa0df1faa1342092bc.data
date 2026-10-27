@@ -1,0 +1,69 @@
+"""Sealed all-sample unit-probe and new full-scene evidence summary V3 (terminal failures included)."""
+import argparse
+import csv
+from pathlib import Path
+import numpy as np
+from scipy.spatial.transform import Rotation
+from .common import BASE,HUMAN,read,save,sha,verify
+
+
+def rot(body):
+    return Rotation.from_quat([body['pose']['r'][k] for k in 'xyzw'])
+
+
+def omega(body):
+    return np.array([body['vel']['angular'][k] for k in 'xyz'])
+
+
+def analyze(out):
+    out.mkdir(exist_ok=False)
+    inputs=[Path(__file__).resolve(),Path(__file__).with_name('common.py'),HUMAN]
+    probes=[BASE/'diagnosis_v2'/('joint_probe_v'+str(v)) for v in (1,2,5,6,7)]
+    for p in probes:inputs.extend([p/'results.json',p/'verification.json',p/'all_inputs_before_simulation.json'])
+    natives=sorted((BASE/'native').glob('rotational_stable_pd*'))
+    for p in natives:
+        inputs.extend(p/f for f in ('report.json','initial_values.json','states240.json','efforts240.json','contacts240.json','targets60.json','attempt.json'))
+        inputs.append(Path(read(p/'report.json')['config']))
+        if (p/'lower_coordinate_gate_failure.json').exists():inputs.append(p/'lower_coordinate_gate_failure.json')
+    pins={str(p):sha(p) for p in inputs}
+    save(out/'inputs_before.json',pins)
+    units=[];samples=[]
+    for p in probes:
+        result=read(p/'results.json')
+        assert read(p/'verification.json')['inputs_unchanged']
+        assert verify(read(p/'all_inputs_before_simulation.json'))
+        for case in result['cases']:
+            rows=case['rows'];assert [r['step'] for r in rows]==list(range(1201))
+            # All fixtures preserve the same named x/z/y physical axes; reorder by name.
+            names=case['names'];basis=np.column_stack([{'L_Hip_x':[1,0,0],'L_Hip_y':[0,0,1],'L_Hip_z':[0,1,0]}[n] for n in names])
+            q=np.array([r['q'] for r in rows]);qd=np.array([r['qd'] for r in rows]);q0=np.array(case['q0']);previous=None;child_errors=[];rates=[];reported=[];prediction=[]
+            for i,row in enumerate(rows):
+                b=row['bodies'][-1];parent=row['bodies'][0];relative=rot(parent).inv()*rot(b);relative_velocity=omega(b)-omega(parent)
+                child_errors.append(float(np.linalg.norm(relative_velocity-rot(b).apply(basis@qd[i]))))
+                reported.append(float(np.linalg.norm(relative_velocity)))
+                rate=float((previous.inv()*relative).magnitude()*240) if previous is not None else 0.
+                rates.append(rate);previous=relative
+                if 'predicted_velocity' in row:prediction.append(float(np.linalg.norm(qd[i+1]-row['predicted_velocity'])))
+                samples.append(dict(probe=p.name,case=case['label'],step=i,max_abs_q_minus_initial_rad=float(abs(q[i]-q0).max()),max_abs_native_qd_rad_s=float(abs(qd[i]).max()),child_angular_residual_rad_s=child_errors[-1],finite_step_relative_rotation_rate_rad_s=rate,reported_relative_angular_speed_rad_s=reported[-1]))
+            units.append(dict(probe=p.name,case=case['label'],steps=1200,seconds=5.,max_abs_q_delta_rad=float(abs(q-q0).max()),final_q=rows[-1]['q'],max_abs_native_qd_rad_s=float(abs(qd).max()),max_child_angular_residual_rad_s=max(child_errors),max_finite_step_rotation_rate_rad_s=max(rates),max_reported_angular_speed_rad_s=max(reported),max_contact_count=max(r['contact_count'] for r in rows),max_next_velocity_prediction_residual_rad_s=max(prediction) if prediction else None,max_native_geometry_mass_error_kg_m2=max((r['mass_matrix_error_kg_m2'] for r in rows if 'mass_matrix_error_kg_m2' in r),default=None),max_explicit_effort_Nm=max(float(abs(np.array(r.get('submitted_effort_Nm',[0]))).max()) for r in rows),scope='Independent unit fixture. Five seconds is per case; no full-scene/guitar stability or zero-range8-axis claim. Finite-step rotation rate includes solver positional corrections; it is not native qd.'))
+    with (out/'unit_samples.csv').open('w',newline='') as f:
+        writer=csv.DictWriter(f,fieldnames=list(samples[0]));writer.writeheader();writer.writerows(samples)
+    mains=[]
+    for p in natives:
+        report=read(p/'report.json');initial=read(p/'initial_values.json');states=read(p/'states240.json')['rows'];efforts=read(p/'efforts240.json')['rows'];targets=read(p/'targets60.json')['rows'];n=report['physics_steps'];assert len(states)==n+1 and len(efforts)==n
+        submitted=np.array([r['submitted105_Nm'] for r in efforts]).reshape(-1,105)
+        assert np.all(submitted[:,initial['zero_range_indices']]==0)
+        assert np.all(submitted[:,initial['position_indices']]==0)
+        assert np.all(abs(submitted)<=np.array(initial['PD_properties']['effort'])+1e-6)
+        assert verify(read(p/'attempt.json')['input_sha256'])
+        lower=[r['lower_stable_pd'] for r in efforts]
+        terminal=read(p/'lower_coordinate_gate_failure.json') if (p/'lower_coordinate_gate_failure.json').exists() else None
+        mains.append(dict(terminal_coordinate_gate_failure=terminal,submitted_rows_only_for_following_maxima=True,run=p.name,completed=report['completed'],steps=n,seconds=n/240,failure=report['failure'],all_initial_checks=all(report['initial_checks'].values()),inputs_unchanged_now=True,forbidden_calls=report['forbidden_calls'],zero8_explicit_effort_zero=True,position48_explicit_effort_zero=True,all_efforts_finite_within_caps=bool(np.isfinite(submitted).all()),max_mass_error_kg_m2=max((r['mass_matrix_max_error_kg_m2'] for r in lower),default=None),max_child_angular_residual_rad_s=max((r['relative_angular_velocity_max_error_rad_s'] for r in lower),default=None),target_bias_rad=read(report['config']).get('lower_target_bias_rad',{}),target_rows=len(targets),scope='Full scene: fixed Root, dynamic finite lower, free gravity-on guitar, strap off. Completed only reports runner/gates; assess full trajectory separately.'))
+    save(out/'unit_summary.json',units)
+    save(out/'native_summary.json',mains)
+    save(out/'verification.json',dict(inputs_unchanged=verify(pins),unit_cases=len(units),full_scene_attempts=len(mains),scope='Unit cases run concurrently within each probe; never add their durations as continuous full-scene stability.'))
+
+
+if __name__=='__main__':
+    parser=argparse.ArgumentParser();parser.add_argument('--out',type=Path,required=True)
+    analyze(parser.parse_args().out.resolve())

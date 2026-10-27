@@ -1,0 +1,1742 @@
+{
+  "schema": "exploration_conditioning_results.v1",
+  "plan": {
+    "schema": "exploration_conditioning_precommit.v1",
+    "created_at": "2026-10-27T13:22:27.474048+09:00",
+    "seed": 20261027,
+    "rng": "numpy.default_rng PCG64",
+    "latent_mean": 0.0,
+    "latent_std": 0.049787068367863944,
+    "physical_action": "tanh(std*z)",
+    "one_tick_samples": 256,
+    "independent_trajectory_paths": 16,
+    "trajectory_ticks": 180,
+    "reported_endpoints": [
+      1,
+      60,
+      180
+    ],
+    "sharing": "one16-D iid standardized Gaussian vector per sample/time/path; arm12 uses first12 and nonthumb16 uses all16 in native named order; same fixed draws reused between masks",
+    "masks": [
+      "arm12_only",
+      "nonthumb16_only"
+    ],
+    "inactive_actions": "all other actions0, including thumb5/right6; arm position at reset-reference, nonthumb finger incremental target hold",
+    "baseline": "controller prepared035 reference105 target; source FK calibrated from prepared035 actual q/body; inactive q held at controller reference; geometric target FK only",
+    "trajectory": "independent iid zero-mean Gaussian innovations each60Hz tick, no learned means or contact feedback; 60 is prefix of same180 sequence",
+    "budget": "256*2 one-tick FK plus16*180*2 path FK; no GPU or physics; no pilot logs used to select conditions",
+    "hypothesis": "same latent std may yield group/horizon-dependent target-FK exploration; magnitude ordering is not presupposed",
+    "limits": "not actual q, dynamics, contact/load, reward gradient or causal action importance"
+  },
+  "groups": {
+    "arm12_only": {
+      "channels": [
+        "L_Thorax_x",
+        "L_Thorax_y",
+        "L_Thorax_z",
+        "L_Shoulder_x",
+        "L_Shoulder_y",
+        "L_Shoulder_z",
+        "L_Elbow_x",
+        "L_Elbow_y",
+        "L_Elbow_z",
+        "L_Wrist_x",
+        "L_Wrist_y",
+        "L_Wrist_z"
+      ],
+      "one_tick": {
+        "joint_delta_rms_deg": {
+          "n": 256,
+          "mean": 0.17305324971675873,
+          "median": 0.17240378260612488,
+          "p05": 0.11168345622718334,
+          "p95": 0.23511355742812157,
+          "maximum": 0.29654738306999207
+        },
+        "joint_delta_l2_deg": {
+          "n": 256,
+          "mean": 0.5994740724563599,
+          "median": 0.597224235534668,
+          "p05": 0.38688283413648605,
+          "p95": 0.8144572377204895,
+          "maximum": 1.0272701978683472
+        },
+        "per_finger": {
+          "index": {
+            "centroid_mean_vector_mm": [
+              -0.43504771151801813,
+              0.5709419386942958,
+              0.33036802483273886
+            ],
+            "centroid_mean_offset_norm_mm": 0.7901798785649702,
+            "centroid_centered_rms_spread_mm": 2.318043380684124,
+            "centroid_total_rms_displacement_mm": 2.4490221222403106,
+            "centroid_endpoint_mm": {
+              "n": 256,
+              "mean": 2.233717620014904,
+              "median": 2.0968867121646566,
+              "p05": 0.719828531871821,
+              "p95": 4.0536003802824645,
+              "maximum": 6.327702872067679
+            },
+            "points_rms_endpoint_mm": {
+              "n": 256,
+              "mean": 2.234515827831125,
+              "median": 2.0974183061305327,
+              "p05": 0.7205168651693177,
+              "p95": 4.05469628291805,
+              "maximum": 6.328538600366124
+            },
+            "max_point_endpoint_mm": {
+              "n": 256,
+              "mean": 2.3055929074912687,
+              "median": 2.164341003107088,
+              "p05": 0.7645572031954528,
+              "p95": 4.2069133590614705,
+              "maximum": 6.477210156065724
+            }
+          },
+          "middle": {
+            "centroid_mean_vector_mm": [
+              -0.3596927881949845,
+              0.5084621903801798,
+              0.32988750181277976
+            ],
+            "centroid_mean_offset_norm_mm": 0.7047967542334237,
+            "centroid_centered_rms_spread_mm": 2.2623721588601398,
+            "centroid_total_rms_displacement_mm": 2.369613101323391,
+            "centroid_endpoint_mm": {
+              "n": 256,
+              "mean": 2.1671117365085726,
+              "median": 2.0732201142589504,
+              "p05": 0.7728379754189898,
+              "p95": 3.851028939419482,
+              "maximum": 6.066425777018172
+            },
+            "points_rms_endpoint_mm": {
+              "n": 256,
+              "mean": 2.167974756194802,
+              "median": 2.0738145248520476,
+              "p05": 0.7774965992362717,
+              "p95": 3.8523271955979457,
+              "maximum": 6.067137696141921
+            },
+            "max_point_endpoint_mm": {
+              "n": 256,
+              "mean": 2.2322431809525454,
+              "median": 2.139438080210177,
+              "p05": 0.8136034684818048,
+              "p95": 3.9467089653007976,
+              "maximum": 6.16947846077809
+            }
+          },
+          "ring": {
+            "centroid_mean_vector_mm": [
+              -0.3883345975600281,
+              0.4943968064812401,
+              0.3099947026843487
+            ],
+            "centroid_mean_offset_norm_mm": 0.7009484129472835,
+            "centroid_centered_rms_spread_mm": 2.2486718413091813,
+            "centroid_total_rms_displacement_mm": 2.3553882328631386,
+            "centroid_endpoint_mm": {
+              "n": 256,
+              "mean": 2.1491481452632524,
+              "median": 2.0645470852123564,
+              "p05": 0.7212406223246154,
+              "p95": 3.812470681213644,
+              "maximum": 6.119377205867935
+            },
+            "points_rms_endpoint_mm": {
+              "n": 256,
+              "mean": 2.1499846481627376,
+              "median": 2.0651819328211167,
+              "p05": 0.7226059548488201,
+              "p95": 3.813990784170692,
+              "maximum": 6.120409843087608
+            },
+            "max_point_endpoint_mm": {
+              "n": 256,
+              "mean": 2.222875183462334,
+              "median": 2.1485021825680404,
+              "p05": 0.7854979033850045,
+              "p95": 3.951331593386849,
+              "maximum": 6.27377288730405
+            }
+          },
+          "pinky": {
+            "centroid_mean_vector_mm": [
+              -0.36162298051514424,
+              0.4273972753219605,
+              0.28488226931968913
+            ],
+            "centroid_mean_offset_norm_mm": 0.6281699756929074,
+            "centroid_centered_rms_spread_mm": 2.160615560044032,
+            "centroid_total_rms_displacement_mm": 2.250079357859721,
+            "centroid_endpoint_mm": {
+              "n": 256,
+              "mean": 2.054252141724147,
+              "median": 1.982059415904168,
+              "p05": 0.7211976330160976,
+              "p95": 3.6071090790616727,
+              "maximum": 5.823469637091433
+            },
+            "points_rms_endpoint_mm": {
+              "n": 256,
+              "mean": 2.0551871411113085,
+              "median": 1.9834722448563686,
+              "p05": 0.7214548610552278,
+              "p95": 3.6077666247692406,
+              "maximum": 5.824342005484998
+            },
+            "max_point_endpoint_mm": {
+              "n": 256,
+              "mean": 2.1297526284503663,
+              "median": 2.0715890326832893,
+              "p05": 0.7498218114798343,
+              "p95": 3.691537210127768,
+              "maximum": 5.978086584019564
+            }
+          }
+        }
+      },
+      "paths": {
+        "1": {
+          "joint_delta_rms_deg": {
+            "n": 16,
+            "mean": 0.16694043576717377,
+            "median": 0.17145320773124695,
+            "p05": 0.0902552530169487,
+            "p95": 0.2343730479478836,
+            "maximum": 0.2383905053138733
+          },
+          "joint_delta_l2_deg": {
+            "n": 16,
+            "mean": 0.5782986283302307,
+            "median": 0.5939313173294067,
+            "p05": 0.3126533702015877,
+            "p95": 0.8118921220302582,
+            "maximum": 0.8258089423179626
+          },
+          "clipped_axis_fraction_through_endpoint": 0.0,
+          "per_finger": {
+            "index": {
+              "centroid_mean_vector_mm": [
+                -0.15916157998492955,
+                0.02028240446446273,
+                -0.32058034797091683
+              ],
+              "centroid_mean_offset_norm_mm": 0.3584906469900063,
+              "centroid_centered_rms_spread_mm": 2.854617094550705,
+              "centroid_total_rms_displacement_mm": 2.877039155187225,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 2.4899079763722236,
+                "median": 2.5998605022203365,
+                "p05": 0.43362062671613477,
+                "p95": 4.70853948953591,
+                "maximum": 4.722947016802742
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 2.490982946163118,
+                "median": 2.601027247107738,
+                "p05": 0.43686944869593225,
+                "p95": 4.709487355652121,
+                "maximum": 4.723335944969395
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 2.5696272400627893,
+                "median": 2.691056547335899,
+                "p05": 0.4762920117164783,
+                "p95": 4.800504947745733,
+                "maximum": 4.837912033946761
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 2.4899079763722236,
+                "median": 2.5998605022203365,
+                "p05": 0.43362062671613477,
+                "p95": 4.70853948953591,
+                "maximum": 4.722947016802742
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 2.4899079763722236,
+                "median": 2.5998605022203365,
+                "p05": 0.43362062671613477,
+                "p95": 4.70853948953591,
+                "maximum": 4.722947016802742
+              }
+            },
+            "middle": {
+              "centroid_mean_vector_mm": [
+                -0.19114766850266904,
+                -0.019102637236086822,
+                -0.25379820050502877
+              ],
+              "centroid_mean_offset_norm_mm": 0.31830153707289977,
+              "centroid_centered_rms_spread_mm": 2.715612272725634,
+              "centroid_total_rms_displacement_mm": 2.7342029705713244,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 2.3581784367716994,
+                "median": 2.439036613893922,
+                "p05": 0.3869123691693724,
+                "p95": 4.525283595773281,
+                "maximum": 4.68067167430459
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 2.359327472161424,
+                "median": 2.440855910053678,
+                "p05": 0.3911993139273822,
+                "p95": 4.526064493102776,
+                "maximum": 4.681037509214204
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 2.4270547533881586,
+                "median": 2.5287217386827816,
+                "p05": 0.42421851814982214,
+                "p95": 4.614251663655191,
+                "maximum": 4.737356913755341
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 2.3581784367716994,
+                "median": 2.439036613893922,
+                "p05": 0.3869123691693724,
+                "p95": 4.525283595773281,
+                "maximum": 4.68067167430459
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 2.3581784367716994,
+                "median": 2.439036613893922,
+                "p05": 0.3869123691693724,
+                "p95": 4.525283595773281,
+                "maximum": 4.68067167430459
+              }
+            },
+            "ring": {
+              "centroid_mean_vector_mm": [
+                -0.12131121775482354,
+                0.0037761145560977205,
+                -0.20247575962712566
+              ],
+              "centroid_mean_offset_norm_mm": 0.2360658887490536,
+              "centroid_centered_rms_spread_mm": 2.76941316760036,
+              "centroid_total_rms_displacement_mm": 2.7794561332586527,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 2.395334616264452,
+                "median": 2.54611118757577,
+                "p05": 0.4096582872761282,
+                "p95": 4.461083718997923,
+                "maximum": 4.662602589795703
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 2.3964070009737677,
+                "median": 2.5472067636799034,
+                "p05": 0.41223541718754975,
+                "p95": 4.462206516131319,
+                "maximum": 4.663015870299997
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 2.47410696228574,
+                "median": 2.6336723093298056,
+                "p05": 0.43127387630024516,
+                "p95": 4.589680275408372,
+                "maximum": 4.751843089093787
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 2.395334616264452,
+                "median": 2.54611118757577,
+                "p05": 0.4096582872761282,
+                "p95": 4.461083718997923,
+                "maximum": 4.662602589795703
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 2.395334616264452,
+                "median": 2.54611118757577,
+                "p05": 0.4096582872761282,
+                "p95": 4.461083718997923,
+                "maximum": 4.662602589795703
+              }
+            },
+            "pinky": {
+              "centroid_mean_vector_mm": [
+                -0.14175610289892532,
+                -0.027493453814830295,
+                -0.1398306321935272
+              ],
+              "centroid_mean_offset_norm_mm": 0.20100569248506472,
+              "centroid_centered_rms_spread_mm": 2.627776893687218,
+              "centroid_total_rms_displacement_mm": 2.6354534128699454,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 2.2749984627030573,
+                "median": 2.4065380365085316,
+                "p05": 0.46052747138175437,
+                "p95": 4.205148000291116,
+                "maximum": 4.522202905589176
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 2.2760747663742826,
+                "median": 2.4082158558506115,
+                "p05": 0.46330520891958216,
+                "p95": 4.206164336544276,
+                "maximum": 4.522680006086858
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 2.3549832083593456,
+                "median": 2.5237019112065244,
+                "p05": 0.49243224031956045,
+                "p95": 4.323516395864559,
+                "maximum": 4.620886067907035
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 2.2749984627030573,
+                "median": 2.4065380365085316,
+                "p05": 0.46052747138175437,
+                "p95": 4.205148000291116,
+                "maximum": 4.522202905589176
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 2.2749984627030573,
+                "median": 2.4065380365085316,
+                "p05": 0.46052747138175437,
+                "p95": 4.205148000291116,
+                "maximum": 4.522202905589176
+              }
+            }
+          }
+        },
+        "60": {
+          "joint_delta_rms_deg": {
+            "n": 16,
+            "mean": 0.37681183218955994,
+            "median": 0.3847586512565613,
+            "p05": 0.28022003918886185,
+            "p95": 0.47690650820732117,
+            "maximum": 0.5429168343544006
+          },
+          "joint_delta_l2_deg": {
+            "n": 16,
+            "mean": 1.3053144216537476,
+            "median": 1.3328431844711304,
+            "p05": 0.9707107096910477,
+            "p95": 1.6520526707172394,
+            "maximum": 1.8807189464569092
+          },
+          "clipped_axis_fraction_through_endpoint": 0.0,
+          "per_finger": {
+            "index": {
+              "centroid_mean_vector_mm": [
+                -1.2684544926645571,
+                3.9298687308370917,
+                2.3257499023301293
+              ],
+              "centroid_mean_offset_norm_mm": 4.739404778003314,
+              "centroid_centered_rms_spread_mm": 3.606978380357973,
+              "centroid_total_rms_displacement_mm": 5.955858517974589,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 5.708223235984551,
+                "median": 6.0405540448882284,
+                "p05": 2.9052945803223604,
+                "p95": 8.12546901191436,
+                "maximum": 8.470842997709232
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 5.710182765825537,
+                "median": 6.042068557268623,
+                "p05": 2.90787519295562,
+                "p95": 8.12684879391036,
+                "maximum": 8.472491533404684
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 5.940813408008605,
+                "median": 6.267957299864785,
+                "p05": 3.0642917772088203,
+                "p95": 8.371531048674774,
+                "maximum": 8.780772309809226
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 9.327609830731598,
+                "median": 8.985984108789701,
+                "p05": 7.306224429465292,
+                "p95": 12.1949010534242,
+                "maximum": 12.598815115569677
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 134.45717572859968,
+                "median": 135.09036968477056,
+                "p05": 122.98194098919626,
+                "p95": 145.54040151587665,
+                "maximum": 146.37228062536988
+              }
+            },
+            "middle": {
+              "centroid_mean_vector_mm": [
+                -0.7724985950350489,
+                3.530726303604563,
+                2.30621818186718
+              ],
+              "centroid_mean_offset_norm_mm": 4.287356366418708,
+              "centroid_centered_rms_spread_mm": 3.4309009625182747,
+              "centroid_total_rms_displacement_mm": 5.491129758736343,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 5.26306482927269,
+                "median": 5.61136290836018,
+                "p05": 2.701219611356168,
+                "p95": 7.60943722377366,
+                "maximum": 7.801484223602646
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 5.26515010872026,
+                "median": 5.612995475949722,
+                "p05": 2.7038102132826687,
+                "p95": 7.610700107783204,
+                "maximum": 7.803315412306117
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 5.4545785339090695,
+                "median": 5.780948630617523,
+                "p05": 2.8279924263561993,
+                "p95": 7.813935406356228,
+                "maximum": 8.064446642160531
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 8.797073585676893,
+                "median": 8.607410775464288,
+                "p05": 6.610737536384205,
+                "p95": 11.539351368737096,
+                "maximum": 11.987939377602371
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 131.7195796186506,
+                "median": 132.2617288600132,
+                "p05": 120.51211331309204,
+                "p95": 143.3110473045576,
+                "maximum": 143.57823534361506
+              }
+            },
+            "ring": {
+              "centroid_mean_vector_mm": [
+                -0.948448678011176,
+                3.4034258380135336,
+                2.1744070288199637
+              ],
+              "centroid_mean_offset_norm_mm": 4.148603169340366,
+              "centroid_centered_rms_spread_mm": 3.4943056710438705,
+              "centroid_total_rms_displacement_mm": 5.42412024012653,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 5.20529083196789,
+                "median": 5.576056101549066,
+                "p05": 2.756190164390728,
+                "p95": 7.524451213057086,
+                "maximum": 7.642700401901242
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 5.2076862851072185,
+                "median": 5.577862824684514,
+                "p05": 2.7593140783427437,
+                "p95": 7.526179640030678,
+                "maximum": 7.644658957518009
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 5.444318993894553,
+                "median": 5.821633854600119,
+                "p05": 2.9237677352116984,
+                "p95": 7.786224974690365,
+                "maximum": 7.972386047723523
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 8.80182305729544,
+                "median": 8.891644066091178,
+                "p05": 6.49583893860274,
+                "p95": 11.720158956835064,
+                "maximum": 12.277760886348423
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 130.88708024566947,
+                "median": 131.26208470742807,
+                "p05": 120.44332095000509,
+                "p95": 142.25178384653427,
+                "maximum": 142.25866601503515
+              }
+            },
+            "pinky": {
+              "centroid_mean_vector_mm": [
+                -0.7749884978535855,
+                2.9633392096508806,
+                2.009843116091453
+              ],
+              "centroid_mean_offset_norm_mm": 3.663530509571316,
+              "centroid_centered_rms_spread_mm": 3.327559113580472,
+              "centroid_total_rms_displacement_mm": 4.949151992910737,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 4.74977813938704,
+                "median": 5.080948822138655,
+                "p05": 2.4951689758003757,
+                "p95": 6.967642292578904,
+                "maximum": 6.996503125883659
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 4.7521536636203185,
+                "median": 5.0828912610687045,
+                "p05": 2.4983860941914986,
+                "p95": 6.969428316510195,
+                "maximum": 6.997868745902542
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 4.966474617285158,
+                "median": 5.273850988549299,
+                "p05": 2.675585714052233,
+                "p95": 7.194461911291703,
+                "maximum": 7.231666182578705
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 8.262028028555095,
+                "median": 8.386885414457156,
+                "p05": 5.8995749582138615,
+                "p95": 11.06548252836955,
+                "maximum": 11.621827947860693
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 125.89807355851042,
+                "median": 125.81737819441668,
+                "p05": 116.09311608742206,
+                "p95": 137.0509428983994,
+                "maximum": 137.16871412428378
+              }
+            }
+          }
+        },
+        "180": {
+          "joint_delta_rms_deg": {
+            "n": 16,
+            "mean": 0.34750181436538696,
+            "median": 0.36476489901542664,
+            "p05": 0.2731427624821663,
+            "p95": 0.40596818178892136,
+            "maximum": 0.4135640859603882
+          },
+          "joint_delta_l2_deg": {
+            "n": 16,
+            "mean": 1.2037816047668457,
+            "median": 1.263582706451416,
+            "p05": 0.9461942911148071,
+            "p95": 1.4063149392604828,
+            "maximum": 1.4326280355453491
+          },
+          "clipped_axis_fraction_through_endpoint": 0.0,
+          "per_finger": {
+            "index": {
+              "centroid_mean_vector_mm": [
+                -0.7718289794905187,
+                3.801314228189439,
+                1.9333909731176768
+              ],
+              "centroid_mean_offset_norm_mm": 4.334017822984784,
+              "centroid_centered_rms_spread_mm": 3.8119436839846452,
+              "centroid_total_rms_displacement_mm": 5.771882287418913,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 5.554429777251256,
+                "median": 5.543988293228226,
+                "p05": 3.2008195713013325,
+                "p95": 7.497442949328706,
+                "maximum": 8.085934822348472
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 5.5566267732009935,
+                "median": 5.545851200037932,
+                "p05": 3.203641829319268,
+                "p95": 7.49958400526902,
+                "maximum": 8.087052676139592
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 5.78772803727553,
+                "median": 5.781042376291385,
+                "p05": 3.42311136527042,
+                "p95": 7.788383294895958,
+                "maximum": 8.320427140148295
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 10.806673864922395,
+                "median": 10.904966924879233,
+                "p05": 9.448184249811893,
+                "p95": 12.1949010534242,
+                "maximum": 12.598815115569677
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 405.6512369410011,
+                "median": 404.8821428554466,
+                "p05": 378.72708865830975,
+                "p95": 429.7260899028615,
+                "maximum": 432.26646066262964
+              }
+            },
+            "middle": {
+              "centroid_mean_vector_mm": [
+                -0.3159909812699597,
+                3.4243110357976976,
+                1.9259136606032332
+              ],
+              "centroid_mean_offset_norm_mm": 3.941433723688373,
+              "centroid_centered_rms_spread_mm": 3.654463497801893,
+              "centroid_total_rms_displacement_mm": 5.374942162944122,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 5.166859873800623,
+                "median": 5.1159107830118895,
+                "p05": 2.8647328424856426,
+                "p95": 7.115570607750161,
+                "maximum": 7.622383999999427
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 5.169158889092062,
+                "median": 5.11725601888889,
+                "p05": 2.8683172696794164,
+                "p95": 7.117285968988098,
+                "maximum": 7.623538440059191
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 5.349276577360021,
+                "median": 5.277417520773812,
+                "p05": 3.0604250322653357,
+                "p95": 7.295866473403132,
+                "maximum": 7.808168942956739
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 10.240761854331343,
+                "median": 10.260461905895923,
+                "p05": 8.819896242723713,
+                "p95": 11.539351368737096,
+                "maximum": 11.987939377602371
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 397.2294677825565,
+                "median": 396.26506769809885,
+                "p05": 373.2527674403134,
+                "p95": 419.81956800917965,
+                "maximum": 423.0624602583705
+              }
+            },
+            "ring": {
+              "centroid_mean_vector_mm": [
+                -0.46942755258818497,
+                3.3099939486641503,
+                1.8120100028002282
+              ],
+              "centroid_mean_offset_norm_mm": 3.8026046885747027,
+              "centroid_centered_rms_spread_mm": 3.7117436880941614,
+              "centroid_total_rms_displacement_mm": 5.313835114460851,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 5.066017093505195,
+                "median": 5.1234699095428295,
+                "p05": 2.386403224978409,
+                "p95": 7.347761353673329,
+                "maximum": 7.749753689421044
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 5.06866179378583,
+                "median": 5.125274916947127,
+                "p05": 2.3897279256498547,
+                "p95": 7.349430252544547,
+                "maximum": 7.750886927327422
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 5.306429729650835,
+                "median": 5.304828388687701,
+                "p05": 2.605490811614509,
+                "p95": 7.575924847235733,
+                "maximum": 7.994552315448166
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 10.226683083822959,
+                "median": 10.063069679260673,
+                "p05": 8.860619102750073,
+                "p95": 11.720158956835064,
+                "maximum": 12.277760886348423
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 395.2852769745775,
+                "median": 392.62717121655214,
+                "p05": 369.7228050741146,
+                "p95": 417.6863899943312,
+                "maximum": 421.66369755695814
+              }
+            },
+            "pinky": {
+              "centroid_mean_vector_mm": [
+                -0.3115613016926866,
+                2.896341972644959,
+                1.6685402396151086
+              ],
+              "centroid_mean_offset_norm_mm": 3.3570662487404346,
+              "centroid_centered_rms_spread_mm": 3.5227070851040625,
+              "centroid_total_rms_displacement_mm": 4.866144162052183,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 4.618825008626106,
+                "median": 4.846552540510496,
+                "p05": 2.0048779297488966,
+                "p95": 6.979657954890998,
+                "maximum": 7.29560613957927
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 4.621512623458605,
+                "median": 4.84822433654319,
+                "p05": 2.0087222559248623,
+                "p95": 6.981721028179477,
+                "maximum": 7.296874263715402
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 4.836533075839885,
+                "median": 5.032172954429279,
+                "p05": 2.1839719216021316,
+                "p95": 7.2143578630811085,
+                "maximum": 7.511996716476785
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 9.609278906684406,
+                "median": 9.380938873654724,
+                "p05": 8.462965935784666,
+                "p95": 11.06548252836955,
+                "maximum": 11.621827947860693
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 380.31723145169235,
+                "median": 376.6178569286408,
+                "p05": 357.59182255496114,
+                "p95": 401.25023523725747,
+                "maximum": 405.6384673433697
+              }
+            }
+          }
+        }
+      }
+    },
+    "nonthumb16_only": {
+      "channels": [
+        "LH:index1_x",
+        "LH:index1_z",
+        "LH:index2",
+        "LH:index3",
+        "LH:middle1_x",
+        "LH:middle1_z",
+        "LH:middle2",
+        "LH:middle3",
+        "LH:ring1_x",
+        "LH:ring1_z",
+        "LH:ring2",
+        "LH:ring3",
+        "LH:pinky1_x",
+        "LH:pinky1_z",
+        "LH:pinky2",
+        "LH:pinky3"
+      ],
+      "one_tick": {
+        "joint_delta_rms_deg": {
+          "n": 256,
+          "mean": 0.18227532505989075,
+          "median": 0.18252423405647278,
+          "p05": 0.13618504628539085,
+          "p95": 0.23640896007418633,
+          "maximum": 0.28085869550704956
+        },
+        "joint_delta_l2_deg": {
+          "n": 256,
+          "mean": 0.729101300239563,
+          "median": 0.7300969362258911,
+          "p05": 0.5447401851415634,
+          "p95": 0.9456358402967453,
+          "maximum": 1.1234347820281982
+        },
+        "per_finger": {
+          "index": {
+            "centroid_mean_vector_mm": [
+              -0.03027798066618844,
+              0.011147857750161676,
+              -0.004040512403922971
+            ],
+            "centroid_mean_offset_norm_mm": 0.03251701994534826,
+            "centroid_centered_rms_spread_mm": 0.3365486770047267,
+            "centroid_total_rms_displacement_mm": 0.338115909977271,
+            "centroid_endpoint_mm": {
+              "n": 256,
+              "mean": 0.2943733077942333,
+              "median": 0.27593332706611917,
+              "p05": 0.09761308920312192,
+              "p95": 0.5965465964064135,
+              "maximum": 0.9616370839293517
+            },
+            "points_rms_endpoint_mm": {
+              "n": 256,
+              "mean": 0.29647821275373065,
+              "median": 0.2784667620880582,
+              "p05": 0.09793813323480738,
+              "p95": 0.600410838758081,
+              "maximum": 0.9661402423252724
+            },
+            "max_point_endpoint_mm": {
+              "n": 256,
+              "mean": 0.3427980479312691,
+              "median": 0.32435497052978124,
+              "p05": 0.10710633453777896,
+              "p95": 0.6851893879477726,
+              "maximum": 1.1311119578731204
+            }
+          },
+          "middle": {
+            "centroid_mean_vector_mm": [
+              -6.956242191015309e-05,
+              -0.01841878731430839,
+              0.0030913510000825026
+            ],
+            "centroid_mean_offset_norm_mm": 0.018676536511515747,
+            "centroid_centered_rms_spread_mm": 0.3705517449078356,
+            "centroid_total_rms_displacement_mm": 0.37102211345189073,
+            "centroid_endpoint_mm": {
+              "n": 256,
+              "mean": 0.33262861137862815,
+              "median": 0.3228086054966257,
+              "p05": 0.0968105960216012,
+              "p95": 0.6160799212223014,
+              "maximum": 0.7891411450909864
+            },
+            "points_rms_endpoint_mm": {
+              "n": 256,
+              "mean": 0.3342677702858947,
+              "median": 0.32403816237534533,
+              "p05": 0.09808989838750076,
+              "p95": 0.6170915605226914,
+              "maximum": 0.7904323274058427
+            },
+            "max_point_endpoint_mm": {
+              "n": 256,
+              "mean": 0.3800747646096043,
+              "median": 0.36696953454093184,
+              "p05": 0.11122122166012292,
+              "p95": 0.7060932823086887,
+              "maximum": 0.9336908386891865
+            }
+          },
+          "ring": {
+            "centroid_mean_vector_mm": [
+              0.0199303712848009,
+              -0.01278495093810138,
+              -0.030185760489233066
+            ],
+            "centroid_mean_offset_norm_mm": 0.03836475995432553,
+            "centroid_centered_rms_spread_mm": 0.2563693147832083,
+            "centroid_total_rms_displacement_mm": 0.2592239965141437,
+            "centroid_endpoint_mm": {
+              "n": 256,
+              "mean": 0.22412194109593792,
+              "median": 0.19951386812437305,
+              "p05": 0.05616369328278885,
+              "p95": 0.47524029321407263,
+              "maximum": 0.7205780040261319
+            },
+            "points_rms_endpoint_mm": {
+              "n": 256,
+              "mean": 0.22627482302751403,
+              "median": 0.20065551275804103,
+              "p05": 0.05805663425929947,
+              "p95": 0.47759733229708085,
+              "maximum": 0.7262723845330292
+            },
+            "max_point_endpoint_mm": {
+              "n": 256,
+              "mean": 0.26688848026284506,
+              "median": 0.2251827689216458,
+              "p05": 0.0721946394367207,
+              "p95": 0.5635900979288793,
+              "maximum": 0.876906258128348
+            }
+          },
+          "pinky": {
+            "centroid_mean_vector_mm": [
+              0.005492433591707414,
+              0.007895187154936572,
+              -0.003388147091499573
+            ],
+            "centroid_mean_offset_norm_mm": 0.010197075447618718,
+            "centroid_centered_rms_spread_mm": 0.2846581859520614,
+            "centroid_total_rms_displacement_mm": 0.2848407681094874,
+            "centroid_endpoint_mm": {
+              "n": 256,
+              "mean": 0.2457719088242447,
+              "median": 0.2168120186175513,
+              "p05": 0.0602578719457292,
+              "p95": 0.5465240178272011,
+              "maximum": 0.8146753710954913
+            },
+            "points_rms_endpoint_mm": {
+              "n": 256,
+              "mean": 0.24840088008797043,
+              "median": 0.21837958454014225,
+              "p05": 0.06271383790867957,
+              "p95": 0.5485890457769061,
+              "maximum": 0.8218808834972511
+            },
+            "max_point_endpoint_mm": {
+              "n": 256,
+              "mean": 0.29812532380117734,
+              "median": 0.2608563605878813,
+              "p05": 0.07854722264237954,
+              "p95": 0.6499548737871356,
+              "maximum": 0.9873939411881696
+            }
+          }
+        }
+      },
+      "paths": {
+        "1": {
+          "joint_delta_rms_deg": {
+            "n": 16,
+            "mean": 0.16893012821674347,
+            "median": 0.17935845255851746,
+            "p05": 0.10356855392456055,
+            "p95": 0.2168515920639038,
+            "maximum": 0.22087861597537994
+          },
+          "joint_delta_l2_deg": {
+            "n": 16,
+            "mean": 0.6757205128669739,
+            "median": 0.7174338102340698,
+            "p05": 0.4142742156982422,
+            "p95": 0.8674063682556152,
+            "maximum": 0.8835144639015198
+          },
+          "clipped_axis_fraction_through_endpoint": 0.046875,
+          "per_finger": {
+            "index": {
+              "centroid_mean_vector_mm": [
+                0.03745108047375004,
+                -0.022050024038103994,
+                -0.020553205173981515
+              ],
+              "centroid_mean_offset_norm_mm": 0.04807516231544149,
+              "centroid_centered_rms_spread_mm": 0.27240826984187166,
+              "centroid_total_rms_displacement_mm": 0.27661794357904196,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 0.25502190055513685,
+                "median": 0.23988936864660565,
+                "p05": 0.11125550187249908,
+                "p95": 0.41256392115004215,
+                "maximum": 0.4224996924637872
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 0.2566489667080696,
+                "median": 0.24163620586976664,
+                "p05": 0.11188826949509209,
+                "p95": 0.41445606057683243,
+                "maximum": 0.42629472498031123
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 0.2959934834556732,
+                "median": 0.28659412926907313,
+                "p05": 0.12701070257237146,
+                "p95": 0.46259225193830245,
+                "maximum": 0.5167128747499514
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 0.25502190055513685,
+                "median": 0.23988936864660565,
+                "p05": 0.11125550187249908,
+                "p95": 0.41256392115004215,
+                "maximum": 0.4224996924637872
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 0.25502190055513685,
+                "median": 0.23988936864660565,
+                "p05": 0.11125550187249908,
+                "p95": 0.41256392115004215,
+                "maximum": 0.4224996924637872
+              }
+            },
+            "middle": {
+              "centroid_mean_vector_mm": [
+                0.06773840948044729,
+                0.032747397278180476,
+                0.002457685008963595
+              ],
+              "centroid_mean_offset_norm_mm": 0.07527897689952368,
+              "centroid_centered_rms_spread_mm": 0.37885762581931615,
+              "centroid_total_rms_displacement_mm": 0.3862641906836407,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 0.34559790377470045,
+                "median": 0.34529647663609875,
+                "p05": 0.11351373784586324,
+                "p95": 0.6272696705205257,
+                "maximum": 0.6492785171984942
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 0.3465732618541268,
+                "median": 0.3457946584619849,
+                "p05": 0.11411459384624352,
+                "p95": 0.6287038387983435,
+                "maximum": 0.6500447833637352
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 0.38219604801996665,
+                "median": 0.3743699114791319,
+                "p05": 0.1263802250546311,
+                "p95": 0.695735806137271,
+                "maximum": 0.7008589349549209
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 0.34559790377470045,
+                "median": 0.34529647663609875,
+                "p05": 0.11351373784586324,
+                "p95": 0.6272696705205257,
+                "maximum": 0.6492785171984942
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 0.34559790377470045,
+                "median": 0.34529647663609875,
+                "p05": 0.11351373784586324,
+                "p95": 0.6272696705205257,
+                "maximum": 0.6492785171984942
+              }
+            },
+            "ring": {
+              "centroid_mean_vector_mm": [
+                0.1009149235944723,
+                -0.05853082460526623,
+                -0.0481689123416687
+              ],
+              "centroid_mean_offset_norm_mm": 0.12621380015366776,
+              "centroid_centered_rms_spread_mm": 0.18899739448306183,
+              "centroid_total_rms_displacement_mm": 0.2272662281787949,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 0.20630344021066116,
+                "median": 0.22041263865652594,
+                "p05": 0.08578115702277284,
+                "p95": 0.344685386611429,
+                "maximum": 0.3572018691846455
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 0.20794490470928434,
+                "median": 0.22129951632633804,
+                "p05": 0.08635376172410911,
+                "p95": 0.3473276557456809,
+                "maximum": 0.3607348696160472
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 0.24511743990929177,
+                "median": 0.2510005241933117,
+                "p05": 0.09252053062702333,
+                "p95": 0.4179470909808396,
+                "maximum": 0.4433148033666898
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 0.20630344021066116,
+                "median": 0.22041263865652594,
+                "p05": 0.08578115702277284,
+                "p95": 0.344685386611429,
+                "maximum": 0.3572018691846455
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 0.20630344021066116,
+                "median": 0.22041263865652594,
+                "p05": 0.08578115702277284,
+                "p95": 0.344685386611429,
+                "maximum": 0.3572018691846455
+              }
+            },
+            "pinky": {
+              "centroid_mean_vector_mm": [
+                0.09541630521989197,
+                0.013959634674930686,
+                -0.03684537085416051
+              ],
+              "centroid_mean_offset_norm_mm": 0.1032314102173061,
+              "centroid_centered_rms_spread_mm": 0.19794330748137218,
+              "centroid_total_rms_displacement_mm": 0.22324488131224596,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 0.20214064804078186,
+                "median": 0.17820528857949547,
+                "p05": 0.0905360793643559,
+                "p95": 0.3636638045151726,
+                "maximum": 0.419513811049953
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 0.204085813222336,
+                "median": 0.18052602201499926,
+                "p05": 0.09161703953510925,
+                "p95": 0.3673778052539955,
+                "maximum": 0.4223381214812656
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 0.24518326040319927,
+                "median": 0.217528044415263,
+                "p05": 0.10828868929561002,
+                "p95": 0.45389907973151367,
+                "maximum": 0.5004671342814854
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 0.20214064804078186,
+                "median": 0.17820528857949547,
+                "p05": 0.0905360793643559,
+                "p95": 0.3636638045151726,
+                "maximum": 0.419513811049953
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 0.20214064804078186,
+                "median": 0.17820528857949547,
+                "p05": 0.0905360793643559,
+                "p95": 0.3636638045151726,
+                "maximum": 0.419513811049953
+              }
+            }
+          }
+        },
+        "60": {
+          "joint_delta_rms_deg": {
+            "n": 16,
+            "mean": 1.4631989002227783,
+            "median": 1.4690749645233154,
+            "p05": 1.0857747197151184,
+            "p95": 1.885498583316803,
+            "maximum": 2.012096881866455
+          },
+          "joint_delta_l2_deg": {
+            "n": 16,
+            "mean": 5.852795600891113,
+            "median": 5.876299858093262,
+            "p05": 4.343098878860474,
+            "p95": 7.541994333267212,
+            "maximum": 8.04838752746582
+          },
+          "clipped_axis_fraction_through_endpoint": 0.03307291666666667,
+          "per_finger": {
+            "index": {
+              "centroid_mean_vector_mm": [
+                -0.8960411319613483,
+                0.08133291301583562,
+                0.19143529323633474
+              ],
+              "centroid_mean_offset_norm_mm": 0.9198653294926912,
+              "centroid_centered_rms_spread_mm": 2.3054050772317467,
+              "centroid_total_rms_displacement_mm": 2.482145200130043,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 2.0306313851453766,
+                "median": 1.746176380286061,
+                "p05": 0.6864624818153894,
+                "p95": 4.7196214207910705,
+                "maximum": 6.200568629869256
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 2.047554798534233,
+                "median": 1.7746898125295476,
+                "p05": 0.6901209385904798,
+                "p95": 4.747397557923224,
+                "maximum": 6.259318321378512
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 2.401766913179364,
+                "median": 2.083519768259564,
+                "p05": 0.7789171704018976,
+                "p95": 5.549267340254456,
+                "maximum": 7.650184723963368
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 2.7057253309737277,
+                "median": 2.406036876375624,
+                "p05": 1.1872067916148512,
+                "p95": 4.944911730294519,
+                "maximum": 6.4086577425226245
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 16.569591040636745,
+                "median": 16.504700994251337,
+                "p05": 15.112763328233747,
+                "p95": 18.594235565684745,
+                "maximum": 18.626428356021954
+              }
+            },
+            "middle": {
+              "centroid_mean_vector_mm": [
+                -0.8790085781859962,
+                -0.28808969815439894,
+                0.02676288080832867
+              ],
+              "centroid_mean_offset_norm_mm": 0.9254015379803624,
+              "centroid_centered_rms_spread_mm": 2.5621427565589507,
+              "centroid_total_rms_displacement_mm": 2.724140875851306,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 2.4347622110618277,
+                "median": 2.113789035411881,
+                "p05": 0.984622528791721,
+                "p95": 4.634795552638613,
+                "maximum": 5.2346565030198215
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 2.443791338496904,
+                "median": 2.1241935117286617,
+                "p05": 0.9885310311243469,
+                "p95": 4.649392225720048,
+                "maximum": 5.256374477931809
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 2.7092834877063154,
+                "median": 2.3738720706253673,
+                "p05": 1.0854511903923152,
+                "p95": 5.225744927176041,
+                "maximum": 5.999815356817577
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 3.4478254051618427,
+                "median": 3.2853893092648914,
+                "p05": 2.56221320513587,
+                "p95": 5.09095684209286,
+                "maximum": 5.2346565030198215
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 21.040961776875108,
+                "median": 20.85842812271752,
+                "p05": 18.87877425336181,
+                "p95": 24.40750155238499,
+                "maximum": 24.45141663439765
+              }
+            },
+            "ring": {
+              "centroid_mean_vector_mm": [
+                0.5329669393082173,
+                -0.10033164154961502,
+                -0.2186169978957639
+              ],
+              "centroid_mean_offset_norm_mm": 0.5847337757138421,
+              "centroid_centered_rms_spread_mm": 1.9337497342251027,
+              "centroid_total_rms_displacement_mm": 2.0202231617017516,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 1.8535288237602083,
+                "median": 1.6895077773065255,
+                "p05": 0.9317546838233328,
+                "p95": 3.2804181567430826,
+                "maximum": 3.6560640377998697
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 1.872494043425066,
+                "median": 1.703558651242073,
+                "p05": 0.9560198924113568,
+                "p95": 3.316388357873244,
+                "maximum": 3.708956083726425
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 2.262013442200262,
+                "median": 2.054663114643362,
+                "p05": 1.0685411948776227,
+                "p95": 4.066992109054183,
+                "maximum": 4.661996524339398
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 2.390494967351824,
+                "median": 2.324154213965394,
+                "p05": 1.4238270963038473,
+                "p95": 3.6437091551871994,
+                "maximum": 3.6560640377998697
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 14.303430859835768,
+                "median": 14.239503152331189,
+                "p05": 12.512715722277502,
+                "p95": 15.91466683833717,
+                "maximum": 16.514150658852497
+              }
+            },
+            "pinky": {
+              "centroid_mean_vector_mm": [
+                -1.2114157489061579,
+                -0.2015595060029839,
+                0.30394379904111896
+              ],
+              "centroid_mean_offset_norm_mm": 1.2651229917022229,
+              "centroid_centered_rms_spread_mm": 1.6648578973522774,
+              "centroid_total_rms_displacement_mm": 2.091001674439748,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 1.8323919468460468,
+                "median": 1.7625046527652302,
+                "p05": 0.5331233217106717,
+                "p95": 3.1682918784523615,
+                "maximum": 4.039308953936527
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 1.8550190973231868,
+                "median": 1.8072976005192878,
+                "p05": 0.5406293248479589,
+                "p95": 3.190210303509249,
+                "maximum": 4.0585770863325505
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 2.2045673583037075,
+                "median": 2.0885405995499013,
+                "p05": 0.6513211239846297,
+                "p95": 3.8867184572664946,
+                "maximum": 4.719296003647004
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 2.359138701942196,
+                "median": 2.402827437098805,
+                "p05": 1.3488469522907076,
+                "p95": 3.637813449931123,
+                "maximum": 4.039308953936527
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 13.667116373702386,
+                "median": 13.683049619307068,
+                "p05": 11.989974223359901,
+                "p95": 15.315774949365528,
+                "maximum": 15.336987465456822
+              }
+            }
+          }
+        },
+        "180": {
+          "joint_delta_rms_deg": {
+            "n": 16,
+            "mean": 2.4231367111206055,
+            "median": 2.2225396633148193,
+            "p05": 1.9996729493141174,
+            "p95": 3.0821715593338013,
+            "maximum": 3.869385242462158
+          },
+          "joint_delta_l2_deg": {
+            "n": 16,
+            "mean": 9.692546844482422,
+            "median": 8.890158653259277,
+            "p05": 7.99869179725647,
+            "p95": 12.328686237335205,
+            "maximum": 15.477540969848633
+          },
+          "clipped_axis_fraction_through_endpoint": 0.021028645833333335,
+          "per_finger": {
+            "index": {
+              "centroid_mean_vector_mm": [
+                -0.5889065711304625,
+                0.21489147904324263,
+                0.24180847210622525
+              ],
+              "centroid_mean_offset_norm_mm": 0.6719082039001891,
+              "centroid_centered_rms_spread_mm": 3.816538627517305,
+              "centroid_total_rms_displacement_mm": 3.87523260331558,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 3.53278055307648,
+                "median": 3.4992090367580344,
+                "p05": 1.284122388851776,
+                "p95": 5.901371181671832,
+                "maximum": 7.380965243311589
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 3.5623672593953213,
+                "median": 3.5178624960452582,
+                "p05": 1.2943659436110933,
+                "p95": 5.930545799486574,
+                "maximum": 7.46797649490877
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 4.201079737473225,
+                "median": 4.063194323284052,
+                "p05": 1.47869712256283,
+                "p95": 6.779323155554785,
+                "maximum": 9.285572633293093
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 4.681913406401112,
+                "median": 4.318454410387135,
+                "p05": 2.1544446537434263,
+                "p95": 7.672838856541163,
+                "maximum": 8.448258881287005
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 49.461325433244895,
+                "median": 49.358201906628636,
+                "p05": 47.49354844881269,
+                "p95": 53.0996809365948,
+                "maximum": 54.608053324627654
+              }
+            },
+            "middle": {
+              "centroid_mean_vector_mm": [
+                -3.0475646200055566,
+                -0.28674878447674734,
+                0.1664682190086128
+              ],
+              "centroid_mean_offset_norm_mm": 3.065548343518399,
+              "centroid_centered_rms_spread_mm": 4.560985519497383,
+              "centroid_total_rms_displacement_mm": 5.495468638388651,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 4.904596211968699,
+                "median": 4.276217753640587,
+                "p05": 1.1088275388930924,
+                "p95": 8.606779899802579,
+                "maximum": 9.116999205629874
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 4.925177249616233,
+                "median": 4.305258622780497,
+                "p05": 1.1459479839608224,
+                "p95": 8.633098015583215,
+                "maximum": 9.136676052530591
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 5.5259033453565465,
+                "median": 4.830727060853748,
+                "p05": 1.3202092071432086,
+                "p95": 9.678671529226204,
+                "maximum": 10.084500818532465
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 6.1737668712143785,
+                "median": 5.493607299598814,
+                "p05": 3.6163431544300653,
+                "p95": 9.215879539386634,
+                "maximum": 10.751041914069543
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 61.768572916085034,
+                "median": 62.58385742462674,
+                "p05": 57.34789841967064,
+                "p95": 65.42854662452397,
+                "maximum": 66.13681320751245
+              }
+            },
+            "ring": {
+              "centroid_mean_vector_mm": [
+                -0.46442215567530504,
+                0.15562015949434435,
+                0.07136017221833629
+              ],
+              "centroid_mean_offset_norm_mm": 0.4949725718685562,
+              "centroid_centered_rms_spread_mm": 2.9139161990583364,
+              "centroid_total_rms_displacement_mm": 2.9556565196309186,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 2.6365427635278853,
+                "median": 2.295409410569456,
+                "p05": 0.9805552019775281,
+                "p95": 4.8336973899546285,
+                "maximum": 6.494056714092187
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 2.6605540752261247,
+                "median": 2.31277340688752,
+                "p05": 1.0346665448917773,
+                "p95": 4.852175215333108,
+                "maximum": 6.495062170076604
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 3.088196820810486,
+                "median": 2.6647526866639257,
+                "p05": 1.328880914481365,
+                "p95": 5.450698643724475,
+                "maximum": 6.631172379643074
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 3.9513180263728844,
+                "median": 3.5782230192136475,
+                "p05": 2.2977828735798975,
+                "p95": 6.077701786667595,
+                "maximum": 7.682363966470574
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 42.95935526739006,
+                "median": 42.939106737337994,
+                "p05": 40.368807077786826,
+                "p95": 46.03659930576336,
+                "maximum": 48.05854848361683
+              }
+            },
+            "pinky": {
+              "centroid_mean_vector_mm": [
+                -1.5744957205165444,
+                -0.33483051913921547,
+                0.3382575779758423
+              ],
+              "centroid_mean_offset_norm_mm": 1.6448606140126378,
+              "centroid_centered_rms_spread_mm": 2.847676297482977,
+              "centroid_total_rms_displacement_mm": 3.288590387198805,
+              "centroid_endpoint_mm": {
+                "n": 16,
+                "mean": 2.881469099457446,
+                "median": 3.003021592647657,
+                "p05": 0.699621387060922,
+                "p95": 5.412328107943766,
+                "maximum": 5.413806829105018
+              },
+              "points_rms_endpoint_mm": {
+                "n": 16,
+                "mean": 2.905894527393691,
+                "median": 3.0204878989061488,
+                "p05": 0.7308416963524703,
+                "p95": 5.424552363200418,
+                "maximum": 5.45190508803252
+              },
+              "max_point_endpoint_mm": {
+                "n": 16,
+                "mean": 3.3789789602506586,
+                "median": 3.60413292580735,
+                "p05": 0.9512090078526154,
+                "p95": 5.883975438823187,
+                "maximum": 6.4876031569273955
+              },
+              "centroid_max_excursion_mm": {
+                "n": 16,
+                "mean": 4.27566068679465,
+                "median": 4.361013963790212,
+                "p05": 2.0621153412527713,
+                "p95": 6.327962927081195,
+                "maximum": 6.67576798104221
+              },
+              "centroid_target_path_length_mm": {
+                "n": 16,
+                "mean": 41.540812894510694,
+                "median": 40.85866208292006,
+                "p05": 37.67257996785442,
+                "p95": 45.40037919569173,
+                "maximum": 45.79890349559924
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "controller_source_matches_original_baseline": true,
+  "production_codec_oracle_max_error_rad": 0.0,
+  "software_versions": {
+    "numpy": "1.23.5",
+    "torch": "2.4.1+cu121",
+    "python": "3.8.20 (default, Oct  3 2024, 15:24:27) \n[GCC 11.2.0]"
+  },
+  "geometry": "target105 FK calibrated from prepared035 actual body/q; no predicted native actual motion",
+  "median_centroid_arm_over_nonthumb_ratios": {
+    "one_tick": {
+      "index": 7.599251364305843,
+      "middle": 6.422443760659353,
+      "ring": 10.347887616139836,
+      "pinky": 9.141833688659347
+    },
+    "60": {
+      "index": 3.459303489088918,
+      "middle": 2.654646615321657,
+      "ring": 3.3004027424121225,
+      "pinky": 2.8828002321395574
+    },
+    "180": {
+      "index": 1.5843547027315206,
+      "middle": 1.1963634870222462,
+      "ring": 2.232050581456741,
+      "pinky": 1.6138920054309245
+    }
+  },
+  "completed": true,
+  "changed_inputs": [],
+  "wall_s": 4.037850467999988
+}

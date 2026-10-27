@@ -1,0 +1,12 @@
+# Palm task authority artifact index
+
+- New plotter: [plot_palm_task_authority.py](/home/ajou/yigyu/3/stability_adapter_2/plot_palm_task_authority.py:1). It reads the saved authority JSON, validates three checks and 76 embedded hashes, and records axis containment as an observation rather than a gating check.
+- Canonical image and manifest: [palm_axis_authority.png](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_task_authority_v1/artifacts_validated/palm_axis_authority.png) and [plot_manifest.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_task_authority_v1/artifacts_validated/plot_manifest.json). Prior chart/source preserved in `artifacts/`, `artifacts_v1/`, `artifacts_v2/`, and `source_plot_v2/`.
+- Results and caveats: [README.md](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_task_authority_v1/README.md:1), especially world-axis definition at line 9, per-step 3×12 map at line 19, and containment observation at line 29.
+- Cumulative report: [VISUAL_REPORT.md §38](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/VISUAL_REPORT.md:806), with figure at line 812 and world-coordinate interpretation at line 814.
+- Source analysis: [PALM_TASK_AUTHORITY.md](/home/ajou/yigyu/3/stability_adapter_2/PALM_TASK_AUTHORITY.md:17), [PLAN.md §46](/home/ajou/yigyu/3/stability_adapter_2/PLAN.md:891), [README.md](/home/ajou/yigyu/3/stability_adapter_2/README.md:159), and [PALM_POSITION_COMPARISON.md](/home/ajou/yigyu/3/stability_adapter_2/PALM_POSITION_COMPARISON.md:78).
+- Verification: `py_compile` passed; canonical CLI and a fresh `/tmp` CLI produced byte/pixel-identical 2340×864 PNGs; current producer SHA and all 76 embedded input SHA records verified. Independent review completed with no outstanding findings: [review.md:34](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_task_authority_v1/review.md:34).
+
+- Saved-only analysis implementation: [analyze_palm_task_authority.py:15](/home/ajou/yigyu/3/stability_adapter_2/analyze_palm_task_authority.py:15), [per-step map/box extrema:37](/home/ajou/yigyu/3/stability_adapter_2/analyze_palm_task_authority.py:37).
+- Actual analysis command/exit0: [analysis_execution.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/palm_task_authority_v1/analysis_execution.json:1). Native initializations, physics steps and new controller runs were zero.
+- Caption/data mapping guidance: [EXPERIMENT_WORKFLOW.md:40](/home/ajou/yigyu/3/stability_adapter_2/EXPERIMENT_WORKFLOW.md:40).

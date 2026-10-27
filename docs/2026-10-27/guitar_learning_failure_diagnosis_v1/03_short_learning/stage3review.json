@@ -1,0 +1,50 @@
+{
+  "schema": "guitar_learning.short_learning_implementation_review.v1",
+  "reviewer": "/root/review_overnight_results",
+  "verdict": "수정 권장",
+  "critical": [],
+  "warning": [
+    {
+      "id": "initial_std_record_mismatch",
+      "file": "guitar_learning/tool/experiments/short_finger_learning/runner.py",
+      "line": 35,
+      "finding": "CLI initial_std is saved in song.short_learning.initial_std and used by ShortPolicy, but top-level settings.initial_std remains0.049787068367863944. Existing smoke_inc_row8 records top-level0.049787 versus actual short-spec0.1711710544767014.",
+      "proposal": "Synchronize the top-level field before a future sealed run, or explicitly declare it an unused legacy field in separate metadata. Preserve existing smoke inputs/checkpoints; do not change source during an executing sealed run.",
+      "blocks_gpu_smoke_or_short_learning": false,
+      "affects": "Settings interpretation only; current actor initialization and architecture contract use the explicit short spec."
+    }
+  ],
+  "scope": "Review of5new short_finger_learning modules,2minimal production hooks,1test module. No code/model/original-log edits and no GPU execution by reviewer. Native readiness/performance/teacher reachability are separate gates.",
+  "independently_run_tests": {
+    "command": "/home/ajou/miniconda3/envs/rl38/bin/python -m unittest guitar_learning.tests.test_short_finger_learning -v",
+    "count": 10,
+    "passed": 10,
+    "failed": 0,
+    "elapsed_s": 3.837
+  },
+  "code_review": {
+    "likelihood": "Exactly selected4 named action axes for logp, analyticKL, entropy, sampled exploration and actor gradients; policy latents exclude deterministic teacher contribution. Inactive heads/support frozen, inactive std coordinates masked.",
+    "teacher": "Finite arm12 + other-finger B from score-local time; torch.where preserves policy selected4 exactly, inactiveRH6zero; selected4 reference condition explicitly separate from policy performance.",
+    "actual_clock": "Original source target by immutable target_id/finger; onsetlocal3s via score_offset, originalpress/onset/endintervals unchanged. Scope/catalog overridden to one target, no exposure-triggered full-song switch.",
+    "reset": "Partial reset uses existing physical pool reset; only reset rows clock/wrist/failure_paid cleared. No warmup transition discard or per-tick state injection.",
+    "strict_checkpoint": "Fresh training only. Evaluation checks ownschema,inputpins,teacher evidence and full trainer architecture/config identity; mode/mask/teacher contract mismatch rejected.",
+    "evaluation": "Predetermined per-env quotas, includes failed attempts, avoids selecting fastest completions. Reference/zero/random/policy conditions labeled; random baseline restricted to fresh initial checkpoint. Env0 first attempt trace includes terminal boundary before reset.",
+    "logging": "9effective reward means overrawK1 HxN transitions, costs separate, compact completed-episode note/angle/failure data; no mandatoryraw all-env transition journals.",
+    "production_hooks": "GpuPool default_scene/default_environment preserved unless subclass override; default FingerSkillEnvironment allowed mode remains incremental, only explicitShortEnvironment permits position. DefaultCLI position rejection covered bytests."
+  },
+  "native_readiness": {
+    "not_certified_by_this_review": true,
+    "required_before_budgeted_comparison": "Same actual-clock reference must achieve candidate/clean/note with original termination; script/fixed/teacher success must not be reported as learned free-guitar performance. Exploration calibration and force behavior must be checked in native runs."
+  },
+  "reviewed_source_sha256": {
+    "guitar_learning/tool/experiments/short_finger_learning/__init__.py": "4c3f8f39b7a7ca7481a492ef02421fe16f499e92e887139ba7e15b8f675f2fc0",
+    "guitar_learning/tool/experiments/short_finger_learning/runtime.py": "5c3f4f0e7ba9145c6042d7d14f81ea299b15e4fb537525394d9033c872b533ca",
+    "guitar_learning/tool/experiments/short_finger_learning/spec.py": "4e3decf6918463b0051a22931638fa56f6c4e279fceb5dc2f75cba3dd7402b1c",
+    "guitar_learning/tool/experiments/short_finger_learning/runner.py": "fce85061ee024e7a9ad973bf4ce873fb9e1085e84227200e33029cb5b6272a4a",
+    "guitar_learning/tool/experiments/short_finger_learning/__main__.py": "c48182fdcbb9bbbc587dfe91ee89811386fc58edfd239258039b9fc4b7bee667",
+    "guitar_learning/training/gpu_pool.py": "675fa199778a9760bd292f3265d57393a3f540748840308d8fa16e0d84bd468d",
+    "guitar_learning/gpu/finger_skill_environment.py": "d28b9f10c87d429586d0b4ca1487b6b62e5f9f544547d93d0f35d22a446ed9de",
+    "guitar_learning/tests/test_short_finger_learning.py": "deae9635abc3ad1622efa44b3bd0b2c32f3c4bc84ac967e57fa836a69a842962"
+  },
+  "no_review_changes_to_package": true
+}

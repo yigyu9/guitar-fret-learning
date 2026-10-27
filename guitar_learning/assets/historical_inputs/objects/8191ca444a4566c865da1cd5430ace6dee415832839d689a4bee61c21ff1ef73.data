@@ -1,0 +1,137 @@
+"""Observable skill history; synthetic/recorded states are interface evidence only."""
+import copy
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+import numpy as np
+from guitar_learning.skills import skill_parallel
+from guitar_learning.training import parallel
+from guitar_learning.skills import specialist_parallel
+from guitar_learning import train_parallel
+from guitar_learning.skills.skill_environment_v2 import SkillTrainingEnvironmentV2, SkillObservationBuilder, HISTORY_FIELDS, history_values
+from guitar_learning.skills.skill_parallel_v2 import SkillPool, skill_native_environment
+from guitar_learning.skills.skill_settings import settings_document, SKILLS
+from guitar_learning.skills.train_skills_v2 import run
+from guitar_learning.core.task_measurement import TaskMeasurement
+from guitar_learning.tests import test_skill_environment as fixtures
+
+
+class ObservableSkillTests(unittest.TestCase):
+    setUp = fixtures.SkillEnvironmentTests.setUp
+    tearDown = fixtures.SkillEnvironmentTests.tearDown
+
+    def environment(self, *args, **kwargs):
+        with patch.object(fixtures, 'SkillTrainingEnvironment', SkillTrainingEnvironmentV2):
+            return fixtures.SkillEnvironmentTests.environment(self, *args, **kwargs)
+
+    def state_field(self, env, observation, name):
+        return observation['state'][env.builder.fields.index('skill_history.'+name)]
+
+    def test_same_physics_different_achievement_and_dwell_changes_observation(self):
+        env = self.environment('right', 'ready'); before, _ = env.reset()
+        ledger = env.skill_ledger
+        ledger.reached.add('t'); ledger.contacts.add('t'); ledger.held.add('t')
+        ledger.ready.add('t'); ledger.crossed.add('t')
+        ledger.ready_dwell = .025; ledger.previous_ready = True
+        ledger.first_success_s = .5
+        after = env._observation()
+        np.testing.assert_array_equal(before['state'][:468], after['state'][:468])
+        np.testing.assert_array_equal(before['events'], after['events'])
+        for name in ('reached', 'contact_acquired', 'held', 'ready', 'crossed',
+                     'ready_dwell_s', 'previous_ready', 'has_first_success',
+                     'first_success_s', 'provisional_success'):
+            self.assertNotEqual(self.state_field(env, before, name), self.state_field(env, after, name), name)
+        self.assertAlmostEqual(self.state_field(env, after, 'ready_dwell_s'), .025/4.)
+
+    def test_timed_bonus_and_miss_history_are_policy_inputs(self):
+        env = self.environment('left', 'timed'); before, _ = env.reset()
+        ledger, timed = env.skill_ledger, env.skill_ledger.timed
+        timed.acquired.add('t'); timed.dwelled.add('t'); timed.left_missed.add('t')
+        timed.right_matches[.05]['t'] = 'old'; timed.right_matches[.1]['t'] = 'old'
+        timed.right_missed.add('t')
+        timed.left['t'].update(valid_s=.1, dwell_s=.025, longest_dwell_s=.05,
+                               acquisitions=2, releases=1, timely_releases=1)
+        ledger.invalidate(['synthetic_fixture_failure'])
+        after = env._observation()
+        for name in ('timed_acquired', 'timed_dwelled', 'timed_left_missed',
+                     'timed_right_matched50', 'timed_right_matched100', 'timed_right_missed',
+                     'timed_valid_s', 'timed_longest_dwell_s', 'timed_acquisitions',
+                     'timed_releases', 'timed_timely_releases', 'safety_invalidated',
+                     'timed_safety_invalidated'):
+            self.assertNotEqual(self.state_field(env, before, name), self.state_field(env, after, name), name)
+        self.assertEqual(self.state_field(env, after, 'timed_dwell_s'), 0.)
+        self.assertEqual(self.state_field(env, after, 'provisional_success'), 0.)
+
+    def test_returned_tick_contains_latest_history_and_reset_has_no_leak(self):
+        env = self.environment('left', 'hold')
+        def contact(measurement, sample): return {'t':dict(fretting_contact_candidate=True)}, {'t'}
+        with patch.object(TaskMeasurement, '_contacts', contact):
+            first, first_info = env.reset()
+            obs, reward, terminated, truncated, info = env.step(np.zeros(39))
+            self.assertAlmostEqual(self.state_field(env, obs, 'candidate_dwell_s'), 4/240./4.)
+            self.assertEqual(self.state_field(env, obs, 'contact_acquired'), 1.)
+            self.assertEqual(info['music']['matched50'], 0)
+            self.assertEqual(info['specialist']['skill']['contact_targets'], ['t'])
+            self.assertFalse(terminated or truncated)
+            session = env.control.session
+            again, again_info = env.reset()
+        self.assertIs(env.control.session, session)
+        for key in first: np.testing.assert_array_equal(first[key], again[key])
+        self.assertEqual(first_info['training_contract'], again_info['training_contract'])
+        self.assertIsNone(env.skill_ledger.first_success_s)
+        self.assertEqual(env.skill_ledger.contacts, set())
+        self.assertEqual(self.state_field(env, again, 'previous_candidate'), 1.)
+
+    def test_common_505_dimensions_and_contract_all_seven_stages(self):
+        contracts = []
+        self.assertEqual(len(HISTORY_FIELDS), 37)
+        for role, skills in SKILLS.items():
+            for skill in skills:
+                env = self.environment(role, skill)
+                observation, info = env.reset()
+                self.assertIsInstance(env.builder, SkillObservationBuilder)
+                self.assertEqual(observation['state'].shape, (505,))
+                self.assertEqual(env.builder.spec['dimension'], 505)
+                self.assertEqual(len(env.builder.spec['fields']), 505)
+                self.assertEqual(len(env.builder.spec['scales']), 505)
+                self.assertEqual(info['training_contract']['task']['specialist']['schema'], 'guitar_learning.skill.v2')
+                contracts.append(copy.deepcopy(info['training_contract']))
+                for key in ('observation', 'action', 'termination'):
+                    self.assertEqual(contracts[-1][key], contracts[0][key])
+                for name, value in observation.items(): self.assertTrue(np.isfinite(value).all(), name)
+        np.testing.assert_array_equal(history_values(None), np.zeros(37))
+
+    def test_native_music_cost_reward_termination_unchanged_from_v1(self):
+        new = self.environment('left', 'hold', time_limit_s=2/60.)
+        # Construct the v1 fixture directly, bypassing this helper's patch.
+        old = fixtures.SkillEnvironmentTests.environment(self, 'left', 'hold', time_limit_s=2/60.)
+        new_obs, _ = new.reset(); old_obs, _ = old.reset()
+        np.testing.assert_array_equal(new_obs['state'][:468], old_obs['state'])
+        for _ in range(2):
+            actual, expected = new.step(np.zeros(39)), old.step(np.zeros(39))
+            self.assertEqual(actual[1:4], expected[1:4])
+            for key in ('music', 'cost', 'reward_terms', 'failure_reasons', 'termination_reason', 'specialist'):
+                self.assertEqual(actual[4][key], expected[4][key])
+            np.testing.assert_array_equal(actual[0]['state'][:468], expected[0]['state'])
+
+    def test_v2_pool_dispatch_is_reversible_on_interrupt(self):
+        originals = skill_parallel.SkillPool, specialist_parallel.SpecialistPool, parallel.Pool
+        settings = settings_document(dict(specialist=dict(role='left'), skill='reach'))
+        with tempfile.TemporaryDirectory() as temporary:
+            args = SimpleNamespace(out=Path(temporary)/'run', resume=None)
+            def fail():
+                with patch.object(originals[2], '__init__', return_value=None) as base:
+                    parallel.Pool([dict(out='unused')])
+                self.assertEqual(base.call_args.args[0][0]['skill'], 'reach')
+                self.assertIs(base.call_args.kwargs['worker_factory'], skill_native_environment)
+                raise KeyboardInterrupt()
+            with patch.dict(sys.modules, {'isaacgym':SimpleNamespace()}), \
+                 patch.object(train_parallel, 'main', fail), self.assertRaises(KeyboardInterrupt):
+                run(settings, args)
+        self.assertEqual((skill_parallel.SkillPool, specialist_parallel.SpecialistPool, parallel.Pool), originals)
+
+
+if __name__ == '__main__': unittest.main()

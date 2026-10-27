@@ -1,0 +1,216 @@
+"""V3: audit the finite human Chest margin, retaining V2 raw-contact criteria."""
+import argparse
+import csv
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from scipy.spatial.transform import Rotation
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import ROOT,A,BASE,read,save,pin,verify,sha
+from ..lower_body_release_v1 import upright_native_audit_v3
+from ..lower_body_release_v1.controller_horizontal_v4 import full_fk
+from ..seated_foot_support_v1.analyze_v6 import measure,contact_interval,sole_summary,physical_guitar_bodies,RAW,LAYOUT_REFERENCE
+from ..grounded_guitar_support_v1.analyze_v19 import interval,right_goal_evidence
+from ..grounded_guitar_release_v1.motion_v1 import WEIGHTS,smoothstep
+from ..grounded_guitar_play_v1.analyze_v1 import prefix
+from ..front_facing_strike_v1.analyze_v1 import strike_evidence
+from ..front_facing_strike_v1.motion_v1 import pick_goal
+from ..front_facing_pose_v1.analyze_v1 import heading,PARTS,GAIN_REFERENCE
+from .protocol_v1 import PHASE,PLAN,PROTOCOL,REFERENCE,REPEAT,CERTIFICATE,TASK_CHAIN,schedule
+from .geometry_v1 import ActualLeftGeometry,declared_model_inputs,neck_physical_bodies
+from .duration_math_v2 import control_evidence
+from .readiness_v1 import evaluate as bilateral_readiness
+
+BASELINE_REQUIRED_GATES=frozenset(['Spine5deg', 'actual_scheduled_strikes', 'actual_video5fps', 'allN_control_math', 'analysis_inputs', 'bilateral_actual_preparation', 'body30mm', 'completed', 'feet95_all_windows', 'first10_exact', 'four_soles', 'lateral20mm', 'left_release_regrasp', 'native_integrity', 'neck3deg', 'no_guitar_ground_chair', 'protocol', 'proximal_actual1deg_each_cycle', 'restrictions', 'right_goal', 'rotation5deg', 'runner_inputs', 'source_preflight', 'target_ownership_and_task_FK', 'triple_support95_all_windows', 'trunk5deg', 'trunk_right3deg', 'wrapper_inputs'])
+
+LEAVES=[PLAN,ROOT/'docs/plans/front_facing_ready_regrasp_20261016.md',ROOT/'docs/plans/front_facing_ready_measurement_20261016.md',ROOT/'docs/plans/front_facing_ready_margin_20261016.md']
+
+
+def stage_at(case,t):
+    r=case['release']
+    if r is None or t<r[0]:return 'gripped'
+    if t<r[0]+1:return 'open'
+    if t<r[1]:return 'withdraw'
+    if case['approach'] is None or t<case['approach'][0]:return 'released_hold'
+    if t<case['approach'][1]:return 'approach'
+    if t<case['close'][1]:return 'close'
+    return 'regrasp_hold'
+
+
+def input_pins(run,cfgpath,cfg,baseline=None):
+    paths=LEAVES+[cfgpath,LAYOUT_REFERENCE,GAIN_REFERENCE,A/'AGENTS.md']+declared_model_inputs()
+    for package in ('front_facing_ready_v1','front_facing_pose_v1','front_facing_strike_v1','grounded_guitar_release_v1','grounded_guitar_play_v1','grounded_guitar_support_v1','seated_foot_support_v1'):
+        paths+=list((A/package).glob('*.py'))
+    paths+=list((ROOT/'tab2body').rglob('*.py'));maps=[]
+    for key in ('source_report','posture_target_report','finite_right_goal_report','hip_load_bias_report','play_preflight_report','ready_preflight_report'):
+        p=Path(cfg[key]);paths += [p,p.parent/'inputs_before.json'];maps.append(read(p.parent/'inputs_before.json'))
+    for value in cfg.values():
+        if isinstance(value,str) and value.startswith('/') and Path(value).is_file():paths.append(Path(value))
+    maps.append(read(CERTIFICATE)['input_sha256'])
+    for r in [run,REFERENCE,REPEAT]+([baseline] if baseline else []):
+        paths += [r/n for n in RAW]+[r/'support_wrapper.json',r/'final_state.json',Path(read(r/'attempt.json')['config'])]
+        maps += [read(r/'attempt.json')['input_sha256'],read(r/'support_wrapper.json')['input_sha256']]
+    paths += [run/'media/capture.json',run/'media/strap/capture.json']+[Path(p) for m in maps for p in m]
+    inputs=pin(cfgpath,extra=paths)
+    for mapping in maps:
+        for p,h in mapping.items():assert p not in inputs or inputs[p]==h,p;inputs[p]=h
+    assert verify(inputs);return inputs
+
+
+def source_and_target_evidence(initial,states,targets,cfg,spec,case):
+    names,bodies=initial['joint_names'],initial['human_body_names'];qref=np.array(initial['q_ref105_rad']);lo,hi=(np.array(initial['PD_properties'][k]) for k in ('lower','upper'))
+    arm=np.array(spec['left']['arm_indices105']);fingers=np.array(spec['left']['finger_indices105']);left=np.r_[arm,fingers];distal=np.array(spec['right_strike_spec']['joint_indices105']);prox=np.array(spec['right_strike_spec']['proximal_latch']['indices105']);right=np.r_[prox,distal];low=initial['lower_indices'];zero=initial['zero_range_indices'];other=np.setdiff1d(np.arange(105),np.r_[left,right,low]);base=np.array(read(cfg['upper_target105'])['q_target_rad105'])
+    fk=full_fk(SimpleNamespace(names=names,q_ref=qref,human_bodies=bodies),initial['native_initial_state']);stateby={s['physics_step']:s['state'] for s in states}
+    rate=np.array([.4 if j in low else .1 if n.startswith(('Torso_','Spine_','Chest_')) else .5 if n.startswith(('Neck_','Head_')) else 1.5 if n.startswith(('LH:','RH:')) else 3. for j,n in enumerate(names)])
+    previous=qref.copy();heldprox=np.array(next(t for t in targets if t['physics_step_before']==2396)['final105_rad'])[prox];phase=None;anchor=None;RHanchors={};LHanchors={};release_anchor=None;first_orientation=None;source_rows=[];chain_rows=[];max_full_pos=0.;max_full_rot=0.
+    checks=dict(full_targets=len(targets)==len(range(0,round(cfg['seconds']*240),4)),steps=[t['physics_step_before'] for t in targets]==list(range(0,round(cfg['seconds']*240),4)),rate_float32_exact=True,original_bounds=True,zero8_exact=True,POSITION48_readback=True,prox6_exact=True,world12IK_inactive=True,other_channels_exact=True,phase_metadata=True,LH_phase_targets=True,RH_phase_targets=True,phase_boundaries_continuous=True,left_strict=True,right_strict=True,source_IK=True,task_chain_strict=True,foot_command=True)
+    for row in targets:
+        k=row['physics_step_before'];t=k/240;request=np.array(row['requested105_rad']);final=np.array(row['final105_rad']);expected=np.clip(request,previous-rate/60,previous+rate/60).astype(np.float32).astype(float);expected[zero]=qref[zero]
+        checks['rate_float32_exact'] &= np.array_equal(final,expected);checks['original_bounds'] &= bool(np.all(request>=lo) and np.all(request<=hi) and np.all(final>=lo) and np.all(final<=hi));checks['zero8_exact'] &= np.array_equal(final[zero],qref[zero]);checks['POSITION48_readback'] &= bool(row['position_readback_exact'] and np.array_equal(final[initial['position_indices']],np.array(row['native105_position_readback_rad'])[initial['position_indices']]))
+        state=stateby[k];q=np.array([v['pos'] for v in state['human_dof_states']]);gp,gr=pose(state['guitar_body_states'][0]);ps=fk(q)
+        errors={n:dict(position_m=float(np.linalg.norm(ps[n][0]-pose(b)[0])),rotation_deg=float(np.rad2deg((ps[n][1].inv()*pose(b)[1]).magnitude()))) for n,b in zip(bodies,state['human_body_states'])}
+        chain=dict(step=k,max_position_m=max(errors[n]['position_m'] for n in TASK_CHAIN),max_rotation_deg=max(errors[n]['rotation_deg'] for n in TASK_CHAIN));chain_rows.append(chain);checks['task_chain_strict'] &= chain['max_position_m']<1e-5 and chain['max_rotation_deg']<.01;max_full_pos=max(max_full_pos,max(e['position_m'] for e in errors.values()));max_full_rot=max(max_full_rot,max(e['rotation_deg'] for e in errors.values()))
+        if k<2400:previous=final;continue
+        m=row['ready'];lh,rh=m['LH'],m['RH'];stage=stage_at(case,t);active=next(((i,start) for i,start in enumerate(case['strike_starts']) if start<=t<start+4),None)
+        checks['prox6_exact'] &= np.array_equal(request[prox],heldprox) and np.array_equal(final[prox],heldprox) and m['proximal_requested_latch_exact'] is True and m['proximal_submitted_latch_exact'] is True
+        checks['world12IK_inactive'] &= row.get('right_world_palm_IK_active') is False and not any(key in row for key in ('right_source_IK_position_error_m','right_source_IK_rotation_error_rad','right_source_IK_support_point_error_m'))
+        checks['other_channels_exact'] &= np.array_equal(request[other],base[other]);checks['foot_command'] &= 'foot_world_target_IK' in row
+        checks['phase_metadata'] &= m['case']==case['case'] and m['phase']==lh['stage']==stage and m['time_s']==t and m['other_base_request_channels_exact'] is True and set(m['changed_indices105'])<=set(np.r_[left,distal]) and lh['arm_indices105']==arm.tolist() and lh['finger_indices105']==fingers.tolist()
+        if phase!=stage:
+            phase=stage;anchor=dict(step=k,submitted=previous[left].copy());trial=q.copy();trial[arm]=previous[arm];p,r=fk(trial)['L_Wrist'];anchor.update(p=p,r=r);LHanchors[stage]=anchor
+            if stage=='open':
+                actualp,actualr=pose(state['human_body_states'][bodies.index('L_Wrist')]);release_anchor=dict(step=k,delta=gr.apply([.08,0,0]),p=actualp,r=actualr)
+            checks['phase_boundaries_continuous'] &= np.array_equal(request[arm],previous[arm])
+        checks['phase_metadata'] &= lh['phase_start_step']==anchor['step'] and np.array_equal(lh['phase_start_submitted26_rad'],anchor['submitted']) and np.linalg.norm(np.array(lh['phase_start_command_wrist_W_m'])-anchor['p'])<=1e-9 and (Rotation.from_quat(lh['phase_start_command_wrist_xyzw']).inv()*anchor['r']).magnitude()<=1e-9
+        closed=np.array(spec['left']['finger_closed_reference14_rad']);opened=np.array(spec['left']['finger_open_goal14_rad']);expected_finger=previous[fingers].copy();boundary=k==anchor['step']
+        if stage!='gripped':
+            opening=smoothstep(t,case['release'][0],case['release'][0]+1);expected_finger=closed+(opened-closed)*opening
+            if stage in ('close','regrasp_hold'):
+                close=smoothstep(t,*case['close']);start=anchor['submitted'][12:] if stage=='close' else opened;expected_finger=start+(closed-start)*close
+        if boundary:
+            expected_finger=previous[fingers].copy();checks['phase_boundaries_continuous'] &= lh['boundary_hold'] is True and np.array_equal(request[left],previous[left])
+        checks['LH_phase_targets'] &= np.array_equal(request[fingers],expected_finger) and np.array_equal(request[arm],lh['arm_requested12_rad']) and np.array_equal(request[fingers],lh['finger_requested14_rad'])
+        if stage in ('gripped','open'):checks['LH_phase_targets'] &= np.array_equal(request[arm],previous[arm])
+        wanted_goal=None;wanted_rotation=None
+        if stage in ('withdraw','released_hold'):
+            a=LHanchors['withdraw'];fraction=smoothstep(t,case['release'][0]+1,case['release'][1]);wanted_goal=a['p']+release_anchor['delta']*fraction;wanted_rotation=a['r']
+        elif stage in ('approach','close','regrasp_hold'):
+            graspG=np.array(spec['left']['actual10_wrist_G_m']);graspR=Rotation.from_quat(spec['left']['actual10_wrist_G_xyzw']);current=gp+gr.apply(graspG);currentR=gr*graspR
+            if stage=='approach':
+                a=LHanchors['approach'];fraction=smoothstep(t,*case['approach']);wanted_goal=a['p']+(current-a['p'])*fraction;wanted_rotation=Rotation.from_rotvec((currentR*a['r'].inv()).as_rotvec()*fraction)*a['r']
+            else:wanted_goal=current;wanted_rotation=currentR
+        if release_anchor is not None:
+            checks['LH_phase_targets'] &= lh['release_start_step']==release_anchor['step'] and np.linalg.norm(np.array(lh['release_delta_W_m'])-release_anchor['delta'])<=1e-12 and np.linalg.norm(np.array(lh['release_actual_origin_W_m'])-release_anchor['p'])<=1e-12
+        checks['LH_phase_targets'] &= (lh['goal_wrist_W_m'] is None)==(wanted_goal is None)
+        if wanted_goal is not None:
+            checks['LH_phase_targets'] &= np.linalg.norm(np.array(lh['goal_wrist_W_m'])-wanted_goal)<=1e-10 and (Rotation.from_quat(lh['goal_wrist_xyzw']).inv()*wanted_rotation).magnitude()<=1e-10
+        if lh['goal_wrist_W_m'] is not None:
+            trial=q.copy();trial[arm]=final[arm];p,r=fk(trial)['L_Wrist'];perror=float(np.linalg.norm(p-lh['goal_wrist_W_m']));rerror=float((Rotation.from_quat(lh['goal_wrist_xyzw']).inv()*r).magnitude());checks['source_IK'] &= perror<=.01 and rerror<=.05 and np.isfinite([perror,rerror]).all()
+            source_rows.append(dict(step=k,kind='LH_final',position_m=perror,rotation_rad=rerror))
+        checks['left_strict'] &= bool(np.all(request[left]>=lo[left]) and np.all(request[left]<=hi[left]) and np.all(abs(final[arm]-qref[arm])<=.8) and np.all(np.linalg.norm(final[arm].reshape(4,3),axis=1)<np.deg2rad(160)))
+        if active is None:checks['RH_phase_targets'] &= rh['active'] is False and np.array_equal(request[distal],previous[distal])
+        else:
+            cycle,start=active;checks['RH_phase_targets'] &= rh['active'] is True and rh['cycle']==cycle and rh['start_s']==start and rh['local_time_s']==10+t-start
+            if cycle not in RHanchors:
+                trial=q.copy();trial[distal]=previous[distal];p,r=fk(trial)['RH:pick'];RHanchors[cycle]=dict(step=k,submitted=previous[distal].copy(),pick=gr.inv().apply(p-gp));checks['phase_boundaries_continuous'] &= np.array_equal(request[distal],previous[distal])
+            if first_orientation is None:
+                trial=q.copy();trial[distal]=previous[distal];first_orientation=gr.inv()*fk(trial)['RH:palm'][1]
+            final_orientation=Rotation.from_rotvec([0,np.deg2rad(-15),0])*Rotation.from_quat(spec['right_strike_spec']['clearance_solver_v2']['palm_G_reference_xyzw']);fraction=smoothstep(t,case['strike_starts'][0],case['strike_starts'][0]+.8);palmwanted=Rotation.from_rotvec((final_orientation*first_orientation.inv()).as_rotvec()*fraction)*first_orientation
+            checks['RH_phase_targets'] &= abs(rh['orientation_ramp_fraction']-fraction)<=1e-15 and (Rotation.from_quat(rh['palm_goal_G_xyzw']).inv()*palmwanted).magnitude()<=1e-10
+            a=RHanchors[cycle];checks['RH_phase_targets'] &= rh['cycle_start_step']==a['step'] and np.array_equal(rh['cycle_start_submitted6_rad'],a['submitted']) and np.linalg.norm(np.array(rh['cycle_initial_pick_G_m'])-a['pick'])<=1e-10
+            wanted=pick_goal(10+t-start,a['pick'],np.array(spec['right_strike_spec']['strike']['waypoints_G_m']));checks['RH_phase_targets'] &= np.linalg.norm(np.array(rh['pick_goal_G_m'])-wanted)<=1e-12
+            trial=q.copy();trial[distal]=final[distal];perror=float(np.linalg.norm(fk(trial)['RH:pick'][0]-(gp+gr.apply(wanted))));checks['source_IK'] &= perror<=.002 and rh['pick_IK_error_m']<=.002;source_rows.append(dict(step=k,kind='RH_final',position_m=perror))
+        checks['right_strict'] &= bool(np.all(abs(final[distal]-qref[distal])<=1) and np.all(np.linalg.norm(final[distal].reshape(2,3),axis=1)<np.deg2rad(160)))
+        previous=final
+    # End state also participates in the strict task-chain60Hz diagnostic.
+    finalstate=states[-1];q=np.array([v['pos'] for v in finalstate['state']['human_dof_states']]);ps=fk(q);last={n:dict(position_m=float(np.linalg.norm(ps[n][0]-pose(finalstate['state']['human_body_states'][bodies.index(n)])[0])),rotation_deg=float(np.rad2deg((ps[n][1].inv()*pose(finalstate['state']['human_body_states'][bodies.index(n)])[1]).magnitude()))) for n in TASK_CHAIN};checks['task_chain_strict'] &= max(e['position_m'] for e in last.values())<1e-5 and max(e['rotation_deg'] for e in last.values())<.01
+    chain_rows.append(dict(step=finalstate['physics_step'],max_position_m=max(e['position_m'] for e in last.values()),max_rotation_deg=max(e['rotation_deg'] for e in last.values())))
+    return dict(passed=all(checks.values()),checks={k:bool(v) for k,v in checks.items()},task_chain_samples=chain_rows,source_IK_samples=source_rows,full105_FK_diagnostic=dict(max_position_m=max_full_pos,max_rotation_deg=max_full_rot,original_threshold_pass=max_full_pos<1e-5 and max_full_rot<.01,scope='Diagnostic only; existing full-finger FK failure is preserved. Original-initial calibration unchanged; no future finger-FK accuracy claim.'))
+
+
+def left_evidence(initial,properties,states,contacts,spec,case):
+    if case['release'] is None:return dict(passed=True,applicable=False,scope='No left-hand release in this case.')
+    names=initial['human_body_names'];physical=physical_guitar_bodies();left={'human/'+n for n in names if n.startswith('LH:') or n in ('L_Thorax','L_Shoulder','L_Elbow','L_Wrist')};neck={'guitar/'+n for n in neck_physical_bodies(initial['guitar_body_names'])};opening=spec['left']['opening_gate'];active=opening['active_joints'];q10=np.array([v['pos'] for v in states[2400]['state']['human_dof_states']]);wref=np.array(spec['left']['actual10_wrist_G_m']);probe=ActualLeftGeometry(initial,properties);freerows=[];geometry=[];dwell=[];close_ref=None
+    if case['close'] is not None:close_ref=np.array([v['pos'] for v in states[round(case['close'][0]*240)]['state']['human_dof_states']])
+    closed=np.array(spec['left']['finger_closed_reference14_rad']);fingerindices=spec['left']['finger_indices105'];close_candidates=spec['left']['regrasp_gate']['active_joint_candidates'] if case['dwell'] is not None else []
+    policy=properties['actual_shape_properties'];finger_bodies={'human/'+name for name in names if name.startswith(tuple('LH:'+d for d in ('thumb','index','middle','ring','pinky'))) and not name.endswith('_top') and name!='LH:thumb_pad' and policy['human'][name] and any((a['filter']&b['filter'])==0 for a in policy['human'][name] for gn in neck for b in policy['guitar'][gn[7:]])}
+    for state,contact in zip(states,contacts):
+        k,t,native=state['physics_step'],state['time_s'],state['state']
+        if not (case['free'][0]<=t<=case['free'][1] or case['dwell'] is not None and case['dwell'][0]<=t<=case['dwell'][1]):continue
+        q=np.array([v['pos'] for v in native['human_dof_states']]);gp,gr=pose(native['guitar_body_states'][0]);wp,_=pose(native['human_body_states'][names.index('L_Wrist')]);wg=gr.inv().apply(wp-gp)
+        matches=[c for c in contact['contacts'] if (c['body0_name'] in left and c['body1_name'] in physical) or (c['body1_name'] in left and c['body0_name'] in physical)]
+        positive_matches=[c for c in matches if float(c['lambda'])>0]
+        if case['free'][0]<=t<=case['free'][1]:
+            actual_open={r['name']:float(r['direction']*(q10[r['index105']]-q[r['index105']])) for r in active};freerows.append(dict(step=k,time_s=t,left_raw_contacts=len(matches),left_positive_contacts=len(positive_matches),raw_contact_records=matches,positive_contact_records=positive_matches,wrist_G_distance_m=float(np.linalg.norm(wg-wref)),actual_signed_opening_rad=actual_open))
+            if k%4==0:geometry.append(dict(step=k,time_s=t,**probe.measure(native)))
+        if case['dwell'] is not None and case['dwell'][0]<=t<=case['dwell'][1]:
+            def neck_finger(c):
+                a,b=c['body0_name'],c['body1_name'];h=b if a in neck else a if b in neck else ''
+                return float(c['lambda'])>0 and h in finger_bodies
+            closing={a['name']:float(a['direction']*(q[a['index105']]-close_ref[a['index105']])) for a in close_candidates};closed_errors={a['name']:float(abs(q[a['index105']]-a['closed_goal_rad'])) for a in close_candidates}
+            dwell.append(dict(step=k,time_s=t,neck_finger_positive=any(neck_finger(c) for c in contact['contacts']),actual_signed_closing_rad=closing,actual_closed_goal_error_rad=closed_errors,wrist_G_distance_m=float(np.linalg.norm(wg-wref))))
+    free_count=round((case['free'][1]-case['free'][0])*240)+1;geom_count=round((case['free'][1]-case['free'][0])*60)+1
+    checks=dict(neck_candidates_original=set(spec['left']['regrasp_gate']['neck_body_candidates'])=={n[7:] for n in neck},full15s_free=case['free'][1]-case['free'][0]==15 and len(freerows)==free_count,
+        left_physical_contact0=bool(freerows and all(r['left_raw_contacts']==0 for r in freerows)),actual_wrist_G60mm=bool(freerows and all(r['wrist_G_distance_m']>=.060 for r in freerows)),
+        every_active_finger_open=bool(active and freerows and all(r['actual_signed_opening_rad'][a['name']]>=a['required_signed_opening_rad'] for r in freerows for a in active)),
+        actual_geometry60Hz=len(geometry)==geom_count,actual_hand_forearm_geometry2mm=bool(geometry and all(r['min_active_hand_forearm_gap_m']>=.002 for r in geometry)))
+    if case['dwell'] is not None:
+        qualifying=[a['name'] for a in close_candidates if dwell and all(r['actual_signed_closing_rad'][a['name']]>=a['required_signed_closing_rad'] and r['actual_closed_goal_error_rad'][a['name']]<=.10 for r in dwell)]
+        expected={r['name']:r for r in active};checks.update(close_candidates_predeclared={r['name'] for r in close_candidates}==set(expected) and all(r['index105']==expected[r['name']]['index105'] and r['required_signed_closing_rad']==min(.10,.5*expected[r['name']]['expected_command_opening_rad']) and r['closed_goal_rad']==closed[fingerindices.index(r['index105'])] for r in close_candidates),full5s_dwell=len(dwell)==1201 and case['dwell'][1]-case['dwell'][0]==5,neck_finger_contact95=bool(dwell and sum(r['neck_finger_positive'] for r in dwell)/len(dwell)>=.95),same_axis_actual_closed_every_sample=bool(qualifying),actual_wrist_G2cm=bool(dwell and all(r['wrist_G_distance_m']<=.02 for r in dwell)))
+    else:qualifying=[]
+    return dict(passed=all(checks.values()),checks=checks,neck_physical_bodies=sorted(neck),actual_neck_finger_bodies=sorted(finger_bodies),qualifying_fixed_axes=qualifying,free_raw_contact_records=sum(r['left_raw_contacts'] for r in freerows),free_positive_contact_records=sum(r['left_positive_contacts'] for r in freerows),free_samples=freerows,actual_geometry_samples=geometry,dwell_samples=dwell,source_shape_definitions=probe.shapes,
+        scope='V2: Complete15s actual240Hz zero raw left/physical-guitar contacts irrespective of lambda, with positive contacts retained separately; opening/wrist-G60mm; actual native source meshes only sampled60Hz,2mm for LH/wrist/forearm. Proximal source gaps diagnostic; no future FK error bound/cooked continuous-clearance claim. Regrasp same fixed finger axis and physical neck contact, bodyroot includes neck/headstock; wrist2cm prevents another grip region substitution.')
+
+
+def main(run,out,baseline=None):
+    out.mkdir(exist_ok=False);cfgpath=Path(read(run/'attempt.json')['config']);cfg=read(cfgpath);case=schedule(cfg['ready_case']);N=round(case['seconds']*240);spec=read(cfg['ready_spec']);inputs=input_pins(run,cfgpath,cfg,baseline);save(out/'inputs_before.json',inputs)
+    initial=read(run/'initial_values.json');properties=read(run/'native_properties.json');states=read(run/'states240.json')['rows'];contacts=read(run/'contacts240.json')['rows'];efforts=read(run/'efforts240.json')['rows'];targets=read(run/'targets60.json')['rows']
+    upright_native_audit_v3.main([run],out/'integrity');integrity=read(out/'integrity/report.json');rows,ground=measure(run);physical=physical_guitar_bodies();guitar_ground_chair=[dict(step=r['physics_step'],contact=c) for r in contacts for c in r['contacts'] if float(c['lambda'])>0 and bool(set((c['body0_name'],c['body1_name']))&physical) and any(n=='ground' or 'chair' in n.lower() for n in (c['body0_name'],c['body1_name']))];names=initial['human_body_names'];front=pose(initial['native_initial_state']['human_body_states'][names.index('Pelvis')])[1].apply([0.,-1.,0.])[:2];front/=np.linalg.norm(front)
+    for row,state,contact in zip(rows,states,contacts):
+        for n in PARTS:
+            rot=pose(state['state']['human_body_states'][names.index(n)])[1];row[n+'_heading_deg']=heading(rot,front)
+            if n=='Spine':row['Spine_total_tilt_deg']=float(np.rad2deg(np.arccos(np.clip(rot.apply([0,0,1])[2],-1,1))))
+        for body in ('L_Hip','R_Hip'):
+            row[body+'_guitar_positive_contacts']=sum(float(c['lambda'])>0 and 'human/'+body in (c['body0_name'],c['body1_name']) and bool(set((c['body0_name'],c['body1_name']))&physical) for c in contact['contacts'])
+        row['triple_support_positive']=bool(row['Chest_guitar_positive_contacts'] and row['R_Shoulder_guitar_positive_contacts'] and (row['L_Hip_guitar_positive_contacts'] or row['R_Hip_guitar_positive_contacts']))
+    whole=interval(rows);whole['max_Spine_total_tilt_deg']=max(r['Spine_total_tilt_deg'] for r in rows);windows={'prepared5to10':[5,10],'all_action':[10,case['seconds']]}
+    for key in ('release','free','approach','close','dwell'):
+        if case[key] is not None:windows[key]=case[key]
+    for j,start in enumerate(case['strike_starts']):windows['strike'+str(j)]=[start,start+4]
+    support={};feet={}
+    for label,(lo,hi) in windows.items():
+        selected=[r for r in rows if lo<=r['time_s']<=hi];support[label]=dict(samples=len(selected),expected_samples=round((hi-lo)*240)+1,triple_positive_fraction=sum(r['triple_support_positive'] for r in selected)/len(selected) if selected else None);feet[label]=contact_interval(selected,ground)
+    feet['1toT']=contact_interval([r for r in rows if 1<=r['time_s']<=case['seconds']],ground);soles=sole_summary(rows)
+    math=control_evidence(initial,properties,states,efforts,targets,cfg);save(out/'control_math.json',math);goal=right_goal_evidence(run,cfg,initial,efforts);save(out/'right_goal.json',goal)
+    ownership=source_and_target_evidence(initial,states,targets,cfg,spec,case);save(out/'target_and_FK_evidence.json',ownership);left=left_evidence(initial,properties,states,contacts,spec,case);save(out/'left_evidence.json',left)
+    strike=strike_evidence(initial,states,spec['right_strike_spec']);events=strike['events'];allowed=[e for e in events if e['global_zone_allowed'] and e['lane_allowed']];actions=[]
+    for j,start in enumerate(case['strike_starts']):
+        ev=[e for e in allowed if start<=e['time_s']<=start+4];down=[e['string'] for e in ev if e['direction']==1];up=[e['string'] for e in ev if e['direction']==-1];actions.append(dict(cycle=j,interval_s=[start,start+4],events=ev,down=down,up=up,passed=down==[6,5,4,3,2,1] and up==[1,2,3,4,5,6]))
+    strike['scheduled_windows']=actions;strike['all_scheduled_actions_pass']=all(a['passed'] for a in actions);strike['no_unscheduled_allowed_events']=all(any(start<=e['time_s']<=start+4 for start in case['strike_starts']) for e in allowed);save(out/'strike_evidence.json',strike)
+    ready=bilateral_readiness(initial,states,spec['right_strike_spec'],events,case['strike_starts']);save(out/'bilateral_readiness.json',ready)
+    bystep={s['physics_step']:s for s in states};proxmotion=[];pairs=[('Chest','R_Thorax'),('R_Thorax','R_Shoulder')]
+    def relative(s,parent,child):return pose(s['state']['human_body_states'][names.index(parent)])[1].inv()*pose(s['state']['human_body_states'][names.index(child)])[1]
+    for start in case['strike_starts']:
+        first=bystep[round(start*240)];selected=[s for s in states if start<=s['time_s']<=start+4];maxima={child:max(float(np.rad2deg((relative(first,parent,child).inv()*relative(s,parent,child)).magnitude())) for s in selected) for parent,child in pairs};cumulative={child:max(float(np.rad2deg((relative(bystep[2400],parent,child).inv()*relative(s,parent,child)).magnitude())) for s in selected) for parent,child in pairs};proxmotion.append(dict(start_s=start,max_relative_from_cycle_start_deg=maxima,max_relative_from10_deg=cumulative,passed=all(v<=1 for v in maxima.values())))
+    save(out/'proximal_motion.json',dict(windows=proxmotion));exact=prefix(run,REFERENCE);save(out/'prepared_prefix.json',exact)
+    report=read(run/'report.json');wrapper=read(run/'support_wrapper.json');preflight=read(cfg['ready_preflight_report']);captures=[read(run/p) for p in ('media/capture.json','media/strap/capture.json')]
+    gates=dict(completed=bool(report['completed'] and report['mode']=='static' and report['physics_steps']==N),protocol=cfg['validation_protocol']==PROTOCOL and cfg['seconds']==case['seconds'] and cfg['ready_schedule']==case,
+        source_preflight=bool(preflight['eligible_for_native_task_diagnostic'] and preflight['inputs_unchanged'] and preflight['previous_fullFK_eligible_for_native'] is False and sha(preflight['previous_fullFK_failure_report'])==preflight['previous_fullFK_failure_sha256'] and sha(cfg['ready_preflight_report'])==cfg['ready_preflight_report_sha256'] and sha(cfg['ready_spec'])==cfg['ready_spec_sha256']==preflight['spec_sha256']),
+        restrictions=bool(not report['failure'] and not report['cleanup_errors'] and not report['forbidden_calls'] and all(report['initial_checks'].values()) and report['root_fixed'] and report['guitar_free'] and not report['strap_enabled'] and report['training_updates']==0),
+        native_integrity=bool(integrity['inputs_unchanged'] and integrity['runs'][0]['all_checks']),runner_inputs=bool(report['inputs_unchanged'] and verify(read(run/'attempt.json')['input_sha256'])),wrapper_inputs=bool(wrapper['inputs_unchanged'] and verify(wrapper['input_sha256']) and wrapper['controller']=='front_facing_ready_v1.runtime_v2.Controller' and wrapper['actual_scene_class']=='front_facing_ready_v1.runtime_v1.Scene'),first10_exact=exact['passed'],
+        allN_control_math=math['passed'],right_goal=goal['passed'],target_ownership_and_task_FK=ownership['passed'],
+        no_guitar_ground_chair=not guitar_ground_chair,body30mm=whole['max_body_displacement_m']<=.03,rotation5deg=whole['max_rotation_deg']<=5,neck3deg=whole['max_abs_neck_deg']<=3,lateral20mm=whole['max_abs_lateral_m']<=.02,trunk5deg=whole['max_Torso_Chest_tilt_deg']<=5,trunk_right3deg=whole['max_abs_Torso_Chest_right_deg']<=3,Spine5deg=whole['max_Spine_total_tilt_deg']<=5,
+        triple_support95_all_windows=all(s['samples']==s['expected_samples'] and s['triple_positive_fraction'] is not None and s['triple_positive_fraction']>=.95 for s in support.values()),feet95_all_windows=all(f['all_contact_rows_present'] and f['both_feet_positive_fraction'] is not None and f['both_feet_positive_fraction']>=.95 for f in feet.values()),four_soles=soles['all_four_parts_passed'],
+        actual_scheduled_strikes=bool(strike['all_scheduled_actions_pass'] and strike['no_unscheduled_allowed_events']),bilateral_actual_preparation=ready['passed'],proximal_actual1deg_each_cycle=all(w['passed'] for w in proxmotion),left_release_regrasp=left['passed'],
+        actual_video5fps=all(c['fps']==5 and [f['physics_step'] for f in c['frames']]==list(range(0,N+1,48)) for c in captures),analysis_inputs=verify(inputs))
+    comparison=None
+    if baseline:
+        comparison=prefix(run,baseline);gates['baseline_first10_exact']=comparison['passed']
+    with (out/'samples.csv').open('x',newline='') as stream:w=csv.DictWriter(stream,fieldnames=list(rows[0]));w.writeheader();w.writerows(rows)
+    save(out/'summary.json',dict(run=str(run),case=case['case'],seconds=cfg['seconds'],config_path=str(cfgpath),config_sha256=sha(cfgpath),ready_spec_path=cfg['ready_spec'],ready_spec_sha256=sha(cfg['ready_spec']),passed=all(gates.values()),gates={k:bool(v) for k,v in gates.items()},whole=whole,support_windows=support,feet_windows=feet,soles_last1=soles,baseline_prefix=comparison,original_full_finger_FK_diagnostic=ownership['full105_FK_diagnostic'],headings_preference={n:dict(initial_deg=rows[0][n+'_heading_deg'],max_abs_action_deg=max(abs(r[n+'_heading_deg']) for r in rows if r['time_s']>=10)) for n in PARTS},inputs_unchanged=verify(inputs),scope='Current-source native case only, no inherited whole-task certificate. Original q105/full-finger FK failure remains diagnostic; task-chain strict10um/.01deg and actual60Hz hand meshes separately checked. Free15s/strikes/regrasp/continuous cases are distinct. Root fixed/lower finite/Gfree unchanged. Noncolliding string/pick crossings are geometric, not string force/vibration/sound. No reset/state injection/PPO.'))
+    print(dict(passed=all(gates.values()),case=case['case'],gates={k:bool(v) for k,v in gates.items()}),flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--run',type=Path,required=True);p.add_argument('--out',type=Path,required=True);p.add_argument('--baseline',type=Path)
+    args=p.parse_args();main(args.run.resolve(),args.out.resolve(),args.baseline.resolve() if args.baseline else None)

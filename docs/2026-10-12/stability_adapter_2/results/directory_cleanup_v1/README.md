@@ -1,0 +1,9 @@
+# `stability_adapter_2` 단독 파일 정리 결과
+
+정리 계획에 따라 사용이 끝난 단독 파일 508개와 Python 캐시 디렉터리 2개를 제거했다. 이는 과거 실험이 과학적으로 무의미하다는 판정이 아니라 현재 작업에서 사용이 끝난 파일의 퇴역이다. 자산·trial·test 디렉터리와 유지 대상 176개 root 파일은 보존했다. 정리 후 root가 추가한 [CURRENT_FILES.md](/home/ajou/yigyu/3/stability_adapter_2/CURRENT_FILES.md)를 포함하면 현재 root 파일은 177개다.
+
+[deletion_report.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/directory_cleanup_v1/deletion_report.json)는 삭제 범위 검사를 모두 통과했다고 기록한다. [verification_after.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/directory_cleanup_v1/verification_after.json)에는 제거 후보 부재, 유지 파일과 주요 문서 접두부 보존, Python 문법 및 import 검사, 세 launcher 문법, 지원 runtime 해시 경로 8,760개, 자산·trial·test 보존, 사전·사후 동일 CPU 검사 32개 통과, CLI help 6개 종료 코드 0이 기록되어 있다. 새 물리 step이나 학습 update는 실행하지 않았다. 독립 검수 기록은 [review.md:1](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/directory_cleanup_v1/review.md:1)에서 확인한다.
+
+삭제 전 package ZIP은 [stability_adapter_2_before_cleanup.zip](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/directory_cleanup_v1/stability_adapter_2_before_cleanup.zip)으로 보존했다. 1,003개 entry와 15개 symlink를 target 역참조 없이 저장했으며 archive SHA-256은 `8c2104db1c7bbf6974805d2c683bb47c68812c5a9628831d7787742ea4faf152`다. [backup_verification.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/directory_cleanup_v1/backup_verification.json)과 [삭제 전 CPU 검사 로그](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/directory_cleanup_v1/tests_before.log)도 함께 보존했다.
+
+삭제 범위는 [cleanup_manifest_v3.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/directory_cleanup_v1/cleanup_manifest_v3.json), 계획과 절차는 [CLEANUP_PLAN.md](/home/ajou/yigyu/3/stability_adapter_2/CLEANUP_PLAN.md), 현재 사용 파일 안내는 [CURRENT_FILES.md](/home/ajou/yigyu/3/stability_adapter_2/CURRENT_FILES.md)에서 확인할 수 있다. 백업으로 삭제 파일을 복원할 수 있지만 옛 문서 링크의 자동 리다이렉트나 모든 과거 명령의 현재 지원을 뜻하지는 않는다.

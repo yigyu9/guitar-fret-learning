@@ -1,0 +1,40 @@
+"""Distinguish feasible human IK, submitted finite targets, and actual tracking."""
+import csv
+from pathlib import Path
+import numpy as np
+from scipy.spatial.transform import Rotation
+from .common import BASE, ROOT, read, save, pin, verify
+from .upright_source_v1 import full_fk
+from stability_adapter_2.initial_pose_noise_v1 import pose
+
+
+def main():
+    phase=BASE/'upright_horizontal_v1';run=phase/'native_static_v5';out=phase/'tracking_static_v5';out.mkdir(exist_ok=False)
+    inputs=pin(extra=[run/n for n in ('initial_values.json','native_properties.json','states240.json','efforts240.json','targets60.json','report.json')]+[ROOT/'docs/plans/upright_horizontal_neck_reference_20261015.md'])
+    save(out/'inputs_before.json',inputs)
+    initial=read(run/'initial_values.json');states=read(run/'states240.json')['rows'];efforts=read(run/'efforts240.json')['rows'];targets=read(run/'targets60.json')['rows']
+    names=initial['human_body_names'];jn=initial['joint_names'];qref=np.array(initial['q_ref105_rad']);fk,_=full_fk(jn,names,states[0]['state'],qref)
+    arm=np.array([i for i,n in enumerate(jn) if n.startswith(('R_Thorax_','R_Shoulder_','R_Elbow_','R_Wrist_'))])
+    gp0,gr0=pose(states[0]['state']['guitar_body_states'][0]);rp0,rr0=pose(states[0]['state']['human_body_states'][names.index('RH:palm')]);anchor=gr0.inv().apply(rp0-gp0);relative=gr0.inv()*rr0
+    ref=next(r for r in read(run/'native_properties.json')['support_references'] if r['body']=='R_Shoulder')
+    goalp=goalr=None;rows=[];fk_errors=[]
+    for sample in states:
+        step=sample['physics_step'];state=sample['state'];q=np.array([s['pos'] for s in state['human_dof_states']]);actual=fk(q)
+        for name in ('Torso','Spine','Chest','RH:palm','L_Ankle','R_Ankle'):
+            ap,ar=pose(state['human_body_states'][names.index(name)]);fp,fr=actual[name];fk_errors.append((np.linalg.norm(ap-fp),(ar.inv()*fr).magnitude()))
+        if step%24==0 and step<1200:
+            gp,gr=pose(state['guitar_body_states'][0]);pivot=gp+gr.apply(ref['goal_G_m']);p=gp+gr.apply(anchor);r=gr*relative
+            neck=gr.apply([0.,1.,0.]);horizontal=neck.copy();horizontal[2]=0.;horizontal/=np.linalg.norm(horizontal);axis=np.cross(neck,horizontal);angle=np.arctan2(np.linalg.norm(axis),neck@horizontal);correction=Rotation.from_rotvec(axis/max(np.linalg.norm(axis),1e-12)*min(angle,np.deg2rad(10.)))
+            goalp=pivot+correction.apply(p-pivot);goalr=correction*r
+        target=targets[min(step//4,len(targets)-1)];trial=q.copy();trial[arm]=np.array(target['final105_rad'])[arm];tp,tr=fk(trial)['RH:palm'];rp,rr=pose(state['human_body_states'][names.index('RH:palm')]);effort=efforts[min(step,len(efforts)-1)];chest=next(p for p in effort['support_points'] if p['body']=='Chest')
+        rows.append(dict(step=step,time_s=sample['time_s'],actual_RPalm_to_latched_IK_goal_position_error_m=float(np.linalg.norm(rp-goalp)),actual_RPalm_to_latched_IK_goal_rotation_error_deg=float(np.rad2deg((goalr.inv()*rr).magnitude())),actual_RPalm_to_submitted_right_q_FK_position_error_m=float(np.linalg.norm(rp-tp)),actual_RPalm_to_submitted_right_q_FK_rotation_error_deg=float(np.rad2deg((tr.inv()*rr).magnitude())),max_right_q_minus_finite_target_rad=float(abs(q[arm]-trial[arm]).max()),Chest_source_gap_at_effort_before_m=chest['nearest_source_gap_m']))
+    with (out/'samples.csv').open('w',newline='') as stream:
+        writer=csv.DictWriter(stream,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+    def interval(samples):
+        return dict(samples=len(samples),**{k:max(r[k] for r in samples) for k in rows[0] if k not in ('step','time_s','Chest_source_gap_at_effort_before_m')})
+    maxima=np.array(fk_errors).max(0);assert maxima[0]<1e-5 and np.rad2deg(maxima[1])<.01
+    result=dict(whole=interval(rows),last1s=interval([r for r in rows if r['time_s']>=4]),first_samples=rows[:9],final_sample=rows[-1],native_FK_max_position_error_m=float(maxima[0]),native_FK_max_rotation_error_deg=float(np.rad2deg(maxima[1])),source_IK_max_position_error_m=max(t['right_source_IK_position_error_m'] for t in targets),source_IK_max_rotation_error_rad=max(t['right_source_IK_rotation_error_rad'] for t in targets),inputs_unchanged=verify(inputs),scope='Source IK fit, finite 60Hz submitted joint target, and actual native pose are distinct. Conditional submitted-target FK changes only right arm while holding the actual rest of the body; it is not a simulated future state. IK goal is latched at each 10Hz update; final state uses last submitted update. Contact gaps come from the nearest available effort-before sample (last state uses step1199), not cooked penetration. This audit diagnoses tracking, does not establish a unique cause or add forces.')
+    save(out/'report.json',result);print(result,flush=True)
+
+
+if __name__=='__main__':main()

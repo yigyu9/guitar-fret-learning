@@ -1,0 +1,51 @@
+{
+  "num_envs": 2,
+  "horizon": 300,
+  "updates": 24,
+  "device": "cuda:0",
+  "seed": 7,
+  "size": "medium",
+  "initial_std": 0.02,
+  "stage": "B",
+  "checkpoint_every": 4,
+  "max_wall_seconds": 2400,
+  "start_event_index": 0,
+  "phrase_events": 8,
+  "tempo_scale": 1.0,
+  "ppo": {
+    "actor_lr": 1e-05,
+    "value_lr": 0.0003,
+    "gamma": 0.99,
+    "cost_gamma": 1.0,
+    "gae_lambda": 0.95,
+    "clip_ratio": 0.2,
+    "cost_weight": 1.0,
+    "epochs": 2,
+    "minibatch_size": 240,
+    "max_grad_norm": 0.5,
+    "target_kl": 0.02,
+    "kl_retries": 3,
+    "retry_lr_factor": 0.25,
+    "episode_cost_budget": null,
+    "lambda_lr": 0.01
+  },
+  "min_available_memory_gib": 4.0,
+  "heartbeat_seconds": 10.0,
+  "resource_interval_seconds": 5.0,
+  "worker_timeout_seconds": 300.0,
+  "music": {
+    "reward_mode": "legacy",
+    "goal_event_indices": null
+  },
+  "specialist": {
+    "role": "right",
+    "left_checkpoint": null,
+    "right_checkpoint": null
+  },
+  "actor_initialization": "/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_timing_curriculum_v1/right_bc_v1/actor_initialization.pt",
+  "timing": {
+    "stage_index": 0,
+    "pre_roll_s": 1.0
+  },
+  "actor_initialization_kind": "bc"
+}

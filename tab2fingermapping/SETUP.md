@@ -74,7 +74,7 @@ python3 fingermapping/run_fingering.py <notes.csv> <chords.json>   # 운지만 (
 ```bash
 cd "$PROJECT_ROOT/tab2fingermapping/ace"
 $PY ../chordtrack/eval_moum.py                 # 4변형 moum 비교
-$PY ../ace_eval/eval_moum.py 0.3 0.25 relaxed  # ACE 단독 평가
+# 과거 ace_eval 하니스는 현재 저장소에 없으며 chordtrack 평가만 재현 가능
 ```
 
 ## 6. 설치 검증 (새 환경을 만들면 이것부터)

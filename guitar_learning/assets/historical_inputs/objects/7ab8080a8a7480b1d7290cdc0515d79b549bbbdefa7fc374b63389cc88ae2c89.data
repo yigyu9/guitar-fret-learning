@@ -1,0 +1,42 @@
+"""Annotate preserved full-body native movies, without executing physics."""
+import argparse
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from PIL import Image
+from . import render_contact_three_view_v1 as render
+from .initial_pose_noise_v1 import read,save,sha
+
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--native',type=Path,required=True);parser.add_argument('--out',type=Path,required=True);args=parser.parse_args();n=args.native.resolve();out=args.out.resolve();out.mkdir(parents=True,exist_ok=False)
+    report=read(n/'report.json');frames=read(n/'contact_frames.json')['frames'];capture=read(n/'media/capture.json')['frames'];assert report['completed'] and report['inputs_unchanged'] and not report['forbidden_calls']
+    assert len(frames)==len(capture)==int(report['physics_seconds']*30)+1
+    assert all(a['physics_step']==b['physics_step'] and a['states_unchanged'] and b['render_preserves_states'] for a,b in zip(frames,capture))
+    paths={Path(__file__).resolve(),Path(__file__).with_name('initial_pose_noise_v1.py'),Path(render.__file__),Path(render.__file__).with_name('strap_trial_recording.py'),Path(render.__file__).with_name('gym_trial_recording.py'),render.FONT,n/'report.json',n/'contact_frames.json',n/'media/capture.json'}
+    for f in frames:
+        for cam in f['cameras'].values():paths.add(n/'media/frames'/cam['native_key']/('%05d.png'%(f['physics_step']//8)))
+    pins={str(p):sha(p) for p in paths};save(out/'inputs_before.json',pins)
+    for index,frame in enumerate(frames):
+        for cam in frame['cameras'].values():
+            path=n/'media/frames'/cam['native_key']/('%05d.png'%index);assert pins[str(path)]==capture[index]['image_sha256'][str(path)]
+    for view in render.VIEWS:(out/'frames'/view).mkdir(parents=True,exist_ok=False)
+    selected={0,min(60,len(frames)-1),len(frames)-1}
+    if report['mode']=='left_cycle':selected|={105,160,195,315,420}
+    rows=[];snapshots=[]
+    with patch.dict(render.STAGES,{'static':'초기 자세·정지 유지','EW6_strike':'오른 팔꿈치·손목6축 왕복 타현'}):
+        for index,frame in enumerate(frames):
+            panels=[]
+            for view,cam in frame['cameras'].items():
+                raw=n/'media/frames'/cam['native_key']/('%05d.png'%index);im,stats=render.draw(raw,frame,cam);dest=out/'frames'/view/('%05d.png'%index);im.save(dest);rows.append({'path':str(dest),'sha256':sha(dest),**stats})
+                if index in selected:panels.append(im)
+            if panels:
+                im=Image.new('RGB',(3840,940),'white')
+                for i,panel in enumerate(panels):im.paste(panel,(1280*i,0))
+                dest=out/('three_views_%05d.png'%index);im.save(dest);snapshots.append({'time_s':frame['time_s'],'path':str(dest),'sha256':sha(dest)})
+    videos,commands=render.encode(out,len(frames));assert all(sha(p)==h for p,h in pins.items())
+    gaps=[p['pair_feature_gap_m'] for f in frames for p in f['points']]
+    save(out/'report.json',{'input_sha256':pins,'inputs_unchanged':True,'mode':report['mode'],'videos':videos,'encode_commands':commands,'snapshots':snapshots,'annotated_frames':rows,'frame_count_per_view':len(frames),'pair_feature_gap_max_m':max(gaps,default=0),'scope':'actual native guitar-human feature at30fps; fixed circle Xray, not forceN or contactarea; postprocessing no physics'})
+    print(report['mode'],'rendered',len(frames),'frames/view',flush=True)
+
+if __name__=='__main__':main()

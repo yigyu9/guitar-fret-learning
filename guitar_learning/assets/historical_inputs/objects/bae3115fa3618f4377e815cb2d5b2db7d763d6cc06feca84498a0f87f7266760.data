@@ -1,0 +1,170 @@
+"""Episode-aware evidence functions; no producer main until child integration closes.
+
+The target/FK function is the explicit V12 function with only canonical/view and
+(episode,phase) anchor routing changed. All gain/bounds/F32/control expressions
+remain inherited or literal V12 expressions. This module is not a full core run.
+"""
+from .analyze_v12 import *
+from . import analyze_v12 as previous_analysis
+from .protocol_v6 import schedule,PROTOCOL,windows_for
+
+
+def analysis_view(plan,t):
+    # Independent reconstruction: never trust producer's episode metadata.
+    assert plan==schedule(plan['case']) and 0<=t<=83.
+    result=copy.deepcopy(plan)
+    episode=plan['episodes'][0 if t<65. else 1]
+    result.update({k:copy.deepcopy(episode[k]) for k in ('release','free','approach','close','settle','dwell')})
+    result['episode_id']=episode['id']
+    return result
+
+
+def stage_at(plan,t):
+    view=analysis_view(plan,t) if 'episode_id' not in plan else plan
+    release=view['release']
+    if t<release[0]:return 'gripped'
+    if t<release[0]+1.:return 'open'
+    if t<release[1]:return 'withdraw'
+    if view['approach'] is None or t<view['approach'][0]:return 'released_hold'
+    if t<view['approach'][1]:return 'approach'
+    if t<view['close'][1]:return 'close'
+    return 'regrasp_hold'
+
+
+def episode_metadata(top,plan,t):
+    view=analysis_view(plan,t);m=top.get('continuous83',{})
+    expected_release=None if t<34. else ('release1' if t<65. else 'release2')
+    expected_close=None if t<54. else 'release1'
+    phase=stage_at(view,t)
+    # Phase at 10 is gripped; later boundaries follow the canonical absolute time.
+    boundaries=[10.,34.,35.,37.,52.,54.,55.,65.,66.,68.]
+    start=max(x for x in boundaries if x<=t)
+    checks=dict(episode=m.get('episode_id')==view['episode_id'],
+        release=m.get('episode_release_s')==view['release'],free=m.get('episode_free_s')==view['free'],
+        all_strikes=m.get('all_strike_starts_s')==list((22.,26.,30.,39.,43.,47.,61.,70.,74.,78.)),
+        phase=top.get('phase')==phase,phase_start=m.get('phase_start_step')==round(start*240),
+        release_reference=m.get('release_reference_episode_id')==expected_release,
+        close_reference=m.get('close_reference_episode_id')==expected_close,
+        reference16=m.get('reference16_step')==(3840 if t>=16. else None))
+    return dict(passed=all(checks.values()),checks=checks)
+
+
+def exact_episode_sequences(states,contacts,plan):
+    assert plan==schedule(plan['case'])
+    expected=list(range(19921))
+    checks=dict(states=[r['physics_step'] for r in states]==expected,
+        contacts=[r['physics_step'] for r in contacts]==expected,
+        state_times=all(r['time_s']==r['physics_step']/240 for r in states),
+        contact_times=all(r['time_s']==r['physics_step']/240 for r in contacts))
+    return dict(passed=all(checks.values()),checks=checks)
+
+
+def left_evidence(initial,properties,states,contacts,spec,case):
+    sequence=exact_episode_sequences(states,contacts,case)
+    if not sequence['passed']:return dict(passed=False,sequence=sequence,episodes={},reason='Malformed full native step/time sequence')
+    episodes={}
+    for ep in case['episodes']:
+        view=analysis_view(case,ep['release'][0])
+        result=previous_analysis.left_evidence(initial,properties,states,contacts,spec,view)
+        raw=list(range(round(ep['free'][0]*240),round(ep['free'][1]*240)+1))
+        geometry=list(range(raw[0],raw[-1]+1,4))
+        checks=dict(parent=result.get('passed') is True,
+            raw_steps=[r['step'] for r in result.get('free_samples',[])]==raw and len(raw)==3601,
+            geometry_steps=[r['step'] for r in result.get('actual_geometry_samples',[])]==geometry and len(geometry)==901,
+            raw_times=all(r['time_s']==r['step']/240 for r in result.get('free_samples',[])),
+            geometry_times=all(r['time_s']==r['step']/240 for r in result.get('actual_geometry_samples',[])),
+            release_reference=result.get('opening_reference',{}).get('actual_time_s')==ep['release'][0],
+            dwell_applicability=(ep['dwell'] is not None)==bool(result.get('dwell_samples')))
+        episodes[ep['id']]=dict(passed=all(checks.values()),checks=checks,result=result)
+    return dict(passed=sequence['passed'] and set(episodes)=={'release1','release2'} and all(v['passed'] for v in episodes.values()),
+        sequence=sequence,episodes=episodes,actual_dynamic_tracking_validated=False,final_adoption_eligible=False,
+        scope='Two separately ANDed 15s windows; source60Hz geometry is not continuous collision certification. No summed 30s claim.')
+
+
+def source_and_target_evidence(initial,states,targets,cfg,spec,case,run):
+    canonical=case;assert canonical==schedule(canonical['case'])
+    names,bodies=initial['joint_names'],initial['human_body_names'];qref=np.array(initial['q_ref105_rad']);lo,hi=(np.array(initial['PD_properties'][k]) for k in ('lower','upper'))
+    selection,selection_maps,selection_paths=selection_inputs(names);maintenance_selection,maintenance_maps,maintenance_paths=maintenance_selection_inputs();selection_ok=True
+    arm=np.array(spec['left']['arm_indices105']);fingers=np.array(spec['left']['finger_indices105']);left=np.r_[arm,fingers];distal=np.array(spec['right_strike_spec']['joint_indices105']);prox=np.array(spec['right_strike_spec']['proximal_latch']['indices105']);right=np.r_[prox,distal];low=initial['lower_indices'];zero=initial['zero_range_indices'];other=np.setdiff1d(np.arange(105),np.r_[left,right,low]);base=np.array(read(cfg['upper_target105'])['q_target_rad105'])
+    fk=full_fk(SimpleNamespace(names=names,q_ref=qref,human_bodies=bodies),initial['native_initial_state']);stateby={s['physics_step']:s['state'] for s in states}
+    rate=np.array([.4 if j in low else .1 if n.startswith(('Torso_','Spine_','Chest_')) else .5 if n.startswith(('Neck_','Head_')) else 1.5 if n.startswith(('LH:','RH:')) else 3. for j,n in enumerate(names)])
+    previous=qref.copy();heldright=np.array(next(t for t in targets if t['physics_step_before']==2396)['final105_rad'])[right];heldprox=heldright[:len(prox)];original_request=base.copy()
+    for name,value in cfg['lower_target_bias_rad'].items():original_request[names.index(name)]+=value
+    original_request[right]=heldright
+    phase=None;anchor=None;RHanchors={};LHanchors={};release_anchor=None;first_orientation=None;source_rows=[];chain_rows=[];maintenance_rows=[];max_full_pos=0.;max_full_rot=0.
+    referencepath=run/'hand_maintenance_reference16.json';recorded=read(referencepath);q16=np.array([v['pos'] for v in stateby[3840]['human_dof_states']]);held16=np.array(next(r for r in targets if r['physics_step_before']==3836)['final105_rad']);g16p,g16r=pose(stateby[3840]['guitar_body_states'][0]);w16p,w16r=pose(stateby[3840]['human_body_states'][bodies.index('L_Wrist')]);w16G=g16r.inv().apply(w16p-g16p);r16G=(g16r.inv()*w16r).as_quat();e16=q16[arm]-held16[arm]
+    refok=recorded.get('step')==3840 and recorded.get('time_s')==16. and recorded.get('state')==stateby[3840] and np.array_equal(recorded.get('actual105_rad'),q16) and np.array_equal(recorded.get('last_submitted105_rad'),held16) and recorded.get('arm_indices105')==arm.tolist() and np.array_equal(recorded.get('actual_wrist_G_m'),w16G) and np.array_equal(recorded.get('actual_wrist_G_xyzw'),r16G) and np.array_equal(recorded.get('e16_12_rad'),e16)
+    reference=dict(file=str(referencepath),wrist_G_m=w16G,wrist_G_xyzw=r16G,e16=e16,held_arm12=held16[arm],qref=qref,lo=lo,hi=hi)
+    checks=dict(full_targets=len(targets)==len(range(0,round(cfg['seconds']*240),4)),steps=[t['physics_step_before'] for t in targets]==list(range(0,round(cfg['seconds']*240),4)),rate_float32_exact=True,original_bounds=True,zero8_exact=True,POSITION48_readback=True,prox6_exact=True,world12IK_inactive=True,other_channels_exact=True,phase_metadata=True,LH_phase_targets=True,RH_phase_targets=True,phase_boundaries_continuous=True,left_strict=True,right_strict=True,source_IK=True,task_chain_strict=True,foot_command=True,chest_pose_targets=True,body9_pose_targets=True,body9_selection=bool(selection_ok),maintenance_selection=True,reference16_exact=bool(refok),increment_targets=True,hand_maintenance=True,foot11_stage=True,top_actual_LH_and_RH=True)
+    for row in targets:
+        k=row['physics_step_before'];t=k/240;case=analysis_view(canonical,t);episode=case['episode_id'];request=np.array(row['requested105_rad']);final=np.array(row['final105_rad']);body9_bias=body9_target_evidence(row,cfg,names,original_request);checks['body9_pose_targets'] &= body9_bias['passed'];increment=increment_target_evidence(row,cfg,names,body9_bias['after_requested105_rad']);checks['increment_targets'] &= increment['passed'];pose_bias=chest_pose_target_evidence(row,cfg,names,increment['after_requested105_rad']);checks['chest_pose_targets'] &= pose_bias['passed'];expected=np.clip(request,previous-rate/60,previous+rate/60).astype(np.float32).astype(float);expected[zero]=qref[zero]
+        checks['rate_float32_exact'] &= np.array_equal(final,expected);checks['original_bounds'] &= bool(np.all(request>=lo) and np.all(request<=hi) and np.all(final>=lo) and np.all(final<=hi));checks['zero8_exact'] &= np.array_equal(final[zero],qref[zero]);checks['POSITION48_readback'] &= bool(row['position_readback_exact'] and np.array_equal(final[initial['position_indices']],np.array(row['native105_position_readback_rad'])[initial['position_indices']]))
+        state=stateby[k];q=np.array([v['pos'] for v in state['human_dof_states']]);gp,gr=pose(state['guitar_body_states'][0]);ps=fk(q)
+        errors={n:dict(position_m=float(np.linalg.norm(ps[n][0]-pose(b)[0])),rotation_deg=float(np.rad2deg((ps[n][1].inv()*pose(b)[1]).magnitude()))) for n,b in zip(bodies,state['human_body_states'])}
+        chain=dict(step=k,max_position_m=max(errors[n]['position_m'] for n in TASK_CHAIN),max_rotation_deg=max(errors[n]['rotation_deg'] for n in TASK_CHAIN));chain_rows.append(chain);checks['task_chain_strict'] &= chain['max_position_m']<1e-5 and chain['max_rotation_deg']<.01;max_full_pos=max(max_full_pos,max(e['position_m'] for e in errors.values()));max_full_rot=max(max_full_rot,max(e['rotation_deg'] for e in errors.values()))
+        if k<2400:previous=final;continue
+        top=row['ready'];hand=hand_target_evidence(row,cfg,names,spec,state,previous,fk,reference);checks['hand_maintenance'] &= hand['passed'];bounds=bounded_target_evidence(row,cfg,previous,reference,arm,state,fk);checks['hand_maintenance'] &= bounds['passed'];m=hand['parent_ready'];parent_request=request if k<=3840 else hand['parent_requested105_rad'];child_request=request if k<=3840 else hand['after_requested105_rad'];lh,rh=m['LH'],m['RH'];stage=stage_at(case,t)
+        if k>3840:
+            maintenance_rows.append(dict(step=k,passed=bool(hand['passed'] and bounds['passed']),checks=hand['checks'],bounded_passed=bounds['passed'],bounded_checks=bounds['checks'],desired_fit=hand.get('desired_fit'),command_FK_diagnostic=hand.get('command_FK_diagnostic')))
+            footix=np.array([names.index(s+'_'+n) for s in ('L','R') for n in ('Knee_x','Ankle_x','Ankle_y','Ankle_z','Toe_x')]+[names.index('R_Hip_x')]);outsidefoot=np.setdiff1d(np.arange(105),footix);foot=row.get('foot_world_target_IK',{})
+            preMotion=increment['after_requested105_rad'].copy();preMotion[names.index('Chest_x')]+=pose_bias['bias_rad'];outsideMotion=np.setdiff1d(np.arange(105),np.r_[left,distal])
+            checks['hand_maintenance'] &= np.array_equal(parent_request[outsideMotion],preMotion[outsideMotion]) and m['changed_indices105']==np.flatnonzero(parent_request!=preMotion).tolist() and top['changed_indices105']==np.flatnonzero(child_request!=preMotion).tolist()
+            checks['foot11_stage'] &= np.array_equal(request[outsidefoot],child_request[outsidefoot]) and request[names.index('R_Hip_x')]==qref[names.index('R_Hip_x')]+cfg['right_hip_final_bias_rad'] and foot.get('legacy_R_Hip_x_request_rad')==child_request[names.index('R_Hip_x')] and foot.get('final_R_Hip_x_request_rad')==request[names.index('R_Hip_x')]
+        checks['top_actual_LH_and_RH'] &= np.array_equal(top['LH']['arm_requested12_rad'],request[arm]) and np.array_equal(top['LH']['finger_requested14_rad'],request[fingers]) and np.array_equal(top['final_LH26_rad'],final[left]) and np.array_equal(top['final_RH6_rad'],final[distal]) and top['RH']==rh
+        active=next(((i,start) for i,start in enumerate(case['strike_starts']) if start<=t<start+4),None)
+        checks['prox6_exact'] &= np.array_equal(request[prox],heldprox) and np.array_equal(final[prox],heldprox) and top['proximal_requested_latch_exact'] is True and top['proximal_submitted_latch_exact'] is True
+        checks['world12IK_inactive'] &= row.get('right_world_palm_IK_active') is False and not any(key in row for key in ('right_source_IK_position_error_m','right_source_IK_rotation_error_rad','right_source_IK_support_point_error_m'))
+        biased_base=base.copy();biased_base[[names.index(n) for n in BODY9_JOINTS]]+=body9_bias['bias9_rad'];biased_base[[names.index(n) for n in BODY9_JOINTS]]+=increment['bias9_rad'];biased_base[names.index('Chest_x')]+=pose_bias['bias_rad']
+        checks['other_channels_exact'] &= np.array_equal(request[other],biased_base[other]);checks['foot_command'] &= 'foot_world_target_IK' in row
+        checks['phase_metadata'] &= episode_metadata(top,canonical,t)['passed']
+        checks['phase_metadata'] &= m['case']==case['case'] and m['phase']==lh['stage']==stage and m['time_s']==t and m['other_base_request_channels_exact'] is True and set(m['changed_indices105'])<=set(np.r_[left,distal]) and lh['arm_indices105']==arm.tolist() and lh['finger_indices105']==fingers.tolist()
+        if phase!=(episode,stage):
+            phase=(episode,stage);anchor=dict(step=k,submitted=previous[left].copy());trial=q.copy();trial[arm]=previous[arm];p,r=fk(trial)['L_Wrist'];anchor.update(p=p,r=r);LHanchors[episode,stage]=anchor
+            if stage=='open':
+                actualp,actualr=pose(state['human_body_states'][bodies.index('L_Wrist')]);release_anchor=dict(step=k,delta=gr.apply([.08,0,0]),p=actualp,r=actualr)
+            checks['phase_boundaries_continuous'] &= np.array_equal(request[arm],previous[arm])
+        checks['phase_metadata'] &= lh['phase_start_step']==anchor['step'] and np.array_equal(lh['phase_start_submitted26_rad'],anchor['submitted']) and np.linalg.norm(np.array(lh['phase_start_command_wrist_W_m'])-anchor['p'])<=1e-9 and (Rotation.from_quat(lh['phase_start_command_wrist_xyzw']).inv()*anchor['r']).magnitude()<=1e-9
+        closed=np.array(spec['left']['finger_closed_reference14_rad']);opened=np.array(spec['left']['finger_open_goal14_rad']);expected_finger=previous[fingers].copy();boundary=k==anchor['step']
+        if stage!='gripped':
+            opening=smoothstep(t,case['release'][0],case['release'][0]+1);expected_finger=closed+(opened-closed)*opening
+            if stage in ('close','regrasp_hold'):
+                close=smoothstep(t,*case['close']);start=anchor['submitted'][12:] if stage=='close' else opened;expected_finger=start+(closed-start)*close
+        if boundary:
+            expected_finger=previous[fingers].copy();checks['phase_boundaries_continuous'] &= lh['boundary_hold'] is True and np.array_equal(request[left],previous[left])
+        checks['LH_phase_targets'] &= np.array_equal(parent_request[fingers],expected_finger) and np.array_equal(parent_request[arm],lh['arm_requested12_rad']) and np.array_equal(parent_request[fingers],lh['finger_requested14_rad'])
+        if stage in ('gripped','open'):checks['LH_phase_targets'] &= np.array_equal(parent_request[arm],previous[arm])
+        wanted_goal=None;wanted_rotation=None
+        if stage in ('withdraw','released_hold'):
+            a=LHanchors[episode,'withdraw'];fraction=smoothstep(t,case['release'][0]+1,case['release'][1]);wanted_goal=a['p']+release_anchor['delta']*fraction;wanted_rotation=a['r']
+        elif stage in ('approach','close','regrasp_hold'):
+            graspG=np.array(spec['left']['actual10_wrist_G_m']);graspR=Rotation.from_quat(spec['left']['actual10_wrist_G_xyzw']);current=gp+gr.apply(graspG);currentR=gr*graspR
+            if stage=='approach':
+                a=LHanchors[episode,'approach'];fraction=smoothstep(t,*case['approach']);wanted_goal=a['p']+(current-a['p'])*fraction;wanted_rotation=Rotation.from_rotvec((currentR*a['r'].inv()).as_rotvec()*fraction)*a['r']
+            else:wanted_goal=current;wanted_rotation=currentR
+        if release_anchor is not None:
+            checks['LH_phase_targets'] &= lh['release_start_step']==release_anchor['step'] and np.linalg.norm(np.array(lh['release_delta_W_m'])-release_anchor['delta'])<=1e-12 and np.linalg.norm(np.array(lh['release_actual_origin_W_m'])-release_anchor['p'])<=1e-12
+        checks['LH_phase_targets'] &= (lh['goal_wrist_W_m'] is None)==(wanted_goal is None)
+        if wanted_goal is not None:
+            checks['LH_phase_targets'] &= np.linalg.norm(np.array(lh['goal_wrist_W_m'])-wanted_goal)<=1e-10 and (Rotation.from_quat(lh['goal_wrist_xyzw']).inv()*wanted_rotation).magnitude()<=1e-10
+        if lh['goal_wrist_W_m'] is not None:
+            trial=q.copy();trial[arm]=final[arm];p,r=fk(trial)['L_Wrist'];perror=float(np.linalg.norm(p-lh['goal_wrist_W_m']));rerror=float((Rotation.from_quat(lh['goal_wrist_xyzw']).inv()*r).magnitude());checks['source_IK'] &= perror<=.01 and rerror<=.05 and np.isfinite([perror,rerror]).all()
+            source_rows.append(dict(step=k,kind='LH_final',position_m=perror,rotation_rad=rerror))
+        checks['left_strict'] &= bool(np.all(request[left]>=lo[left]) and np.all(request[left]<=hi[left]) and np.all(abs(final[arm]-qref[arm])<=.8) and np.all(np.linalg.norm(final[arm].reshape(4,3),axis=1)<np.deg2rad(160)))
+        if active is None:checks['RH_phase_targets'] &= rh['active'] is False and np.array_equal(request[distal],previous[distal])
+        else:
+            cycle,start=active;checks['RH_phase_targets'] &= rh['active'] is True and rh['cycle']==cycle and rh['start_s']==start and rh['local_time_s']==10+t-start
+            if cycle not in RHanchors:
+                trial=q.copy();trial[distal]=previous[distal];p,r=fk(trial)['RH:pick'];RHanchors[cycle]=dict(step=k,submitted=previous[distal].copy(),pick=gr.inv().apply(p-gp));checks['phase_boundaries_continuous'] &= np.array_equal(request[distal],previous[distal])
+            if first_orientation is None:
+                trial=q.copy();trial[distal]=previous[distal];first_orientation=gr.inv()*fk(trial)['RH:palm'][1]
+            final_orientation=Rotation.from_rotvec([0,np.deg2rad(-15),0])*Rotation.from_quat(spec['right_strike_spec']['clearance_solver_v2']['palm_G_reference_xyzw']);fraction=smoothstep(t,case['strike_starts'][0],case['strike_starts'][0]+.8);palmwanted=Rotation.from_rotvec((final_orientation*first_orientation.inv()).as_rotvec()*fraction)*first_orientation
+            checks['RH_phase_targets'] &= abs(rh['orientation_ramp_fraction']-fraction)<=1e-15 and (Rotation.from_quat(rh['palm_goal_G_xyzw']).inv()*palmwanted).magnitude()<=1e-10
+            a=RHanchors[cycle];checks['RH_phase_targets'] &= rh['cycle_start_step']==a['step'] and np.array_equal(rh['cycle_start_submitted6_rad'],a['submitted']) and np.linalg.norm(np.array(rh['cycle_initial_pick_G_m'])-a['pick'])<=1e-10
+            wanted=pick_goal(10+t-start,a['pick'],np.array(spec['right_strike_spec']['strike']['waypoints_G_m']));checks['RH_phase_targets'] &= np.linalg.norm(np.array(rh['pick_goal_G_m'])-wanted)<=1e-12
+            trial=q.copy();trial[distal]=final[distal];perror=float(np.linalg.norm(fk(trial)['RH:pick'][0]-(gp+gr.apply(wanted))));checks['source_IK'] &= perror<=.002 and rh['pick_IK_error_m']<=.002;source_rows.append(dict(step=k,kind='RH_final',position_m=perror))
+        checks['right_strict'] &= bool(np.all(abs(final[distal]-qref[distal])<=1) and np.all(np.linalg.norm(final[distal].reshape(2,3),axis=1)<np.deg2rad(160)))
+        previous=final
+    # End state also participates in the strict task-chain60Hz diagnostic.
+    finalstate=states[-1];q=np.array([v['pos'] for v in finalstate['state']['human_dof_states']]);ps=fk(q);last={n:dict(position_m=float(np.linalg.norm(ps[n][0]-pose(finalstate['state']['human_body_states'][bodies.index(n)])[0])),rotation_deg=float(np.rad2deg((ps[n][1].inv()*pose(finalstate['state']['human_body_states'][bodies.index(n)])[1]).magnitude()))) for n in TASK_CHAIN};checks['task_chain_strict'] &= max(e['position_m'] for e in last.values())<1e-5 and max(e['rotation_deg'] for e in last.values())<.01
+    chain_rows.append(dict(step=finalstate['physics_step'],max_position_m=max(e['position_m'] for e in last.values()),max_rotation_deg=max(e['rotation_deg'] for e in last.values())))
+    return dict(passed=all(checks.values()),checks={k:bool(v) for k,v in checks.items()},body9_selection=dict(path=str(BODY9_SELECTION),sha256=sha(BODY9_SELECTION),result_path=str(BODY9_RESULT),result_sha256=sha(BODY9_RESULT),scope='Static selected-vector source evidence and original-initial FK only; physical future support/tilt/full-finger accuracy are not guaranteed. Existing source13 preflight and all actual gates remain separate.'),task_chain_samples=chain_rows,source_IK_samples=source_rows,maintenance_selection=maintenance_selection,reference16=dict(path=str(referencepath),sha256=sha(referencepath),passed=bool(refok),e16_12_rad=e16.tolist(),actual_wrist_G_m=w16G.tolist(),actual_wrist_G_xyzw=r16G.tolist()),maintenance_samples=maintenance_rows,full105_FK_diagnostic=dict(max_position_m=max_full_pos,max_rotation_deg=max_full_rot,original_threshold_pass=max_full_pos<1e-5 and max_full_rot<.01,scope='Diagnostic only; existing full-finger FK failure is preserved. Original-initial calibration unchanged; no future finger-FK accuracy claim.'))

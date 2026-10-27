@@ -1,0 +1,136 @@
+"""Project recorded native contact features on native camera frames; graphics only."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+from .strap_trial_recording import project
+
+ROOT = Path(__file__).resolve().parents[1]
+FONT = Path('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
+GROUPS = {
+    'chest': ('가슴', (20,200,240)),
+    'right_upper_arm': ('오른 위팔', (255,140,20)),
+    'right_thigh': ('오른 허벅지', (185,70,240)),
+    'left_thigh': ('왼 허벅지', (70,120,255)),
+    'left_thumb': ('왼 엄지', (255,65,65)),
+    'left_hand': ('왼손 나머지', (240,210,20)),
+    'other': ('기타 인체 부위', (150,150,150)),
+}
+VIEWS = {'front':'앞', 'right_side':'오른쪽 옆', 'top':'위'}
+STAGES = dict(zip(['prepare','close_A','hold_A','release_A','open_A','move_open_B','close_B','hold_B','release_B','open_B'],
+                  ['초기 준비','A 잡기 접근','A 잡기 유지','A 해제 중','A 분리 유지','분리한 채 B 이동','B 잡기 접근','B 잡기 유지','B 해제 중','B 분리 유지']))
+
+
+def read(path): return json.loads(path.read_text())
+def sha(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def draw(raw, frame, camera):
+    image = Image.new('RGB',(1280,940),(248,248,248))
+    with Image.open(raw) as native:
+        assert native.size == (1280,720)
+        image.paste(native.convert('RGB'),(0,0))
+    draw = ImageDraw.Draw(image)
+    points = frame['points']
+    pixels,z,valid = project(np.array([p['point_W_m'] for p in points]).reshape(-1,3),
+                             np.array(camera['view_matrix']),np.array(camera['projection_matrix']),1280,720)
+    assert valid.all(), 'contact feature is outside the full-body camera'
+    # Merge only near-duplicate features of the same group; keep all raw rows in metadata.
+    unique = {}
+    for p,xy in zip(points,pixels):
+        key = (p['group'], *np.rint(np.array(p['point_W_m'])/.002).astype(int))
+        if key not in unique or p['positive_lambda']:
+            unique[key] = (p,xy)
+    for p,xy in unique.values():
+        x,y = xy; color = GROUPS[p['group']][1]
+        box = (x-7,y-7,x+7,y+7)
+        draw.ellipse((x-9,y-9,x+9,y+9),outline=(20,20,20),width=2)
+        draw.ellipse(box,fill=color if p['positive_lambda'] else None,outline=color,width=3)
+    title = ImageFont.truetype(str(FONT),26)
+    font = ImageFont.truetype(str(FONT),20)
+    small = ImageFont.truetype(str(FONT),18)
+    view = next(k for k,v in frame['cameras'].items() if v is camera)
+    draw.text((18,730),f'{VIEWS[view]}  |  {frame["time_s"]:.3f}초  |  {STAGES[frame["stage"]]}',font=title,fill=(15,15,15))
+    draw.text((18,775),'채운 원: 양의 접촉 반응   /   빈 원: lambda=0   /   원 크기는 힘의 크기가 아닙니다',font=font,fill=(20,20,20))
+    for i,(key,(label,color)) in enumerate(GROUPS.items()):
+        x = 18+(i%4)*315; y = 816+(i//4)*38
+        draw.ellipse((x,y+4,x+14,y+18),fill=color,outline=(20,20,20))
+        draw.text((x+23,y),label,font=font,fill=(20,20,20))
+    draw.text((18,902),'X-ray 표시: 몸에 가려진 접촉점도 보입니다. 기타–인체의 실제 contact feature 위치이며 접촉 면적·힘(N)이 아닙니다.',font=small,fill=(30,30,30))
+    return image, {'raw_contact_rows':len(points),'drawn_features':len(unique),'out_of_frame':int((~valid).sum())}
+
+
+def encode(out, count):
+    videos = {}; encoded = []
+    for view in VIEWS:
+        path = out/(view+'.mp4')
+        command = ['ffmpeg','-nostdin','-n','-loglevel','error','-framerate','30','-i',str(out/'frames'/view/'%05d.png'),
+                   '-frames:v',str(count),'-c:v','libx264','-crf','20','-pix_fmt','yuv420p',str(path)]
+        subprocess.run(command,check=True)
+        videos[view] = path; encoded.append(command)
+    combined = out/'front_side_top.mp4'
+    command = ['ffmpeg','-nostdin','-n','-loglevel','error']
+    for path in videos.values(): command += ['-i',str(path)]
+    command += ['-filter_complex','[0:v]scale=640:470[a];[1:v]scale=640:470[b];[2:v]scale=640:470[c];[a][b][c]hstack=inputs=3[v]',
+                '-map','[v]','-frames:v',str(count),'-c:v','libx264','-crf','20','-pix_fmt','yuv420p',str(combined)]
+    subprocess.run(command,check=True); videos['combined'] = combined; encoded.append(command)
+    results = {}
+    for view,path in videos.items():
+        probe = subprocess.run(['ffprobe','-v','error','-count_frames','-select_streams','v:0','-show_entries',
+                                'stream=width,height,avg_frame_rate,nb_read_frames,duration','-of','json',str(path)],check=True,capture_output=True,text=True)
+        stream = json.loads(probe.stdout)['streams'][0]
+        assert int(stream['nb_read_frames']) == count and abs(float(stream['duration'])-count/30)<.002
+        results[view] = {'path':str(path),'sha256':sha(path),'stream':stream}
+    return results, encoded
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--native',type=Path,required=True); parser.add_argument('--out',type=Path,required=True)
+    args = parser.parse_args(); n=args.native.resolve(); out=args.out.resolve(); out.mkdir(parents=True,exist_ok=False)
+    metadata = read(n/'media/contact_view_frames.json'); frames = metadata['frames']
+    assert len(frames)==481 and [f['physics_step'] for f in frames]==list(range(0,3841,8))
+    native_report = read(n/'report.json')
+    assert native_report['completed'] and native_report['inputs_unchanged'] and not native_report['forbidden_calls']
+    assert native_report['physics_steps']==3840 and native_report['physics_seconds']==16
+    capture = read(n/'media/capture.json')['frames']
+    assert len(capture)==len(frames) and all(a['physics_step']==b['physics_step'] and a['render_preserves_states'] and b['states_unchanged'] for a,b in zip(capture,frames))
+    reproduction = n.parent/'reproduction.json'; proof = read(reproduction)
+    assert proof['inputs_unchanged'] and all(proof['exact'].values())
+    paths = {Path(__file__).resolve(),ROOT/'stability_adapter_2/strap_trial_recording.py',ROOT/'stability_adapter_2/gym_trial_recording.py',FONT,
+             n/'media/contact_view_frames.json',n/'media/capture.json',n/'report.json',reproduction}
+    for frame in frames:
+        for camera in frame['cameras'].values(): paths.add(n/'media/frames'/camera['native_key']/('%05d.png'%(frame['physics_step']//8)))
+    inputs = {str(p):sha(p) for p in paths}; (out/'inputs_before.json').write_text(json.dumps(inputs,indent=2))
+    for index,frame in enumerate(frames):
+        for camera in frame['cameras'].values():
+            raw = n/'media/frames'/camera['native_key']/('%05d.png'%index)
+            assert inputs[str(raw)]==capture[index]['image_sha256'][str(raw)], 'native capture image changed before annotation'
+    for view in VIEWS: (out/'frames'/view).mkdir(parents=True,exist_ok=False)
+    rows = []; snapshots = []
+    selected = {15,105,160,195,315,420}  # 0.5/3.5/5.333/6.5/10.5/14 seconds.
+    for index, frame in enumerate(frames):
+        images = []
+        for view,camera in frame['cameras'].items():
+            raw = n/'media/frames'/camera['native_key']/('%05d.png'%index)
+            image,stats = draw(raw,frame,camera); path=out/'frames'/view/('%05d.png'%index); image.save(path)
+            rows.append({'physics_step':frame['physics_step'],'view':view,'path':str(path),'sha256':sha(path),**stats})
+            if index in selected: images.append(image)
+        if images:
+            sheet = Image.new('RGB',(3840,940),'white')
+            for k,image in enumerate(images): sheet.paste(image,(k*1280,0))
+            path=out/('three_views_%05d.png'%index); sheet.save(path); snapshots.append({'time_s':frame['time_s'],'path':str(path),'sha256':sha(path)})
+    videos,commands = encode(out,len(frames))
+    assert all(sha(p)==h for p,h in inputs.items())
+    gaps = [p['pair_feature_gap_m'] for f in frames for p in f['points']]
+    report = {'input_sha256':inputs,'inputs_unchanged':True,'videos':videos,'encode_commands':commands,'snapshots':snapshots,
+              'frame_count_per_view':len(frames),'annotated_frames':rows,'pair_feature_gap_max_m':max(gaps,default=0),
+              'pair_feature_gap_median_m':float(np.median(gaps)) if gaps else 0,'camera_config':metadata['camera_config'],
+              'scope':'native cameras plus X-ray projected point glyphs, fixed pixel size; same physics trace verified; positive raw lambda is not force N; body-local normal contact features, not pressure areas'}
+    (out/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)); print('three-view contact visualization complete',flush=True)
+
+
+if __name__=='__main__': main()

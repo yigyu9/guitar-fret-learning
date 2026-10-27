@@ -1,0 +1,117 @@
+"""CPU contract checks; synthetic poses/gains here are test fixtures only."""
+from pathlib import Path
+import unittest
+import xml.etree.ElementTree as ET
+
+import numpy as np
+
+from ..whole_body_control import (
+    ACTIVE_NAMES, HELD_NAMES, LOWER_NAMES, EXPECTED_NAMES, WholeBodyTargetContract)
+
+
+def fixture(names=None):
+    names = tuple(sorted(EXPECTED_NAMES)) if names is None else tuple(names)
+    n = len(names)
+    return dict(names=names,q_ref=np.linspace(-.1,.1,n),lower=np.full(n,-2.),
+                upper=np.full(n,2.),rates_rad_s=np.full(n,3.),half_range_rad=np.full(39,.4),
+                kp=np.full(n,10.),kd=np.full(n,2.),effort_limits=np.full(n,5.),
+                control_hz=60.,smoothing_alpha=.5)
+
+
+class WholeBodyTests(unittest.TestCase):
+    def test_xml_exact_names_and_anatomical_zero_ranges(self):
+        path = Path(__file__).resolve().parents[1]/'assets/tab2body/assets/smpl_mpl_hands_body.xml'
+        joints = [j for j in ET.parse(path).getroot().findall('.//worldbody//joint') if j.get('name')]
+        self.assertEqual(len(joints),105)
+        self.assertEqual({j.get('name') for j in joints},EXPECTED_NAMES)
+        lower = [j for j in joints if j.get('name') in LOWER_NAMES]
+        zero = [j for j in lower if len(set(map(float,j.get('range').split())))==1]
+        self.assertEqual(len(lower),24)
+        self.assertEqual(len(zero),8)
+        self.assertEqual(len(lower)-len(zero),16)
+        self.assertEqual(len([j for j in joints if len(set(map(float,j.get('range').split())))==1]),8)
+        args = fixture()
+        for j in lower:
+            i = args['names'].index(j.get('name'))
+            lo,hi = np.deg2rad(list(map(float,j.get('range').split())))
+            args['lower'][i],args['upper'][i] = lo,hi
+            args['q_ref'][i] = (lo+hi)/2
+        c = WholeBodyTargetContract(**args)
+        self.assertEqual(c.metadata['zero_range_count'],8)
+        self.assertEqual(c.metadata['nonzero_range_dim'],97)
+
+    def test_named_shuffle_and_ownership(self):
+        a = WholeBodyTargetContract(**fixture())
+        # Match the same external reference by name in both native orders.
+        args = fixture(a.names[::-1])
+        args['q_ref'] = a.q_ref[::-1].copy()
+        b = WholeBodyTargetContract(**args)
+        action = np.linspace(-1,1,39)
+        ar,af = a.targets(action,a.reset_targets())
+        br,bf = b.targets(action,b.reset_targets())
+        np.testing.assert_array_equal(ar,br[::-1])
+        np.testing.assert_array_equal(af,bf[::-1])
+        self.assertEqual((len(ACTIVE_NAMES),len(HELD_NAMES)),(39,66))
+        self.assertEqual(len(set(ACTIVE_NAMES)|set(HELD_NAMES)),105)
+        np.testing.assert_array_equal(af[a.held_indices],a.q_ref[a.held_indices])
+        np.testing.assert_allclose(np.abs(af-a.q_ref).max(),.05)
+        self.assertEqual(a.metadata['native_order'],list(a.names))
+
+    def test_every_channel_restores_and_saturates_including_lower(self):
+        c = WholeBodyTargetContract(**fixture())
+        target = c.reset_targets()
+        q = target+.1
+        np.testing.assert_allclose(c.torques(q,np.zeros(105),target),-1.)
+        np.testing.assert_array_equal(c.torques(target+100,np.zeros(105),target),-5.)
+        np.testing.assert_array_equal(c.torques(target-100,np.zeros(105),target),5.)
+        np.testing.assert_array_equal(q,target+.1)
+        self.assertEqual(c.torques(q,np.zeros(105),target).shape,(105,))
+        np.testing.assert_allclose(c.torques(target,np.ones(105),target),-2.)
+
+    def test_reject_81_wrong_names_and_held_contamination(self):
+        args = fixture(tuple(name for name in sorted(EXPECTED_NAMES) if name not in LOWER_NAMES))
+        with self.assertRaises(ValueError): WholeBodyTargetContract(**args)
+        args = fixture()
+        args['names'] = ('root',)+args['names'][1:]
+        with self.assertRaises(ValueError): WholeBodyTargetContract(**args)
+        c = WholeBodyTargetContract(**fixture())
+        for name in ('L_Hip_x','RH:thumb2','Torso_x'):
+            previous = c.reset_targets()
+            previous[c.names.index(name)] += .001
+            with self.assertRaises(ValueError): c.targets(np.zeros(39),previous)
+            with self.assertRaises(ValueError): c.torques(c.q_ref,np.zeros(105),previous)
+        invalid = c.reset_targets()
+        invalid[c.names.index('L_Thorax_x')] += 1.
+        with self.assertRaisesRegex(ValueError, 'outside effective bounds'):
+            c.torques(c.q_ref,np.zeros(105),invalid)
+
+    def test_validation_and_input_output_copies(self):
+        for key,value in [('kp',0.),('kp',np.nan),('kd',-1.),
+                          ('effort_limits',0.),('rates_rad_s',-1.)]:
+            args = fixture()
+            args[key][0] = value
+            with self.subTest(key=key,value=value),self.assertRaises(ValueError):
+                WholeBodyTargetContract(**args)
+        args = fixture()
+        c = WholeBodyTargetContract(**args)
+        args['q_ref'][:] = 1
+        args['kp'][:] = 1
+        self.assertFalse(np.all(c.q_ref==1))
+        self.assertTrue(np.all(c.kp==10))
+        out = c.reset_targets()
+        out[:] = 1
+        self.assertFalse(np.all(c.q_ref==1))
+        for action in (np.zeros(38),np.full(39,np.nan),np.full(39,1.01)):
+            with self.assertRaises(ValueError): c.targets(action,c.reset_targets())
+        with self.assertRaises(ValueError): c.targets(np.zeros(39),np.zeros(81))
+        with self.assertRaises(ValueError): c.torques(np.zeros(81),np.zeros(105),c.q_ref)
+        with self.assertRaises(ValueError): c.torques(c.q_ref,np.full(105,np.inf),c.q_ref)
+        for value in (c.q_ref,c.kp,c.kd,c.effort_limits):
+            self.assertFalse(value.flags.writeable)
+        # Finite output is preserved even when a finite-input product overflows.
+        result = c.torques(np.full(105,-1e308),np.zeros(105),c.q_ref)
+        np.testing.assert_array_equal(result,np.full(105,5.))
+
+
+if __name__=='__main__':
+    unittest.main()

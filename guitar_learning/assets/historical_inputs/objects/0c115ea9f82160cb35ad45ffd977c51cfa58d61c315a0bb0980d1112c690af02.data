@@ -1,0 +1,99 @@
+"""동일한 유한 압현 경로에 2초 완만 복귀와 1초 회복 관측을 명시한다."""
+import copy
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+import numpy as np
+from ..lower_body_release_v1.common import ROOT,A,BASE,read,save,pin,verify,sha
+from .recording_v2 import ThinStringTrialRecording
+from ..string_trial_recording_v1 import StringTrialRecording
+
+P=BASE/'grounded_guitar_support_v1';PLAY=P/'play_v1';OUT=PLAY/'preflight_v5'
+PLAN=ROOT/'docs/plans/grounded_guitar_slow_return_20261016.md'
+MODE='recorded_finite_finger_slow_return_v1'
+
+
+def recorder_cpu():
+    def init(rec,env,out):
+        rec.env=env;rec.frames=[];rec.strap=SimpleNamespace(raw=SimpleNamespace(),fps=30,interval=8)
+    def capture(rec):rec.frames.append(dict(physics_step=rec.env.steps))
+    results=[]
+    with patch.object(StringTrialRecording,'__init__',init),patch.object(StringTrialRecording,'capture',capture):
+        for seconds in (16,28):
+            env=SimpleNamespace(config={'physics_hz':240},steps=0)
+            recorder=ThinStringTrialRecording(env,'unused')
+            for step in range(0,seconds*240+1,8):
+                env.steps=step;recorder.capture()
+            recorder.capture()
+            steps=[r['physics_step'] for r in recorder.frames]
+            expected=list(range(0,seconds*240+1,24))
+            results.append(dict(seconds=seconds,frames=len(steps),expected_frames=seconds*10+1,
+                exact_cadence_and_endpoint=steps==expected,unique_steps=len(steps)==len(set(steps)),
+                all_layers_fps10_interval24=all((r.fps,r.interval)==(10,24) for r in (recorder,recorder.strap,recorder.strap.raw)),
+                last_step=steps[-1],encoded_duration_s=len(steps)/recorder.fps,
+                scope='원 capture를 모의 함수로 바꾼 CPU 호출 주기 검사이며 실제 렌더·인코딩 성공이 아니다.'))
+    return results
+
+
+def main():
+    OUT.mkdir(exist_ok=False)
+    previous=PLAY/'preflight_v4';native=PLAY/'native_press_v4';analysis=PLAY/'analysis_press_v4'
+    extra=[Path(__file__).resolve(),Path(__file__).with_name('runtime_v3.py'),Path(__file__).with_name('recording_v2.py'),PLAN,
+        previous/'report.json',previous/'play_spec.json',previous/'generation.json',native/'support_wrapper.json',
+        analysis/'summary.json',analysis/'ownership_evidence.json',analysis/'press_evidence.json',
+        P/'recorded_press_effect_v1/report.json',P/'recorded_press_effect_v1/phase_report.json',
+        PLAY/'inputs/press_v4.json',PLAY/'inputs/combined_v4.json']
+    extra += [native/n for n in ('initial_values.json','states240.json','contacts240.json','efforts240.json','targets60.json','native_properties.json','report.json','attempt.json')]
+    discovery=pin(extra=extra);save(OUT/'discovery_before.json',discovery)
+    oldreport=read(previous/'report.json');wrapper=read(native/'support_wrapper.json')
+    inputs=pin(extra=list(discovery)+list(oldreport['input_sha256'])+list(wrapper['input_sha256'])+[OUT/'discovery_before.json'])
+    save(OUT/'inputs_before.json',inputs)
+    assert verify(discovery) and verify(oldreport['input_sha256']) and verify(wrapper['input_sha256'])
+    assert not any('/grounded_guitar_play_v1/'+n in p for p in inputs for n in ('motion_v4.py','run_v4.py','analyze_v5.py'))
+    oldspec=read(previous/'play_spec.json');spec=copy.deepcopy(oldspec)
+    spec['finger_control'].update(mode=MODE,return_mode='capture13_to_reference2396_target15_smoothstep',return_interval_s=[13,15],observation_interval_s=[15,16])
+    initial=read(native/'initial_values.json');indices=spec['finger_trajectory']['joint_indices105']
+    lower=np.array(initial['PD_properties']['lower'])[indices];upper=np.array(initial['PD_properties']['upper'])[indices]
+    rest=np.array(spec['finger_trajectory']['rest_final4_rad']);rows=spec['finger_trajectory']['rows']
+    captures=np.vstack([rest,*[r['final4_rad'] for r in rows]])
+    u=np.linspace(0,1,121);smooth=u*u*(3-2*u)
+    returns=captures[:,None,:]+smooth[None,:,None]*(rest[None,None,:]-captures[:,None,:])
+    returns32=returns.astype(np.float32).astype(float)
+    maximum_speed=float(np.max(abs(rest-captures))*.75)
+    recorded_checks=oldreport['table_row_checks'];cadence=recorder_cpu()
+    targets=read(native/'targets60.json')['rows'];states=read(native/'states240.json')['rows'];contacts=read(native/'contacts240.json')['rows'];efforts=read(native/'efforts240.json')['rows']
+    first13=dict(state_rows=len(states[:3121]),contact_rows=len(contacts[:3121]),effort_rows=len(efforts[:3120]),numeric_target_rows=sum(r['physics_step_before']<=3120 for r in targets),scope='실제 V4의 첫13초 근거다. 새 V5와의 exact 비교는 새 실제 자료가 생성된 뒤 분석기가 판정한다.')
+    gates=dict(oldreport['gates'])
+    gates.update(recorded_table_exact_unchanged=spec['finger_trajectory']==oldspec['finger_trajectory'],
+        press_and_right_paths_exact=spec['press']==oldspec['press'] and spec['strike']==oldspec['strike'],
+        inherited_recorded_bounds_rate_readback_IK=all(all(row[k] for k in ('strict_bounds','float32_final','original_rate_replay_exact','original_readback_exact','reference_IK_pass')) for row in recorded_checks),
+        all_possible_capture_to_rest_convex_original_bounds=bool(np.all(returns>=lower) and np.all(returns<=upper)),
+        float32_slow_return_original_strict_bounds=bool(np.all(returns32>=lower) and np.all(returns32<=upper)),
+        smoothstep_endpoints_exact=bool(np.array_equal(returns32[:,0,:],captures) and np.array_equal(returns32[:,-1,:],np.broadcast_to(rest,captures.shape))),
+        smoothstep_peak_velocity_ratio_37p5percent=bool((1.5/2)/(1/.5)==.375),
+        all_capture_slow_return_peak_under_original_rate=maximum_speed<=1.5,
+        recorder16s161_and28s281_unique_endpoint_all_layers=all(r['exact_cadence_and_endpoint'] and r['unique_steps'] and r['all_layers_fps10_interval24'] for r in cadence),
+        prior_actual_first13_full_rows=first13['state_rows']==3121 and first13['contact_rows']==3121 and first13['effort_rows']==3120 and first13['numeric_target_rows']==781)
+    gates={k:bool(v) for k,v in gates.items()}
+    assert verify(inputs);save(OUT/'play_spec.json',spec)
+    report={k:copy.deepcopy(v) for k,v in oldreport.items() if k not in ('input_sha256','inputs_after_sha256','eligible_for_native','gates','spec_sha256','scope')}
+    report.update(eligible_for_native=all(gates.values()),gates=gates,inputs_unchanged=True,input_sha256=inputs,inputs_after_sha256={p:sha(p) for p in inputs},spec_sha256=sha(OUT/'play_spec.json'),
+        finger_control=spec['finger_control'],prior_native_run=str(native),prior_native_first13_evidence=first13,
+        slow_return=dict(duration_s=2,observation_interval_s=[15,16],possible_capture_targets=len(captures),samples_per_capture=121,
+            requested_peak_speed_ratio_to_previous=.375,maximum_possible_requested_speed_rad_s=maximum_speed,
+            minimum_float32_return_margin_rad=float(np.min(np.minimum(returns32-lower,upper-returns32)))),
+        recording_CPU_evidence=cadence,native_simulation_steps=0,new_finger_IK_evaluations=0,
+        scope='기록된 특정 유한 검지 경로와 실제 접촉 목표 유지 조건은 V4 그대로다. 복귀만13..15초 smoothstep으로 바꾸고15..16초 관측한다. 요청 피크 속도는 이전0.5초 선형 복귀의37.5%다. 원10..14초 동작 판정은 유지하고 가슴·상완95%는10..14/10..16/13..16 각각 검사해야 한다. 기존 source41·원V1및V4 실자료는 명시한 과거 근거로 재사용하며 새 FK/IK 또는 물리 성공이 아니다. 첫13초 실제동일성과 새 영상 cadence·렌더불변·인코딩은 실제 실행 뒤 판정한다. 원14초 baseline/strike를16초 대조로 설명하지 않는다.')
+    save(OUT/'report.json',report)
+    configs=[]
+    for case in ('press','combined'):
+        cfg=read(PLAY/'inputs'/(case+'_v4.json'))
+        cfg.update(seconds=16,validation_protocol='finite_prepare5_hold5_play4_recover2_v1',play_action_interval_s=[10,14],return_interval_s=[13,15],recovery_observation_s=[15,16],
+            play_preflight_report=str(OUT/'report.json'),play_spec=str(OUT/'play_spec.json'),play_spec_sha256=sha(OUT/'play_spec.json'),finger_control_mode=MODE)
+        path=PLAY/'inputs'/(case+'_v5.json');save(path,cfg);configs.append(path)
+    assert verify(inputs)
+    save(OUT/'generation.json',dict(eligible_for_native=report['eligible_for_native'],input_sha256=inputs,inputs_unchanged=True,native_simulation_steps=0,new_finger_IK_evaluations=0,output_sha256={str(p):sha(p) for p in [OUT/'play_spec.json',OUT/'report.json',*configs]}))
+    print(dict(eligible=report['eligible_for_native'],gates=gates,maximum_return_speed_rad_s=maximum_speed,recorder_CPU=cadence,input_count=len(inputs)),flush=True)
+    assert report['eligible_for_native'],'완만 복귀 사전 검사 실패: 새 물리 실행 금지'
+
+if __name__=='__main__':main()

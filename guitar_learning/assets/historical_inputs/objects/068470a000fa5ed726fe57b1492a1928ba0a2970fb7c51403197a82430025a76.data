@@ -1,0 +1,126 @@
+"""Full source-note schedule without modifying the reviewed song bundle."""
+from dataclasses import dataclass
+import hashlib
+import json
+import math
+from pathlib import Path
+import wave
+
+from guitar_learning.score.events import load_music_task
+from guitar_learning.music_task import EVENT_FIELDS, STATE_FIELDS, ScoreTask, ScoreTarget, finite
+
+
+@dataclass(frozen=True)
+class SongTask(ScoreTask):
+    episode_duration_s: float = 0.0
+
+    def __post_init__(self):
+        super().__post_init__()
+        duration = finite(self.episode_duration_s, 'episode_duration_s')
+        if duration <= max(target.end_s for target in self.targets):
+            raise ValueError('song duration must include all targets and the final tail')
+
+    @property
+    def duration_s(self):
+        return self.episode_duration_s
+
+
+def make_task(bundle, pre_roll_s=3., tail_s=.5):
+    """Preserve every note, source clock, and existing release-capped sustain.
+
+    The reviewed plan collapses two same-string restrikes into one unsupported
+    event. Only this explicit gesture is expanded at its original note onsets.
+    Each inherits the aggregate direction; no second direction is inferred.
+    """
+    pre_roll = finite(pre_roll_s, 'pre_roll_s')
+    tail = finite(tail_s, 'tail_s')
+    if pre_roll < 0 or tail <= 0:
+        raise ValueError('nonnegative pre-roll and positive tail required')
+    root = Path(bundle).resolve()
+    source = load_music_task(root, stage='B', tempo_scale=1., preroll_s=pre_roll)
+    manifest_path = root / 'manifest.json'
+    manifest = json.loads(manifest_path.read_text())
+    audio_path = root / 'source/audio.wav'
+    audio_bytes = audio_path.read_bytes()
+    audio_sha = hashlib.sha256(audio_bytes).hexdigest()
+    audio_entry = manifest['files']['source/audio.wav']
+    if audio_entry['sha256'] != audio_sha or audio_entry['bytes'] != len(audio_bytes):
+        raise ValueError('audio manifest fingerprint mismatch')
+    with wave.open(str(audio_path), 'rb') as audio:
+        frames, sample_rate = audio.getnframes(), audio.getframerate()
+    audio_duration = frames / sample_rate
+    control_ticks = math.ceil((pre_roll + audio_duration + tail) * 60)
+    duration = control_ticks / 60.
+    notes = json.loads((root / 'mapping/fingering.json').read_text())['notes']
+    targets, schedule, expanded = [], [], []
+    for event in source.timeline.events:
+        split = not event.supported
+        if split:
+            if (event.unsupported_reasons != ('unsupported_alternate_restrike',)
+                    or event.strike.gesture != 'alternate_restrike'
+                    or len(event.string_targets) != 2
+                    or len({t.string for t in event.string_targets}) != 1
+                    or any(not t.supported for t in event.string_targets)):
+                raise ValueError('unsupported full-song event: ' + event.event_id)
+            expanded.append(event.event_id)
+        for target in event.string_targets:
+            onset = target.note_on_s if split else event.score_time_s + target.traversal_offset_s
+            end = min(target.sustain_until_s,
+                      target.release_s if target.release_s is not None else target.sustain_until_s)
+            press = target.press_start_s if target.press_start_s is not None else target.note_on_s
+            identity = f'{event.event_id}/string-{target.string + 1}/note-{target.mapping_note_index}'
+            direction = 1 if event.strike.direction == 'down' else -1
+            targets.append(ScoreTarget(identity, event.event_id, target.string, target.fret,
+                                       target.finger or 0, direction, onset + pre_roll,
+                                       end + pre_roll, press + pre_roll, onset, end))
+            schedule.append(dict(target_id=identity, event_id=event.event_id,
+                                 mapping_note_index=target.mapping_note_index,
+                                 source_event_id=target.source_event_id,
+                                 source_string=target.source_string,
+                                 string=target.string, fret=target.fret, finger=target.finger or 0,
+                                 direction=direction, source_onset_s=onset,
+                                 source_note_on_s=target.note_on_s,
+                                 source_note_off_s=target.note_off_s,
+                                 source_end_s=end, source_press_s=press,
+                                 source_release_s=target.release_s,
+                                 onset_s=onset + pre_roll, end_s=end + pre_roll,
+                                 press_s=press + pre_roll, expanded_restrike=split))
+    indices = [row['mapping_note_index'] for row in schedule]
+    if len(indices) != len(notes) or sorted(indices) != list(range(len(notes))):
+        raise ValueError('full-song source-note coverage is incomplete or duplicated')
+    if max(target.source_end_s for target in targets) > audio_duration:
+        raise ValueError('song targets extend beyond the source audio')
+    metadata = source.content_document()
+    metadata.pop('observation_dim')
+    metadata.pop('lookahead')
+    files = {item['path']: dict(item) for item in source.provenance}
+    for path in (Path(__file__).resolve(), Path(__file__).resolve().parents[1] / 'music_task.py'):
+        payload = path.read_bytes()
+        files[str(path)] = dict(path=str(path), sha256=hashlib.sha256(payload).hexdigest(), bytes=len(payload))
+    metadata.update(schema='guitar_learning.song_score.v1', stage='full',
+                    event_ids=[event.event_id for event in source.timeline.events],
+                    source_origin_s=0., timing_mode='source_audio_clock',
+                    preroll_s=pre_roll, tempo_scale=1.,
+                    event_fields=list(EVENT_FIELDS), state_fields=list(STATE_FIELDS),
+                    lookahead_s=4., capacity=64,
+                    provenance=[files[path] for path in sorted(files)],
+                    temporal_composition='all source notes; release-capped audible intervals; conflicting same-string targets rejected',
+                    geometry_frame='caller supplied guitar frame; delta meters and relative velocity meters/second',
+                    priority_slots='current with earliest end; unmatched nearest nonexpired strict deadline within token window',
+                    song=dict(source_manifest=manifest,
+                              manifest_path=str(manifest_path),
+                              manifest_sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                              audio_path=str(audio_path), audio_sha256=audio_sha,
+                              audio_frames=frames, audio_sample_rate=sample_rate,
+                              audio_duration_s=audio_duration,
+                              pre_roll_s=pre_roll, tail_s=tail,
+                              control_hz=60, control_ticks=control_ticks,
+                              policy_duration_s=duration,
+                              source_event_count=len(source.timeline.events),
+                              source_note_count=len(notes), source_mapping_indices=indices,
+                              coverage=dict(complete=True, unique=True, omitted_indices=[], duplicated_indices=[]),
+                              expanded_event_ids=expanded,
+                              derivation='supported onset=canonical score+traversal; alternate_restrike split at source note_on; each split inherits aggregate direction; end=min(sustain,release); no source-origin shift; +policy pre-roll; horizon=ceil((audio+pre-roll+tail)*60)/60',
+                              direction_scope='aggregate plan direction inherited independently by each split note; second direction is not inferred',
+                              schedule=schedule))
+    return SongTask(tuple(targets), lookahead_s=4., provenance=metadata, episode_duration_s=duration)

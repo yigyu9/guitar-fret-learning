@@ -1,0 +1,25 @@
+"""Native before/after frames and all-sample upright/contact plots."""
+import argparse,csv
+from pathlib import Path
+import numpy as np
+from PIL import Image,ImageDraw,ImageFont
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from .common import BASE,read,save,sha,verify
+
+
+def main(run,analysis,out):
+    out.mkdir(exist_ok=False);before=BASE/'native/rotational_stable_pd_interior_static_v1/media/frames/whole_body/00150.png';after=run/'media/frames/whole_body/00150.png';summary=analysis/'summary.json';samples=analysis/'samples.csv';inputs=[before,after,summary,samples,Path(__file__).resolve()];pins={str(p):sha(p) for p in inputs};save(out/'inputs_before.json',pins)
+    rows=list(csv.DictReader(samples.open()));values={k:np.array([float(r[k]) for r in rows]) for k in rows[0]};at5=int(np.argmin(abs(values['time_s']-5)));font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',18);canvas=Image.new('RGB',(1040,712),(245,245,245));draw=ImageDraw.Draw(canvas)
+    for col,(path,label) in enumerate([(before,'Previous: Chest right tilt +18.16 deg'),(after,f"Upright: Chest right tilt {values['Chest_right_tilt_deg'][at5]:+.2f} deg")]):
+        canvas.paste(Image.open(path).convert('RGB').crop((420,60,940,720)),(col*520,52));draw.text((col*520+12,15),label,font=font,fill=(25,25,25))
+    canvas.save(out/'before_after_native_5s.png')
+    t=values['time_s'];fig,axes=plt.subplots(3,1,figsize=(10,7),sharex=True,gridspec_kw={'height_ratios':[2,1.5,1]});axes[0].plot(t,values['Torso_right_tilt_deg'],label='Waist right tilt');axes[0].plot(t,values['Chest_right_tilt_deg'],label='Chest right tilt');axes[0].plot(t,values['Chest_total_tilt_deg'],label='Chest total tilt');axes[0].axhline(3,color='.6',ls='--',lw=.8);axes[0].axhline(-3,color='.6',ls='--',lw=.8);axes[0].axhline(5,color='.6',ls=':',lw=.8);axes[0].set_ylabel('Tilt (deg)');axes[0].grid(alpha=.2);axes[0].legend(loc='upper left',bbox_to_anchor=(0,1.28),ncol=3,frameon=False)
+    axes[1].plot(t,values['guitar_root_displacement_m']*1000,color='tab:purple');axes[1].set_ylabel('Guitar root shift (mm)');axes[1].grid(alpha=.2)
+    contact=np.array([values[n+'_positive_lambda_contacts']>0 for n in ('Chest','R_Shoulder')]);axes[2].imshow(contact,aspect='auto',interpolation='nearest',extent=[t[0],t[-1],1.5,-.5],vmin=0,vmax=1,cmap='Blues');axes[2].set_yticks([0,1]);axes[2].set_yticklabels(['Chest','Right upper arm']);axes[2].set_xlabel('Simulation time (s)');axes[2].set_title('Native positive contact response (blue), no unit conversion to force',fontsize=10)
+    fig.tight_layout(h_pad=1.7);fig.savefig(out/'native_tilt_motion_contacts.png',dpi=170);plt.close(fig);save(out/'verification.json',dict(inputs_unchanged=verify(pins),before_native_frame=str(before),after_native_frame=str(after),comparison_time_s=5.,crop_pixels_original=[420,60,940,720],camera_unchanged=True,scope='Native rendered frames cropped identically, caption outside pixels. No source geometry image presented as native. Plot includes every 240Hz sample; positive solver lambda is response presence, not calibrated N.'))
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--run',type=Path,required=True);p.add_argument('--analysis',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();main(a.run.resolve(),a.analysis.resolve(),a.out.resolve())

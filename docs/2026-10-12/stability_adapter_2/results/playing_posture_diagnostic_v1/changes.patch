@@ -1,0 +1,50 @@
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/before/PLAN.md
++++ /home/ajou/yigyu/3/stability_adapter_2/PLAN.md
+@@ -599,3 +599,12 @@
+ - [ ] 짧은 구절·곡 통합에서 음악·허용 범위·자연스러움·물리 상태를 함께 평가.
+ 
+ 현재 root/하체 고정·몸통 PD 목표 유지·Thorax 이하66관절 권한·자유 기타 조건을 유지한다. 제어권·보정 제한과 최종 목표/history 계약 검증 뒤 학습 구조를 결정한다. 체크포인트 시험은 최소2초 준비 후 원본 첫 done까지 시작부터 녹화하며 실패·부분 기록을 완주로 표시하지 않는다. 이번 반영은 문서 변경이고 물리 실행·자산 변경·학습 업데이트는 없다. [변경 기록](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/research_direction_update_v1/README.md:1).
++
++## 현재 소단계: 연주 자세·목표 오차 진단 (2026-10-10)
++
++- [x] 저장 native 실행의 시간/좌표/420D 목표 ABI 조사 및 [세부 계획](/home/ajou/yigyu/3/stability_adapter_2/PLAYING_POSTURE_DIAGNOSTIC_PLAN.md:1) 작성.
++- [x] 기존 스트랩 ON 재실행에서 기타 넥/앞판/몸통 상대 배치·양팔 관절 여유·현재 프렛 목표를 함께 표시.
++- [x] 수학/시간 정합 및 입력 보존 검증, 실제 native 원본과 PNG 대조. 의미 검증6개·문법 검사 통과,113표본의 최대 네 손끝 정합 오차7.797e−8m.
++- [x] 결과 문서·독립 검수·변경 색인 및 최종 봉인. [이미지·설명과 결과](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/README.md:1), [변경 파일·실제 줄](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/FILE_INDEX.md:1).
++
++이번 단위는 저장 자료 후처리이며 새 물리 실행·제어·학습은 없다. 자연스러운 자세의 선호 문턱은 아직 설정하지 않고 사용자 허용 범위를 유지한다.
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/before/README.md
++++ /home/ajou/yigyu/3/stability_adapter_2/README.md
+@@ -6,6 +6,8 @@
+ 양손 통합·안정화 보정 학습·지속 연주 성공은 미완료다. 스트랩은 시험별 ON/OFF 비교 변수다.
+ 
+ 메인 실행 계획은 [허용 범위 안에서 자유 기타 연주 계획](/home/ajou/yigyu/3/stability_adapter_2/PLAN.md:1)을 따른다.
++
++2026-10-10 [연주 자세·현재 프렛 목표 진단](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/README.md:1)을 추가했다. 저장된 스트랩 ON native 실행의113표본에서 넥 기울기·앞판 정면 각도·Chest 상대 배치·양팔12관절씩의 signed 한계 여유·현재 목표를 함께 표시한다.2초 대비 종료 앞판 각도는3.68→51.49°였고 종료 active 손끝 목표 오차는 검지106.88/약지78.74mm였다. 목표가 바뀌므로 한 음의 동일 목표 오차 변화로 단정하지 않는다. 종료 actor-root 위치가 범위 안이어도 연주 성공은 확인되지 않았다. 허용 회전 집합 판정·자연스러움 문턱·보정 제어·학습은 이 진단에 추가하지 않았으며 새 물리 실행은0회다.
+ 
+ 전체 연구의 목표·우선순위·단계별 통과 조건은 [전체 연구 메인 계획](/home/ajou/yigyu/3/master_plan/README.md:14)을 따른다. 2026-10-10 반영한 방향은 자유 기타의 허용 범위 유지와 실제 압현·타현을 함께 달성하는 것이다. 초기 p/q 복원 중심의 아래 과거 기록과 달라지는 부분은 최신 전체 방향과 [현재 실행 목표](/home/ajou/yigyu/3/stability_adapter_2/PLAN.md:8)를 우선한다. 다음 소단계는 현재 기타 기준 왼손 손목·목표 프렛 오차와 접촉면을 시각화하고, 제한된 팔 보정으로 한 음의 압현·유지를 검증하는 것이다.
+ 
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/before/results_README.md
++++ /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/README.md
+@@ -542,3 +542,7 @@
+ ## 후면지향 엄지 면: 네 초기 자세 source 검사
+ 
+ [결과/초기조건/그림/실제줄](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/three_face_rear_facet_v2/README.md:1). 엄지±.10/.20rad의네후보는patch이탈과source교차로제외해새native/step0이다. 거리QP의중단/복구와원본보존을구분했고이번source비교를새실제Gym영상으로표현하지않는다. 다음catalog계획은미실행이다.
++
++## 2026-10-10 연주 자세·현재 프렛 목표 진단
++
++[실제 Isaac Gym 화면과 설명](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/README.md:1)에 초기·2초 전환·3초·종료 이미지와113표본 추세를 추가했다. 기존 스트랩 ON 실행의 저장 자료 후처리이며 새 물리 실행·학습은0회다. 넥과 앞판 방향, 몸통 상대 배치, 모델 관절 여유와 현재 프렛 목표를 함께 본다. 넓은 허용 범위를 유지하며 자연스러움 문턱과 전체 회전 집합 인증은 미구현이다.
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/before/VISUAL_REPORT.md
++++ /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/VISUAL_REPORT.md
+@@ -2256,3 +2256,11 @@
+ ![실제 native 왼손 근접 영상, 0–5초 기록](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/prepared_strike_connection_v1/native/data/images/hands.mp4)
+ 
+ [전체 결과·0/2/5초 이미지·실행 제한](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/prepared_strike_connection_v1/README.md:1)과 [실행·자료 파일 색인](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/prepared_strike_connection_v1/CHANGED_FILES.md:1)을 따른다. 정책 연결은 진단상 실행됐지만 인정 타현, strict palm 지원 또는 연주 성공은 확인되지 않았다.
++
++## 2026-10-10 연주 자세·현재 프렛 목표 진단
++
++저장된 스트랩 ON native 실행의2초 전환과3.716667초 실제 종료를 비교했다. 넥 기울기는−5.47→+11.33°, 앞판과 고정 몸통 정면의 각도는3.68→51.49°다. 종료 actor-root 위치는 위치 범위 안이지만 활성 손끝–프렛 목표 오차는 검지106.88/약지78.74mm이며 기존 실행은 압현 성공0%로 실패했다. 프렛·활성 손가락이 바뀌므로 같은 음의 오차 증가로 단정하지 않는다.
++
++![실제 Isaac Gym의2초 전환과 종료, 현재 기타 기준 목표 참고선](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/analysis/comparison.png)
++
++노랑은 넥 local +Y, 청록은 앞판 법선 +Z, 흰색은 활성 손끝 marker, 분홍은 현재 할당 목표다. 새 선은 접촉·가림 인증이 아니며 기존 오렌지 스트랩 경로 표시를 보존했다. [초기·중간·종료 전신/손 확대와 지표 설명](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/README.md:1). 이번은 저장113표본 후처리로 새 물리 실행·학습은0회이며 자연스러움 문턱·허용 회전 집합 판정은 미설정/미구현이다.

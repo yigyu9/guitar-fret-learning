@@ -1,0 +1,160 @@
+"""최종보정 뒤 같은 실행에서 정지5초를 검증하는 절대일정 실행."""
+import isaacgym
+import argparse
+from pathlib import Path
+from unittest.mock import patch
+from ..lower_body_release_v1 import run_horizontal_v7 as runner,scene_v8,controller_horizontal_v4
+from ..lower_body_release_v1.common import ROOT,A,read,save,pin,verify,sha
+from .. import string_trial_recording_v1 as strings
+from ..front_facing_strike_v1.run_v5 import compact_native_save
+from ..front_facing_pose_v1.recording_v1 import ThinStringTrialRecording
+from ..front_facing_pose_v1.release_prepare_v2 import validate_reference
+from .protocol_v3 import PHASE,PLAN,PROTOCOL,REFERENCE,REPEAT,CERTIFICATE,CONFIG_REFERENCE,schedule,SETTLED_HOLD,SETTLED_PLAN,REGRASP_SETTLE_PLAN
+from .protocol_v1 import schedule as legacy_schedule
+from .runtime_v4 import MODE,JOINTS,DELTA
+from .runtime_v6 import Scene,Controller
+
+PLANS=[PLAN,ROOT/'docs/plans/front_facing_ready_regrasp_20261016.md',ROOT/'docs/plans/front_facing_ready_measurement_20261016.md',ROOT/'docs/plans/front_facing_ready_margin_20261016.md',ROOT/'docs/plans/front_facing_ready_chest_pose_20261016.md',ROOT/'docs/plans/front_facing_ready_body9_pose_20261016.md',SETTLED_PLAN,REGRASP_SETTLE_PLAN]
+DESIGN=PHASE/'diagnose_selective_posture_v1'
+SELECTED=DESIGN/'selected_v5/selected_vector.json'
+SELECTED_SHA='da6a3f530da9821de2213cdbd6606c583e86d9c5baf4a31d7f9380bb29a098a9'
+DESIGN_INPUTS=[SELECTED,DESIGN/'freeze_v5.json',DESIGN/'selected_v5/result.json',DESIGN/'selected_v5/inputs_before.json',DESIGN/'run_v4/result_v1.json',DESIGN/'run_v4/inputs_before.json',DESIGN/'summary_v5.md']
+RAW=('initial_values.json','native_properties.json','final_state.json','states240.json','contacts240.json','efforts240.json','targets60.json','attempt.json','report.json','support_wrapper.json')
+TASK_GATES={'static25_and_repeat_pass','static4raw_exact','current_right_and_baseline_success','task_chain_original10um_0p01deg','source41_wrist2mm_0p02rad','source41_strict26','source41_other79_exact','return41_wrist2mm_0p02rad','return41_strict26','return41_other79_exact','original_zero8_excluded','source_candidate_SHA','opening14_partitioned'}
+
+
+from .run_v7 import baseline_guard
+
+
+def iter_rows(path):
+    """Read compact native JSON rows one at a time; preserve full row values."""
+    import json,re
+    decoder=json.JSONDecoder()
+    with Path(path).open() as stream:
+        buffer=''
+        while True:
+            chunk=stream.read(65536);assert chunk,'native rows array missing'
+            buffer+=chunk;match=re.search(r'"rows"\s*:\s*\[',buffer)
+            if match:
+                buffer=buffer[match.end():];break
+        while True:
+            buffer=buffer.lstrip()
+            if buffer.startswith(','):buffer=buffer[1:].lstrip()
+            if buffer.startswith(']'):return
+            try:
+                row,end=decoder.raw_decode(buffer)
+            except json.JSONDecodeError:
+                chunk=stream.read(65536);assert chunk,'incomplete native row'
+                buffer+=chunk;continue
+            assert isinstance(row,dict)
+            yield row
+            buffer=buffer[end:]
+
+
+def regrasp_reference_guard(cfg):
+    run=PHASE/'native_regrasp_v6';config=PHASE/'inputs_settled_hold_v1/regrasp_v1.json'
+    original=read(config)
+    from .protocol_v2 import PROTOCOL as original_protocol,schedule as original_schedule
+    assert original['ready_case']=='regrasp' and original['seconds']==42.
+    assert original['validation_protocol']==original_protocol and original['ready_schedule']==original_schedule('regrasp')
+    excluded={'seconds','validation_protocol','ready_schedule'}
+    assert {k:v for k,v in cfg.items() if k not in excluded}=={k:v for k,v in original.items() if k not in excluded}
+    report=read(run/'report.json');attempt=read(run/'attempt.json');wrapper=read(run/'support_wrapper.json')
+    assert report['completed'] is True and report['physics_steps']==10080 and report['inputs_unchanged'] is True
+    assert Path(report['config']).resolve()==config and Path(attempt['config']).resolve()==config
+    assert wrapper['inputs_unchanged'] is True and wrapper['physical_seconds']==42. and wrapper['ready_case']=='regrasp'
+    assert wrapper['validation_protocol']==original_protocol
+    analysis=PHASE/'analysis_regrasp_v6';summary=read(analysis/'summary.json');left=read(analysis/'left_evidence.json')
+    assert summary['passed'] is False and summary['inputs_unchanged'] is True and summary['case']=='regrasp'
+    assert Path(summary['run']).resolve()==run and Path(summary['config_path']).resolve()==config and summary['config_sha256']==sha(config)
+    assert left['checks']['neck_finger_contact95'] is False
+    assert all(value is True for key,value in left['checks'].items() if key!='neck_finger_contact95')
+    maps=[read(analysis/'inputs_before.json'),attempt['input_sha256'],wrapper['input_sha256']]
+    for mapping in maps:
+        assert mapping and verify(mapping) and mapping.get(str(config))==sha(config)
+    for name in RAW:assert maps[0].get(str(run/name))==sha(run/name)
+    return [config,analysis/'summary.json',analysis/'left_evidence.json',analysis/'inputs_before.json']+[run/name for name in RAW],maps
+
+
+def compare_original42(run):
+    reference=PHASE/'native_regrasp_v6';counts={};first_mismatch=None
+    limits={'states240.json':('physics_step',10081,1),'contacts240.json':('physics_step',10081,1),
+            'efforts240.json':('physics_step_before',10080,1),'targets60.json':('physics_step_before',2520,4)}
+    for name,(key,count,stride) in limits.items():
+        actual=iter_rows(run/name);expected=iter_rows(reference/name);matched=0;seen=0
+        for j,row in enumerate(expected):
+            assert row[key]==j*stride and j<count
+            other=next(actual,None);same=other==row
+            if same:matched+=1
+            elif first_mismatch is None:first_mismatch=dict(file=name,reference_row=j,expected_step=row[key],actual_step=None if other is None else other.get(key))
+            seen+=1
+        assert seen==count
+        counts[name]=dict(expected_rows=count,matched_rows=matched,step_stride=stride,last_step=(count-1)*stride)
+    return dict(passed=first_mismatch is None,reference_run=str(reference),run=str(run),prefix_seconds=42.,rows=counts,first_mismatch=first_mismatch,
+        reference_raw_sha256={name:sha(reference/name) for name in limits},actual_raw_sha256={name:sha(run/name) for name in limits},
+        scope='Whole row equality at original absolute steps: states/contact0..10080,efforts0..10079,targets0..10076. New step10080 effort/target belongs43s continuation and is excluded. Original37..42 contact95 failure remains unchanged; new38..43 needs independent actual evaluation.')
+
+
+def main(config,out):
+    config,out=Path(config).resolve(),Path(out).resolve();assert out.parent==PHASE and not out.exists()
+    cfg=read(config);case=cfg['ready_case'];assert cfg['ready_schedule']==schedule(case) and cfg['seconds']==schedule(case)['seconds']
+    assert cfg['ready_settled_hold_s']==SETTLED_HOLD
+    assert cfg['validation_protocol']==PROTOCOL and cfg['mode']=='static' and cfg['preparation_s']==5 and cfg['hold_interval_s']==[5,10]
+    assert cfg['chest_action_preload_mode']=='finite_human_Chest_0p5mm_v1' and cfg['chest_action_preload_extra_m']==.0005 and cfg['chest_action_preload_ramp_s']==[10.,10.5]
+    assert cfg['ready_body9_pose_mode']==MODE and cfg['ready_body9_pose_joints']==JOINTS and cfg['ready_body9_pose_delta_rad']==DELTA and cfg['ready_body9_pose_ramp_s']==[10,10.5]
+    assert sha(SELECTED)==SELECTED_SHA
+    selected=read(SELECTED);assert selected['joint_names']==JOINTS and selected['additional_delta9_rad']==DELTA
+    assert cfg['ready_chest_pose_mode']=='finite_human_Chest_x_forward_0p005rad_v1' and cfg['ready_chest_pose_joint']=='Chest_x' and cfg['ready_chest_pose_delta_rad']==.005 and cfg['ready_chest_pose_ramp_s']==[10,10.5]
+    assert cfg['ready_chest_margin_mode']=='finite_human_Chest_extra0p25mm_v1' and cfg['ready_chest_margin_extra_m']==.00025 and cfg['ready_chest_margin_ramp_s']==[10,10.5]
+    assert cfg['distal_rotational_feedback_mode']=='finite_distal6_SO3_child_PD_v1' and cfg['distal_rotational_feedback_start_s']==10.
+    reference=read(CONFIG_REFERENCE);removed={'play_case','play_start_s','play_action_interval_s'}
+    added={'ready_settled_hold_s','seconds','validation_protocol','ready_case','ready_schedule','ready_spec','ready_spec_sha256','ready_preflight_report','ready_preflight_report_sha256','ready_baseline_summary','ready_chest_margin_mode','ready_chest_margin_extra_m','ready_chest_margin_ramp_s','ready_chest_pose_mode','ready_chest_pose_joint','ready_chest_pose_delta_rad','ready_chest_pose_ramp_s','ready_body9_pose_mode','ready_body9_pose_joints','ready_body9_pose_delta_rad','ready_body9_pose_ramp_s'}
+    assert {k:v for k,v in cfg.items() if k not in added}=={k:v for k,v in reference.items() if k not in added|removed}
+    preflight_path=Path(cfg['ready_preflight_report']).resolve();preflight=read(preflight_path);spec_path=Path(cfg['ready_spec']).resolve();spec=read(spec_path)
+    assert sha(preflight_path)==cfg['ready_preflight_report_sha256']
+    assert preflight['eligible_for_native_task_diagnostic'] is True and preflight['inputs_unchanged'] is True
+    assert set(preflight['gates'])==TASK_GATES and all(v is True for v in preflight['gates'].values())
+    assert sha(spec_path)==cfg['ready_spec_sha256']==preflight['spec_sha256'] and spec_path==preflight_path.parent/'ready_spec.json'
+    assert preflight['source_candidate_sha256']==spec['initial_candidate_sha256']==cfg['candidate_sha256']==sha(cfg['candidate'])
+    assert spec['schedules'][case]==legacy_schedule(case) and spec['right_strike_spec']==read(cfg['play_spec'])
+    assert spec['config_reference_sha256']==preflight['reference_config_sha256']==sha(CONFIG_REFERENCE)
+    _,_,_,_,static=validate_reference(REFERENCE,REPEAT,CERTIFICATE)
+    assert Path(cfg['prepared_static_config']).resolve()==static
+    paths=PLANS+DESIGN_INPUTS+[PHASE/'REQUIREMENTS.md',config,CONFIG_REFERENCE,preflight_path,spec_path,preflight_path.parent/'inputs_before.json',CERTIFICATE,A/'AGENTS.md']
+    for package in ('front_facing_ready_v1','front_facing_strike_v1','front_facing_pose_v1','grounded_guitar_release_v1','grounded_guitar_support_v1','seated_foot_support_v1'):
+        paths+=list((A/package).glob('*.py'))
+    maps=[preflight['input_sha256'],read(preflight_path.parent/'inputs_before.json'),read(CERTIFICATE)['input_sha256']]+[read(p) for p in (DESIGN/'selected_v5/inputs_before.json',DESIGN/'run_v4/inputs_before.json')]
+    if case!='baseline':
+        more,mappings=baseline_guard(cfg);paths+=more;maps+=mappings
+    for mapping in maps:
+        assert mapping and verify(mapping);paths += [Path(p) for p in mapping]
+    if case=='regrasp':
+        more,mappings=regrasp_reference_guard(cfg);paths+=more;maps+=mappings
+    inputs=pin(config,extra=paths)
+    for mapping in maps:
+        for p,h in mapping.items():assert p not in inputs or inputs[p]==h,p;inputs[p]=h
+    assert verify(inputs);before=PHASE/'provenance'/(out.name+'_before.json');save(before,inputs)
+    exact_path=None;exact_sha=None;exact_passed=None
+    try:
+        with patch.object(strings,'StringTrialRecording',ThinStringTrialRecording),patch.object(scene_v8,'Scene',Scene),patch.object(controller_horizontal_v4,'Controller',Controller),patch.object(runner,'save',compact_native_save):
+            runner.run(config,out)
+        if case=='regrasp':
+            exact=compare_original42(out);exact_path=out/'regrasp_original42_exact.json';save(exact_path,exact)
+            exact_sha=sha(exact_path);exact_passed=exact['passed']
+            assert exact_passed
+    finally:
+        save(out/'support_wrapper.json',dict(input_sha256=inputs,inputs_unchanged=verify(inputs),before_manifest=str(before),
+            actual_scene_class='front_facing_ready_v1.runtime_v4.Scene',controller='front_facing_ready_v1.runtime_v6.Controller',motion_class='front_facing_ready_v1.motion_v1.Motion',
+            regrasp_original42_exact_report=None if exact_path is None else str(exact_path),regrasp_original42_exact_report_sha256=exact_sha,regrasp_original42_exact_passed=exact_passed,
+            validation_protocol=PROTOCOL,ready_settled_hold_s=SETTLED_HOLD,ready_case=case,physical_seconds=cfg['seconds'],image_capture_hz=5,camera_matrix_telemetry_hz=30,
+            chest_action_preload_mode=cfg['chest_action_preload_mode'],chest_action_preload_extra_m=.0005,chest_action_preload_ramp_s=[10.,10.5],
+            ready_body9_pose_mode=cfg['ready_body9_pose_mode'],ready_body9_pose_joints=JOINTS,ready_body9_pose_delta_rad=DELTA,ready_body9_pose_ramp_s=[10.,10.5],
+            ready_chest_pose_mode=cfg['ready_chest_pose_mode'],ready_chest_pose_joint='Chest_x',ready_chest_pose_delta_rad=.005,ready_chest_pose_ramp_s=[10.,10.5],
+            ready_chest_margin_mode=cfg['ready_chest_margin_mode'],ready_chest_margin_extra_m=.00025,ready_chest_margin_ramp_s=[10.,10.5],
+            distal_rotational_feedback_mode=cfg['distal_rotational_feedback_mode'],distal_rotational_feedback_start_s=10.,
+            scope='새protocol3는원절대목표수학유지/regrasp settle37..38+dwell38..43/continuous settle49..50+dwell50..55+R55..59.원42prefix raw4exact별도검사.11..16정지5초.원spec일정은legacyprotocol1과대조하며원geometrypreflight는새타이밍물리성공인증아님.원initial-calibrated taskchain만엄격검증하는진단실행.원fullFK/finger실패는보존.단일scheduler LH26/Rdistal6,원Rprox2396목표/finiteFoot/Chest0.5/SO3effort후같은cap내Chest0.25margin가설.성공채택아님.기존Chest_x+.005유지+선정Body9추가가설.실제step/cfg일시조작없음.기타free/중력ON/strapOFF,원gain/cap,상태주입/G힘/부착/PPO없음.후처리nativehand원형상2mm·240Hz접촉·재파지·반복성공은별도판정.'))
+    assert verify(inputs)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--config',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();main(a.config,a.out)

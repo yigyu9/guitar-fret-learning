@@ -1,0 +1,357 @@
+"""One GPU PhysX simulator with CUDA state and control tensors.
+
+Only episode reset writes state. Reset body poses are explicitly the pinned
+prepared snapshot until the first physics step reconstructs articulation FK.
+"""
+from pathlib import Path
+import json
+
+import numpy as np
+
+
+def _body_row(record):
+    return ([record['pose']['p'][a] for a in 'xyz'] +
+            [record['pose']['r'][a] for a in 'xyzw'] +
+            [record['vel']['linear'][a] for a in 'xyz'] +
+            [record['vel']['angular'][a] for a in 'xyz'])
+
+
+def _apply_body_properties(properties, rows):
+    if len(properties) != len(rows):
+        raise ValueError('Pinned rigid-body property count differs from asset')
+    for prop, row in zip(properties, rows):
+        prop.mass = row['mass_kg']
+        for i, axis in enumerate('xyz'):
+            setattr(prop.com, axis, row['COM_body_m'][i])
+            for j, other in enumerate('xyz'):
+                setattr(getattr(prop.inertia, axis), other, row['inertia_COM_kg_m2'][i][j])
+
+
+class GpuScene:
+    def __init__(self, num_envs, hand, device='cuda:0', out=None):
+        # Isaac must be imported before Torch in the executable entry point.
+        import isaacgym
+        from isaacgym import gymapi, gymtorch
+        import torch
+        from guitar_learning.runtime.prepared_reset_v1 import load_prepared_reset_contract
+        from guitar_learning.native.paths import resolve_input_path
+        from guitar_learning.core.finger_control import default_profile
+
+        if type(num_envs) is not int or num_envs < 1 or hand not in ('left', 'right'):
+            raise ValueError('Positive environment count and left/right hand required')
+        self.device = torch.device(device)
+        if self.device.type != 'cuda' or not torch.cuda.is_available():
+            raise ValueError('GPU scene requires available explicit CUDA device')
+        self.num_envs, self.hand = num_envs, hand
+        self.out = None if out is None else Path(out)
+        self.gym, self.sim = gymapi.acquire_gym(), None
+        self.closed, self.physics_steps, self.reset_calls = False, 0, 0
+        self._actual_physics = {}
+        self._tensor_devices = {}
+        self._rigid_readback_max_error = 0.
+        self.episode_steps = torch.zeros(num_envs, dtype=torch.long, device=self.device)
+        self.contract = load_prepared_reset_contract()
+        initial, saved = self.contract['initial'], self.contract['state']
+        self.names = list(initial['joint_names'])
+        if (len(self.names) != 105 or len(set(self.names)) != 105 or
+                initial['human_root_fixed'] is not True or initial['guitar_root_fixed'] is not False or
+                initial['guitar_gravity_disabled'] is not False):
+            raise ValueError('Pinned105 fixed human root and free gravity guitar required')
+        self.human_bodies = list(initial['human_body_names'])
+        self.guitar_bodies = list(initial['guitar_body_names'])
+        self.body_names = (['human/' + n for n in self.human_bodies] +
+                           ['guitar/' + n for n in self.guitar_bodies] + ['chair/box'])
+        self.body_count = len(self.body_names)
+        self.envs, self.actors, self.origins = [], [], []
+        self._reset_mask = torch.ones(num_envs, dtype=torch.bool, device=self.device)
+        self._prepared_bodies = torch.tensor(
+            [_body_row(r) for kind in ('human', 'guitar', 'chair')
+             for r in saved[kind + '_body_states']], dtype=torch.float32, device=self.device)
+        self._prepared_dofs = torch.tensor(
+            [[r['pos'], r['vel']] for r in saved['human_dof_states']],
+            dtype=torch.float32, device=self.device)
+        self.reference105 = torch.tensor(self.contract['target105'], dtype=torch.float32, device=self.device)
+        self.native_control_kp = torch.tensor(initial['control_K105'], device=self.device)
+        self.native_control_kd = torch.tensor(initial['control_D105'], device=self.device)
+        try:
+            params = gymapi.SimParams()
+            params.dt, params.substeps = 1 / 240., 1
+            params.up_axis, params.gravity = gymapi.UP_AXIS_Z, gymapi.Vec3(0, 0, -9.81)
+            params.use_gpu_pipeline, params.physx.use_gpu = True, True
+            params.physx.solver_type = 1
+            params.physx.num_position_iterations, params.physx.num_velocity_iterations = 4, 2
+            params.physx.contact_collection = gymapi.ContactCollection.CC_LAST_SUBSTEP
+            params.physx.contact_offset, params.physx.rest_offset = .002, 0.
+            params.physx.max_depenetration_velocity = 10.
+            params.physx.max_gpu_contact_pairs = max(1048576, num_envs * 4096)
+            params.physx.default_buffer_size_multiplier = 5.
+            compute = self.device.index if self.device.index is not None else torch.cuda.current_device()
+            self.sim = self.gym.create_sim(compute, -1, gymapi.SIM_PHYSX, params)
+            if self.sim is None:
+                raise RuntimeError('GPU PhysX simulator construction failed')
+            ground = gymapi.PlaneParams()
+            ground.normal = gymapi.Vec3(0, 0, 1)
+            self.gym.add_ground(self.sim, ground)
+            assets = []
+            for record in initial['loaded_assets']:
+                options = gymapi.AssetOptions()
+                options.fix_base_link = record['fixed_base']
+                options.disable_gravity = record['gravity_disabled']
+                if not options.fix_base_link:
+                    options.override_com = options.override_inertia = True
+                path = resolve_input_path(record['path'])
+                asset = self.gym.load_asset(self.sim, str(path.parent), path.name, options)
+                if asset is None:
+                    raise RuntimeError('Pinned GPU asset failed to load: ' + str(path))
+                assets.append(asset)
+            chair_options = gymapi.AssetOptions()
+            chair_options.fix_base_link = True
+            half = initial['chair_initial_placement']['half_m']
+            assets.append(self.gym.create_box(self.sim, *(2 * np.asarray(half)), chair_options))
+            body_rows = initial['human_properties'] + initial['guitar_properties']['applied']
+            for index in range(num_envs):
+                env = self.gym.create_env(self.sim, gymapi.Vec3(-1.5, -1.5, 0),
+                                          gymapi.Vec3(1.5, 1.5, 2.5), int(np.ceil(np.sqrt(num_envs))))
+                if env is None:
+                    raise RuntimeError('GPU environment construction failed')
+                self.envs.append(env)
+                origin = self.gym.get_env_origin(env)
+                self.origins.append([origin.x, origin.y, origin.z])
+                handles = []
+                for kind, asset in zip(('human', 'guitar', 'chair'), assets):
+                    row = saved[kind + '_body_states'][0]
+                    transform = gymapi.Transform()
+                    transform.p = gymapi.Vec3(*[row['pose']['p'][a] for a in 'xyz'])
+                    transform.r = gymapi.Quat(*[row['pose']['r'][a] for a in 'xyzw'])
+                    actor = self.gym.create_actor(env, asset, transform, kind, index, -1 if kind == 'human' else 0)
+                    if actor < 0:
+                        raise RuntimeError('GPU actor construction failed')
+                    handles.append(actor)
+                    if kind in ('human', 'guitar'):
+                        rows = initial['human_properties'] if kind == 'human' else initial['guitar_properties']['applied']
+                        actual_names = list(self.gym.get_actor_rigid_body_names(env, actor))
+                        if actual_names != [r['name'] for r in rows]:
+                            raise ValueError('Pinned GPU rigid-body order mismatch')
+                        props = self.gym.get_actor_rigid_body_properties(env, actor)
+                        _apply_body_properties(props, rows)
+                        if self.gym.set_actor_rigid_body_properties(env, actor, props, False) is False:
+                            raise RuntimeError('GPU rigid-body properties rejected')
+                        readback = self.gym.get_actor_rigid_body_properties(env, actor)
+                        for prop, record in zip(readback, rows):
+                            actual = [prop.mass] + [getattr(prop.com, a) for a in 'xyz'] + [
+                                getattr(getattr(prop.inertia, a), b) for a in 'xyz' for b in 'xyz']
+                            expected = [record['mass_kg']] + record['COM_body_m'] + [
+                                v for row in record['inertia_COM_kg_m2'] for v in row]
+                            # PhysX diagonalizes inertia when properties are set;
+                            # reconstruction can differ by a few float32 ULPs.
+                            error = float(np.max(np.abs(np.asarray(actual) - np.asarray(expected))))
+                            self._rigid_readback_max_error = max(self._rigid_readback_max_error, error)
+                            if not np.allclose(actual, expected, rtol=2e-6, atol=1e-8):
+                                raise RuntimeError('GPU rigid mass/COM/inertia readback differs for ' + record['name'])
+                        shapes = self.gym.get_actor_rigid_shape_properties(env, actor)
+                        spans = self.gym.get_actor_rigid_body_shape_indices(env, actor)
+                        for name, span in zip(actual_names, spans):
+                            expected = initial['actual_shape_properties'][kind][name]
+                            if span.count != len(expected):
+                                raise ValueError('Pinned GPU collision shape count mismatch')
+                            for offset, record in enumerate(expected):
+                                prop = shapes[span.start + offset]
+                                prop.filter, prop.friction = record['filter'], record['friction']
+                                prop.contact_offset = record['contact_offset_m']
+                        if self.gym.set_actor_rigid_shape_properties(env, actor, shapes) is False:
+                            raise RuntimeError('GPU collision properties rejected')
+                        readback = self.gym.get_actor_rigid_shape_properties(env, actor)
+                        for expected, actual in zip(shapes, readback):
+                            if (expected.filter != actual.filter or expected.friction != actual.friction or
+                                    expected.contact_offset != actual.contact_offset):
+                                raise RuntimeError('GPU collision filter/friction/contact offset readback differs')
+                    if kind == 'human':
+                        if list(self.gym.get_actor_dof_names(env, actor)) != self.names:
+                            raise ValueError('Pinned GPU DOF order mismatch')
+                        props = self.gym.get_actor_dof_properties(env, actor)
+                        for field in props.dtype.names:
+                            props[field] = initial['native_PD_properties'][field]
+                        if hand == 'left':
+                            profile = default_profile()
+                            for j, name in enumerate(self.names):
+                                if name.startswith('LH:'):
+                                    prefix = 'thumb' if name.startswith('LH:thumb') else 'finger'
+                                    props['stiffness'][j] = profile[prefix + '_stiffness']
+                                    props['damping'][j] = profile[prefix + '_damping']
+                        if self.gym.set_actor_dof_properties(env, actor, props) is False:
+                            raise RuntimeError('GPU native DOF properties rejected')
+                        readback = self.gym.get_actor_dof_properties(env, actor)
+                        if not np.array_equal(readback, props):
+                            raise RuntimeError('GPU native DOF property readback differs')
+                        if self.gym.enable_actor_dof_force_sensors(env, actor) is False:
+                            raise RuntimeError('GPU DOF force sensor setup failed')
+                        self.pd_properties = readback.copy()
+                for actor in handles:
+                    disabled = self.gym.get_actor_rigid_shape_properties(env, actor)
+                    for prop in disabled:
+                        prop.filter = 1
+                    assert self.gym.set_actor_rigid_shape_properties(env, actor, disabled) is not False
+                self.actors.append(handles)
+            if not self.gym.prepare_sim(self.sim):
+                raise RuntimeError('GPU prepare_sim failed')
+            self.origins = torch.tensor(self.origins, dtype=torch.float32, device=self.device)
+            self._dof = gymtorch.wrap_tensor(self.gym.acquire_dof_state_tensor(self.sim)).view(num_envs, 105, 2)
+            self._roots = gymtorch.wrap_tensor(self.gym.acquire_actor_root_state_tensor(self.sim)).view(num_envs, 3, 13)
+            self._bodies = gymtorch.wrap_tensor(self.gym.acquire_rigid_body_state_tensor(self.sim)).view(num_envs, self.body_count, 13)
+            self.contact_force = gymtorch.wrap_tensor(self.gym.acquire_net_contact_force_tensor(self.sim)).view(num_envs, self.body_count, 3)
+            self.jacobian = gymtorch.wrap_tensor(self.gym.acquire_jacobian_tensor(self.sim, 'human'))
+            if any(t.device != self.device for t in (self._dof, self._roots, self._bodies, self.contact_force, self.jacobian)):
+                raise RuntimeError('GPU pipeline returned non-CUDA tensors')
+            self._tensor_devices = {name: str(value.device) for name, value in (
+                ('dof', self._dof), ('roots', self._roots), ('bodies', self._bodies),
+                ('contact_force', self.contact_force), ('jacobian', self.jacobian))}
+            self.q, self.qd = self._dof[..., 0], self._dof[..., 1]
+            self.target = self.reference105.expand(num_envs, -1).clone()
+            self.efforts = torch.zeros_like(self.target)
+            self.lower = torch.tensor(self.pd_properties['lower'].copy(), device=self.device)
+            self.upper = torch.tensor(self.pd_properties['upper'].copy(), device=self.device)
+            if int((self.lower < self.upper).sum()) != 97 or int((self.lower == self.upper).sum()) != 8:
+                raise ValueError('GPU native105/effective97/zero8 limits differ')
+            self.effort_caps = torch.tensor(self.pd_properties['effort'].copy(), device=self.device)
+            chair = self.gym.get_actor_rigid_body_properties(self.envs[0], self.actors[0][2])[0]
+            self.mass = torch.tensor([r['mass_kg'] for r in body_rows] + [chair.mass], device=self.device)
+            self.com = torch.tensor([r['COM_body_m'] for r in body_rows] +
+                                    [[getattr(chair.com, a) for a in 'xyz']], device=self.device)
+            self.inertia = torch.tensor([r['inertia_COM_kg_m2'] for r in body_rows] +
+                [[[getattr(getattr(chair.inertia, a), b) for b in 'xyz'] for a in 'xyz']], device=self.device)
+            self.masses = self.mass
+            self.metadata = dict(joint_names=self.names, body_names=self.body_names,
+                human_bodies=self.human_bodies, guitar_bodies=self.guitar_bodies,
+                body_com=self.com.tolist(), reference105=self.reference105.tolist(),
+                position_indices=initial['position_indices'], effort_indices=initial['effort_indices'],
+                zero_indices=initial['zero_range_indices'], physics_hz=240, control_hz=60,
+                reset_body_source='Pinned035/v14 body snapshot until first actual GPU physics step',
+                state_position_frame='Native environment-local coordinates; no environment-origin addition/subtraction',
+                synchronization_version='guitar_learning.cuda_gym_torch_barriers.v1',
+                contact_measurement='GPU body net contact force; no native pair/local witness claim')
+            actual = self.gym.get_sim_params(self.sim)
+            if not actual.use_gpu_pipeline or not actual.physx.use_gpu:
+                raise RuntimeError('Native simulator did not enable GPU physics and pipeline')
+            self._actual_physics = dict(physx_use_gpu=bool(actual.physx.use_gpu),
+                use_gpu_pipeline=bool(actual.use_gpu_pipeline), dt_s=float(actual.dt),
+                substeps=int(actual.substeps), gravity=[getattr(actual.gravity, a) for a in 'xyz'],
+                position_iterations=int(actual.physx.num_position_iterations),
+                velocity_iterations=int(actual.physx.num_velocity_iterations))
+            self._refresh()
+            self.reset(torch.arange(num_envs, device=self.device))
+            self._write_audit()
+        except BaseException:
+            try:
+                self.close()
+            except BaseException as error:
+                self.lifecycle_write_error = repr(error)
+            raise
+
+    @property
+    def body_state(self):
+        import torch
+        value = self._bodies.clone()
+        return torch.where(self._reset_mask[:, None, None], self._prepared_bodies[None], value)
+
+    def _refresh(self):
+        import torch
+        self.gym.refresh_dof_state_tensor(self.sim)
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+        self.gym.refresh_net_contact_force_tensor(self.sim)
+        self.gym.refresh_jacobian_tensors(self.sim)
+        # Gym's CUDA stream is external to Torch's allocator/current stream.
+        # Native buffer copies must finish before Torch consumes these views.
+        torch.cuda.synchronize(self.device)
+
+    def snapshot(self):
+        import torch
+        contact = torch.where(self._reset_mask[:, None, None],
+                              torch.zeros_like(self.contact_force), self.contact_force)
+        return dict(q=self.q, qd=self.qd, target=self.target, body_state=self.body_state,
+                    contact_force=contact, physics_step=self.episode_steps, jacobian=self.jacobian,
+                    reset_body_snapshot=self._reset_mask.clone())
+
+    def reset(self, indices):
+        import torch
+        from isaacgym import gymtorch
+        ids = torch.as_tensor(indices, dtype=torch.long, device=self.device).flatten()
+        if self.closed or ids.numel() == 0:
+            raise ValueError('Live scene and nonempty episode reset indices required')
+        if bool(((ids < 0) | (ids >= self.num_envs)).any()) or ids.unique().numel() != ids.numel():
+            raise ValueError('Unique in-range reset indices required')
+        if getattr(self, '_last_reset_physics_step', None) == self.physics_steps:
+            if bool(self._reset_mask[ids].all()):
+                return self.snapshot()
+            raise RuntimeError('Combine all episode reset indices in one reset per physics step')
+        self._dof[ids] = self._prepared_dofs
+        self._roots[ids, 1] = self._prepared_bodies[len(self.human_bodies)]
+        human_ids = (ids * 3).to(dtype=torch.int32).contiguous()
+        guitar_ids = (ids * 3 + 1).to(dtype=torch.int32).contiguous()
+        torch.cuda.synchronize(self.device)
+        if self.gym.set_dof_state_tensor_indexed(self.sim, gymtorch.unwrap_tensor(self._dof), gymtorch.unwrap_tensor(human_ids), ids.numel()) is False:
+            raise RuntimeError('GPU boundary DOF reset failed')
+        if self.gym.set_actor_root_state_tensor_indexed(self.sim, gymtorch.unwrap_tensor(self._roots), gymtorch.unwrap_tensor(guitar_ids), ids.numel()) is False:
+            raise RuntimeError('GPU boundary guitar root reset failed')
+        torch.cuda.synchronize(self.device)
+        self.target[ids] = self.reference105
+        self.efforts[ids] = 0
+        self.episode_steps[ids] = 0
+        self._reset_mask[ids] = True
+        self.reset_calls += 1
+        self._last_reset_physics_step = self.physics_steps
+        return self.snapshot()
+
+    def step(self, targets105, efforts105):
+        import torch
+        if (self.closed or targets105.shape != self.target.shape or efforts105.shape != self.efforts.shape or
+                targets105.device != self.device or efforts105.device != self.device):
+            raise ValueError('Live scene and aligned batched105 controls required')
+        if (not bool(torch.isfinite(targets105).all()) or not bool(torch.isfinite(efforts105).all()) or
+                bool(((targets105 < self.lower - 1e-7) | (targets105 > self.upper + 1e-7)).any()) or
+                bool((efforts105.abs() > self.effort_caps + 1e-6).any()) or
+                bool((efforts105[:, self.metadata['position_indices']] != 0).any()) or
+                bool((efforts105[:, self.metadata['zero_indices']] != 0).any())):
+            raise ValueError('Finite native-bounded mixed control ownership required')
+        from isaacgym import gymtorch
+        self.target.copy_(targets105)
+        self.efforts.copy_(efforts105)
+        # Ensure Torch writes are visible to Gym's separate native CUDA stream.
+        torch.cuda.synchronize(self.device)
+        if self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(self.target)) is False:
+            raise RuntimeError('GPU POSITION target submission failed')
+        if self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.efforts)) is False:
+            raise RuntimeError('GPU finite effort submission failed')
+        self.gym.simulate(self.sim)
+        self.gym.fetch_results(self.sim, True)
+        self.physics_steps += 1
+        self.episode_steps += 1
+        self._reset_mask[:] = False
+        self._refresh()
+        return self.snapshot()
+
+    @property
+    def diagnostics(self):
+        return dict(schema='guitar_learning.gpu_scene.v1', num_envs=self.num_envs,
+                    device=str(self.device), **self._actual_physics, tensor_devices=self._tensor_devices,
+                    simulator_count=1, environment_count=self.num_envs,
+                    physics_steps=self.physics_steps, reset_calls=self.reset_calls,
+                    rigid_property_readback_max_abs_error=self._rigid_readback_max_error,
+                    synchronization_version='guitar_learning.cuda_gym_torch_barriers.v1',
+                    state_setter_scope='Episode boundaries only; human DOF and free guitar root',
+                    closed=self.closed)
+
+    def _write_audit(self):
+        if self.out is not None:
+            self.out.mkdir(parents=True, exist_ok=True)
+            path = self.out / ('gpu_scene_final.json' if self.closed else 'gpu_scene_initial.json')
+            with path.open('x') as stream:
+                json.dump(self.diagnostics, stream, indent=2)
+
+    def close(self):
+        if not self.closed:
+            if self.sim is not None:
+                self.gym.destroy_sim(self.sim)
+                self.sim = None
+            self.closed = True
+            self._write_audit()

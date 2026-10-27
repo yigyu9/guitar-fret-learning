@@ -1,0 +1,100 @@
+"""Read-only comparison of native initial-target and Chest-only target trials."""
+import csv
+from pathlib import Path
+import numpy as np
+from scipy.spatial.transform import Rotation
+from ..lower_body_release_v1.common import ROOT,A,BASE,HUMAN,read,save,pin,verify
+from ..initial_pose_noise_v1 import pose
+from ..om_axilla_source_geometry_v3 import CapsuleBodyDistance
+
+PHASE=BASE/'front_facing_pose_v1'
+OUT=PHASE/'diagnosis_target_v2'
+BODIES=('Torso','Spine','Chest')
+
+
+def main():
+    OUT.mkdir(exist_ok=False)
+    paths=[Path(__file__).with_name('diagnose_target_v1.py'),PHASE/'diagnosis_target_v1/comparison.json',Path(__file__),Path(__file__).with_name('__init__.py'),ROOT/'docs/plans/front_facing_pose_20261016.md',ROOT/'docs/plans/front_facing_chest_target_v1_20261016.md']
+    for version in (1,2):
+        n=PHASE/f'native_static_v{version}';a=PHASE/f'analysis_static_v{version}'
+        paths += [n/f'{s}.json' for s in ('states240','contacts240','efforts240','targets60','initial_values','report','native_properties')]
+        paths += [a/'summary.json',a/'samples.csv',PHASE/f'inputs_v{version}/static10.json']
+    pins=pin(extra=paths);save(OUT/'inputs_before.json',pins)
+    distance=CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']),HUMAN)
+    summaries={}
+    for version in (1,2):
+        n=PHASE/f'native_static_v{version}';initial=read(n/'initial_values.json');names=initial['joint_names'];bodies=initial['human_body_names']
+        states=read(n/'states240.json')['rows'];contacts=read(n/'contacts240.json')['rows'];efforts=read(n/'efforts240.json')['rows'];targets=read(n/'targets60.json')['rows']
+        contact_map={r['physics_step']:r['contacts'] for r in contacts};effort_map={r['physics_step_before']:r for r in efforts};target_map={r['physics_step_before']:r for r in targets}
+        rows=[];target=None;initial_advance=None
+        for sample in states:
+            step=sample['physics_step'];s=sample['state'];ps={name:pose(b) for name,b in zip(bodies,s['human_body_states'])};gp,gr=pose(s['guitar_body_states'][0])
+            r={'physics_step':step,'time_s':sample['time_s'],'preceding_effort_step':step-1 if step else -1}
+            centers={};current_contacts=contact_map[step]
+            for body in BODIES:
+                p,rot=ps[body];up=rot.apply([0.,0.,1.]);fwd=rot.apply([0.,-1.,0.]);centers[body]=p+rot.apply(distance.capsules[body][0].mean(0))
+                r[body+'_source_gap_m']=float(distance.measure(ps,body,gp,gr)['gap_m'])
+                r[body+'_tilt_deg']=float(np.rad2deg(np.arccos(np.clip(up[2],-1,1))))
+                r[body+'_heading_deg']=float(np.rad2deg(np.arctan2(-fwd[0],fwd[1])))
+                for axis,value in zip('xyz',centers[body]):r[body+'_capsule_center_W_'+axis+'_m']=float(value)
+            advance=float((centers['Chest']-centers['Spine'])[1])
+            if initial_advance is None:initial_advance=advance
+            r['Chest_relative_Spine_forward_advance_m']=advance-initial_advance
+            for body in ('Chest','Spine','R_Shoulder','Torso'):
+                found=[c for c in current_contacts if {c['body0_name'].split('/')[0],c['body1_name'].split('/')[0]}=={'human','guitar'} and 'human/'+body in (c['body0_name'],c['body1_name'])]
+                positive=[c for c in found if c['lambda']>0.]
+                r[body+'_G_raw_contact_count']=len(found);r[body+'_G_positive_contact_count']=len(positive);r[body+'_G_positive_lambda_raw_sum']=sum(c['lambda'] for c in positive)
+            eff=effort_map.get(step-1)
+            if step and step-1 in target_map:target=target_map[step-1]
+            for body in BODIES:
+                for axis in 'xyz':
+                    name=body+'_'+axis;j=names.index(name);r[name+'_actual_q_rad']=s['human_dof_states'][j]['pos']
+                    for key,col in [('scalar_PD105_Nm','PD_Nm'),('support_task105_Nm','support_task_Nm'),('submitted105_Nm','submitted_Nm'),('gravity105_Nm','gravity_Nm')]:r[name+'_'+col]=float(eff[key][j]) if eff else 0.
+                    r[name+'_preceding_q_rad']=float(states[step-1]['state']['human_dof_states'][j]['pos']) if step else float(s['human_dof_states'][j]['pos'])
+                    r[name+'_requested_q_rad']=float(target['requested105_rad'][j]) if target else initial['q_ref105_rad'][j]
+                    r[name+'_submitted_q_rad']=float(target['final105_rad'][j]) if target else initial['q_ref105_rad'][j]
+                    r[name+'_preceding_PD_qerror_rad']=r[name+'_submitted_q_rad']-r[name+'_preceding_q_rad']
+            r['target_step_before']=target['physics_step_before'] if target else -1
+            if eff:
+                task=eff['replaced_3mm_Chest_task'];extra=eff['chest_extra_depth']
+                assert (extra['K_N_m'],extra['D_Ns_m'],extra['cap_N'])==(2000.,30.,20.)
+                final_task=next(t for t in eff['support_points'] if t['body']=='Chest')
+                r['Chest_final_virtual_force_request_norm_N']=float(np.linalg.norm(final_task['virtual_force_request_W_N']))
+                r['Chest_final_raw_normal_request_N']=float(final_task['raw_normal_request_N'])
+                r['Chest_final_source_gap_m']=float(final_task['nearest_source_gap_m'])
+                for field in ('K_N_m','D_Ns_m','cap_N'):r['Chest_final_'+field]=extra[field]
+                for axis,value in zip('xyz',final_task['virtual_force_request_W_N']):r['Chest_final_virtual_force_W_'+axis+'_N']=value
+                r['Chest_legacy_virtual_force_request_norm_N']=float(np.linalg.norm(task['virtual_force_request_W_N']))
+                r['Chest_legacy_source_gap_m']=task['nearest_source_gap_m'];r['Chest_legacy_raw_normal_request_N']=task['raw_normal_request_N']
+                for field in ('base_depth_m','extra_depth_m','total_depth_m','ramp_fraction'):r['Chest_'+field]=extra[field]
+                for axis,value in zip('xyz',task['virtual_force_request_W_N']):r['Chest_legacy_virtual_force_W_'+axis+'_N']=value
+                for body in BODIES:
+                    r[body+'_extra_depth_delta105_norm_Nm']=float(np.linalg.norm([extra['delta105_Nm'][names.index(body+'_'+axis)] for axis in 'xyz']))
+            else:
+                for field in ('final_virtual_force_request_norm_N','final_raw_normal_request_N','final_source_gap_m','final_K_N_m','final_D_Ns_m','final_cap_N'):r['Chest_'+field]=0.
+                for axis in 'xyz':r['Chest_final_virtual_force_W_'+axis+'_N']=0.
+                for field in ('legacy_virtual_force_request_norm_N','legacy_source_gap_m','legacy_raw_normal_request_N','base_depth_m','extra_depth_m','total_depth_m','ramp_fraction'):r['Chest_'+field]=0.
+                for axis in 'xyz':r['Chest_legacy_virtual_force_W_'+axis+'_N']=0.
+                for body in BODIES:r[body+'_extra_depth_delta105_norm_Nm']=0.
+            rows.append(r)
+        with (OUT/f'native{version}_samples.csv').open('w') as stream:
+            writer=csv.DictWriter(stream,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+        result={'native_summary':read(PHASE/f'analysis_static_v{version}/summary.json')['gates'],'rows':len(rows),'windows':{},'selected':{}}
+        for label,lo,hi in [('first1s',0.,1.),('prep1to5s',1.,5.),('hold5to10s',5.,10.)]:
+            selected=[r for r in rows if lo<=r['time_s']<=hi];values={}
+            for key in rows[0]:
+                if key.endswith(('_gap_m','_tilt_deg','_advance_m','_request_norm_N','_normal_request_N','_delta105_norm_Nm')) or key.endswith(('_PD_Nm','_submitted_Nm','_support_task_Nm')):
+                    a=np.array([r[key] for r in selected]);values[key]={'min':float(a.min()),'median':float(np.median(a)),'max':float(a.max()),'mean':float(a.mean())}
+            values['positive_contact_fraction']={b:float(np.mean([r[b+'_G_positive_contact_count']>0 for r in selected])) for b in ('Chest','Spine','Torso','R_Shoulder')}
+            values['simultaneous_Chest_RShoulder_fraction']=float(np.mean([r['Chest_G_positive_contact_count']>0 and r['R_Shoulder_G_positive_contact_count']>0 for r in selected]))
+            result['windows'][label]=values
+        for t in [0.,1/240,.0166666667,.1,.4333333333,1.,5.,10.]:
+            row=min(rows,key=lambda r:abs(r['time_s']-t));result['selected'][str(t)]=row
+        summaries[str(version)]=result
+        print('version',version,'hold contacts',result['windows']['hold5to10s']['positive_contact_fraction'],flush=True)
+    assert verify(pins)
+    save(OUT/'comparison.json',{'versions':summaries,'inputs_unchanged':True,'source_geometry_scope':'Source capsule/convex gap from actual normalized native body/G poses, distinct from PhysX cooked contact; no new simulation. Contact lambda recorded as raw solver field, not Newton force. State at step s compared to preceding native state s-1, effort before s-1 and latest submitted target before s-1. PD qerror uses target minus preceding q, not post-step q. Initial row has no preceding command and zero placeholders, not applied effort. Chest_final fields read final support_points[Chest], with K2000/D30/cap20 and scheduled depth7..9.25mm; Chest_legacy fields retain replaced3mm task for contrast, never submitted final force. Requests and submitted efforts are commands, not measured joint torque.'})
+    print('done inputs unchanged',flush=True)
+
+
+if __name__=='__main__':main()

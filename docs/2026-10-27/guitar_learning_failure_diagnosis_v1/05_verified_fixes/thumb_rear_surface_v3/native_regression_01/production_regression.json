@@ -1,0 +1,306 @@
+{
+  "schema": "diagnostic.thumb_rear_surface_production_regression.v1",
+  "completed": true,
+  "failure": null,
+  "audits": {
+    "base_completed": true,
+    "base_no_failure": true,
+    "source_pins_unchanged": true,
+    "scene_closed": true,
+    "fixed_readback": true,
+    "gravity_on": true,
+    "physical_clock": true,
+    "finite": true,
+    "request_bounds": true,
+    "codec": true,
+    "original_contact_protocol": true,
+    "original_fixed_witness_release": true,
+    "native_gpu": true,
+    "video": true,
+    "current_contract": true
+  },
+  "protocol_passed": {
+    "first_contact": true,
+    "first_hold": true,
+    "release": true,
+    "recontact": true,
+    "final_hold": true
+  },
+  "all_contact_protocol_conditions_passed": true,
+  "scope": "One fixed-guitar035 native environment; unchanged production helper and original 15s thumb-only finite probe. Not learned policy performance or contact-pair pressure.",
+  "base_scope_notice": "Original report.json is untouched and retains inherited free-guitar wording; actual fixed mode/readback is recorded here.",
+  "source_pins": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/thumb_rear_surface_v3/support/run_regression.py": "574a0aecb8e0d4d8b46746a32cea1d446cf0b2ccb08b5b6954aba7e5cd3444f2",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/thumb_rear_surface_v3/support/self_test.py": "39eafa85a37ea4dbe9443f7191f55987bb160519e4db4372850a2d0d9c3c8bd2",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/thumb_rear_surface_v3/support/README.md": "9824a536b66268981425d779ddad2a04db51b84d23f7923bb84e8e88a1950eb5",
+    "/home/ajou/yigyu/3/guitar_learning/tool/validation/thumb_contact_probe.py": "d61100faf715914246b855c1d3257397ad9971e67a3b6836261d512e83988cff",
+    "/home/ajou/yigyu/3/guitar_learning/tool/validation/hand_contact_probe.py": "4b337a2902aec95a1f7778610671841b2e7de3f8a59dcaf67ae7b1f14aff8aff",
+    "/home/ajou/yigyu/3/guitar_learning/gpu/thumb_support.py": "29596edcf230aa18db6ad304f7815c6e8b6bd44ac8433408629e86e2fce051a7",
+    "/home/ajou/yigyu/3/guitar_learning/gpu/episode_diagnostics.py": "5ba4ea1392b0330117d8ffc6a2092fe520ff6da95c85e1bd11ee2bdd22ca8d00",
+    "/home/ajou/yigyu/3/guitar_learning/gpu/scene.py": "0e0b2298dccbb38395b3d15c009704ab092fd372b478063e275232c6da061e45"
+  },
+  "changed_inputs": [],
+  "helper_contract": {
+    "schema": "guitar_learning.gpu_thumb_rear_support.v3",
+    "body": "LH:thumb3",
+    "samples": 128,
+    "rate_per_s": 0.02,
+    "patch": "thumb-specific source -x distal/+z flexion/-y inward-side triangles; same sampled point and outward normal",
+    "region": "face-referenced physical playing-neck1 rear, central 50% width, work-fret center Gy +/-0.04m clipped to neck1; unused OBJ vertices and headstock transition excluded",
+    "gap": "signed outward rear-plane distance; maximum quality at0..0.003m",
+    "distance": "(1+max(gap-0.003,0)/0.02)^-2",
+    "penetration": "smoothstep from0 at-0.001m to1 at0; zero below-0.001m",
+    "orientation": "smoothstep(clamp(outward_pad_normal dot -rear_normal /0.8,0,1))",
+    "regional_quality": "(1+in-plane distance to finite target region/0.02)^-2",
+    "contact_candidate": "same sample signed gap[-0.001,0.0005]m, region excess<=1e-6m, facing>=0.1 and thumb3 rear-normal net load>=0.01N",
+    "reward": "0.01/s geometric quality +0.01/s same-point geometric quality times binary contact candidate; larger loads give no extra reward",
+    "net_load": "relu(thumb3 native resultant force in guitar coordinates dot unit source rear normal); absent/nonfinite input disables contact candidate",
+    "selection": "maximum rate, then maximum geometric quality, then nearest finite-region point; first sample only at exact distance tie",
+    "integration": "rate only; caller integrates completed physics dt and failure suppression",
+    "limitation": "finite source samples, not cooked collision geometry, anatomical annotation, contact-pair or pressure certification"
+  },
+  "diagnostic_contract": {
+    "schema": "guitar_learning.gpu_left_episode_diagnostics.v6",
+    "fingers": [
+      "index",
+      "middle",
+      "ring",
+      "pinky"
+    ],
+    "joints": [
+      "MCP",
+      "PIP",
+      "DIP"
+    ],
+    "finger_wrist_hz": 240,
+    "thumb_hz": 60,
+    "thumb_support_hz": 240,
+    "reset_sample_included": false,
+    "duration": "completed physics endpoint count/240; thumb completed control endpoint count/60",
+    "exclusions": "overlapping per-finger seconds; never sum exclusions as disjoint time",
+    "standby_masks": "actual v5 score-only per-finger active union; release0.05s and0.1s fade; next preparation0.35s and0.1s fade; direct/partial/full gap recovery; finite geometry required",
+    "idle_angles": "gate-weighted valid geometric flexion; denominator per joint valid gate-weighted seconds",
+    "press_angles": "own assigned press..end inclusive, valid geometric flexion; denominator per joint valid seconds",
+    "standby": "actual inverse-quadratic helper per_finger_rate integrated at240Hz; weighted reward excludes entire failed control tick exactly as environment",
+    "initial_quality_decline": "quality below reset reference minus1e-6; completed240Hz fullgate==1 samples before own first press-2; absent fingers whole song; invalid reset/current angles excluded; no sample means evaluableFalse",
+    "recovery": "fixed own-note-union gaps: previous end+0.05s release+1.0s provisional return budget through next press-0.35s; initial start1.05s, final end song duration; windows>=0.5s evaluated at80% planned occupancy; no policy gate in denominator; not a proven return-time guarantee",
+    "gate_runs": "actual gate>0 and gate==1 completed240Hz endpoint runs; lengths/counts/band occupancy include ongoing runs; thresholds0.5/1/3s; no dynamic per-tick trace",
+    "wrist": "absolute nearest-box delta by live guitar-local Gx/Gy/Gz; inclusive inside region; physics endpoint samples",
+    "thumb": "minimum Euclidean distance from existing finite source thumb2/3 support vertices to face-referenced playing-neck1 rear facets (outward normal Gz < -0.5); excludes unused OBJ vertices and headstock transition; rear-side compatible permits signed plane gap >= -1 mm",
+    "thumb_limitation": "legacy60Hz support vertices have no normals; shared thumb_support240Hz uses same-point patch position/normal and selected-point signed gap; neither certifies native contact pairs, pressure, sound, full mesh penetration or cooked collision geometry",
+    "thumb_support": "shared helper rate at240Hz:0.01/s geometric quality plus0.01/s same-point quality times binary contact candidate; actual weighted payout uses completed-control failure suppression, approach weight and explicit multiplier0(off)/1(on); native net force and rear-normal load are resultant proxies, never pressure or contact-pair certification",
+    "thumb_contact_candidate": "shared selected point signed gap[-0.001,0.0005]m, finite central neck-rear region, facing>=0.1, native thumb3 rear-normal load>=0.01N; force magnitude above threshold gives no further reward",
+    "thumb_normal_load": "helper relu(native thumb3 resultant in guitar coordinates dot unit rear normal); mean denominator is helper normal_load_valid completed physics seconds",
+    "thumb_nearbutunloaded": "near_geometry and normal_load_valid with rear-normal load<0.01N; excludes invalid loads and does not imply a known body pair",
+    "extreme_combinations": "240Hz geometric flags per finger: MCP<-20deg and PIP/DIP>60deg; MCP/PIP>75deg and DIP<10deg; DIP-PIP>50deg. Flags overlap and are diagnostics only; idle means outside own press..end, independent of B gate"
+  },
+  "raw_audit": {
+    "physical_endpoints": 3600,
+    "controls": 900,
+    "finite": true,
+    "clock_exact": true,
+    "max_target_excursion_deg": 4.577719688415527,
+    "max_control_change_deg": 0.500000536441803,
+    "native_target_limit_excess_rad": 0.0
+  },
+  "scene": {
+    "schema": "guitar_learning.gpu_scene.v4",
+    "num_envs": 1,
+    "device": "cuda:0",
+    "physx_use_gpu": true,
+    "use_gpu_pipeline": true,
+    "dt_s": 0.004166666883975267,
+    "substeps": 1,
+    "gravity": [
+      0.0,
+      0.0,
+      -9.8100004196167
+    ],
+    "position_iterations": 4,
+    "velocity_iterations": 2,
+    "tensor_devices": {
+      "dof": "cuda:0",
+      "roots": "cuda:0",
+      "bodies": "cuda:0",
+      "contact_force": "cuda:0",
+      "jacobian": "cuda:0"
+    },
+    "simulator_count": 1,
+    "environment_count": 1,
+    "physics_steps": 3600,
+    "reset_calls": 1,
+    "rigid_property_readback_max_abs_error": 2.3168647089732985e-07,
+    "native_body_count": 68,
+    "logical_body_count": 106,
+    "environment_aggregate": {
+      "schema": "guitar_learning.gpu_env_aggregate.v1",
+      "max_bodies": 68,
+      "max_shapes": 145,
+      "self_collisions": true,
+      "actors": [
+        "human",
+        "guitar",
+        "chair"
+      ]
+    },
+    "guitar_representation": {
+      "schema": "guitar_learning.gpu_rigid_guitar.v1",
+      "physical_bodies": 1,
+      "logical_bodies": 39,
+      "collision_shapes": 89,
+      "asset_sha256": "c8a5cd81733e3883600caed84d9359277b48e1375f8703fa5d054a11cc7de064",
+      "manifest_sha256": "8691885f712a687cb3e8d51001a2c9276ce7e9f3539a40ac5dc20afccd7f9ded",
+      "proxy_collision_policy": "G:thumb_support_proxy and G:pluck_range retain visuals and their original mass/COM/inertia contribution, but both geoms have contype=conaffinity=0. Intentional difference: their original possible chair/ground contacts are fully excluded. Original logical39 markers and source properties retained."
+    },
+    "diagnostic_guitar_mode": "fixed",
+    "diagnostic_guitar_asset": {
+      "path": "/home/ajou/yigyu/3/guitar_learning/assets/gpu_rigid_guitar_v1/guitar_compound.xml",
+      "asset_sha256": "c8a5cd81733e3883600caed84d9359277b48e1375f8703fa5d054a11cc7de064",
+      "requested_fix_base_link": true,
+      "requested_disable_gravity": false,
+      "requested_override_com": true,
+      "requested_override_inertia": true,
+      "native_asset_body_count": 1,
+      "native_asset_shape_count": 89,
+      "shape_readback_sha256": "4578919576fc4fbcaeb1845523d132102ae024bb5c9d2d88a362368dbf2b2d41",
+      "actor_shape_readback_count": 89,
+      "rigid_properties_verified": true
+    },
+    "synchronization_version": "guitar_learning.cuda_gym_torch_barriers.v1",
+    "state_setter_scope": "Episode boundaries only; human DOF and free guitar root",
+    "closed": true,
+    "hand_collision": {
+      "schema": "guitar_learning.left_inter_finger_collision.v1",
+      "native_rule": "enabled iff (filterA & filterB) == 0",
+      "finger_masks": {
+        "thumb": 1048576,
+        "index": 2097152,
+        "middle": 4194304,
+        "ring": 8388608,
+        "pinky": 16777216
+      },
+      "enabled_distinct_finger_pairs": 90,
+      "preserved_other_human_shape_pairs": 1395,
+      "human_pair_matrix_sha256": "57fc9b11d932f9a630ec320f24ac68d5a5e55782550cf6d3921e4370a7a92352",
+      "changed_filters": [
+        {
+          "body": "L_Elbow",
+          "shape": 0,
+          "before": 128,
+          "after": 32505984
+        },
+        {
+          "body": "L_Wrist",
+          "shape": 0,
+          "before": 128,
+          "after": 32505984
+        },
+        {
+          "body": "LH:palm",
+          "shape": 0,
+          "before": 128,
+          "after": 32505984
+        },
+        {
+          "body": "LH:thumb1",
+          "shape": 0,
+          "before": 128,
+          "after": 1048576
+        },
+        {
+          "body": "LH:thumb2",
+          "shape": 0,
+          "before": 128,
+          "after": 1048576
+        },
+        {
+          "body": "LH:thumb3",
+          "shape": 0,
+          "before": 128,
+          "after": 1048576
+        },
+        {
+          "body": "LH:thumb_pad",
+          "shape": 0,
+          "before": 1048575,
+          "after": 33554431
+        },
+        {
+          "body": "LH:index1",
+          "shape": 0,
+          "before": 128,
+          "after": 2097152
+        },
+        {
+          "body": "LH:index2",
+          "shape": 0,
+          "before": 128,
+          "after": 2097152
+        },
+        {
+          "body": "LH:index3",
+          "shape": 0,
+          "before": 128,
+          "after": 2097152
+        },
+        {
+          "body": "LH:middle1",
+          "shape": 0,
+          "before": 128,
+          "after": 4194304
+        },
+        {
+          "body": "LH:middle2",
+          "shape": 0,
+          "before": 128,
+          "after": 4194304
+        },
+        {
+          "body": "LH:middle3",
+          "shape": 0,
+          "before": 128,
+          "after": 4194304
+        },
+        {
+          "body": "LH:ring1",
+          "shape": 0,
+          "before": 128,
+          "after": 8388608
+        },
+        {
+          "body": "LH:ring2",
+          "shape": 0,
+          "before": 128,
+          "after": 8388608
+        },
+        {
+          "body": "LH:ring3",
+          "shape": 0,
+          "before": 128,
+          "after": 8388608
+        },
+        {
+          "body": "LH:pinky1",
+          "shape": 0,
+          "before": 128,
+          "after": 16777216
+        },
+        {
+          "body": "LH:pinky2",
+          "shape": 0,
+          "before": 128,
+          "after": 16777216
+        },
+        {
+          "body": "LH:pinky3",
+          "shape": 0,
+          "before": 128,
+          "after": 16777216
+        }
+      ],
+      "external_pair_preservation": "Checked against actual compound-guitar and chair filters; the two source guitar proxies have no physical shape in the GPU compound asset."
+    },
+    "hand_collision_native_readback_environments": 1
+  },
+  "base_report_sha256": "b40b591a194edc1185b90804898869b287fc3b53761c02a7da0a40a314b26406"
+}

@@ -1,0 +1,41 @@
+"""Independent native feet/properties/targets/root and common-prefix audit."""
+import argparse,itertools
+from pathlib import Path
+import xml.etree.ElementTree as ET
+import numpy as np
+from scipy.spatial.transform import Rotation
+from .common import BASE,HUMAN,read,save,sha,verify
+from stability_adapter_2.initial_pose_noise_v1 import pose
+
+
+def main(runs,out):
+    out.mkdir(exist_ok=False);reference=BASE/'native/rotational_stable_pd_interior_static_v1';paths=[Path(__file__).resolve(),HUMAN,reference/'native_properties.json']+[r/n for r in runs for n in ('attempt.json','report.json','native_properties.json','initial_values.json','states240.json','contacts240.json','efforts240.json','targets60.json')];pins={str(p):sha(p) for p in paths};save(out/'inputs_before.json',pins);local={}
+    for body in ET.parse(HUMAN).iter('body'):
+        n=body.get('name')
+        if n not in ('L_Ankle','L_Toe','R_Ankle','R_Toe'):continue
+        g=body.find('geom');half=np.fromstring(g.get('size'),sep=' ');center=np.fromstring(g.get('pos'),sep=' ');rot=Rotation.from_quat(np.roll(np.fromstring(g.get('quat','1 0 0 0'),sep=' '),-1));local[n]=center+rot.apply(np.array(list(itertools.product((-1.,1.),repeat=3)))*half)
+    # Explicit local scale before rotation, as used by source_geometry_v1.
+    for body in ET.parse(HUMAN).iter('body'):
+        n=body.get('name')
+        if n in local:
+            g=body.find('geom');half=np.fromstring(g.get('size'),sep=' ');center=np.fromstring(g.get('pos'),sep=' ');rot=Rotation.from_quat(np.roll(np.fromstring(g.get('quat','1 0 0 0'),sep=' '),-1));corners=np.array(list(itertools.product((-1.,1.),repeat=3)))*half;local[n]=center+rot.apply(corners)
+    oldprops=read(reference/'native_properties.json');results=[];loaded=[]
+    for run in runs:
+        i=read(run/'initial_values.json');report=read(run/'report.json');props=read(run/'native_properties.json');states=read(run/'states240.json')['rows'];contacts=read(run/'contacts240.json')['rows'];efforts=read(run/'efforts240.json')['rows'];targets=read(run/'targets60.json')['rows'];names=i['human_body_names'];q=np.array([[d['pos'] for d in s['state']['human_dof_states']] for s in states]);qd=np.array([[d['vel'] for d in s['state']['human_dof_states']] for s in states]);foot={n:[] for n in local};root=i['native_initial_state']['human_body_states'][names.index('Pelvis')];chair=i['native_initial_state']['chair_body_states'];fixed=True
+        for j,s in enumerate(states):
+            assert s['physics_step']==j and s['time_s']==j/240 and contacts[j]['physics_step']==j
+            fixed &= s['state']['human_body_states'][names.index('Pelvis')]==root and s['state']['chair_body_states']==chair
+            for n,corners in local.items():
+                p,r=pose(s['state']['human_body_states'][names.index(n)]);foot[n].append(float((p+r.apply(corners))[:,2].min()))
+        commands=np.array([e['submitted105_Nm'] for e in efforts]);last=q[-min(241,len(q)):][:,i['lower_indices']];sensors=np.array([s['native105_dof_force_sensor_Nm'] for s in states]);checks=dict(all_rows_240Hz_exact=len(states)==report['physics_steps']+1,all_q_qd_sensors_finite=bool(np.isfinite(q).all() and np.isfinite(qd).all() and np.isfinite(sensors).all()),fixed_Root_and_chair_every_sample=bool(fixed),human_mass_COM_inertia_unchanged=props['human']==oldprops['human'],guitar_mass_COM_inertia_unchanged=props['guitar']==oldprops['guitar'],shape_filters_friction_offsets_unchanged=props['actual_shape_properties']==oldprops['actual_shape_properties'],submitted_finite_within_caps=bool(np.isfinite(commands).all() and np.all(abs(commands)<=np.array(i['PD_properties']['effort'])+1e-6)),zero8_explicit_effort_zero=bool(np.all(commands[:,i['zero_range_indices']]==0)),position48_explicit_effort_zero=bool(np.all(commands[:,i['position_indices']]==0)),target_readback_exact=all(t['position_readback_exact'] for t in targets),all_consumed_inputs_unchanged=verify(read(run/'attempt.json')['input_sha256']))
+        results.append(dict(run=str(run),checks=checks,all_checks=all(checks.values()),source_box_min_ground_z_m={n:dict(min_all=min(v),first=v[0],last=v[-1]) for n,v in foot.items()},lower24_last1s_max_peak_to_peak_rad=float(np.ptp(last,axis=0).max()),zero8_max_abs_q_rad=float(abs(q[:,i['zero_range_indices']]).max()),R_Hip_x_initial_rad=float(q[0,i['joint_names'].index('R_Hip_x')]),R_Hip_x_final_rad=float(q[-1,i['joint_names'].index('R_Hip_x')]),R_Hip_x_final_target_rad=targets[-1]['final105_rad'][i['joint_names'].index('R_Hip_x')],max_lower_mass_error_kg_m2=max(e['lower_stable_pd']['mass_matrix_max_error_kg_m2'] for e in efforts),max_lower_child_angular_error_rad_s=max(e['lower_stable_pd']['relative_angular_velocity_max_error_rad_s'] for e in efforts)))
+        loaded.append((states,contacts,efforts,targets))
+    prefix=None
+    if len(loaded)==2:
+        a,b=loaded;prefix=dict(state_sensor_0_through_2s_exact=a[0][:481]==b[0][:481],contacts_0_through_2s_exact=a[1][:481]==b[1][:481],effort_0_before_2s_exact=a[2][:480]==b[2][:480],target_arrays_0_before_2s_exact=[t['final105_rad'] for t in a[3][:120]]==[t['final105_rad'] for t in b[3][:120]])
+    save(out/'report.json',dict(runs=results,prefix=prefix,inputs_unchanged=verify(pins),scope='Foot heights are source box vertices transformed with normalized native quaternions, not PhysX cooked clearance; t0 raw contacts not support evidence. Body axes and scalar q channels remain distinct. Native sensor generalized forces differ from submitted commands and raw contact lambda.'))
+    print(results,'prefix',prefix,flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--run',type=Path,nargs='+',required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();main([r.resolve() for r in a.run],a.out.resolve())

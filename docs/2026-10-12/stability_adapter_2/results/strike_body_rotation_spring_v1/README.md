@@ -1,0 +1,36 @@
+# Strike body-rotation spring 진단
+
+이 5초 native 진단은 이전 EFFORT damped-arm의 source policy+bounded-PI 조건을 유지하고, 오른팔 9축(R9) 요청 effort 오차 계산을 scalar joint 차이에서 parent-relative 회전 차이로 바꾼 후보를 기록한다. 목표 회전은 `Exp(B·final_goal_q) · calibrated_rest_R`, 실제 parent-relative 회전은 같은 physics step의 native body state에서 읽었다. 요청 토크는 `clip(original_kp · Bᵀ log(actual_R⁻¹ · goal_R), ±original_effort_limit)`이다. XML basis `B`의 column 순서는 축 label의 world X/Y/Z를 뜻하지 않는다. 계산은 [실행 코드](/home/ajou/yigyu/3/stability_adapter_2/run_strike_body_rotation_spring.py:126) 및 [초기 rest·XML basis 구성](/home/ajou/yigyu/3/stability_adapter_2/run_strike_body_rotation_spring.py:76)에 기록돼 있다.
+
+**결과: NOT ADOPTED.** Native 실행은 1,200 physics steps, 151 camera frames, 24/24 checks로 5초 완료했다. Native input closure 1,091개는 변경 0이고 analysis 입력 7개의 SHA도 before/after 동일하다. PREPARE/PLAY/HOLD는 49/251/0 control samples, 실행된 actor steps는 251이다. 저장된 source motor phase는 `[0]`뿐이다. 따라서 관측한 trajectory에는 APPROACH/RECOVER phase가 없었다. R9가 EFFORT stiffness 0으로 전환된 시점은 0.816667초/source phase 0이며, native damping은 baseline 1.0배였다. Report의 `PD_switch_count=1`은 이 EFFORT activation 전환이며 phase-1 quarter-damping 전환은 아니고 `PD_switch_time_s`는 null이다. 나머지 72 DOF는 POSITION, source의 learned RH finger 21축은 frozen policy 소유였다. Soft-orientation 5 mm/rad residual은 이번 실행에 추가하지 않았다. 학습은 0회다.
+
+READY success, target hit, physical target hit, accepted release, physical release는 모두 0이고 miss 10, wrong crossing 0이었다. Source terminal 없이 5초 기록을 마쳤으며 마지막 running Strike F1과 tip-ready success는 모두 0이다. 최소 PLAY policy pick-to-READY 거리는 0.003836738 m다. 기타 회전 변화는 최대 46.986103°·종료 43.975283°, 위치 변화는 최대 46.353646 mm·종료 27.841216 mm였다. Playable region 표본은 전체 control 49/300, PLAY policy 3/251이다. 이 저장 결과는 연주 성공이나 torque chart의 물리적 유효성을 보여주지 않는다.
+
+요청 토크와 native force-dual 해석은 구분해야 한다. 같은 native snapshot 기반 속도 audit의 `child_R_W · B · native_v`가 상대 각속도를 RMS 0.000365 rad/s로 재현했다는 사실은 저장 궤적에서의 속도 좌표 일치 관측이다. 이는 요청한 child tangent 토크가 native generalized effort와 공액임을 증명하지 않는다. 별도의 100-case pure math 검사는 zero-goal·world-rotation invariance 및 가정된 child-basis 부호 정렬만 확인한다. Native anchor 검사도 1,004개 요청 명령의 final goal exactness와 125개 저장 sample의 actual q/body-relative rotation exactness 범위다. 어떤 검사도 native torque 방향, force-dual mapping, closed-loop 안정성을 인증하지 않는다. 접촉 표본은 contact output이며 단일 원인 증거로 해석하지 않는다. 별도 clearance audit 진행은 이 phase의 연주 성과로 합치지 않는다.
+
+## 실행 및 검증 자료
+
+- [Native report](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/report.json), [native input closure](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/inputs_after.json): 실행 길이·24 checks·EFFORT activation·native mode·closure 1,091개 unchanged.
+- [Analysis summary](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/analysis/summary.json), [analysis input SHA before](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/analysis/inputs_before.json), [after](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/analysis/inputs_after.json): pulse·phase·region·pose 요약과 분석 입력 7개 unchanged 기록.
+- [Requested torque commands](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/human_torque_commands.json), [rotation spring basis/rest](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/human_rotation_spring.json), [native property readback](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/PD_phase_properties.json): 저장 요청 명령·목표/실제 회전 기록, calibrated rest 및 phase-0 EFFORT stiffness/damping property.
+- [Spring audit](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/spring_audit.json): 1,004 torque rows, R9-only, 요청 식 재계산 max error 0 Nm, PREPARE control 49행·native trace prefix 25행·첫 actor observation/action exact. 전체 1,200-step state equality를 뜻하지 않는다.
+- [Native spring anchor check](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native_spring_anchor_check.json): 1,004개 final goal exact, 125개 저장 native q/pose sample exact. 물리 토크나 force-dual 인증은 아님.
+- [Pure spring math check](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/spring_math_check.json): 100개 pure math case; native force duality/closed-loop 안정성은 범위 밖.
+- [Native velocity coordinate audit](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/native_velocity_coordinate_audit_v1/README.md), [실험 계획 및 velocity 근거](/home/ajou/yigyu/3/stability_adapter_2/STRIKE_BODY_ROTATION_SPRING_PLAN.md:1): 같은 saved snapshot의 child-Bv 속도 근거와 force-dual 미인증 범위.
+- [Initial audit](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/initial_audit.json), [initial values](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/initial_values.json), [checkpoint connection](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/checkpoint_connection.json): 시작 state/FK audit와 frozen 303-observation/30-action checkpoint 연결.
+- [Controls](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/controls.json), [native trace](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/trace.json): 300 controls, 151 sampled native states.
+- [Pre-review](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/pre_review.md): 실행 전 제한 범위의 수학·구현 경계 검수. 저장 native 결과의 최종 독립검수와는 별개다.
+
+## 저장된 native 전신 및 손 영상
+
+아래 stills는 Isaac Gym native camera의 0·2·5초 frame이다. 두 영상은 각 151 frames, 30 fps, 5.033333초다.
+
+| 시점 | 전신 | 손 |
+|---|---|---|
+| 0초, 초기 상태 | ![전신 0초](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/images/frames/whole_body/00000.png) | ![손 0초](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/images/frames/hands/00000.png) |
+| 2초, PLAY 중 | ![전신 2초](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/images/frames/whole_body/00060.png) | ![손 2초](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/images/frames/hands/00060.png) |
+| 5초, 기록 끝 | ![전신 5초](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/images/frames/whole_body/00150.png) | ![손 5초](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/images/frames/hands/00150.png) |
+
+![전신 native 영상](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/images/whole_body.mp4)
+
+![손 native 영상](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_body_rotation_spring_v1/native/data/images/hands.mp4)

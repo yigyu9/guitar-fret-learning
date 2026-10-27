@@ -1,0 +1,132 @@
+"""물리 실행 없이 실제 apply/원 rate 수식을 source 상태 stub에 적용한다."""
+import argparse
+import ast
+import copy
+from pathlib import Path
+from types import SimpleNamespace
+import xml.etree.ElementTree as ET
+import itertools
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from ..lower_body_release_v1.common import A, BASE, HUMAN, LOWER, read, save, sha, pin, verify
+from ..lower_body_release_v1.upright_source_v1 import INITIAL, full_fk
+from ..lower_body_release_v1.source_geometry_v1 import foot_vertices
+from ..initial_pose_noise_v1 import pose
+
+PHASE = BASE/'front_facing_pose_v1'
+RUNTIME = A/'front_facing_pose_v1/runtime_v1.py'
+
+
+def controller_class():
+    # 원 class/function AST만 그대로 컴파일하여 Gym 모듈 import/생성을 피한다.
+    tree = ast.parse(RUNTIME.read_text(), filename=str(RUNTIME))
+    selected = [n for n in tree.body if isinstance(n, (ast.ClassDef, ast.FunctionDef))]
+    namespace = dict(np=np, least_squares=least_squares, pose=pose, PreviousController=object)
+    exec(compile(ast.Module(body=selected, type_ignores=[]), str(RUNTIME), 'exec'), namespace)
+    return namespace['Controller'], namespace['horizontal_forward'], namespace['heading_error_rad']
+
+
+def main(source, out):
+    source, out = Path(source).resolve(), Path(out).resolve()
+    assert source.parent == PHASE and out.parent == PHASE and not out.exists()
+    files = [source/n for n in ('candidate.json', 'report.json', 'upper_target105.json', 'static5.json')]
+    files += [Path(__file__).resolve(), RUNTIME, INITIAL,
+              A/'front_facing_pose_v1/recording_v1.py', A/'front_facing_pose_v1/run_v1.py',
+              A/'lower_body_release_v1/upright_source_v1.py',
+              A/'lower_body_release_v1/source_geometry_v1.py', A/'lower_body_release_v1/scene_v8.py']
+    inputs = pin(extra=files)
+    candidate, source_report, upper, config = [read(source/n) for n in
+        ('candidate.json', 'report.json', 'upper_target105.json', 'static5.json')]
+    initial = read(INITIAL)
+    names, bodies = candidate['joint_names'], initial['human_body_names']
+    assert names == initial['joint_names'] == upper['joint_names']
+    qref = np.array(candidate['q_ref_rad'])
+    state = copy.deepcopy(candidate['expected_initial_state'])
+    frozen = copy.deepcopy(state)
+    lower = np.array(initial['PD_properties']['lower'])
+    upper_bound = np.array(initial['PD_properties']['upper'])
+    low_ix = np.array(initial['lower_indices'], dtype=int)
+    zero = np.flatnonzero(lower == upper_bound)
+    fk, _ = full_fk(names, bodies, state, qref)
+    cls, forward, heading_error = controller_class()
+    logic = cls.__new__(cls)
+    scene = SimpleNamespace(names=names, q_ref=qref, lower=lower, upper=upper_bound,
+        lower_indices=low_ix, zero_indices=zero, target=qref.astype(np.float32),
+        cfg={'right_hip_final_bias_rad': -.01}, native=lambda: copy.deepcopy(state), steps=0)
+    logic.s, logic.fk = scene, fk
+    logic.leg = np.array([names.index(side+'_'+n) for side in ('L', 'R')
+                         for n in ('Knee_x', 'Ankle_x', 'Ankle_y', 'Ankle_z', 'Toe_x')])
+    logic.reference = fk(qref)
+    logic.front_reference_W = forward(logic.reference['Pelvis'][1])
+    logic.front_initial_heading = {}
+    logic.front_base_heading = {}
+    logic.locals = {}
+    signs = np.array(list(itertools.product((-1., 1.), repeat=3)))
+    for body in ET.parse(HUMAN).iter('body'):
+        name = body.get('name')
+        if name in ('L_Ankle', 'L_Toe', 'R_Ankle', 'R_Toe'):
+            geom = body.find('geom')
+            half = np.fromstring(geom.get('size'), sep=' ')
+            center = np.fromstring(geom.get('pos'), sep=' ')
+            rotation = Rotation.from_quat(np.roll(np.fromstring(geom.get('quat', '1 0 0 0'), sep=' '), -1))
+            logic.locals[name] = center+rotation.apply(signs[signs[:, 2] == -1]*half)
+    rates = np.array([.4 if n.startswith(LOWER) else .1 if n.startswith(('Torso_', 'Spine_', 'Chest_'))
+                      else .5 if n.startswith(('Neck_', 'Head_')) else 1.5 if n.startswith(('LH:', 'RH:'))
+                      else 3. for n in names])
+    checks = dict(all31_apply_calls_completed=True, all_requests_finite=True, original_bounds=True,
+                  original_zero8_unchanged=True, exact_float32_rate_formula=True,
+                  pre_rate_heading2deg=True, post_rate_heading2deg=True, state_stub_unchanged=True)
+    cases = []
+    for command_step in range(31):
+        scene.steps = command_step*4
+        request = np.array(upper['q_target_rad105'], dtype=float)
+        for n, v in config['lower_target_bias_rad'].items():
+            request[names.index(n)] += v
+        named, diagnostic = logic.apply(dict(zip(names, request.tolist())))
+        requested = np.array([named[n] for n in names])
+        previous = scene.target.copy()
+        final = np.clip(requested, previous-rates/60, previous+rates/60).astype(np.float32)
+        final[zero] = qref[zero]
+        scene.target = final
+        predicted = fk(final.astype(float))
+        after_heading = {n: float(np.rad2deg(heading_error(predicted[n][1], logic.front_reference_W)))
+                         for n in logic.locals}
+        checks['all_requests_finite'] &= bool(np.isfinite(requested).all() and np.isfinite(final).all())
+        checks['original_bounds'] &= bool(np.all(requested >= lower) and np.all(requested <= upper_bound)
+                                          and np.all(final >= lower) and np.all(final <= upper_bound))
+        checks['original_zero8_unchanged'] &= bool(np.array_equal(requested[zero], qref[zero])
+                                                   and np.array_equal(final[zero], qref[zero]))
+        expected = np.clip(requested, previous-rates/60, previous+rates/60).astype(np.float32)
+        expected[zero] = qref[zero]
+        checks['exact_float32_rate_formula'] &= bool(np.array_equal(final, expected))
+        checks['pre_rate_heading2deg'] &= all(abs(v) <= 2. for v in diagnostic['predicted_heading_error_deg'].values())
+        checks['post_rate_heading2deg'] &= all(abs(v) <= 2. for v in after_heading.values())
+        checks['state_stub_unchanged'] &= state == frozen
+        if command_step in (0, 30):
+            after_feet = {n: dict(min_bottom_z_m=float(b[:, 2].min()), max_bottom_z_m=float(b[:, 2].max()),
+                                  bottom_span_m=float(np.ptp(b[:, 2])))
+                          for n, (_, b) in foot_vertices(predicted).items()}
+            cases.append(dict(time_s=scene.steps/240, requested_foot_diagnostic=diagnostic,
+                rate_before105_rad=previous.astype(float).tolist(), requested105_rad=requested.tolist(),
+                final105_rad=final.astype(float).tolist(), post_rate_heading_error_deg=after_heading,
+                post_rate_source_feet=after_feet,
+                max_lower_target_change_rad=float(np.max(abs(final[low_ix]-previous[low_ix])))))
+    checks['inputs_unchanged'] = verify(inputs)
+    output = dict(passed=all(checks.values()), checks=checks, source_candidate=str(source/'candidate.json'),
+        source_candidate_sha256=sha(source/'candidate.json'), source_report_eligible=source_report['eligible_for_native'],
+        runtime_sha256=sha(RUNTIME), input_sha256=inputs, inputs_unchanged=verify(inputs), cases=cases,
+        command_count=31, interval_s=[0., .5], physics_steps_executed=0,
+        scope='실제 Controller.apply AST와 원 Scene rate 수식을 source-FK 기반 정지 state stub에31회 적용. actual q/body 상태는 전혀 진전시키지 않고 목표만60Hz로 갱신한 CPU fixture. 원본XML의 발BOX local bottom 사용. source 초기/예측과 actual native 검증은 다름. source 자체 eligibility/상체 실패/하중·접촉·동적 안정성을 통과시킨 결과가 아님.')
+    save(out, output)
+    print(dict(passed=output['passed'], checks=checks, out=str(out),
+               cases=[dict(time_s=c['time_s'], pre_heading=c['requested_foot_diagnostic']['predicted_heading_error_deg'],
+                           post_heading=c['post_rate_heading_error_deg'], post_feet=c['post_rate_source_feet']) for c in cases]), flush=True)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='물리 없는 정면 발 IK/rate CPU 검증')
+    parser.add_argument('--source', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    args = parser.parse_args()
+    main(args.source, args.out)

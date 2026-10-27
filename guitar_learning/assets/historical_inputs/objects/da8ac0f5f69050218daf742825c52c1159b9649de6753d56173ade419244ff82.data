@@ -1,0 +1,86 @@
+"""CPU validation orchestration; recorded-body fixtures are not native execution."""
+import copy
+import unittest
+import numpy as np
+from guitar_learning.tool.validate import probe_action,evaluate_episode,load_policy
+from guitar_learning.tests import test_training_environment as fixture
+
+
+class ProbeActionTests(unittest.TestCase):
+    def test_roles_bounds_and_determinism(self):
+        roles={'zero':[], 'right':list(range(33,39)), 'left_arm':list(range(12)),
+               'fingers':list(range(12,33)), 'all':list(range(39))}
+        for mode,indices in roles.items():
+            action=probe_action(mode,30)
+            self.assertEqual(action.dtype,np.float32)
+            self.assertEqual(action.shape,(39,))
+            self.assertEqual(np.flatnonzero(action).tolist(),indices)
+            np.testing.assert_array_equal(action,probe_action(mode,30))
+            for step in range(0,1000,13): self.assertLessEqual(np.max(np.abs(probe_action(mode,step))),1.)
+        with self.assertRaises(ValueError): probe_action('policy',0)
+        with self.assertRaises(ValueError): probe_action('right',-1)
+
+
+class ValidationIntegrationTests(fixture.TrainingEnvironmentTests):
+    # Reuse setup/factory, avoid inheriting the separate integration test cases.
+    test_short_preparation_four_substeps_and_live_target_observation=None
+    test_time_limit_final_observation_and_episode_cost=None
+    test_timeline_and_unsafe_failure_are_distinct=None
+    test_cpu_policy_collection_and_update=None
+
+    def test_budget_truncation_and_preserved_raw_substeps(self):
+        env=self.environment()
+        rows=[]
+        summary=evaluate_episode(env,lambda obs,step:probe_action('right',step),2/60,
+                                 on_step=lambda step,row:rows.append(row))
+        self.assertEqual(summary['reason'],'validation_budget')
+        self.assertFalse(summary['terminated'])
+        self.assertTrue(summary['truncated'])
+        self.assertEqual(summary['control_steps'],2)
+        self.assertEqual(len(rows),2)
+        self.assertEqual(len(rows[-1]['info']['native_control']['physics_samples240']),4)
+        self.assertAlmostEqual(summary['cost'],sum(r['info']['cost'] for r in rows))
+        self.assertIn('a',summary['target_distance_last_m'])
+        self.assertIn('a',summary['fret_candidates_last'])
+        self.assertIsNone(env.time_limit_s)
+
+    def test_native_time_limit_reason_and_contract_integrity(self):
+        env=self.environment(time_limit_s=1/60)
+        summary=evaluate_episode(env,lambda obs,step:probe_action('zero',step),2/60)
+        self.assertEqual(summary['reason'],'time_limit')
+        original=copy.deepcopy(env.contract)
+        def mutate(obs,step):
+            env.contract['schema']='different'
+            return probe_action('zero',step)
+        with self.assertRaisesRegex(ValueError,'contract changed'):
+            evaluate_episode(env,mutate,1/60)
+        self.assertNotEqual(original,env.contract)
+
+    def test_checkpoint_eval_strict_contract_and_deterministic_mean(self):
+        import tempfile
+        from pathlib import Path
+        import torch
+        from guitar_learning.policy import Policy
+        from guitar_learning.ppo import PPOTrainer,PPOConfig
+        env=self.environment()
+        obs,_=env.reset()
+        model=Policy(len(obs['state']),size='small',contract=env.contract)
+        with torch.no_grad(): model.actor_heads[0].bias.fill_(.2)
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'checkpoint.pt'
+            PPOTrainer(model,PPOConfig(epochs=1)).save(path)
+            restored=load_policy(path,obs,env.contract)
+            inputs=[torch.as_tensor(obs[k]).unsqueeze(0) for k in ('state','events','mask','priority_events','priority_mask')]
+            with torch.no_grad():
+                a=restored.act(*inputs,deterministic=True)['action']
+                b=restored.act(*inputs,deterministic=True)['action']
+            self.assertTrue(torch.equal(a,b))
+            self.assertTrue(torch.allclose(a[0,:33],torch.full((33,),float(np.tanh(.2)))))
+            changed=copy.deepcopy(env.contract)
+            changed['reward']['strict_match']=100.
+            with self.assertRaises(ValueError): load_policy(path,obs,changed)
+
+    def test_invalid_budget(self):
+        env=self.environment()
+        for seconds in (0,-1,float('nan'),.001):
+            with self.assertRaises(ValueError): evaluate_episode(env,lambda obs,step:np.zeros(39),seconds)

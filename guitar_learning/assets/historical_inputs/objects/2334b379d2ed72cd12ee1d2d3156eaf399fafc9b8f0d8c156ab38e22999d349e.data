@@ -1,0 +1,75 @@
+"""Train explicit single-note pools with the existing563 quality PPO core."""
+import argparse
+import copy
+import json
+import os
+from pathlib import Path
+from unittest.mock import patch
+
+
+def settings_document(raw):
+    from ..train_musical_quality import settings_document as quality_settings
+    from .environment import settings_document as pool_settings
+    if not isinstance(raw, dict): raise ValueError('settings object required')
+    value = copy.deepcopy(raw)
+    curriculum = pool_settings(value.pop('curriculum', None))
+    result = quality_settings(value)
+    result['curriculum'] = curriculum
+    return result
+
+
+def native_environment(spec, worker_id):
+    import isaacgym
+    import numpy as np
+    import torch
+    import random
+    from .. import parallel
+    from ..specialist_parallel import specialist_compact  # Bind the original logger before replacing it.
+    from ..train_musical_quality import compact
+    from ..timing_curriculum import TimingConfig
+    from .environment import build_environment
+    if not spec.get('headless', True): raise ValueError('headless quality curriculum required')
+    seed = int(spec.get('seed', 7))+worker_id
+    random.seed(seed); np.random.seed(seed); torch.manual_seed(seed); torch.set_num_threads(1)
+    parallel._compact = compact
+    return build_environment(spec['config'], Path(spec['out'])/'environment',
+        role=spec['specialist']['role'], bundle=spec['bundle'], curriculum=spec['curriculum'],
+        timing=TimingConfig(**spec['timing']), stage=spec['stage'],
+        start_event_index=spec.get('start_event_index', 0), phrase_events=spec.get('phrase_events', 8),
+        tempo_scale=spec.get('tempo_scale', 1.), seed=int(spec.get('seed', 7)),
+        worker_id=worker_id, music=spec.get('music'), **dict(spec.get('env_kwargs', {})))
+
+
+def run(settings, args):
+    import isaacgym
+    from .. import parallel, train_musical_quality, musical_quality_transfer
+    from .transfer import apply_actor_initialization
+    original_pool = parallel.Pool
+
+    class CurriculumPool(original_pool):
+        def __init__(self, specs, **kwargs):
+            specs = copy.deepcopy(specs)
+            for spec in specs: spec['curriculum'] = copy.deepcopy(settings['curriculum'])
+            super().__init__(specs, **kwargs)
+
+    # The nested timing runner derives its pool from this binding and retains
+    # source pinning, current input identity and unchanged strict resume.
+    with patch.object(parallel, 'Pool', CurriculumPool), \
+            patch.object(train_musical_quality, 'native_environment', native_environment), \
+            patch.object(musical_quality_transfer, 'apply_actor_initialization', apply_actor_initialization):
+        return train_musical_quality.run(settings, args)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--settings', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--resume', type=Path)
+    args = parser.parse_args()
+    for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+        os.environ[name] = '1'
+    import isaacgym
+    run(settings_document(json.loads(args.settings.read_text())), args)
+
+
+if __name__ == '__main__': main()

@@ -1,0 +1,72 @@
+"""Synthetic shared native evidence boundaries; no dynamics claim."""
+import copy
+import unittest
+from guitar_learning.music_task import ScoreTask, ScoreTarget
+from guitar_learning.timing.timing_curriculum import TimingConfig
+from guitar_learning.joint.metrics import CoordinationLedger, joint_quality
+from guitar_learning.joint.spec import COORDINATION_FIELDS
+
+
+def sample(tick, clean=True, accepted=(), crossing=None):
+    return dict(physics_step=tick, task_time_s=tick/240.,
+        targets={'t':dict(fretting_quality=dict(clean_target_candidate=clean))},
+        strike_quality=dict(accepted_crossing_ids=list(accepted)),
+        crossings=[] if crossing is None else [crossing])
+
+
+def cross(tick, identity='hit', **changes):
+    value=dict(crossing_id=identity, task_time_s=tick/240., string_number=2, direction=1,
+               valid=True, reason_flags=[])
+    value.update(changes)
+    return value
+
+
+class JointMetricsTests(unittest.TestCase):
+    def ledger(self, *, clean=True, onset=1/240., end=1.):
+        task=ScoreTask((ScoreTarget('t','e',1,5,1,1,onset,end,0.,onset,end),))
+        return CoordinationLedger(task,sample(0,clean),TimingConfig(pre_roll_s=3.,stage_index=1))
+
+    def test_coupled_once_and_duplicate_id_does_not_pay_again(self):
+        ledger=self.ledger()
+        self.assertEqual(ledger.update(sample(1,accepted=['hit'],crossing=cross(1)))['coordination_coupled'],1.)
+        self.assertEqual(ledger.update(sample(2,accepted=['hit'],crossing=cross(2)))['coordination_coupled'],0.)
+        self.assertEqual(len(ledger.coupled),1)
+        self.assertEqual(len(ledger.uncoupled),0)
+        self.assertTrue(ledger.summary(completed=True)['stage_success'])
+        self.assertEqual(dict(zip(COORDINATION_FIELDS,ledger.history()))['coordination_awarded'],1.)
+
+    def test_missing_previous_or_current_clean_blocks_coupling(self):
+        for previous,current in ((False,True),(True,False)):
+            ledger=self.ledger(clean=previous)
+            terms=ledger.update(sample(1,current,['hit'],cross(1)))
+            self.assertEqual(terms,dict(coordination_coupled=0.,coordination_uncoupled=-.5))
+            self.assertFalse(ledger.summary(True)['stage_success'])
+
+    def test_fabricated_late_wrong_or_after_end_accepted_strike_cannot_couple(self):
+        variants=[None,cross(1,string_number=1),cross(1,valid=False),cross(1,reason_flags=['blocked']),
+                  cross(1,task_time_s=2/240.)]
+        for crossing in variants:
+            ledger=self.ledger()
+            self.assertEqual(ledger.update(sample(1,accepted=['hit'],crossing=crossing))['coordination_coupled'],0.)
+            self.assertEqual(len(ledger.uncoupled),1)
+        ledger=self.ledger(onset=.8,end=1.)
+        self.assertEqual(ledger.update(sample(1,accepted=['hit'],crossing=cross(1)))['coordination_coupled'],0.)
+        ledger=self.ledger(onset=0.,end=1/240.)
+        self.assertEqual(ledger.update(sample(1,accepted=['hit'],crossing=cross(1)))['coordination_coupled'],0.)
+
+    def test_joint_success_requires_coupling_complete_and_safe_history(self):
+        ledger=self.ledger()
+        passed=dict(stage_success=True,provisional_success=True)
+        self.assertFalse(joint_quality(passed,passed,ledger.summary(True))['stage_success'])
+        ledger.update(sample(1,accepted=['hit'],crossing=cross(1)))
+        self.assertFalse(joint_quality(passed,passed,ledger.summary(False))['stage_success'])
+        self.assertTrue(joint_quality(passed,passed,ledger.summary(True))['stage_success'])
+        ledger.invalidate(['unsafe'])
+        self.assertFalse(joint_quality(passed,passed,ledger.summary(True))['stage_success'])
+        self.assertEqual(len(ledger.summary()['coupled_crossing_ids']),1)
+        self.assertTrue(ledger.summary()['safety_invalidated'])
+        with self.assertRaisesRegex(ValueError,'consecutive'):ledger.update(sample(1))
+        with self.assertRaisesRegex(ValueError,'disappear'):ledger.update(sample(2))
+
+
+if __name__=='__main__':unittest.main()

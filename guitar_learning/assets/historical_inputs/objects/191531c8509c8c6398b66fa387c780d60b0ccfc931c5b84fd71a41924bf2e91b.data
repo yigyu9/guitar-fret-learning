@@ -1,0 +1,44 @@
+"""CPU contracts for exact sampling and the integration barrier."""
+import gzip
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from .replay_v1 import NoIntegration, selected_rows
+
+
+class ReplayContracts(unittest.TestCase):
+    def test_exact_sampling_plain_and_gzip(self):
+        data = {'rows': [{'physics_step': i, 'time_s': i / 240, 'state': {'measured': i}} for i in range(4080, 4321)]}
+        with tempfile.TemporaryDirectory() as folder:
+            for compressed in (False, True):
+                path = Path(folder) / ('states_gzip.json' if compressed else 'states_plain.json')
+                payload = json.dumps(data).encode()
+                path.write_bytes(gzip.compress(payload) if compressed else payload)
+                result = list(selected_rows(path, 17, 18))
+                self.assertEqual([r['physics_step'] for r in result], list(range(4080, 4320, 4)))
+                self.assertEqual(len(result), 60)
+                self.assertEqual([r['state']['measured'] for r in result], list(range(4080, 4320, 4)))
+                self.assertEqual(list(selected_rows(path, 17, 18, True)), [data['rows'][0]])
+
+    def test_missing_selected_state_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'states.json'
+            path.write_text(json.dumps({'rows': [{'physics_step': 4080, 'time_s': 17}]}))
+            with self.assertRaisesRegex(ValueError, 'missing selected'):
+                list(selected_rows(path, 17, 18))
+
+    def test_barrier_blocks_integration_and_forces(self):
+        class FakeGym:
+            def step_graphics(self, sim):
+                return sim
+        barrier = NoIntegration(FakeGym())
+        for name in ('simulate', 'fetch_results', 'apply_actor_dof_efforts', 'apply_rigid_body_force_tensors'):
+            with self.assertRaisesRegex(RuntimeError, 'forbids physics'):
+                getattr(barrier, name)(None)
+        self.assertEqual(len(barrier.blocked_calls), 4)
+        self.assertEqual(barrier.step_graphics('graphics-only'), 'graphics-only')
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,85 @@
+"""Full-interval free-guitar and seated-foot acceptance from native raw samples."""
+import argparse
+import csv
+from pathlib import Path
+from ..lower_body_release_v1.common import ROOT, BASE, read, save, pin, verify
+from ..lower_body_release_v1 import upright_native_audit_v3
+from ..seated_foot_support_v1.analyze_v6 import measure, contact_interval, sole_summary, RAW, LAYOUT_REFERENCE
+
+
+def interval(rows):
+    return dict(samples=len(rows), first_s=rows[0]['time_s'], last_s=rows[-1]['time_s'],
+        max_body_displacement_m=max(r['guitar_body_displacement_from_initial_m'] for r in rows),
+        max_rotation_deg=max(r['guitar_rotation_from_initial_deg'] for r in rows),
+        max_abs_neck_deg=max(abs(r['neck_elevation_deg']) for r in rows),
+        max_abs_lateral_m=max(abs(r['lateral_error_m']) for r in rows),
+        max_Torso_Chest_tilt_deg=max(r[n+'_total_tilt_deg'] for r in rows for n in ('Torso', 'Chest')),
+        max_abs_Torso_Chest_right_deg=max(abs(r[n+'_right_tilt_deg']) for r in rows for n in ('Torso', 'Chest')),
+        Chest_fraction=sum(r['Chest_guitar_positive_contacts'] > 0 for r in rows)/len(rows),
+        RShoulder_fraction=sum(r['R_Shoulder_guitar_positive_contacts'] > 0 for r in rows)/len(rows),
+        simultaneous_support_fraction=sum(r['Chest_guitar_positive_contacts'] > 0 and r['R_Shoulder_guitar_positive_contacts'] > 0 for r in rows)/len(rows))
+
+
+def main(run, out):
+    assert (run/'report.json').is_file()
+    out.mkdir(exist_ok=False)
+    cfg = Path(read(run/'attempt.json')['config'])
+    paths = list(Path(__file__).resolve().parent.glob('*.py'))
+    paths += list((ROOT/'stability_adapter_2/seated_foot_support_v1').glob('*.py'))
+    paths += [run/n for n in RAW]+[run/'support_wrapper.json', cfg, LAYOUT_REFERENCE,
+        ROOT/'docs/plans/grounded_guitar_support_20261016.md', ROOT/'docs/plans/grounded_guitar_world_anchor_20261016.md', ROOT/'docs/plans/grounded_guitar_spine_clearance_20261016.md']
+    config = read(cfg)
+    paths += [Path(config[k]) for k in ('source_report', 'upper_target105')]
+    pins = pin(cfg, extra=paths)
+    save(out/'inputs_before.json', pins)
+    upright_native_audit_v3.main([run], out/'integrity')
+    rows, ground = measure(run)
+    with (out/'samples.csv').open('w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    save(out/'ground_contacts.json', dict(rows=ground))
+    whole = interval(rows)
+    settled_rows = [r for r in rows if 1 <= r['time_s'] <= 5]
+    settled = interval(settled_rows) if settled_rows else None
+    soles = sole_summary(rows)
+    feet = contact_interval(settled_rows, ground)
+    report = read(run/'report.json')
+    wrapper = read(run/'support_wrapper.json')
+    integrity = read(out/'integrity/report.json')
+    gates = dict(completed_static5=bool(report['completed'] and report['mode'] == 'static' and report['physics_steps'] == 1200),
+        runtime_restrictions=bool(not report['failure'] and not report['cleanup_errors'] and not report['forbidden_calls']
+            and all(report['initial_checks'].values()) and report['root_fixed'] and report['guitar_free']
+            and not report['strap_enabled'] and report['training_updates'] == 0),
+        native_integrity=bool(integrity['runs'][0]['all_checks'] and integrity['inputs_unchanged']),
+        runner_inputs=bool(report['inputs_unchanged'] and verify(read(run/'attempt.json')['input_sha256'])),
+        wrapper_inputs=bool(wrapper['inputs_unchanged'] and isinstance(wrapper['input_sha256'], dict)
+            and wrapper['input_sha256'] and verify(wrapper['input_sha256'])
+            and wrapper['actual_scene_class'] == 'seated_foot_support_v1.runtime_v6.Scene'
+            and wrapper['controller'] == 'grounded_guitar_support_v1.runtime_v2.Controller'),
+        body_displacement30mm=whole['max_body_displacement_m'] <= .03,
+        rotation5deg=whole['max_rotation_deg'] <= 5,
+        neck3deg=whole['max_abs_neck_deg'] <= 3,
+        lateral20mm=whole['max_abs_lateral_m'] <= .02,
+        trunk_total5deg=whole['max_Torso_Chest_tilt_deg'] <= 5,
+        trunk_right3deg=whole['max_abs_Torso_Chest_right_deg'] <= 3,
+        Chest_upperarm95pct=bool(settled and settled['simultaneous_support_fraction'] >= .95),
+        both_feet95pct=bool(feet['both_feet_positive_fraction'] is not None and feet['both_feet_positive_fraction'] >= .95
+            and feet['all_contact_rows_present']),
+        four_soles_still=soles['all_four_parts_passed'], analysis_inputs=verify(pins))
+    windows = {}
+    for name, lo, hi in [('startup_0to1', 0, 1), ('settled_1to5', 1, 5), ('last_4to5', 4, 5)]:
+        subset = [r for r in rows if lo <= r['time_s'] <= hi]
+        windows[name] = interval(subset) if subset else None
+    save(out/'summary.json', dict(run=str(run), gates=gates, passed=all(gates.values()),
+         whole=whole, windows=windows, feet_1to5=feet, soles_last1=soles, inputs_unchanged=verify(pins),
+         scope='Full 0..5s guitar thresholds; physical Chest/upper-arm and both-foot contact fraction uses 1..5s. Original source foot BOX vertices transformed by normalized native rotation, not cooked clearance. Raw lambda is not force N; fixed Root is not free-root weight balance.'))
+    print(dict(passed=all(gates.values()), gates=gates, whole=whole), flush=True)
+
+
+if __name__ == '__main__':
+    p = argparse.ArgumentParser()
+    p.add_argument('--run', type=Path, required=True)
+    p.add_argument('--out', type=Path, required=True)
+    a = p.parse_args()
+    main(a.run.resolve(), a.out.resolve())

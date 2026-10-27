@@ -1,0 +1,38 @@
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/team_pose_envelope_visualization_v1/before/PLAN.md
++++ /home/ajou/yigyu/3/stability_adapter_2/PLAN.md
+@@ -608,3 +608,9 @@
+ - [x] 결과 문서·독립 검수·변경 색인 및 최종 봉인. [이미지·설명과 결과](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/README.md:1), [변경 파일·실제 줄](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/FILE_INDEX.md:1).
+ 
+ 이번 단위는 저장 자료 후처리이며 새 물리 실행·제어·학습은 없다. 자연스러운 자세의 선호 문턱은 아직 설정하지 않고 사용자 허용 범위를 유지한다.
++
++## 팀원 자세 판정표 시각화 (2026-10-10)
++
++- [x] 원자료 보존 및 [표시 계획](/home/ajou/yigyu/3/stability_adapter_2/TEAM_POSE_ENVELOPE_VISUALIZATION_PLAN.md:1) 작성. 현재 설정·허용범위 변경 없음.
++- [x] 바디 중심 위치 후보·회전 분리 구간의 개념도와96개 판정 표본 그림 생성. 범례 겹침을 수정한 별도 v2가 최종 그림이며 첫 producer/산출물은 보존했다.
++- [x] 원자료/PNG 정합·입력보존·독립 검수·이미지 설명 및 변경 색인 기록.
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/team_pose_envelope_visualization_v1/before/results_README.md
++++ /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/README.md
+@@ -546,3 +546,7 @@
+ ## 2026-10-10 연주 자세·현재 프렛 목표 진단
+ 
+ [실제 Isaac Gym 화면과 설명](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/README.md:1)에 초기·2초 전환·3초·종료 이미지와113표본 추세를 추가했다. 기존 스트랩 ON 실행의 저장 자료 후처리이며 새 물리 실행·학습은0회다. 넥과 앞판 방향, 몸통 상대 배치, 모델 관절 여유와 현재 프렛 목표를 함께 본다. 넓은 허용 범위를 유지하며 자연스러움 문턱과 전체 회전 집합 인증은 미구현이다.
++
++## 2026-10-10 팀원 자세 허용 후보 시각화
++
++[위치·회전 개념도와96개 판정 표본](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/team_pose_envelope_visualization_v1/README.md:1)을 추가했다. 팀원 fret_041000 기준의 골반 상대 바디 중심과 축별 후보를 그린 설명도이며 Isaac Gym 장면이나6축 조합 안전 인증이 아니다. 현재 허용범위/초기각/제어는 유지하고 새 물리 실행·학습은0회다. 원본 CSV와 이미지를 보존하며 눈 판정39/미기록57, dy+2cm 이상치와 방위±2° 미검증을 구분한다.
+--- /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/team_pose_envelope_visualization_v1/before/VISUAL_REPORT.md
++++ /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/VISUAL_REPORT.md
+@@ -2264,3 +2264,13 @@
+ ![실제 Isaac Gym의2초 전환과 종료, 현재 기타 기준 목표 참고선](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/analysis/comparison.png)
+ 
+ 노랑은 넥 local +Y, 청록은 앞판 법선 +Z, 흰색은 활성 손끝 marker, 분홍은 현재 할당 목표다. 새 선은 접촉·가림 인증이 아니며 기존 오렌지 스트랩 경로 표시를 보존했다. [초기·중간·종료 전신/손 확대와 지표 설명](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/playing_posture_diagnostic_v1/README.md:1). 이번은 저장113표본 후처리로 새 물리 실행·학습은0회이며 자연스러움 문턱·허용 회전 집합 판정은 미설정/미구현이다.
++
++## 2026-10-10 팀원 자세 판정표의 후보와 검증 범위
++
++![팀원 기준의 바디 중심 위치·회전 후보 개념도](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/team_pose_envelope_visualization_v1/analysis_v2/pose_candidates.png)
++
++노란 상자는 보고서의 축별 위치 후보를 곱한 바디 중심 영역이고 보라 점은 중앙값 조합 후보다. 실제 기타 형상·인체·접촉이 계산된 Isaac Gym 장면이 아니다. 넥 고도는 팀원 기준22°와 우리 수평 후보0°가 서로 다른 기준임을 표시하고, 방위±2°는 미검증, roll은 두 자연 후보 구간 사이의 빨강 실측점을 분리한다.
++
++![CSV96개 판정 표본과 제안 목표 오차](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/team_pose_envelope_visualization_v1/analysis_v2/judgment_samples.png)
++
++원은 눈 판정 기록39개, 삼각형은 눈 판정 미기록57개다. 색은 원 CSV의 final 판정이며 원자료가 추정한 관통을 새로 인증하지 않는다. 보라색 선분은 제안 목표±오차, 빈 사각형은 dy+2cm 이상치다. 점 사이와6축 동시 변경은 미검증이다. [그림 설명·원자료·변경 색인](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/team_pose_envelope_visualization_v1/README.md:1). 새 물리 실행·학습·환경 설정 변경은 없다.

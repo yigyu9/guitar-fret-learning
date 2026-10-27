@@ -1,5 +1,8 @@
 # transcribe_v2 — Onset+Frame / HCQT 기타 탭 전사 모델 설계
 
+> **상태: EXPERIMENTAL DESIGN.** 기본 Stage1 실행 경로는 상위 `pipeline.py`이며 이 문서는
+> 대체 전사 모델의 연구 계획이다.
+
 > 2026-07-15. v1(`tab2fingermapping/conformer/`)은 **불변 보존** — 이 디렉토리는 별도.
 > 조사·설계 근거 = `_gen/research_synthesis.md`(SOTA 5각 조사 종합), 각 결정에 `(F#)` 인용.
 > 실행 = conda `tab2fm`(torch 2.5.1+cu121, nnAudio 0.3.4, mir_eval 0.8.2), GPU RTX 4070 Ti 12GB.

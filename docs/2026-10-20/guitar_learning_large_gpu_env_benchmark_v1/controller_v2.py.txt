@@ -1,0 +1,247 @@
+"""Large CUDA cases with bounded cleanup of this launcher's own session only."""
+import argparse
+import csv
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import subprocess
+import time
+
+BASE = Path('/home/ajou/yigyu/3/docs/2026-10-20/guitar_learning_large_gpu_env_benchmark_v1')
+_CASE = re.compile(r'n[248](?:_repeat)?\Z')
+
+
+def process_identity(pid):
+    try:
+        fields = Path('/proc/%d/stat' % pid).read_text().rsplit(')', 1)[1].split()
+        return dict(pid=pid, state=fields[0], pgid=int(fields[2]), sid=int(fields[3]),
+                    starttime_ticks=int(fields[19]))
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+
+
+def group_exists(pgid):
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def group_members(pgid):
+    result = []
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            row = process_identity(int(entry.name))
+        except (PermissionError, OSError):
+            continue
+        if row is not None and row['pgid'] == pgid:
+            result.append(row)
+    return sorted(result, key=lambda row: row['pid'])
+
+
+def prior_group_checks(base):
+    """Read old identities only; no prior group is ever signalled here."""
+    names = {path.name for path in base.iterdir() if path.is_dir() and _CASE.fullmatch(path.name)}
+    names.update(path.name[:-len('_supervisor.json')] for path in base.glob('*_supervisor.json')
+                 if _CASE.fullmatch(path.name[:-len('_supervisor.json')]))
+    rows = []
+    for name in sorted(names):
+        report_path, status_path = base / (name + '_supervisor.json'), base / name / 'status.json'
+        report = json.loads(report_path.read_text()) if report_path.exists() else {}
+        status = json.loads(status_path.read_text()) if status_path.exists() else {}
+        pgid = report.get('child_pgid') or status.get('parent_pid')
+        if pgid is None and report.get('child_pid') is None and report.get('exception'):
+            # A v2 preflight failure never created a child or a process group.
+            rows.append(dict(name=name, child_created=False, group_alive=False))
+            continue
+        if type(pgid) is not int or pgid <= 1:
+            raise RuntimeError('Cannot verify prior case process group: ' + name)
+        rows.append(dict(name=name, pgid=pgid, group_alive=group_exists(pgid),
+                         identity_source='supervisor.child_pgid' if report.get('child_pgid') else 'status.parent_pid',
+                         current_leader=process_identity(pgid), members=group_members(pgid),
+                         action='read_only; never signal prior or possibly recycled identity'))
+    return rows
+
+
+def cleanup_owned_group(child, owner, timeouts=(60., 20., 10.)):
+    """Bound SIGINT/TERM/KILL waits, reaping the owned parent at every poll."""
+    pgid = owner['pgid']
+    diagnostic = dict(child_pid=child.pid, child_pgid=pgid, owner=owner, stages=[],
+                      residual_members=[], group_alive=False, completed=False)
+    if pgid != child.pid or pgid <= 1 or pgid == os.getpgrp() or owner['sid'] != pgid:
+        diagnostic['ownership_error'] = 'Child must own a fresh process group and session'
+        return diagnostic
+
+    def owned():
+        current = process_identity(child.pid)
+        if current is not None and (current['starttime_ticks'] != owner['starttime_ticks'] or
+                                    current['pgid'] != pgid or current['sid'] != pgid):
+            diagnostic['ownership_error'] = 'Leader identity changed or PID was recycled; refusing signals'
+            return False
+        if any(row['sid'] != pgid for row in group_members(pgid)):
+            diagnostic['ownership_error'] = 'Unexpected session member; refusing signals'
+            return False
+        return True
+
+    def alive():
+        child.poll()
+        return group_exists(pgid)
+
+    started = time.monotonic()
+    for name, sig, timeout in zip(('parent_SIGINT', 'group_SIGTERM', 'group_SIGKILL'),
+                                  (signal.SIGINT, signal.SIGTERM, signal.SIGKILL), timeouts):
+        if not alive():
+            break
+        if not owned():
+            break
+        stage = dict(action=name, timeout_s=timeout, signal_sent=False)
+        diagnostic['stages'].append(stage)
+        stage_started = time.monotonic()
+        try:
+            if sig == signal.SIGINT:
+                if child.poll() is None:
+                    child.send_signal(sig)
+                    stage['signal_sent'] = True
+            else:
+                os.killpg(pgid, sig)
+                stage['signal_sent'] = True
+        except ProcessLookupError:
+            pass
+        except BaseException as error:
+            stage['signal_error'] = dict(type=type(error).__name__, message=str(error))
+        deadline = stage_started + timeout
+        while alive() and time.monotonic() < deadline:
+            try:
+                time.sleep(min(.1, max(0., deadline - time.monotonic())))
+            except BaseException as error:
+                stage['wait_interrupted'] = dict(type=type(error).__name__, message=str(error))
+                break
+        stage['elapsed_s'] = time.monotonic() - stage_started
+        stage['group_alive_after'] = alive()
+    diagnostic.update(elapsed_s=time.monotonic() - started, returncode=child.poll(),
+                      group_alive=alive(), residual_members=group_members(pgid))
+    diagnostic['completed'] = not diagnostic['group_alive'] and child.poll() is not None
+    return diagnostic
+
+
+def parser():
+    result = argparse.ArgumentParser()
+    result.add_argument('--name', required=True)
+    result.add_argument('--num-envs', type=int, choices=(2, 4, 8), required=True)
+    result.add_argument('--updates', type=int, default=1)
+    result.add_argument('--horizon', type=int, default=1969)
+    result.add_argument('--resume', type=Path)
+    return result
+
+
+def main(argv=None):
+    args = parser().parse_args(argv)
+    if (args.name not in ('n%d' % args.num_envs, 'n%d_repeat' % args.num_envs) or
+            args.updates not in (1, 2) or args.horizon not in (1969, 256)):
+        raise ValueError('Case name must match2/4/8 workers; updates1/2 and horizon1969/256 only')
+    out = BASE / args.name
+    report_path = BASE / (args.name + '_supervisor.json')
+    if out.exists() or report_path.exists():
+        raise FileExistsError('Case output or supervisor report already exists: ' + str(out))
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1',
+        TORCH_EXTENSIONS_DIR='/tmp/guitar_structure_torch_extensions', OMP_NUM_THREADS='1',
+        OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1',
+        PYTHONPATH='/home/ajou/yigyu/3/isaacgym/python:/home/ajou/yigyu/3',
+        LD_LIBRARY_PATH='/home/ajou/miniconda3/envs/rl38/lib',
+        PATH='/home/ajou/miniconda3/envs/rl38/bin:' + os.environ['PATH'])
+    command = ['/home/ajou/miniconda3/envs/rl38/bin/python', '-B', '-u', '-m',
+        'guitar_learning.train', '--hand', 'left', '--song', '05_BN2-131-B_solo',
+        '--size', 'large', '--num-envs', str(args.num_envs), '--updates', str(args.updates),
+        '--horizon', str(args.horizon), '--seed', '7', '--device', 'cuda:0', '--out', str(out)]
+    if args.resume:
+        command += ['--resume', str(args.resume.resolve())]
+    started = time.monotonic()
+    rows, guard, child, cleanup, failure, owner, prior = [], None, None, None, None, None, []
+    wrapper = dict(path=str(Path(__file__).resolve()),
+                   sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+    try:
+        prior = prior_group_checks(BASE)
+        if any(row['group_alive'] for row in prior):
+            raise RuntimeError('Prior case process group still exists; aborting without signalling it')
+        with (BASE / (args.name + '_console.log')).open('x') as log, \
+                (BASE / (args.name + '_gpu_samples.jsonl')).open('x') as samples:
+            child = subprocess.Popen(command, cwd='/home/ajou/yigyu/3', env=env,
+                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            owner = process_identity(child.pid)
+            if owner is None:
+                # A child can fail before the first probe. Retain known PGID and
+                # wait status; no unknown process is used as an ownership basis.
+                child.poll()
+                owner = dict(pid=child.pid, pgid=child.pid, sid=child.pid, starttime_ticks=None)
+            report_path.write_text(json.dumps(dict(completed=False, phase='running',
+                command=command, child_pid=child.pid, child_pgid=child.pid, owner=owner,
+                wrapper=wrapper, prior_group_checks=prior), indent=2) + '\n')
+            while True:
+                probe = subprocess.run(['nvidia-smi', '-i', '0',
+                    '--query-gpu=timestamp,index,name,memory.total,memory.used,memory.free,utilization.gpu',
+                    '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=10)
+                row = dict(elapsed_s=time.monotonic() - started, returncode=probe.returncode,
+                           stdout=probe.stdout, stderr=probe.stderr)
+                if probe.returncode == 0:
+                    values = next(csv.reader(probe.stdout.splitlines()))
+                    row.update(timestamp=values[0].strip(), index=int(values[1]), name=values[2].strip(),
+                        total_mib=float(values[3]), used_mib=float(values[4]), free_mib=float(values[5]),
+                        gpu_utilization_percent=float(values[6]))
+                memory = {line.split(':')[0]: int(line.split()[1]) * 1024
+                    for line in Path('/proc/meminfo').read_text().splitlines()
+                    if line.startswith(('MemAvailable:', 'SwapFree:'))}
+                row.update(memory)
+                status = out / 'status.json'
+                if status.exists():
+                    state = json.loads(status.read_text())
+                    row.update(phase=state['phase'], ticks=state.get('ticks'),
+                               update_index=state.get('update_index'))
+                rows.append(row)
+                samples.write(json.dumps(row) + '\n')
+                samples.flush()
+                if probe.returncode != 0 or row.get('free_mib', 0) < 1024 or row['MemAvailable'] < 6 * 2**30:
+                    guard = row
+                    break
+                if child.poll() is not None:
+                    break
+                time.sleep(2)
+    except BaseException as error:
+        failure = dict(type=type(error).__name__, message=str(error))
+    finally:
+        if child is not None:
+            try:
+                cleanup = cleanup_owned_group(child, owner)
+            except BaseException as error:
+                cleanup = dict(completed=False, group_alive=group_exists(child.pid),
+                    residual_members=group_members(child.pid),
+                    exception=dict(type=type(error).__name__, message=str(error)))
+        code = child.poll() if child is not None else None
+        valid = [row for row in rows if row['returncode'] == 0]
+        result = dict(completed=child is not None and code == 0 and guard is None and failure is None
+                          and len(valid) == len(rows) and bool(cleanup and cleanup['completed']),
+            command=command, returncode=code, elapsed_s=time.monotonic() - started,
+            guard_trigger=guard, samples=len(rows),
+            gpu_sample_peak_used_mib=max((row['used_mib'] for row in valid), default=None),
+            gpu_sample_min_free_mib=min((row['free_mib'] for row in valid), default=None),
+            host_sample_min_available_gib=min((row['MemAvailable'] for row in rows), default=None),
+            child_pid=child.pid if child else None, child_pgid=child.pid if child else None,
+            owner=owner, wrapper=wrapper, cleanup=cleanup, exception=failure,
+            prior_group_checks=prior,
+            scope='globalGPU nvidia-smi approximately2s samples plus native CLI; Torch peak allocated/reserved is in run report')
+        if result['host_sample_min_available_gib'] is not None:
+            result['host_sample_min_available_gib'] /= 2**30
+        report_path.write_text(json.dumps(result, indent=2) + '\n')
+        print(json.dumps(result), flush=True)
+    return 0 if result['completed'] else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

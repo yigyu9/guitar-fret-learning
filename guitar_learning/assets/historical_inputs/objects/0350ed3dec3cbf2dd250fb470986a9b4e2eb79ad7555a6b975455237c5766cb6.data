@@ -1,0 +1,148 @@
+"""Retain all26 actual gates and audit the new finite finger control from raw data."""
+import isaacgym
+import argparse
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import read, save
+from ..horizontal_play_test_v1.analyze_v1 import physical_guitar_bodies
+from . import analyze_v2 as old
+from .motion_v1 import interpolate
+from .motion_v2 import MODE
+from .finger_fk_v1 import make_finger_fk
+
+ORIGINAL_OWNERSHIP = old.ownership
+
+
+def ownership(run, initial, properties, targets):
+    legacy = ORIGINAL_OWNERSHIP(run, initial, properties, targets)
+    cfg = read(read(run/'attempt.json')['config'])
+    wrapper = read(run/'support_wrapper.json')
+    spec = read(cfg['play_spec'])
+    after = [row for row in targets if row['physics_step_before'] >= 2400]
+    states = {row['physics_step']: row['state'] for row in read(run/'states240.json')['rows']}
+    contacts = {row['physics_step']: row['contacts'] for row in read(run/'contacts240.json')['rows']}
+    checks = dict(original_ownership=legacy['passed'], full240_post_targets=len(after)==240,
+        actual10_and13=2400 in states and 3120 in states,
+        explicit_motion_patch=wrapper.get('finger_motion_class')=='grounded_guitar_play_v1.motion_v2.Motion'
+            and wrapper.get('scene_command')=='grounded_guitar_play_v1.runtime_v2.command_with_final'
+            and wrapper.get('finger_control_mode')==cfg.get('finger_control_mode')==MODE,
+        finite_finger_spec=spec.get('finger_control')==dict(mode=MODE,return_mode='actual13_G_to_actual10_G',
+            full_goal_IK_gate_m=.003,local_prediction_gate_m=.0001,actual4qnorm_gate_rad=.05))
+    if not checks['actual10_and13'] or not checks['full240_post_targets']:
+        return dict(checks=checks,passed=False,original_ownership=legacy,scope='Incomplete new finite finger case is rejected.')
+    names, bodies = initial['joint_names'], initial['human_body_names']
+    finger = [names.index(n) for n in ('LH:index1_x','LH:index1_z','LH:index2','LH:index3')]
+    view = SimpleNamespace(names=names,human_bodies=bodies)
+    physical = physical_guitar_bodies()
+    before = [row for row in targets if row['physics_step_before'] < 2400][-1]
+    q10 = np.array([r['pos'] for r in states[2400]['human_dof_states']])[finger]
+    def marker_G(state):
+        gp,gr=pose(state['guitar_body_states'][0]);p,_=pose(state['human_body_states'][bodies.index('LH:index3')])
+        return gr.inv().apply(p-gp)
+    origin10, origin13 = marker_G(states[2400]), marker_G(states[3120])
+    target = np.array(spec['press']['target_G_m'])
+    capture = None
+    ready_since = None
+    previous_model = previous_q4 = previous_palm = None
+    checks.update(full_observation_and_goal_math=True, before_rate_IK3mm=True, actual4step_prediction=True,
+        inverse_projection=True, capture_first_predicate=True, hold_last_submitted_exact=True,
+        return_actual13_to_actual10=True, original_finger_rate=True, finite_requested_bounds=True)
+    errors=[]; prediction_errors=[]; increment_norms=[]; fit_errors=[]; held_steps=[]
+    def match(a,b):
+        value=float(np.max(abs(np.asarray(a,dtype=float)-np.asarray(b,dtype=float))))
+        errors.append(value)
+        return value <= 1e-10
+    lower=np.array(initial['PD_properties']['lower'])[finger];upper=np.array(initial['PD_properties']['upper'])[finger]
+    for row in after:
+        k=row['physics_step_before'];t=k/240;state=states[k];m=row.get('play',{})
+        q=np.array([r['pos'] for r in state['human_dof_states']]);q4=q[finger]
+        gp,gr=pose(state['guitar_body_states'][0]);actual=marker_G(state)
+        palm=pose(state['human_body_states'][bodies.index('LH:palm')])
+        model=make_finger_fk(view,state)
+        marker=pose(state['human_body_states'][bodies.index('LH:index3')])[0]
+        anchor=float(np.linalg.norm(model(q)['LH:index3'][0]-marker))
+        positive=[]
+        for c in contacts[k]:
+            a,b=c['body0_name'],c['body1_name']
+            if float(c['lambda'])>0 and ((a=='human/LH:index3' and b in physical) or (b=='human/LH:index3' and a in physical)):
+                positive.append(dict(body0=a,body1=b,raw_lambda=float(c['lambda'])))
+        relative=actual-target
+        ready=bool(positive and np.linalg.norm(relative[:2])<=spec['press']['geometry_xy_m']
+            and spec['press']['geometry_z_band_m'][0]<=relative[2]<=spec['press']['geometry_z_band_m'][1])
+        if not ready or t<10.8:ready_since=None
+        elif ready_since is None:ready_since=t
+        dwell=t-ready_since if ready_since is not None else 0.
+        descent=float(origin10[2]-actual[2]);change=float(np.max(abs(q4-q10)))
+        prior=np.array(before['final105_rad'])[finger]
+        if capture is None and 10.8<=t<13 and ready and dwell>=.1 and descent>=.002 and change>=.02:
+            capture=dict(step=k,source_target_step=k-4,final4_rad=prior.tolist(),
+                observed_ready_duration_60Hz_s=dwell,actual_descent_m=descent,actual_qchange_rad=change)
+        held=capture is not None and t<13
+        checks['capture_first_predicate'] &= m.get('finger_target_capture')==capture and m.get('contact_hold_active') is held
+        checks['full_observation_and_goal_math'] &= (m.get('finger_control_mode')==MODE and m.get('readiness_observation_hz')==60
+            and m.get('actual_geometry_contact_ready') is ready and m.get('actual_index3_positive_contacts')==positive
+            and m.get('ready_observation_start_s')==ready_since and match(m['observed_ready_duration_s'],dwell)
+            and match(m['actual_descent_from10_m'],descent) and match(m['actual_max_qchange_from10_rad'],change)
+            and match(m['actual_finger_G_m'],actual) and match(m['actual_q4_rad'],q4)
+            and match(m['previous_submitted4_rad'],prior) and match(m['actual_anchor_error_m'],anchor) and anchor<=1e-9
+            and match(m['return_destination10_G_m'],origin10))
+        if previous_model is None:
+            checks['actual4step_prediction'] &= m.get('previous_actual4step_prediction_error_m') is None and m.get('actual4step_increment_norm_rad') is None
+        else:
+            predicted=previous_model(q)['LH:index3'][0]
+            error=float(np.linalg.norm(previous_palm[1].inv().apply(predicted-previous_palm[0])-palm[1].inv().apply(marker-palm[0])))
+            increment=float(np.linalg.norm(q4-previous_q4))
+            prediction_errors.append(error);increment_norms.append(increment)
+            checks['actual4step_prediction'] &= error<=.0001 and increment<=.05 and match(m['previous_actual4step_prediction_error_m'],error) and match(m['actual4step_increment_norm_rad'],increment)
+        requested=np.array(row['requested105_rad']);final=np.array(row['final105_rad'])
+        checks['finite_requested_bounds'] &= bool(np.all(requested[finger]>=lower) and np.all(requested[finger]<=upper))
+        expected_final=np.clip(requested[finger],prior-1.5/60,prior+1.5/60).astype(np.float32).astype(float)
+        checks['original_finger_rate'] &= np.array_equal(final[finger],expected_final)
+        if held:
+            held_steps.append(k)
+            checks['hold_last_submitted_exact'] &= (np.array_equal(requested[finger],capture['final4_rad'])
+                and np.array_equal(final[finger],capture['final4_rad']) and m.get('press_IK_evaluated') is False
+                and m.get('press_IK_error_m') is None and m.get('press_goal_G_m') is None
+                and m.get('actual_fullgoal_error_m') is None and m.get('final_target_model_goal_error_m') is None)
+            goal=None
+        else:
+            if t<13:
+                goal=interpolate(t,[10,10.8,11.3,13],np.array([origin10,target+[0,0,.008],target-[0,0,.004],target-[0,0,.004]]))
+            else:
+                goal=interpolate(t,[13,13.5,14],np.array([origin13,origin10,origin10]))
+            goal_W=gp+gr.apply(goal)
+            error=float(np.linalg.norm(model(requested)['LH:index3'][0]-goal_W));fit_errors.append(error)
+            checks['before_rate_IK3mm'] &= m.get('press_IK_evaluated') is True and error<=.003 and match(m['press_goal_G_m'],goal) and match(m['press_IK_error_m'],error) and match(m['actual_fullgoal_error_m'],np.linalg.norm(marker-goal_W))
+            checks['full_observation_and_goal_math'] &= match(m['final_target_model_goal_error_m'],np.linalg.norm(model(final)['LH:index3'][0]-goal_W))
+        checks['return_actual13_to_actual10'] &= (m.get('return_origin13_G_m') is None if t<13 else match(m['return_origin13_G_m'],origin13))
+        checks['full_observation_and_goal_math'] &= (match(m['requested_minus_actual4_norm_rad'],np.linalg.norm(requested[finger]-q4))
+            and match(m['final_minus_actual4_norm_rad'],np.linalg.norm(final[finger]-q4))
+            and match(m['requested_target_model_prediction_W_m'],model(requested)['LH:index3'][0])
+            and match(m['requested_inverse_projection_error_rad'],model.last_inverse_projection_error_rad)
+            and match(m['final_target_model_prediction_W_m'],model(final)['LH:index3'][0])
+            and match(m['final_inverse_projection_error_rad'],model.last_inverse_projection_error_rad))
+        checks['inverse_projection'] &= m['requested_inverse_projection_error_rad']<=1e-9 and m['final_inverse_projection_error_rad']<=1e-9
+        previous_model,previous_q4,previous_palm,before=model,q4,palm,row
+    checks['captured_and_held_to13']=bool(capture is not None and held_steps==list(range(capture['step'],3120,4)))
+    checks={key:bool(value) for key,value in checks.items()}
+    return dict(checks=checks,passed=all(checks.values()),original_ownership=legacy,
+        finite_finger_evidence=dict(capture=capture,held_target_rows=len(held_steps),
+            max_actual4step_prediction_error_m=max(prediction_errors,default=None),max_actual4q_increment_norm_rad=max(increment_norms,default=None),
+            max_before_rate_fullgoal_IK_error_m=max(fit_errors,default=None),max_reconstruction_error=max(errors,default=None)),
+        scope='All original target ownership plus raw60Hz readiness/first-capture/constant prior-submitted human target/continuous actual13G to actual10G return. Actual4step local prediction, requested/final predictions and actual fullgoal error are different quantities. Actual240Hz contact/dwell/motion and all physical gates remain in the frozen analyzer.')
+
+
+def main(run,out,baseline=None):
+    with patch.object(old,'ownership',ownership):
+        old.main(run,out,baseline)
+    assert old.ownership is ORIGINAL_OWNERSHIP
+    save(out/'analysis_revision_v3.json',dict(version='analyze_v3',physical_gates_unchanged=True,
+        additional_audit='New actual-pose finite finger Motion and scoped diagnostic command are reconstructed inside the original target_ownership gate. No legacy physical/action gate is removed.'))
+
+
+if __name__=='__main__':
+    parser=argparse.ArgumentParser();parser.add_argument('--run',type=Path,required=True);parser.add_argument('--out',type=Path,required=True);parser.add_argument('--baseline',type=Path)
+    args=parser.parse_args();main(args.run.resolve(),args.out.resolve(),args.baseline.resolve() if args.baseline else None)

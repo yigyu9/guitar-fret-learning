@@ -1,0 +1,5 @@
+from pathlib import Path
+import shutil,hashlib,subprocess,json,time,os
+R=Path('/home/ajou/yigyu/3');P=R/'docs/2026-10-12/stability_adapter_2/results/body9_strap_minus4mm_v1';s=R/'stability_adapter_2/make_body9_strap_minus4mm_artifacts_v2.py';sha=lambda p:hashlib.sha256(Path(p).read_bytes()).hexdigest();before=sha(s);shutil.copyfile(s,P/'artifact_source_v2.py');shutil.copyfile(__file__,P/'artifact_execution_producer_v2.py');start=time.monotonic()
+with (P/'artifact_v2.log').open('wb') as log:r=subprocess.run(['/home/ajou/miniconda3/envs/rl38/bin/python','-u','-m','stability_adapter_2.make_body9_strap_minus4mm_artifacts_v2'],cwd=str(R),env=dict(os.environ,OPENBLAS_NUM_THREADS='1',OMP_NUM_THREADS='1',MPLCONFIGDIR='/tmp/stability2_small_wrist'),stdout=log,stderr=subprocess.STDOUT)
+(P/'artifact_execution_v2.json').write_text(json.dumps(dict(exit_code=r.returncode,wall_seconds=time.monotonic()-start,source_sha256_before=before,source_sha256_after=sha(s),log_sha256=sha(P/'artifact_v2.log'),native_calls=0),indent=2)+'\n');print((P/'artifact_v2.log').read_text());assert r.returncode==0 and before==sha(s)

@@ -1,0 +1,15 @@
+# 변경 파일 색인
+
+- [감사 결과와 해석](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_fk_coordinate_audit_v1/README.md:1)
+- [변경 파일 색인](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_fk_coordinate_audit_v1/CHANGED_FILES.md:1)
+- [분석 summary](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_fk_coordinate_audit_v1/analysis/summary.json:1)
+- [관절 그룹별 표본](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_fk_coordinate_audit_v1/analysis/group_rows.json:1)
+- [RH:pick 표본별 오차](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_fk_coordinate_audit_v1/analysis/pick_rows.json:1)
+- [입력 SHA, 실행 전](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_fk_coordinate_audit_v1/analysis/inputs_before.json:1)
+- [입력 변경 여부, 실행 후](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_fk_coordinate_audit_v1/analysis/inputs_after.json:1)
+- [분석 producer](/home/ajou/yigyu/3/stability_adapter_2/analyze_strike_fk_coordinates.py:19)
+- [두 raw 계산 입력: initial values와 trace](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_timed_exit_v1/native/data/initial_values.json:1)
+- [원 timed EXIT report/controls 및 시각 자료: 실행 참고자료, 6개 계산 입력에는 미포함](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_timed_exit_v1/README.md:1)
+- [FK calibration 구현](/home/ajou/yigyu/3/stability_adapter_2/underneck_initial_search.py:28)
+- [수정하지 않은 감사 계획](/home/ajou/yigyu/3/stability_adapter_2/STRIKE_FK_COORDINATE_AUDIT_PLAN.md:1)
+- [정정 전 README 보존본](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_fk_coordinate_audit_v1/doc_before_clarification/README.md:1) · [정정 전 CHANGED_FILES 보존본](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_fk_coordinate_audit_v1/doc_before_clarification/CHANGED_FILES.md:1)

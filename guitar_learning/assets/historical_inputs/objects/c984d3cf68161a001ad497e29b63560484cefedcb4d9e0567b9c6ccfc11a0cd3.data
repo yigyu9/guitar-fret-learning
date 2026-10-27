@@ -1,0 +1,178 @@
+"""60Hz learning interface, measuring music and stability at every 240Hz step."""
+from dataclasses import dataclass, asdict
+import copy
+import numpy as np
+from .environment_v4 import FreeGuitarEnvironment
+from .control import ACTIVE_NAMES
+from .task_measurement import TaskMeasurement
+from .observations import ObservationBuilder
+from .safety import SafetyConfig, StabilityMonitor
+
+
+@dataclass(frozen=True)
+class RewardConfig:
+    strict_match: float = 1.
+    lenient_only_match: float = .25
+    wrong_crossing: float = -.25
+    missed_strict: float = -.5
+    held_second: float = 2.
+    timely_release: float = .25
+    approach_second: float = .2
+    approach_scale_m: float = .03
+    action_change_second: float = .01
+    terminal_failure: float = -2.
+
+
+def default_action_ranges():
+    """Initial exploration envelope; musical reachability remains to be learned."""
+    return np.array([.5 if name.startswith('LH:') else .35 if name.startswith('L_') else .25
+                     for name in ACTIVE_NAMES])
+
+
+class ContactEnvironment(FreeGuitarEnvironment):
+    def __init__(self, *args, contact_reader=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.contact_reader, self.contact_names = contact_reader, None
+
+    def reset(self):
+        self.contact_names = None
+        return super().reset()
+
+    def _snapshot(self):
+        sample = super()._snapshot()
+        scene = self.session.scene
+        if self.contact_reader is None:
+            from guitar_learning.native.native_contacts import body_names, read_contacts
+            if self.contact_names is None:
+                self.contact_names = body_names(scene.gym,scene.env)
+            contacts = read_contacts(scene.gym,scene.env,self.contact_names)
+        else:
+            contacts = self.contact_reader(scene)
+        if scene.native() != sample['native']:
+            raise RuntimeError('Contact query changed native state')
+        step = sample['native']['physics_step']
+        sample['native_contacts'] = dict(physics_step=step,time_s=step/240.,contacts=contacts)
+        return sample
+
+
+class TrainingEnvironment:
+    """Gym-style reset/step without depending on Gym or fixed-guitar code.
+
+    Termination is returned at the end of the current 4-substep control tick.
+    Every substep is measured, including a threshold crossed inside that tick.
+    """
+    def __init__(self, config, out, *, task, action_half_range_rad=None,
+                 reward_config=RewardConfig(), safety_config=SafetyConfig(),
+                 time_limit_s=None, **kwargs):
+        self.task, self.reward_config, self.safety_config = task, reward_config, safety_config
+        if any(not np.isfinite(v) for v in asdict(reward_config).values()) or reward_config.approach_scale_m <= 0:
+            raise ValueError('finite reward weights and positive approach scale required')
+        if time_limit_s is not None and (not np.isfinite(time_limit_s) or time_limit_s <= 0):
+            raise ValueError('positive finite optional time limit required')
+        self.time_limit_s = time_limit_s
+        half = default_action_ranges() if action_half_range_rad is None else action_half_range_rad
+        self.control = ContactEnvironment(config,out,action_half_range_rad=half,**kwargs)
+        self.finished = True
+
+    def reset(self):
+        self.finished = True
+        try:
+            sample, info = self.control.reset()
+            scene = self.control.session.scene
+            self.measurement = TaskMeasurement(self.task,scene.human_bodies,scene.guitar_bodies)
+            measured = self.measurement.reset(sample)
+            self.stability = StabilityMonitor(scene.human_bodies,scene.guitar_bodies,self.safety_config)
+            safety = self.stability.reset(sample)
+            human_com = {row['name']:row['COM_body_m'] for row in scene.human_properties}
+            guitar_com = {row['name']:row['COM_body_m'] for row in scene.guitar_properties['applied']}
+            self.builder = ObservationBuilder(scene.names,scene.human_bodies,scene.guitar_bodies,
+                                              human_com,guitar_com,self.control.reference105,self.task)
+            self.previous_action = np.zeros(39)
+            self.total_reward = self.total_cost = 0.
+            self.control_steps = 0
+            self.contract = dict(schema='guitar_learning.training.v1',observation=copy.deepcopy(self.builder.spec),
+                action=dict(names=list(ACTIVE_NAMES),dimension=39,minimum=-1.,maximum=1.,
+                    offset_half_range_rad=self.control.half_range.tolist(),smoothing_alpha=self.control.alpha,
+                    target_contract=copy.deepcopy(self.control.contract.metadata),
+                    nonpolicy_scope='upper42 held; lower24 finite external support, not policy outputs'),
+                task=dict(provenance=copy.deepcopy(self.task.provenance),duration_s=self.task.duration_s,
+                          targets=[asdict(t) for t in self.task.targets]),
+                reward=dict(**asdict(self.reward_config),cost_rate='(guitar_m/.02)^2+(guitar_rad/.15)^2+mean((feet_m/.02)^2)+all_support_absent+mean(feet_absent)',
+                            cost_integration='240Hz seconds plus once-per-episode failure_cost'),
+                termination=dict(**asdict(self.safety_config),time_limit_s=self.time_limit_s,
+                    preparation_seconds=self.control.preparation_seconds,physics_hz=240,control_hz=60,
+                    evaluation='each240Hz substep; return at60Hz tick boundary'))
+            self.finished = False
+            self.last_sample, self.last_measured, self.last_safety = sample, measured, safety
+            info.update(reward_or_music_training='native measured score rewards and stability costs enabled',
+                        task_time_s=0.,training_contract=self.contract)
+            return self._observation(), info
+        except BaseException:
+            self.close()
+            raise
+
+    def _observation(self):
+        return self.builder.build(self.last_sample,self.last_measured,self.last_safety,
+                                  self.control.session.scene.target,self.previous_action)
+
+    def step(self, action):
+        if self.finished:
+            raise RuntimeError('reset required before stepping a finished/uninitialized episode')
+        action = np.asarray(action,dtype=float)
+        # Codec performs strict shape/range checks before any physical integration.
+        _, native_info = self.control.step(action)
+        cfg = self.reward_config
+        terms = dict(strict_match=0.,lenient_only_match=0.,wrong_crossing=0.,missed_strict=0.,
+                     held=0.,timely_release=0.,approach=0.,action_change=0.,terminal_failure=0.)
+        rows, failure_reasons, cost = [], [], 0.
+        for sample in native_info['physics_samples240']:
+            measured, safety = self.measurement.update(sample), self.stability.update(sample)
+            delta = measured['delta']
+            for key, source in (('strict_match','new_strict_matches'),('lenient_only_match','new_lenient_only_matches'),
+                                ('wrong_crossing','wrong_crossings'),('missed_strict','new_missed_strict'),
+                                ('timely_release','timely_releases')):
+                terms[key] += getattr(cfg,key)*delta[source]
+            terms['held'] += cfg.held_second*delta['held_delta_s']
+            now = measured['task_time_s']
+            approaching = [t for t in self.task.targets if t.press_s <= now <= t.onset_s
+                           and t.target_id not in self.measurement.ledger.matches[.05]]
+            if approaching:
+                credit = []
+                for target in approaching:
+                    geometry = measured['geometry'][target.target_id]
+                    distance = np.linalg.norm(geometry['delta'])
+                    credit.append(np.exp(-(distance/cfg.approach_scale_m)**2))
+                terms['approach'] += cfg.approach_second*float(np.mean(credit))/240.
+            cost += safety['cost']
+            failure_reasons.extend(x for x in safety['failure_reasons'] if x not in failure_reasons)
+            rows.append(dict(physics_step=sample['native']['physics_step'],music=measured,stability=safety))
+            self.last_sample,self.last_measured,self.last_safety = sample,measured,safety
+        terms['action_change'] = -cfg.action_change_second*float(np.mean((action-self.previous_action)**2))/60.
+        self.previous_action = action.copy()
+        self.control_steps += 1
+        now = self.last_measured['task_time_s']
+        terminated = bool(failure_reasons or self.last_measured['terminated'])
+        truncated = bool(not terminated and self.time_limit_s is not None and now >= self.time_limit_s)
+        reason = 'terminal_failure' if failure_reasons else 'timeline_complete' if terminated else 'time_limit' if truncated else None
+        if failure_reasons:
+            cost += self.safety_config.failure_cost
+            terms['terminal_failure'] = cfg.terminal_failure
+        reward = float(sum(terms.values()))
+        if not np.isfinite([reward,cost]).all():
+            self.finished = True
+            raise ValueError('nonfinite reward/cost invalidates collection')
+        self.total_reward += reward
+        self.total_cost += cost
+        self.finished = terminated or truncated
+        observation = self._observation()
+        info = dict(cost=float(cost),reward_terms=terms,termination_reason=reason,failure_reasons=failure_reasons,
+                    task_time_s=now,music=self.last_measured['summary'],physics_measurements=rows,
+                    native_control=native_info)
+        if self.finished:
+            info['episode'] = dict(valid=True,reason=reason,cost=self.total_cost,reward=self.total_reward,
+                                   steps=self.control_steps,task_time_s=now,music=self.last_measured['summary'])
+        return observation,reward,terminated,truncated,info
+
+    def close(self):
+        self.finished = True
+        self.control.close()

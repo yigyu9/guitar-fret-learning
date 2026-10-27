@@ -1,0 +1,22 @@
+"""Source-shape distances reconstructed from actual initial/final native poses."""
+import argparse
+from pathlib import Path
+import numpy as np
+from .common import A,HUMAN,read,save,pin,verify
+from .upright_source_v1 import metrics
+from stability_adapter_2.initial_pose_noise_v1 import pose
+from stability_adapter_2.om_axilla_source_geometry_v3 import CapsuleBodyDistance
+
+
+def main(runs,out):
+    out.mkdir(exist_ok=False);pins=pin(extra=[r/n for r in runs for n in ('initial_values.json','final_state.json','report.json')]);save(out/'inputs_before.json',pins);distance=CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']),HUMAN);rows=[]
+    for run in runs:
+        i=read(run/'initial_values.json');states=[i['native_initial_state'],read(run/'final_state.json')];m=[]
+        for state in states:
+            gp,gr=pose(state['guitar_body_states'][0]);ps={n:pose(b) for n,b in zip(i['human_body_names'],state['human_body_states'])};m.append(metrics(ps,distance,gp,gr))
+        ix=i['joint_names'].index('R_Hip_x');gp0,_=pose(states[0]['guitar_body_states'][0]);gp1,_=pose(states[1]['guitar_body_states'][0]);rows.append(dict(run=str(run),completed=read(run/'report.json')['completed'],initial_metrics=m[0],final_metrics=m[1],R_Hip_x_initial_native_rad=states[0]['human_dof_states'][ix]['pos'],R_Hip_x_final_native_rad=states[1]['human_dof_states'][ix]['pos'],guitar_root_delta_W_m=(gp1-gp0).tolist()))
+    save(out/'report.json',dict(rows=rows,inputs_unchanged=verify(pins),scope='Independent source analytic capsule/convex gaps at normalized actual native poses. Negative is source intersection indication, not cooked penetration depth. Native solver response is assessed separately. R_Hip_x suffix is a scalar native channel, not a world rotation axis.'));print([(Path(r['run']).name,r['final_metrics']['capsules']['Chest']['gap_m']) for r in rows],flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--run',type=Path,nargs='+',required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();main([r.resolve() for r in a.run],a.out.resolve())

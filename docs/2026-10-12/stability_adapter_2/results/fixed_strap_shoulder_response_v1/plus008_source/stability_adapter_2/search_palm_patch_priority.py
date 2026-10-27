@@ -1,0 +1,547 @@
+"""Prioritize palm placement anywhere within the requested side patch; preserve physical controls."""
+import copy
+import hashlib
+import json
+from pathlib import Path
+from types import SimpleNamespace
+import xml.etree.ElementTree as ET
+
+ROOT = Path(__file__).resolve().parents[1]
+BASE = ROOT / 'docs/2026-10-12/stability_adapter_2/results'
+PHASE = BASE / 'palm_patch_priority_initial_v1'
+TRIALS = ROOT / 'stability_adapter_2/trials/palm_patch_priority_initial_v1'
+REFERENCE = BASE / 'three_face_support_loss_v1/native/saved_finger_targets'
+
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def read(path):
+    return json.loads(Path(path).read_text())
+
+
+def save(path, value):
+    Path(path).write_text(json.dumps(value, indent=2, allow_nan=False) + '\n')
+
+
+def main():
+    PHASE.mkdir(exist_ok=True)
+    if (PHASE / 'proposal.json').exists() or (PHASE / 'attempt.json').exists():
+        raise FileExistsError('preserve consumed source search')
+    TRIALS.mkdir(exist_ok=False)
+    previous = read(BASE / 'three_face_wider_hand_initial_v1/proposal.json')
+    hashes = dict(previous['input_sha256'])
+    catalog = read(BASE / 'three_face_rear_facet_catalog_v1/catalog.json')
+    for path, expected in catalog['input_sha256'].items():
+        if path in hashes and hashes[path] != expected:
+            raise AssertionError('inconsistent inherited source inputs')
+        hashes[path] = expected
+    if not all(sha(p) == h for p, h in hashes.items()):
+        raise AssertionError('sealed source inputs changed')
+    for path in [Path(__file__).resolve(), BASE / 'three_face_wider_hand_initial_v1/proposal.json',
+                 BASE / 'three_face_wider_hand_initial_v1/search_execution.json',
+                 BASE / 'three_face_near_rear_anchor_v1/proposal.json',
+                 ROOT / 'stability_adapter_2/THREE_FACE_WIDER_HAND_INITIAL_PLAN.md',
+                 ROOT / 'stability_adapter_2/THREE_FACE_SUPPORT_PLANE_INITIAL_PLAN.md',
+                 ROOT / 'stability_adapter_2/PALM_PATCH_PRIORITY_INITIAL_PLAN.md',
+                 ROOT / 'stability_adapter_2/PALM_PATCH_PRIORITY_EXECUTION.md',
+                 ROOT / 'stability_adapter_2/source_separation_penalty.py',
+                 BASE / 'three_face_support_plane_initial_v1/proposal.json',
+                 PHASE / 'previous_search_source.py', PHASE / 'previous_source_preservation.json']:
+        hashes[str(path)] = sha(path)
+    save(PHASE / 'attempt.json', {'input_sha256': hashes, 'native_initializations': 0, 'physics_steps': 0})
+    from .environment import np
+    from .initial_overlap import build_probe
+    from .face_referenced_geometry import face_geometry
+    from .search_multi_face_grip import left_fk
+    from .build_fixed_lower_asset import pose, ASSET
+    from .palm_side_source_checks import intersection
+    from .warmstart_targets import compose
+    from .source_separation_penalty import separation_penalty
+    from scipy.spatial import ConvexHull
+    from scipy.optimize import least_squares, minimize, LinearConstraint
+    from scipy.spatial.transform import Rotation
+    import trimesh
+
+    initial = read(REFERENCE / 'initial_values.json')
+    old = read(BASE / 'three_face_initial_same_target_v1/proposal.json')
+    grip = read(BASE / 'three_face_finger_target_hold_v1/proposal.json')
+    names, bodies = initial['human_joint_names'], initial['human_body_names']
+    state0 = initial['native_initial_state']
+    q0 = np.array(initial['initial_PD_target_rad'], dtype=float)
+    target = np.array(initial['preserved_absolute_targets_rad'], dtype=np.float32)
+    native_lower, native_upper = np.array(initial['PD_properties']['lower']), np.array(initial['PD_properties']['upper'])
+    left = [names.index(n) for n in initial['left33_names']]
+    main_indices = [names.index(n) for n in initial['main_control_joint_names']]
+    arm = [i for i in left if not names[i].startswith('LH:')]
+    thumb = [i for i in left if names[i].startswith('LH:thumb')]
+    front_fingers = [i for i in left if names[i].startswith(('LH:index', 'LH:middle', 'LH:ring', 'LH:pinky'))]
+    indices = arm + thumb + front_fingers
+    def bounds(thumb_radius):
+        lower, upper = native_lower.copy(), native_upper.copy()
+        lower[arm] = np.maximum(lower[arm], np.maximum(q0[arm] - .15, np.array(old['C02_angles_rad'])[arm] - .3))
+        upper[arm] = np.minimum(upper[arm], np.minimum(q0[arm] + .15, np.array(old['C02_angles_rad'])[arm] + .3))
+        lower[thumb], upper[thumb] = np.maximum(lower[thumb], q0[thumb] - thumb_radius), np.minimum(upper[thumb], q0[thumb] + thumb_radius)
+        lower[front_fingers] = np.maximum(lower[front_fingers], q0[front_fingers] - .3)
+        upper[front_fingers] = np.minimum(upper[front_fingers], q0[front_fingers] + .3)
+        aug = {row['dof']: row for row in read(ROOT / 'docs/2026-08-19/fret_joint_limits/joint_limit_ranges.json')['rows']}
+        for i in thumb + front_fingers:
+            lower[i] = max(lower[i], aug[names[i]]['lower_rad'])
+            upper[i] = min(upper[i], aug[names[i]]['upper_rad'])
+        lower[indices] = np.maximum(lower[indices], target[indices].astype(float) - .3)
+        upper[indices] = np.minimum(upper[indices], target[indices].astype(float) + .3)
+        # Restrict the optimizer to representable angles inside the requested bounds.
+        lo32, hi32 = lower[indices].astype(np.float32), upper[indices].astype(np.float32)
+        lo32 = np.where(lo32.astype(float) < lower[indices], np.nextafter(lo32, np.float32(np.inf)), lo32)
+        hi32 = np.where(hi32.astype(float) > upper[indices], np.nextafter(hi32, np.float32(-np.inf)), hi32)
+        lower[indices], upper[indices] = lo32, hi32
+        if len(indices) != 33 or np.any(lower[indices] >= upper[indices]) or np.any(q0[indices] < lower[indices]) or np.any(q0[indices] > upper[indices]):
+            raise AssertionError('33-coordinate search bounds and starting point')
+        return lower, upper
+    lower, upper = bounds(.3)
+    fk, parents = left_fk(names, bodies, state0, q0)
+    gp, gq = pose(state0['guitar_body_states'][0])
+    gr = Rotation.from_quat(gq)
+    gn = [row['body'] for row in read(REFERENCE / 'shape_properties.json')['actors']['guitar']['body_ranges']]
+    config = read(ROOT / 'stability_adapter_2/config.json')
+    config['humanoid_asset'] = str(ASSET)
+    scene = SimpleNamespace(config=config, human=0, guitar=1, env=None,
+        gym=SimpleNamespace(get_actor_rigid_body_names=lambda env, actor: bodies if actor == 0 else gn),
+        bodies=lambda actor: state0['human_body_states'] if actor == 0 else state0['guitar_body_states'])
+    model, data, shapes = build_probe(scene)
+    world_meshes = {s['geom_id']: face_geometry(model, data, s) for s in shapes}
+    local_meshes = {}
+    for shape in shapes:
+        if shape['actor'] == 'human' and shape['body'] in fk(q0):
+            p, r = fk(q0)[shape['body']]
+            mesh = world_meshes[shape['geom_id']].copy()
+            mesh.vertices = r.inv().apply(mesh.vertices - p)
+            local_meshes[shape['geom_id']] = mesh
+    contacts = [json.loads(line) for line in (REFERENCE / 'contacts.jsonl').read_text().splitlines()]
+    anchors = {}
+    for body, end in [('LH:thumb3', 24), ('LH:palm', 144)]:
+        candidates = [(row['physics_step'], k, c) for row in contacts if row['physics_step'] <= end
+                      for k, c in enumerate(row['contacts']) if 'human/' + body in (c['body0_name'], c['body1_name'])
+                      and any(c[n].startswith('guitar/') for n in ('body0_name', 'body1_name')) and c['lambda'] > 0]
+        if not candidates:
+            raise AssertionError('no positive recorded feature for ' + body)
+        native_points = [np.array([c['localPos' + str(0 if c['body0_name'] == 'human/' + body else 1)][k]
+                                  for k in 'xyz']) for _, _, c in candidates]
+        chosen = int(np.argmin(np.linalg.norm(native_points - np.median(native_points, axis=0), axis=1)))
+        step, row_index, contact = candidates[chosen]
+        geom = next(s['geom_id'] for s in shapes if s['actor'] == 'human' and s['body'] == body)
+        mesh = local_meshes[geom]
+        near = trimesh.triangles.closest_point(mesh.triangles, np.tile(native_points[chosen], (len(mesh.faces), 1)))
+        triangle = int(np.argmin(np.linalg.norm(near - native_points[chosen], axis=1)))
+        anchors[body] = {'source_point_local_m': near[triangle].tolist(),
+            'source_triangle_local_m': mesh.triangles[triangle].tolist(),
+            'source_normal_local': mesh.face_normals[triangle].tolist(), 'source_triangle_index': triangle,
+            'native_feature_local_m': native_points[chosen].tolist(), 'physics_step': step, 'contact_row_index': row_index,
+            'native_to_source_distance_mm': float(np.linalg.norm(near[triangle] - native_points[chosen]) * 1000),
+            'scope': 'observed feature nearest active source hull triangle; not anatomical pad/cooked surface certification'}
+    observed_thumb = copy.deepcopy(anchors['LH:thumb3'])
+    geom = next(s['geom_id'] for s in shapes if s['actor'] == 'human' and s['body'] == 'LH:thumb3')
+    thumb_mesh = local_meshes[geom]
+    selected_anchors = {}
+    for selected in catalog['selected']:
+        triangle = selected['triangle_index']
+        center = thumb_mesh.triangles[triangle].mean(axis=0)
+        if not np.allclose(center, selected['centroid_local_m'], atol=1e-12, rtol=0) or not np.allclose(
+                thumb_mesh.face_normals[triangle], selected['normal_local'], atol=1e-12, rtol=0):
+            raise AssertionError('catalog anchor does not match active source mesh')
+        selected_anchors[triangle] = dict(observed_thumb,
+            source_point_local_m=center.tolist(), source_triangle_local_m=thumb_mesh.triangles[triangle].tolist(),
+            source_normal_local=thumb_mesh.face_normals[triangle].tolist(), source_triangle_index=triangle,
+            source_selection='qualified near rear patch catalog centroid; not anatomical/cooked certification',
+            scope='selected source centroid; native feature and its nearest source point retained separately',
+            native_to_source_distance_mm=float(np.linalg.norm(center - observed_thumb['native_feature_local_m']) * 1000),
+            observed_feature_source_anchor=observed_thumb)
+    anchors['LH:thumb3'] = copy.deepcopy(selected_anchors[1462])
+    save(PHASE / 'facet_selection.json', {'selected': catalog['selected'], 'anchors': selected_anchors,
+        'scope': 'source catalog centroids; not a native contact point or anatomical pad'})
+    proxy = np.array(read(BASE / 'palm_neck_side_v1/initial_audit_v2/audit.json')['palmar_normal_proxy_local'])
+    def points(q):
+        poses = fk(q)
+        return {b: gr.inv().apply(poses[b][0] + poses[b][1].apply(a['source_point_local_m']) - gp) for b, a in anchors.items()}
+    start_points = points(q0)
+    jac = np.empty((6, len(indices)))
+    for col, i in enumerate(indices):
+        plus, minus = q0.copy(), q0.copy()
+        plus[i] += .0001
+        minus[i] -= .0001
+        pp, pm = points(plus), points(minus)
+        jac[:, col] = np.concatenate([pp[b] - pm[b] for b in anchors]) / .0002
+    save(PHASE / 'sensitivity.json', {'anchors': anchors, 'body_order': list(anchors),
+        'coordinate_names': [names[i] for i in indices], 'derivative_G_mm_per_rad': (jac * 1000).tolist(),
+        'central_difference_rad': .0001, 'difference_is_source_FK_not_submitted_native_angles': True,
+        'initial_anchor_G_m': {k: v.tolist() for k, v in start_points.items()},
+        'lower_rad': lower[indices].tolist(), 'upper_rad': upper[indices].tolist()})
+    def graph_distance(a, b):
+        chain, current = [], a
+        while current in parents:
+            chain.append(current)
+            current = parents[current]
+        chain.append(current)
+        steps, current = 0, b
+        while current not in chain and current in parents:
+            steps += 1
+            current = parents[current]
+        return steps + chain.index(current) if current in chain else 99
+    def meshes_at(q):
+        poses = fk(q)
+        meshes = dict(world_meshes)
+        for shape in shapes:
+            if shape['geom_id'] not in local_meshes:
+                continue
+            mesh = local_meshes[shape['geom_id']].copy()
+            p, r = poses[shape['body']]
+            mesh.vertices = p + r.apply(mesh.vertices)
+            meshes[shape['geom_id']] = mesh
+        return meshes, poses
+    necks = [world_meshes[s['geom_id']].copy() for s in shapes if s['actor'] == 'guitar' and s['body'] == 'guitar']
+    for mesh in necks:
+        mesh.vertices = gr.inv().apply(mesh.vertices - gp)
+    neck_planes = [ConvexHull(mesh.vertices).equations for mesh in necks]
+    local_planes = {b: ConvexHull(local_meshes[next(s['geom_id'] for s in shapes if s['actor'] == 'human' and s['body'] == b)].vertices).equations for b in anchors}
+    soft_pairs = sorted({tuple(p) for row in previous['rejected'] for p in row['soft_source_pairs']} |
+                        {(body, guitar) for body in ('LH:index3', 'LH:middle3', 'LH:ring3', 'LH:pinky3')
+                         for guitar in ('guitar', 'G:fret3', 'G:fret4')})
+    guitar_source = {}
+    for shape in shapes:
+        if shape['actor'] == 'guitar' and any(g == shape['body'] for _, g in soft_pairs):
+            mesh = world_meshes[shape['geom_id']].copy()
+            mesh.vertices = gr.inv().apply(mesh.vertices - gp)
+            guitar_source[shape['geom_id']] = (shape['body'], mesh, ConvexHull(mesh.vertices).equations)
+    for body in sorted({h for h, _ in soft_pairs}):
+        geom = next(s['geom_id'] for s in shapes if s['actor'] == 'human' and s['body'] == body)
+        local_planes[body] = ConvexHull(local_meshes[geom].vertices).equations
+    def footprint(point, triangle, polygon, outward):
+        normal = np.cross(polygon[1] - polygon[0], polygon[2] - polygon[0])
+        normal /= np.linalg.norm(normal)
+        if normal @ outward < 0:
+            normal = -normal
+        def projection(p):
+            signed = float((p - polygon[0]) @ normal)
+            proj = p - signed * normal
+            edges = np.roll(polygon, -1, axis=0) - polygon
+            signs = [float(np.cross(edge, proj - origin) @ normal) for origin, edge in zip(polygon, edges)]
+            inside = all(s >= -1e-12 for s in signs) or all(s <= 1e-12 for s in signs)
+            fractions = np.clip(np.sum((proj - polygon) * edges, axis=1) / np.sum(edges * edges, axis=1), 0, 1)
+            boundary = float(np.linalg.norm(proj - polygon - fractions[:, None] * edges, axis=1).min())
+            return {'inside': inside, 'signed_plane_distance_mm': signed * 1000,
+                    'boundary_margin_mm': boundary * 1000 if inside else -boundary * 1000}
+        return {'point': projection(point), 'triangle_vertices': [projection(p) for p in triangle],
+                'triangle_G_m': triangle.tolist(), 'scope': 'point margin gated; neighboring facet extent observed, overhang permitted'}
+    def certified_distance(mesh, polygon):
+        # Centered millimetres resolve the sub-micrometre gate without changing source meshes.
+        center = (mesh.vertices.mean(axis=0) + polygon.mean(axis=0)) / 2
+        vertices = (mesh.vertices - center) * 1000
+        patch = (polygon - center) * 1000
+        planes = ConvexHull(vertices).equations
+        _, unique = np.unique(np.round(planes, 10), axis=0, return_index=True)
+        planes = planes[unique]
+        matrix = np.column_stack((planes[:, :3], np.zeros((len(planes), 4))))
+        sum_row = np.r_[np.zeros(3), np.ones(4)][None, :]
+        def objective(x):
+            delta = x[:3] - x[3:] @ patch
+            return float(delta @ delta), np.r_[2 * delta, -2 * patch @ delta]
+        result = minimize(objective, np.r_[vertices.mean(axis=0), np.full(4, .25)], jac=True,
+            method='SLSQP', bounds=[(None, None)] * 3 + [(0, 1)] * 4,
+            constraints=[LinearConstraint(matrix, -np.inf, -planes[:, 3]), LinearConstraint(sum_row, 1, 1)],
+            options={'ftol': 1e-13, 'maxiter': 1000})
+        x = result.x
+        if not np.isfinite(x).all() or np.any(x[3:] < 0) or x[3:].sum() <= 0:
+            raise RuntimeError('invalid source patch witness')
+        raw_violation = float(np.maximum(matrix @ x + planes[:, 3], 0).max())
+        raw_weight_sum_error = float(abs(x[3:].sum() - 1))
+        # A primal/dual interval needs feasible witnesses, not a solver success flag.
+        # Move any boundary violation toward an interior convex vertex mean.
+        interior = vertices.mean(axis=0)
+        initial_witness = x[:3].copy()
+        at_point = planes[:, :3] @ x[:3] + planes[:, 3]
+        at_interior = planes[:, :3] @ interior + planes[:, 3]
+        active = at_point > -1e-8
+        if active.any():
+            fraction = float(np.min((-1e-8 - at_interior[active]) / (at_point[active] - at_interior[active])))
+            x[:3] = interior + min(1., fraction) * (x[:3] - interior)
+        x[3:] /= x[3:].sum()
+        violation = float(np.maximum(matrix @ x + planes[:, 3], 0).max())
+        weight_sum_error = float(abs(x[3:].sum() - 1))
+        if violation > 1e-10 or weight_sum_error > 1e-10:
+            raise RuntimeError('source distance witness feasibility failed')
+        delta = x[:3] - x[3:] @ patch
+        upper_mm = float(np.linalg.norm(delta))
+        direction = delta / upper_mm if upper_mm else np.zeros(3)
+        lower_mm = max(0., float((vertices @ direction).min() - (patch @ direction).max()))
+        return {'distance_m': upper_mm / 1000, 'distance_lower_bound_m': lower_mm / 1000,
+            'primal_dual_gap_m': (upper_mm - lower_mm) / 1000, 'feasibility_error_mm': violation,
+            'optimizer_success': bool(result.success), 'optimizer_message': result.message,
+            'unadjusted_plane_feasibility_error_mm': raw_violation,
+            'unadjusted_weight_sum_error': raw_weight_sum_error, 'weight_sum_error': weight_sum_error,
+            'feasible_witness_adjustment_mm': float(np.linalg.norm(x[:3] - initial_witness)),
+            'palm_witness_world_m': (x[:3] / 1000 + center).tolist(),
+            'target_witness_world_m': ((x[3:] @ patch) / 1000 + center).tolist(),
+            'scope': 'source convex distance witness upper bound and support-plane lower bound; not cooked geometry'}
+    front_points = {b: gr.inv().apply(fk(q0)[b][0] + fk(q0)[b][1].apply(grip['facets'][b]['point_local_m']) - gp)
+                    for b in ('LH:index3', 'LH:middle3', 'LH:ring3', 'LH:pinky3')}
+    selected = next(r for r in catalog['selected'] if r['triangle_index'] == 1462)
+    clearance = .0003
+    thumb_radius = .3
+    lower, upper = bounds(thumb_radius)
+    thumb_target = np.array(selected['diagnostic_goal_G_m'])
+    thumb_target[2] = -.008 - clearance
+    thumb_target[:2] += .0005 * np.array([1., -.01631590413943356]) / np.linalg.norm([1., -.01631590413943356])
+    def palm_projection(point):
+        goal = point.copy()
+        polygon = np.array(grip['regions_G_m']['palm'])
+        goal[1] = np.clip(goal[1], polygon[:,1].min()+.003, polygon[:,1].max()-.003)
+        goal[2] = np.clip(goal[2], polygon[:,2].min()+.003, polygon[:,2].max()-.003)
+        goal[0] = .027908-.01631590413943356*(goal[1]+.241803)+clearance
+        return goal
+    goals = {'LH:thumb3': thumb_target, 'LH:palm': palm_projection(start_points['LH:palm'])}
+    front_polygon = np.array(grip['regions_G_m']['front'])
+    def front_projection(point):
+        goal = point.copy()
+        goal[1] = np.clip(goal[1], front_polygon[:, 1].min() + .005, front_polygon[:, 1].max() - .005)
+        w = .027908 - .01631590413943356 * (goal[1] + .241803)
+        goal[0] = np.clip(goal[0], -w + .003, w - .003)
+        goal[2] = grip['front_outer_source_z_G_m'] + clearance
+        return goal
+    front_goals = {body: front_projection(front_points[body]) for body in ('LH:index3', 'LH:middle3', 'LH:ring3', 'LH:pinky3')}
+    def six_points(q):
+        result = points(q)
+        poses = fk(q)
+        for body in front_goals:
+            p, r = poses[body]
+            result[body] = gr.inv().apply(p + r.apply(grip['facets'][body]['point_local_m']) - gp)
+        return result
+    support = read(BASE / 'three_face_support_plane_initial_v1/proposal.json')
+    labels = ['wide_near17', 'support_near17']
+    seeds = [(label, np.array(next(r for r in data['rejected'] if r['label']=='old_near17')['expected_initial_angles_rad'])) for label,data in zip(labels,(previous,support))]
+    self_pairs = sorted({tuple(sorted((p['a'], p['b']))) for row in previous['rejected']
+                         for p in row['nonadjacent_left_hand_intersections']})
+    for body in sorted({b for pair in self_pairs for b in pair}):
+        geom = next(s['geom_id'] for s in shapes if s['actor'] == 'human' and s['body'] == body)
+        local_planes[body] = ConvexHull(local_meshes[geom].vertices).equations
+    for label, q in seeds:
+        if np.any(q[indices] < lower[indices]) or np.any(q[indices] > upper[indices]):
+            raise AssertionError('source seed outside new bounds')
+    save(PHASE / 'initial_guesses.json', {'seeds': [{'label': label, 'initial81_angles_rad': q.tolist()} for label, q in seeds],
+        'source_seed_count': 2, 'source_seed_selection': labels, 'observed_self_pairs': self_pairs,
+        'body_order': list(dict(goals, **front_goals)), 'initial_goal_G_m': {b: p.tolist() for b,p in dict(goals, **front_goals).items()},
+        'coordinate_names': [names[i] for i in indices], 'lower_rad': lower[indices].tolist(), 'upper_rad': upper[indices].tolist(),
+        'scope': 'source-only starting guesses; overlaps in guesses not submitted to native; final33angles must pass full hard gates'})
+    rows, rejected = [], []
+    for label, seed in seeds:
+        def residual(values):
+            q = q0.copy()
+            q[indices] = values
+            ps, poses = points(q), fk(q)
+            result = list(np.concatenate([(ps[b] - (palm_projection(ps[b]) if b=='LH:palm' else goals[b])) * (8000 if b=='LH:palm' else 1000) for b in anchors]))
+            for body in front_points:
+                p, r = poses[body]
+                point = gr.inv().apply(p + r.apply(grip['facets'][body]['point_local_m']) - gp)
+                result.extend((point - front_projection(point)) * 250)
+                direction = (gr.inv() * r).apply(grip['facets'][body]['normal_local'])
+                result.extend(2 * (direction - np.array([0., 0., -1.])))
+            for body in anchors:
+                p, r = poses[body]
+                geom = next(s['geom_id'] for s in shapes if s['actor'] == 'human' and s['body'] == body)
+                vertices = gr.inv().apply(p + r.apply(local_meshes[geom].vertices) - gp)
+                rotation = gr.inv() * r
+                normals = rotation.apply(local_planes[body][:, :3])
+                origin = gr.inv().apply(p - gp)
+                planes = np.column_stack((normals, local_planes[body][:, 3] - normals @ origin))
+                result.extend(50000 * separation_penalty(mesh.vertices, plane, vertices, planes, clearance) for mesh, plane in zip(necks, neck_planes))
+                desired = np.array([0., 0., 1.]) if body == 'LH:thumb3' else -np.array([1., .01631590413943356, 0.]) / np.linalg.norm([1., .01631590413943356, 0.])
+                direction = rotation.apply(anchors[body]['source_normal_local'])
+                result.extend(2 * (direction - desired))
+            for body in sorted({h for h, _ in soft_pairs}):
+                p, r = poses[body]
+                geom = next(s['geom_id'] for s in shapes if s['actor'] == 'human' and s['body'] == body)
+                vertices = gr.inv().apply(p + r.apply(local_meshes[geom].vertices) - gp)
+                rotation = gr.inv() * r
+                normals = rotation.apply(local_planes[body][:, :3])
+                origin = gr.inv().apply(p - gp)
+                planes = np.column_stack((normals, local_planes[body][:, 3] - normals @ origin))
+                for guitar_body, mesh, guitar_planes in guitar_source.values():
+                    if (body, guitar_body) in soft_pairs:
+                        result.append(50000 * separation_penalty(mesh.vertices, guitar_planes, vertices, planes, .0001))
+            # Convex tip hulls approach the requested face rather than escaping laterally.
+            current = {}
+            for body in sorted(set(front_goals) | set(anchors) | {b for pair in self_pairs for b in pair}):
+                p, r = poses[body]
+                geom = next(s['geom_id'] for s in shapes if s['actor'] == 'human' and s['body'] == body)
+                vertices = gr.inv().apply(p + r.apply(local_meshes[geom].vertices) - gp)
+                normals = (gr.inv() * r).apply(local_planes[body][:, :3])
+                origin = gr.inv().apply(p - gp)
+                planes = np.column_stack((normals, local_planes[body][:, 3] - normals @ origin))
+                current[body] = (vertices, planes)
+                if body == 'LH:thumb3':
+                    deficit = vertices[:, 2].max() - (-.008 - clearance)
+                elif body == 'LH:palm':
+                    a = .01631590413943356
+                    level = (.027908 - a * .241803) / np.linalg.norm([1., a])
+                    deficit = level + clearance - (vertices @ (np.array([1., a, 0.]) / np.linalg.norm([1., a]))).min()
+                elif body in front_goals:
+                    deficit = grip['front_outer_source_z_G_m'] + clearance - vertices[:, 2].min()
+                else:
+                    continue
+                result.append(50000 * max(0., deficit))
+            for a, b in self_pairs:
+                va, pa = current[a]; vb, pb = current[b]
+                result.append(50000 * separation_penalty(va, pa, vb, pb, .0001))
+            up = float(poses['LH:palm'][1].apply(proxy)[2])
+            result.append(100 * max(0., -up))
+            result.extend(2 * (values - q0[indices]))
+            return np.array(result)
+        opt = least_squares(residual, seed[indices], bounds=(lower[indices], upper[indices]),
+                            max_nfev=80, ftol=1e-9, xtol=1e-9, gtol=1e-8)
+        q = q0.astype(np.float32)
+        q[indices] = opt.x.astype(np.float32)
+        ps = points(q)
+        goals['LH:palm'] = palm_projection(ps['LH:palm'])
+        meshes, poses = meshes_at(q)
+        overlaps, cross_hands, self_cross = [], [], []
+        humans = [s for s in shapes if s['actor'] == 'human']
+        guitars = [s for s in shapes if s['actor'] == 'guitar']
+        for h in humans:
+            for g in guitars:
+                radius = intersection(meshes[h['geom_id']], meshes[g['geom_id']])
+                if radius > 1e-7:
+                    overlaps.append({'human': h['body'], 'guitar': g['body'], 'common_radius_m': radius})
+        for h in [s for s in humans if s['body'].startswith('LH:') or s['body'] == 'L_Wrist']:
+            for g in [s for s in humans if s['body'].startswith('RH:') or s['body'] == 'R_Wrist']:
+                radius = intersection(meshes[h['geom_id']], meshes[g['geom_id']])
+                if radius > 1e-7:
+                    cross_hands.append({'left': h['body'], 'right': g['body'], 'common_radius_m': radius})
+        hand = [s for s in humans if s['body'].startswith('LH:') or s['body'] in ('L_Wrist', 'L_Elbow')]
+        for k, h in enumerate(hand):
+            for g in hand[k + 1:]:
+                if graph_distance(h['body'], g['body']) <= 2:
+                    continue
+                radius = intersection(meshes[h['geom_id']], meshes[g['geom_id']])
+                if radius > 1e-7:
+                    self_cross.append({'a': h['body'], 'b': g['body'], 'common_radius_m': radius})
+        offsets = {names[i]: float(target[i]) - float(q[i]) for i in left}
+        reasons = []
+        if np.any(q < native_lower) or np.any(q > native_upper):
+            reasons.append('float32_native_initial_bounds')
+        if np.any(q[indices] < lower[indices]) or np.any(q[indices] > upper[indices]):
+            reasons.append('float32_search_Aug19_C02_offset_bounds')
+        if any(abs(v) > .3 for v in offsets.values()):
+            reasons.append('absolute_target_relative_offset_bounds')
+        if overlaps:
+            reasons.append('source_human_guitar_intersection')
+        if cross_hands:
+            reasons.append('source_cross_hands_intersection')
+        if self_cross:
+            reasons.append('source_nonadjacent_left_hand_intersection')
+        up = float(poses['LH:palm'][1].apply(proxy)[2])
+        if up <= 0:
+            reasons.append('palm_up_proxy')
+        anchor_error = {b: float(np.linalg.norm(ps[b] - goals[b]) * 1000) for b in anchors}
+        if max(anchor_error.values()) > 3:
+            reasons.append('source_anchor_goal_distance_over3mm')
+        footprint_metrics, hull_patch_gaps = {}, {}
+        for body in anchors:
+            face = 'thumb' if body == 'LH:thumb3' else 'palm'
+            polygon = np.array(grip['regions_G_m'][face])
+            p, r = poses[body]
+            triangle = gr.inv().apply(p + r.apply(anchors[body]['source_triangle_local_m']) - gp)
+            footprint_metrics[body] = footprint(ps[body], triangle, polygon,
+                                                [0, 0, -1] if face == 'thumb' else [1, 0, 0])
+            geom = next(s['geom_id'] for s in shapes if s['actor'] == 'human' and s['body'] == body)
+            hull_patch_gaps[body] = certified_distance(meshes[geom], gr.apply(polygon) + gp)
+            m = footprint_metrics[body]['point']
+            if not m['inside'] or m['boundary_margin_mm'] < (2 if face == 'thumb' else 3):
+                reasons.append(body + '_point_patch_margin')
+            if not (hull_patch_gaps[body]['distance_lower_bound_m'] >= .0003 - 1e-7
+                    and hull_patch_gaps[body]['distance_m'] <= .001 + 1e-7):
+                reasons.append(body + '_hull_finite_patch_gap')
+        thumb_gap = hull_patch_gaps['LH:thumb3']
+        witness_G = gr.inv().apply(np.array(thumb_gap['palm_witness_world_m']) - gp)
+        target_G = gr.inv().apply(np.array(thumb_gap['target_witness_world_m']) - gp)
+        toward = target_G - witness_G
+        rear_direction_dot = float(toward[2] / np.linalg.norm(toward)) if np.linalg.norm(toward) else 0.
+        rear_signed_mm = float((-.008 - witness_G[2]) * 1000)
+        if rear_direction_dot <= .75 or rear_signed_mm < 0:
+            reasons.append('thumb_hull_witness_not_rear_support')
+        trial = copy.deepcopy(initial['input_trial'])
+        trial['initial_settings']['joint_angles_rad'].update({names[i]: float(q[i]) for i in left})
+        trial['main_target_offsets_rad'] = offsets
+        state = copy.deepcopy(state0)
+        for body, (p, r) in poses.items():
+            state['human_body_states'][bodies.index(body)]['pose'] = {'p': dict(zip('xyz', p)), 'r': dict(zip('xyzw', r.as_quat()))}
+        for i, value in enumerate(q):
+            state['human_dof_states'][i]['pos'] = float(value)
+        if not reasons and any(np.max(np.abs(q.astype(float) - np.array(r['expected_initial_angles_rad']))) < 1e-4 for r in rows):
+            reasons.append('duplicate_accepted_initial_q_within_1e-4_rad')
+        row = {'label': label, 'alpha': .5, 'target_clearance_m': clearance,
+            'accepted_for_fresh_native': not reasons, 'reasons': reasons,
+            'absolute_strap_rest_length_m': initial['absolute_strap_rest_length_m'],
+            'anchor_triangle_index': selected['triangle_index'],
+            'source_anchors': copy.deepcopy(anchors), 'soft_source_pairs': soft_pairs,
+            'source_separation_residual_scale_per_m': 50000,
+            'source_support_plane_scale_per_m': 50000, 'soft_observed_self_pairs': self_pairs,
+            'point_residual_weights': {'thumb':1,'palm':8,'front':.25},
+            'palm_goal_policy':'current source point projected inside finite side patch with3mm boundary margin',
+            'source_facets': dict(grip['facets'], **{b: {'point_local_m': a['source_point_local_m'],
+                'normal_local': a['source_normal_local']} for b, a in anchors.items()}),
+            'thumb_radius_rad': thumb_radius, 'front_finger_radius_rad': .3,
+            'front_goal_G_m': {b:front_projection(p).tolist() for b,p in six_points(q).items() if b in front_goals},
+            'front_point_G_m': {b:p.tolist() for b,p in six_points(q).items() if b in front_goals},
+            'front_goal_error_mm': {b: float(np.linalg.norm(six_points(q)[b] - front_projection(six_points(q)[b])) * 1000)
+                                    for b in front_goals},
+            'seed_initial81_angles_rad': seed.tolist(), 'search_lower_rad': lower[indices].tolist(),
+            'search_upper_rad': upper[indices].tolist(),
+            'thumb_witness_toward_patch_GZ_dot': rear_direction_dot, 'thumb_witness_rear_signed_mm': rear_signed_mm,
+            'expected_initial_angles_rad': q.astype(float).tolist(), 'expected_absolute_targets_rad': target.astype(float).tolist(),
+            'source_state': state, 'anchor_goal_G_m': {b: p.tolist() for b, p in goals.items()},
+            'anchor_G_m': {b: p.tolist() for b, p in ps.items()}, 'anchor_goal_error_mm': anchor_error,
+            'palm_up_proxy_z': up, 'source_intersections': overlaps, 'cross_hand_intersections': cross_hands,
+            'nonadjacent_left_hand_intersections': self_cross, 'optimizer_success': bool(opt.success),
+            'source_footprint': footprint_metrics, 'source_hull_to_finite_patch': hull_patch_gaps,
+            'optimizer_nfev': opt.nfev, 'actual_initial_coordinate_delta_rad': (q - q0).tolist()}
+        if not reasons:
+            composed = compose(q, main_indices, [offsets.get(names[i], 0.) for i in main_indices], native_lower, native_upper)
+            if not np.array_equal(composed, target):
+                raise AssertionError('absolute81 target float32 exactness')
+            path = TRIALS / (label + '.json')
+            save(path, trial)
+            row.update(trial_path=str(path), trial_sha256=sha(path),
+                       native_proposal_path=str(PHASE / (label + '_proposal.json')))
+            rows.append(row)
+        else:
+            rejected.append(row)
+        save(PHASE / 'partial_selection.json', {'rows': rows, 'rejected': rejected})
+        print(json.dumps({'label': label, 'reasons': reasons, 'anchor_error_mm': anchor_error,
+                          'source_overlaps': len(overlaps), 'self_cross': len(self_cross)}), flush=True)
+        if len(rows) >= 2:
+            break
+    checks = {'source_search_bounds_native_Aug19_C02_and_offsets': True, 'source_queries_only': True,
+              'accepted_candidates_no_source_intersections_and_same_targets': all(not r['reasons'] for r in rows),
+              'sealed_inputs_unchanged': all(sha(p) == h for p, h in hashes.items())}
+    if not all(checks.values()):
+        raise AssertionError(checks)
+    proposal = {'checks': checks, 'input_sha256': hashes, 'rows': rows, 'rejected': rejected,
+        'facets': dict(grip['facets'], **{b: {'point_local_m': a['source_point_local_m'],
+            'normal_local': a['source_normal_local']} for b, a in anchors.items()}),
+        'regions_G_m': grip['regions_G_m'],
+        'front_outer_source_z_G_m': grip['front_outer_source_z_G_m'], 'left33_names': initial['left33_names'],
+        'old_initial_angles_rad': q0.tolist(), 'saved_absolute_targets_rad': target.astype(float).tolist(),
+        'anchors': anchors, 'native_initializations': 0, 'physics_steps': 0,
+        'requested_source_seed_count': 2, 'processed_source_candidates': len(rows) + len(rejected),
+        'scope': '33 initial coordinates; palm finite-patch sliding projection priority weight8; front point .25; dense-equivalent separation shortcut; whole-tip rear/front/palm-side source plane deficits and observed self-pair separation soft; hard gates unchanged; other48/old81T/gain/LA held; final66 retained; not physical support certification'}
+    save(PHASE / 'proposal.json', proposal)
+    for row in rows:
+        context = copy.deepcopy(proposal)
+        context['rows'], context['rejected'] = [row], []
+        context['facets'], context['anchors'] = row['source_facets'], row['source_anchors']
+        save(row['native_proposal_path'], context)
+
+
+
+if __name__ == '__main__':
+    main()

@@ -1,10 +1,11 @@
 {
-  "schema": "tab2body.strike_training.v2",
+  "schema": "tab2body.strike_training.v3",
   "metadata": {
     "fps": 60,
-    "profile": "pick_gesture_compiler_v2",
+    "profile": "pick_gesture_compiler_v3",
     "time_authority": "events[].time copied from fingering.notes[].t_on",
     "source": "/home/ajou/yigyu/3/data/song_bundles/00_SS1-68-E_comp/mapping/fingering.json",
+    "source_sha256": "6cf51e24abeda603d5a451059297a042c49fb21bcd25e12f0d21af1381914b9d",
     "source_string_convention": "fingering notes 0=low-E, 5=high-e",
     "string_convention": "Isaac 0=high-e, 5=low-E"
   },
@@ -890,10 +891,52 @@
       "string": 0
     }
   ],
+  "reviewed_overrides": [
+    {
+      "override_id": "reconcile-source-chord-35.28s",
+      "action": "merge",
+      "source_event_ids": [
+        147,
+        148,
+        149
+      ],
+      "resolved_times_s": [
+        35.277968,
+        35.280145,
+        35.283048
+      ],
+      "reason": "The source annotation and symbolic note mapping describe one chord, while the derived fingering spreads the same three strings across an infeasible traversal boundary.",
+      "evidence": {
+        "source_annotation_onsets_s": [
+          35.277968,
+          35.280145,
+          35.283048
+        ],
+        "source_annotation_span_ms": 5.08,
+        "derived_fingering_onsets_s": [
+          35.2595,
+          35.2943,
+          35.3408
+        ],
+        "derived_fingering_span_ms": 81.3,
+        "symbolic_mapping_chord_time_s": 35.294118,
+        "unsafe_plan_edge": {
+          "from_event_index": 85,
+          "to_event_index": 86,
+          "edge_gap_ms": 46.5,
+          "required_gap_ms": 50.0,
+          "crossed_strings": [
+            0
+          ]
+        },
+        "manual_audio_review": "not_performed_user_delegated_approval_from_source_and_symbolic_evidence"
+      }
+    }
+  ],
   "validation": {
     "contract_valid": true,
-    "schema": "tab2body.strike_training.v2",
-    "profile": "pick_gesture_compiler_v2",
+    "schema": "tab2body.strike_training.v3",
+    "profile": "pick_gesture_compiler_v3",
     "fps": 60,
     "time_authority": "events[].time",
     "string_convention": "Isaac 0=high-e, 5=low-E",
@@ -912,6 +955,10 @@
     "minimum_event_gap_s": 0.0,
     "minimum_event_gap_frames": 0,
     "max_time_frame_error_frames": 0.4939999999999145,
-    "max_time_frame_error_seconds": 0.008233333333331908
+    "max_time_frame_error_seconds": 0.008233333333331908,
+    "source_time_count": 0,
+    "source_ref_count": 0,
+    "maximum_time_uncertainty_s": 0.0,
+    "reviewed_override_count": 1
   }
 }

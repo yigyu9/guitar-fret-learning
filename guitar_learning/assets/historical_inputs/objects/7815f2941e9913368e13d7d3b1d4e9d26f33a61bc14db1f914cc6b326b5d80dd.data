@@ -1,0 +1,47 @@
+"""Compare actual native frames and every measured layout/contact sample."""
+import argparse,csv
+from pathlib import Path
+import numpy as np
+from PIL import Image,ImageDraw,ImageFont
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from scipy.spatial.transform import Rotation
+from .common import BASE,read,save,sha,verify
+
+
+def main(run,analysis,layout,out):
+    out.mkdir(exist_ok=False)
+    previous=BASE/'upright_chest_support_v1/native_static_v17'
+    paths=[previous/'media/frames/whole_body/00150.png',run/'media/frames/whole_body/00150.png']
+    files=paths+[analysis/'samples.csv',layout/'samples.csv',layout/'summary.json',Path(__file__).resolve(),Path(__file__).with_name('common.py'),Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')]
+    files += [p/n for p in (previous,run) for n in ('camera_frames.json','initial_values.json','states240.json')]
+    pins={str(p):sha(p) for p in files};save(out/'inputs_before.json',pins)
+    assert read(previous/'camera_frames.json')['frames'][150]['cameras']==read(run/'camera_frames.json')['frames'][150]['cameras']
+    summary=read(layout/'summary.json')
+    native=read(previous/'states240.json')['rows'][-1]['state'];g=native['guitar_body_states'][0]['pose']['r'];neck=Rotation.from_quat([g[k] for k in 'xyzw']).apply([0,1,0]);old_angle=np.rad2deg(np.arcsin(np.clip(neck[2],-1,1)))
+    font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',18)
+    canvas=Image.new('RGB',(1400,712),(245,245,245));draw=ImageDraw.Draw(canvas)
+    labels=[f'Previous raised pose at 5 s: neck {old_angle:+.2f} deg',f'Corrected placement at 5 s: neck {summary["last_neck_elevation_deg"]:+.2f} deg']
+    for col,(path,label) in enumerate(zip(paths,labels)):
+        assert draw.textbbox((0,0),label,font=font)[2]<680
+        canvas.paste(Image.open(path).convert('RGB').crop((400,60,1100,720)),(col*700,52));draw.text((col*700+12,15),label,font=font,fill=(25,25,25))
+    canvas.save(out/'before_after_native_5s.png')
+    posture=list(csv.DictReader((analysis/'samples.csv').open()));placement=list(csv.DictReader((layout/'samples.csv').open()))
+    save(out/'csv_columns.json',dict(posture=list(posture[0]),layout=list(placement[0])))
+    # Column names come directly from the measurement producer.
+    cols={k:np.array([float(r[k]) for r in placement]) for k in placement[0]}
+    values={k:np.array([float(r[k]) for r in posture]) for k in posture[0]}
+    assert np.array_equal(cols['time_s'],values['time_s'])
+    t=values['time_s'];fig,axes=plt.subplots(4,1,figsize=(10,8),sharex=True)
+    axes[0].plot(t,cols['neck_elevation_deg']);axes[0].axhline(3,ls='--',color='.5');axes[0].axhline(-3,ls='--',color='.5');axes[0].set_ylabel('Neck (deg)')
+    axes[1].plot(t,1000*(cols['guitar_body_right_coordinate_m']-summary['reference_right_coordinate_m']));axes[1].axhline(20,ls='--',color='.5');axes[1].axhline(-20,ls='--',color='.5');axes[1].set_ylabel('Lateral error (mm)')
+    axes[2].plot(t,values['Chest_total_tilt_deg'],label='Chest total');axes[2].plot(t,values['Chest_right_tilt_deg'],label='Chest right');axes[2].axhline(5,ls='--',color='.5');axes[2].set_ylabel('Body tilt (deg)');axes[2].legend(loc='upper left',bbox_to_anchor=(0,1.35),ncol=2,frameon=False)
+    contact=np.array([values[n+'_positive_lambda_contacts']>0 for n in ('Chest','R_Shoulder')]);axes[3].imshow(contact,aspect='auto',interpolation='nearest',extent=[t[0],t[-1],1.5,-.5],vmin=0,vmax=1,cmap='Blues');axes[3].set_yticks([0,1]);axes[3].set_yticklabels(['Chest','Right upper arm']);axes[3].set_xlabel('Simulation time (s)')
+    for ax in axes[:3]:ax.grid(alpha=.2)
+    fig.tight_layout(h_pad=1.4);fig.savefig(out/'native_layout_contacts.png',dpi=170);plt.close(fig)
+    save(out/'verification.json',dict(inputs_unchanged=verify(pins),camera_unchanged=True,comparison_time_s=5.,crop_pixels_original=[400,60,1100,720],scope='Actual native renders, identical crop and camera. Every 240Hz sample plotted; blue marks positive solver lambda, not calibrated force. End frames alone do not establish dynamic success.'))
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--run',type=Path,required=True);p.add_argument('--analysis',type=Path,required=True);p.add_argument('--layout',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();main(a.run.resolve(),a.analysis.resolve(),a.layout.resolve(),a.out.resolve())

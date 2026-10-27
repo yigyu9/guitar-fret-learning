@@ -1,0 +1,13 @@
+# 변경 파일 색인 — Strike incremental approach v1
+
+| 자료 | 용도 |
+|---|---|
+| [README.md](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/README.md:1) | 음악 구간 결과와 post-terminal HOLD를 분리한 설명, native PNG/MP4 embeds |
+| [progress.md](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/progress.md:1) | saved data 대조 및 문서 상태 |
+| [Native report](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/native/data/report.json), [closure](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/native/inputs_after.json) | 1,200 physics steps·151 camera frames·24 checks·1,103 unchanged inputs |
+| [Analysis summary](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/analysis/summary.json), [before SHA](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/analysis/inputs_before.json), [after SHA](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/analysis/inputs_after.json) | 결과 집계와 분석 입력 7개 SHA |
+| [All-phase goal audit](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/allphase_goal_audit.json) | 6 audit input SHA, 77 controls/39 native state prefix 및 R9 goal 검증 |
+| [Initial values](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/native/data/initial_values.json), [initial audit](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/native/data/initial_audit.json), [checkpoint connection](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/native/data/checkpoint_connection.json) | 시작 상태 및 frozen checkpoint provenance |
+| [Controls](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/native/data/controls.json), [trace](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_incremental_approach_v1/native/data/trace.json) | 300 control rows와 terminal duplicate를 포함한 152 trace rows |
+| `native/data/images/frames/{whole_body,hands}/{00040,00085,00109,00150}.png`, `native/data/images/{whole_body,hands}.mp4` | README에 embed한 native 1.333/2.833/3.633/5초 이미지와 두 영상 |
+| [Source phase/waypoint logic](/home/ajou/yigyu/3/stability_adapter_2/run_strike_incremental_approach.py:157), [R9 goal owner](/home/ajou/yigyu/3/stability_adapter_2/run_strike_incremental_approach.py:194), [plan](/home/ajou/yigyu/3/stability_adapter_2/STRIKE_INCREMENTAL_APPROACH_PLAN.md:1) | phase별 waypoint와 증분 목표 구현 근거 |

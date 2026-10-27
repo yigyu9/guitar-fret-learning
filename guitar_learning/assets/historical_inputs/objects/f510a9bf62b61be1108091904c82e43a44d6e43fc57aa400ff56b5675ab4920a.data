@@ -1,0 +1,43 @@
+"""Post-maintenance17..22 hold; left actual16 maintenance remains active."""
+import numpy as np
+from .protocol_v4 import PROTOCOL,SETTLED_HOLD
+from .analyze_v11 import BODY9_JOINTS,stage_at,interval,summarize_sole_window,read
+
+
+def evaluate(initial,states,targets,efforts,cfg,spec,case,rows):
+    lo,hi=SETTLED_HOLD;ks=list(range(round(lo*240),round(hi*240)+1));kt=list(range(ks[0],ks[-1]+1,4))
+    ss=[s for s in states if ks[0]<=s['physics_step']<=ks[-1]];ts=[r for r in targets if ks[0]<=r['physics_step_before']<=ks[-1]];es=[r for r in efforts if ks[0]<=r['physics_step_before']<=ks[-1]];selected=[r for r in rows if lo<=r['time_s']<=hi]
+    checks=dict(config=cfg.get('ready_settled_hold_s')==SETTLED_HOLD and cfg.get('validation_protocol')==PROTOCOL and cfg.get('ready_schedule')==case,
+        full5s=hi-lo==5 and [s['physics_step'] for s in ss]==ks and len(ss)==1201 and all(s['time_s']==s['physics_step']/240 for s in ss),
+        full301targets=[r['physics_step_before'] for r in ts]==kt and len(ts)==301,
+        full1201efforts=[r['physics_step_before'] for r in es]==ks and len(es)==1201,
+        full1201measured=[r['step'] for r in selected]==ks and all(r['time_s']==r['step']/240 for r in selected),
+        actions_after_hold=all(t>=hi for t in case['strike_starts']) and (case['release'] is None or case['release'][0]>=hi),
+        held_R12=True,LH_maintenance_scope=True,absolute_phase=True,boundary22=True,pose_targets_constant=True,pose_metadata_constant=True,preload_metadata_constant=True)
+    latch=next(r for r in targets if r['physics_step_before']==2396);right=list(spec['right_strike_spec']['proximal_latch']['indices105'])+list(spec['right_strike_spec']['joint_indices105']);held=np.array(latch['final105_rad'])[right];distal=spec['right_strike_spec']['joint_indices105'];body9=[initial['joint_names'].index(n) for n in BODY9_JOINTS]
+    fixed=np.array(read(cfg['upper_target105'])['q_target_rad105']);fixed[body9]+=np.array(cfg['ready_body9_pose_delta_rad']);fixed[body9]+=np.array(cfg['ready_spine_target_increment_delta_rad']);fixed[initial['joint_names'].index('Chest_x')]+=.005
+    bytarget={r['physics_step_before']:r for r in targets};left=list(spec['left']['arm_indices105'])+list(spec['left']['finger_indices105'])
+    for row in ts:
+        k=row['physics_step_before'];t=k/240;m=row.get('ready',{});lh,rh=m.get('LH',{}),m.get('RH',{});request=np.array(row['requested105_rad']);final=np.array(row['final105_rad']);active=any(start<=t<start+4 for start in case['strike_starts']);maintenance=m.get('hand_maintenance',{})
+        checks['held_R12'] &= np.array_equal(request[right],held) and np.array_equal(final[right],held)
+        checks['absolute_phase'] &= m.get('time_s')==t and m.get('case')==case['case'] and m.get('phase')==stage_at(case,t) and lh.get('stage')==stage_at(case,t) and rh.get('active') is active
+        # Full raw64/F32 IK/target/FK/ownership checks remain a separate mandatory core gate.
+        checks['LH_maintenance_scope'] &= maintenance.get('mode')==cfg['ready_hand_maintenance_mode'] and maintenance.get('physics_step_before')==k and maintenance.get('phase')==stage_at(case,t)
+        if k==ks[-1]:
+            previous=np.array(bytarget[k-4]['final105_rad'])
+            if hi in case['strike_starts']:checks['boundary22'] &= rh.get('cycle_start_step')==k and np.array_equal(rh.get('cycle_start_submitted6_rad'),previous[distal])
+            if case['release'] is not None and case['release'][0]==hi:checks['boundary22'] &= lh.get('phase_boundary_hold') is True and lh.get('boundary_hold') is True and lh.get('phase_start_step')==k and np.array_equal(lh.get('phase_start_submitted26_rad'),previous[left]) and np.array_equal(request[left],previous[left]) and np.array_equal(final[left],previous[left])
+        checks['pose_targets_constant'] &= np.array_equal(request[body9],fixed[body9]) and np.array_equal(final[body9],fixed[body9].astype(np.float32).astype(float))
+        b,c,n=row.get('ready_body9_pose',{}),row.get('ready_chest_pose',{}),row.get('ready_spine_target_increment',{})
+        checks['pose_metadata_constant'] &= b.get('time_s')==t and b.get('physics_step_before')==k and b.get('ramp_fraction')==1 and np.array_equal(b.get('bias9_rad'),cfg['ready_body9_pose_delta_rad']) and c.get('time_s')==t and c.get('physics_step_before')==k and c.get('ramp_fraction')==1 and c.get('bias_rad')==.005 and n.get('time_s')==t and n.get('physics_step_before')==k and n.get('ramp_fraction')==1 and np.array_equal(n.get('bias9_rad'),cfg['ready_spine_target_increment_delta_rad'])
+    for row in es:
+        a,m=row.get('chest_action_preload',{}),row.get('ready_chest_margin',{})
+        checks['preload_metadata_constant'] &= a.get('ramp_fraction')==1 and a.get('extra_m')==.0005 and m.get('ramp_fraction')==1 and m.get('extra_m')==.00025
+    metrics={};soles=summarize_sole_window(selected)
+    if selected:
+        metrics=interval(selected);metrics['max_Spine_total_tilt_deg']=max(r['Spine_total_tilt_deg'] for r in selected);metrics['triple_positive_fraction']=sum(r['triple_support_positive'] for r in selected)/len(selected);metrics['feet_positive_fraction']=sum(r['both_feet_positive_ground'] for r in selected)/len(selected)
+        physical=dict(triple95=metrics['triple_positive_fraction']>=.95,feet95=all(r['contacts_row_available'] for r in selected) and metrics['feet_positive_fraction']>=.95,four_soles=soles['all_four_parts_passed'],body30mm=metrics['max_body_displacement_m']<=.03,rotation5deg=metrics['max_rotation_deg']<=5,neck3deg=metrics['max_abs_neck_deg']<=3,lateral20mm=metrics['max_abs_lateral_m']<=.02,trunk5deg=metrics['max_Torso_Chest_tilt_deg']<=5,trunk_right3deg=metrics['max_abs_Torso_Chest_right_deg']<=3,Spine5deg=metrics['max_Spine_total_tilt_deg']<=5)
+    else:physical=dict(actual_hold_present=False)
+    checks.update(physical);checks={k:bool(v) for k,v in checks.items()}
+    return dict(passed=all(checks.values()),checks=checks,interval_s=SETTLED_HOLD,actual_state_samples=len(ss),actual_target_samples=len(ts),actual_effort_samples=len(es),metrics=metrics,soles=soles,
+        scope='Actual state interval17..22 inclusive ends before integration of action22; effort at22 applies to the following step; R12 latch2396, Body9 old+new+Chestlast. LH actual16 maintenance allowed and full target/FK/ownership remains separate required AND. Endpoint22 actions must hold preceding submitted targets. Same physical thresholds; no new dynamic certificate or clock remap.')

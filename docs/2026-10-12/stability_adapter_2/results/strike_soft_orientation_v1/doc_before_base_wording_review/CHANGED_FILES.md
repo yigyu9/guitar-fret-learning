@@ -1,0 +1,13 @@
+# 변경 파일 색인 — Strike soft orientation v1
+
+| 파일/자료 | 설명 |
+|---|---|
+| [README.md](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/README.md:1) | 저장된 결과, 한계, native 이미지 및 영상 |
+| [progress.md](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/progress.md:1) | phase 상태와 검증 목록 |
+| [Native report](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/native/data/report.json), [closure](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/native/inputs_after.json) | 1,200 steps·151 frames·21 checks·1,088 native inputs unchanged |
+| [Analysis summary](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/analysis/summary.json), [before SHA](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/analysis/inputs_before.json), [after SHA](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/analysis/inputs_after.json) | 7개 분석 입력의 불변 기록과 결과 요약 |
+| [Initial values](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/native/data/initial_values.json), [initial audit](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/native/data/initial_audit.json), [Native report](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/native/data/report.json) | 시작 상태 및 POSITION readback 기록 |
+| [Checkpoint connection](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/native/data/checkpoint_connection.json), [controls](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/native/data/controls.json), [trace](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/native/data/trace.json) | frozen actor metadata, 300 control rows, 151 native state samples |
+| `native/data/images/frames/{whole_body,hands}/{00000,00060,00150}.png`, `native/data/images/{whole_body,hands}.mp4` | native 0/2/5초 frame과 전신·손 영상, README에 embed |
+| [Runner orientation cost](/home/ajou/yigyu/3/stability_adapter_2/run_strike_soft_orientation.py:177), [phase ownership and recorded residual](/home/ajou/yigyu/3/stability_adapter_2/run_strike_soft_orientation.py:208) | 방향 항을 포함한 공동 residual과 데이터 기록 구현 |
+| [Plan](/home/ajou/yigyu/3/stability_adapter_2/STRIKE_SOFT_ORIENTATION_PLAN.md:1), [pre-review](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_soft_orientation_v1/pre_review.md) | 별도 계획과 순수 회전 수학 사전검수 범위 |

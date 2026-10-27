@@ -1,0 +1,45 @@
+"""Plot all measured action samples and unchanged-camera actual native frames."""
+from pathlib import Path
+import csv
+import numpy as np
+from PIL import Image,ImageDraw,ImageFont
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from ..lower_body_release_v1.common import BASE,read,save,sha,verify
+
+
+def main():
+    phase=BASE/'upright_horizontal_play_v1';out=phase/'figures_v1';out.mkdir(exist_ok=False)
+    cases=('baseline','press','strike','combined');font=Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')
+    before=phase/'native_baseline_v1/media/frames/whole_body/00150.png';after=phase/'native_combined_v1/media/frames/whole_body/00213.png'
+    files=[Path(__file__).resolve(),Path(__file__).parents[1]/'lower_body_release_v1/common.py',font,before,after]
+    files += [phase/f'analysis_{c}_v1'/n for c in cases for n in ('samples.csv','summary.json')]
+    files += [phase/f'native_{c}_v1/camera_frames.json' for c in ('baseline','combined')]
+    pins={str(p):sha(p) for p in files};save(out/'inputs_before.json',pins)
+    b=read(phase/'native_baseline_v1/camera_frames.json')['frames'][150]
+    a=read(phase/'native_combined_v1/camera_frames.json')['frames'][213]
+    assert b['time_s']==5 and a['time_s']==7.1 and b['cameras']==a['cameras']
+    canvas=Image.new('RGB',(1400,712),(245,245,245));draw=ImageDraw.Draw(canvas);f=ImageFont.truetype(str(font),18)
+    for col,(path,label) in enumerate(((before,'Before motions: 5.0 s'),(after,'Press + downstroke: 7.1 s'))):
+        assert draw.textbbox((0,0),label,font=f)[2]<680
+        canvas.paste(Image.open(path).convert('RGB').crop((400,60,1100,720)),(col*700,52));draw.text((col*700+12,15),label,font=f,fill=(25,25,25))
+    canvas.save(out/'before_during_native.png')
+    fig,axes=plt.subplots(3,1,figsize=(10,7),sharex=True)
+    for case in cases:
+        with (phase/f'analysis_{case}_v1/samples.csv').open() as stream:
+            rows=[r for r in csv.DictReader(stream) if 5<=float(r['time_s'])<=9]
+        t=np.array([float(r['time_s']) for r in rows])
+        for ax,key,scale in zip(axes,('body_displacement_from_5s_m','rotation_from_5s_deg','neck_elevation_deg'),(1000,1,1)):
+            ax.plot(t,[float(r[key])*scale for r in rows],label=case)
+    for ax,value in zip(axes,(30,5,3)):ax.axhline(value,ls='--',color='.5',lw=1)
+    axes[2].axhline(-3,ls='--',color='.5',lw=1)
+    for ax,label in zip(axes,('Body-center shift (mm)','Rotation from 5 s (deg)','Neck elevation (deg)')):ax.set_ylabel(label);ax.grid(alpha=.2)
+    axes[0].legend(loc='lower left',bbox_to_anchor=(0,1.03),ncol=4,frameon=False)
+    axes[2].set_xlabel('Physics time (s); action interval after identical 5 s preparation')
+    fig.tight_layout();fig.savefig(out/'action_stability_comparison.png',dpi=170);plt.close(fig)
+    save(out/'verification.json',dict(inputs_unchanged=verify(pins),camera_unchanged=True,before_time_s=5.,during_time_s=7.1,
+         source_native_frames=[str(before),str(after)],crop_pixels=[400,60,1100,720],scope='Native screenshots, identical camera and crop, labels outside image. All 240Hz samples in5..9s plotted; startup is present in full native videos and separately fails the original posture criterion. Dashed lines are predeclared action diagnostic thresholds, not physical safety limits.'))
+
+
+if __name__=='__main__':main()

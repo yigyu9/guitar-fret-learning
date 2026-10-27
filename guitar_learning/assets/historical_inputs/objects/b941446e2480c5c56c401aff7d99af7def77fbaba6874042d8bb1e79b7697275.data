@@ -1,0 +1,77 @@
+"""Halve finite human arm preload; observe native contact forces read-only."""
+import isaacgym  # Must precede torch/gymtorch and numerical-library imports.
+from isaacgym import gymapi, gymtorch
+import numpy as np
+
+from .runtime_v14 import Controller as PreviousController
+
+
+class Controller(PreviousController):
+    def __init__(self, scene):
+        super().__init__(scene)
+        assert scene.cfg['right_task_preload_m'] == .002
+        state = scene.native()
+        affine_task = self.task_goal_W.copy()
+        original_preload = float(np.linalg.norm(affine_task-self.material_W))
+        assert abs(original_preload-.004) <= 1e-12
+        self.task_goal_W = self.material_W+.5*(affine_task-self.material_W)
+        self.goal_correction['affine_after_task_goal_W_m'] = affine_task.tolist()
+        self.goal_correction['after']['task_goal_W_m'] = self.task_goal_W.tolist()
+        self.goal_correction['right_task_preload'] = dict(
+            original_m=original_preload, applied_m=float(np.linalg.norm(self.task_goal_W-self.material_W)),
+            scale=.5, scope='Only the human task preload changes; palm/material IK anchors retain the affine goal.')
+        self.goal_correction['scope'] = 'Constant finite human affine anchors; task preload4to2mm, original gains/caps. No guitar command.'
+
+        params = scene.gym.get_sim_params(scene.sim)
+        assert params.physx.contact_collection == gymapi.ContactCollection.CC_LAST_SUBSTEP
+        assert float(params.dt) == float(np.float32(1/240))
+        expected_substeps = int(scene.physics_parameters.get('substeps', 1))
+        assert int(params.substeps) == expected_substeps
+        count = int(scene.gym.get_sim_rigid_body_count(scene.sim))
+        names = [None]*count
+        mapping = [None]*count
+        assert scene.gym.get_env_count(scene.sim) == 1
+        env = scene.gym.get_env(scene.sim, 0)
+        for actor_index in range(scene.gym.get_actor_count(env)):
+            actor = scene.gym.get_actor_handle(env, actor_index)
+            actor_name = scene.gym.get_actor_name(env, actor)
+            for local_index, body_name in enumerate(scene.gym.get_actor_rigid_body_names(env, actor)):
+                index = int(scene.gym.get_actor_rigid_body_index(env, actor, local_index, gymapi.DOMAIN_SIM))
+                assert 0 <= index < count and names[index] is None
+                name = actor_name+'/'+body_name
+                names[index] = name
+                mapping[index] = dict(sim_index=index, env_index=0, actor_index=actor_index,
+                    actor_name=actor_name, actor_body_index=local_index, body_name=body_name, name=name)
+        assert all(isinstance(name, str) for name in names) and len(set(names)) == count
+        self.contact_probe_tensor = gymtorch.wrap_tensor(scene.gym.acquire_net_contact_force_tensor(scene.sim))
+        assert tuple(self.contact_probe_tensor.shape) == (count, 3)
+        self.contact_probe_names = names
+        self.contact_probe_mapping = mapping
+        self.contact_probe_params = dict(contact_collection='CC_LAST_SUBSTEP',
+            contact_collection_value=int(params.physx.contact_collection), substeps=int(params.substeps),
+            configured_substeps=expected_substeps,
+            dt_s=float(params.dt), gravity_W_m_s2=[float(getattr(params.gravity, a)) for a in 'xyz'])
+        assert scene.native() == state
+
+    def effort(self):
+        effort, row = super().effort()
+        s = self.s
+        before = s.native()
+        assert s.gym.refresh_net_contact_force_tensor(s.sim) is not False
+        values = self.contact_probe_tensor.detach().cpu().numpy().astype(float).copy()
+        assert values.shape == (len(self.contact_probe_names), 3) and np.isfinite(values).all()
+        preserved = s.native() == before
+        assert preserved
+        probe = dict(physics_step_before=int(s.steps), completed_physics_step=int(s.steps),
+            ordered_names=self.contact_probe_names, shape=list(values.shape), force_W_N=values.tolist(),
+            state_preserved=bool(preserved), **self.contact_probe_params,
+            ground=dict(name='ground', tensor_index=None, scope='Static ground plane has no actor rigid-body tensor row.'),
+            scope='Latest completed simulation step, read-only net contact force; not submitted effort or raw lambda. Atstep0 prior contact preparation may be present. Never used for control.')
+        if s.steps == 0:
+            probe['body_mapping'] = self.contact_probe_mapping
+        row['net_contact_force_probe'] = probe
+        row['right_task_preload_m'] = self.goal_correction['right_task_preload']['applied_m']
+        right = next(point for point in row['support_points'] if point['body'] == 'R_Shoulder')
+        right['right_task_preload_m'] = row['right_task_preload_m']
+        right['mode'] = 'Finite human affine goal with2mm task preload; original palm/material/gains/caps.'
+        return effort, row

@@ -1,0 +1,133 @@
+"""Recorded interface checks; these do not establish native song success."""
+import copy
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+import numpy as np
+from guitar_learning.song.reward_environment import build_environment
+from guitar_learning.song import progress
+from guitar_learning.song.quality import SongLedger
+from guitar_learning.tests import test_song_environment as baseline
+from guitar_learning.tests.test_skill_environment import LongRecordedSession
+
+
+class SongRewardV2EnvironmentTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.environments = []
+
+    def tearDown(self):
+        for env in self.environments: env.close()
+        self.folder.cleanup()
+
+    def make_environment(self, **kwargs):
+        sessions = []
+        def factory(config, out):
+            session = LongRecordedSession(config, out)
+            sessions.append(session)
+            return session
+        def contacts(scene): return copy.deepcopy(sessions[-1].row()['native_contacts']['contacts'])
+        env = build_environment({}, Path(self.folder.name)/str(len(self.environments)),
+            bundle=baseline.BUNDLE, song=baseline.SONG,
+            session_factory=factory, contact_reader=contacts, **kwargs)
+        self.environments.append(env)
+        return env, sessions
+
+    def test_reset_changes_only_reward_contract_and_preserves_state500(self):
+        env, sessions = self.make_environment()
+        old, _ = baseline.environment(Path(self.folder.name)/'old')
+        self.environments.append(old)
+        actual, info = env.reset()
+        expected, _ = old.reset()
+        for field in expected: np.testing.assert_array_equal(actual[field], expected[field])
+        self.assertEqual(actual['state'].shape, (500,))
+        self.assertIsInstance(env.song_ledger, SongLedger)
+        current, previous = copy.deepcopy(env.contract), copy.deepcopy(old.contract)
+        current_song, previous_song = current['reward'].pop('song'), previous['reward'].pop('song')
+        self.assertEqual(current, previous)
+        self.assertEqual(current_song['schema'], 'guitar_learning.song_metrics.v2')
+        self.assertEqual(previous_song['schema'], 'guitar_learning.song_metrics.v1')
+        self.assertEqual(info['song']['schema'], 'guitar_learning.song_metrics.v2')
+        self.assertEqual(info['song']['denominator'], 67)
+        self.assertEqual(sessions[0].scene.steps, 0)
+        env.step(np.zeros(39))
+        again, _ = env.reset()
+        for field in actual: np.testing.assert_array_equal(actual[field], again[field])
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0].reset_calls, 1)
+
+    def test_four_substeps_control_progress_and_episode_totals(self):
+        env, sessions = self.make_environment(time_limit_s=2/60.)
+        env.reset()
+        states = [dict(target_id='a', potential=v) for v in (.2, .8, .8, .4)]
+        total = 0.
+        with patch.object(progress, 'snapshot', side_effect=states):
+            for tick in range(2):
+                observation, reward, terminated, truncated, info = env.step(np.full(39, .1))
+                total += reward
+                self.assertEqual(len(info['physics_measurements']), 4)
+                self.assertEqual([row['physics_step'] for row in info['physics_measurements']],
+                    list(range(tick*4+1, tick*4+5)))
+                self.assertAlmostEqual(reward, sum(info['reward_terms'].values()))
+                self.assertEqual(info['reward_terms']['song_right_guide'], 0.)
+                self.assertEqual(info['reward_shaping']['value'], info['reward_terms']['song_right_progress'])
+                self.assertTrue(all('song_right_progress' not in row['song_reward_terms']
+                    for row in info['physics_measurements']))
+                self.assertEqual(observation['state'].shape, (500,))
+                self.assertFalse(terminated)
+                self.assertEqual(truncated, tick == 1)
+        self.assertEqual(sessions[0].policy_calls, 2)
+        self.assertEqual(sessions[0].scene.steps, 8)
+        self.assertAlmostEqual(info['reward_terms']['song_right_progress'], .25*(.99*.4-.8))
+        self.assertAlmostEqual(env.total_reward, total)
+        self.assertAlmostEqual(info['episode']['reward'], total)
+        self.assertEqual(info['episode']['song'], info['song'])
+        self.assertFalse(info['song']['completed'])
+        with self.assertRaisesRegex(RuntimeError, 'reset required'): env.step(np.zeros(39))
+        self.assertEqual(sessions[0].scene.steps, 8)
+
+    def test_failed_tick_suppresses_all_positives_and_pays_failure_once(self):
+        env, sessions = self.make_environment()
+        env.reset()
+        sessions[0].unsafe_at = 4
+        original_update = env.song_ledger.update
+        def positive(*args, **kwargs):
+            value = original_update(*args, **kwargs)
+            value['song_clean_hold'] += 100.
+            return value
+        states = [dict(target_id='a', potential=v) for v in (.2, .8)]
+        with patch.object(progress, 'snapshot', side_effect=states), patch.object(env.song_ledger, 'update', side_effect=positive):
+            _, reward, terminated, truncated, info = env.step(np.zeros(39))
+        self.assertTrue(terminated)
+        self.assertFalse(truncated)
+        self.assertEqual(info['reward_terms']['song_right_progress'], 0.)
+        self.assertTrue(all(value <= 0 for value in info['reward_terms'].values()))
+        self.assertTrue(all(value <= 0 for row in info['physics_measurements'] for value in row['song_reward_terms'].values()))
+        expected_cost = sum(row['stability']['cost'] for row in info['physics_measurements'])+env.safety_config.failure_cost
+        self.assertAlmostEqual(info['cost'], expected_cost)
+        self.assertAlmostEqual(info['episode']['cost'], expected_cost)
+        self.assertAlmostEqual(info['episode']['reward'], reward)
+        self.assertTrue(info['song']['safety_invalidated'])
+        self.assertFalse(info['song']['stage_success'])
+
+    def test_uninitialized_finished_and_progress_exceptions_fail_closed(self):
+        env, sessions = self.make_environment()
+        with self.assertRaisesRegex(RuntimeError, 'reset required'): env.step(np.zeros(39))
+        self.assertEqual(sessions, [])
+        env.reset()
+        with patch.object(progress, 'snapshot', side_effect=ValueError('progress injection')):
+            with self.assertRaisesRegex(ValueError, 'progress injection'): env.step(np.zeros(39))
+        self.assertTrue(env.finished)
+        with self.assertRaisesRegex(RuntimeError, 'reset required'): env.step(np.zeros(39))
+        self.assertEqual(sessions[0].scene.steps, 0)
+        env.reset()
+        before = progress.snapshot(env.task, env.song_ledger.notes, env.last_measured, env.last_sample, env.song_ledger.window_s)
+        with patch.object(progress, 'snapshot', side_effect=[before, ValueError('after injection')]):
+            with self.assertRaisesRegex(ValueError, 'after injection'): env.step(np.zeros(39))
+        self.assertTrue(env.finished)
+        with self.assertRaisesRegex(RuntimeError, 'reset required'): env.step(np.zeros(39))
+        self.assertEqual(sessions[0].scene.steps, 4)
+
+
+if __name__ == '__main__': unittest.main()

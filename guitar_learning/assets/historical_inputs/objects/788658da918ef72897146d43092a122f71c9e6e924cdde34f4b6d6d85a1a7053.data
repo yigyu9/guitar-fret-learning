@@ -1,0 +1,29 @@
+# 09. 학습과 평가
+
+기준일: 2026-10-19. 이 문서는 실행 결과와 다음 단계의 통과 조건을 관리한다. 아래 수치는 각 실행 입력에서 확인한 기록이며 현행 호스트 코드의 새 성공을 뜻하지 않는다.
+
+## 확인된 실험
+
+| 경로·실행 | 확인한 결과 | 해석 범위 |
+|---|---|---|
+| [양손 단음joint](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_joint_v1/README.md) | 실제840전이·PPO1업데이트·저장 후 재평가. 공동 음악 성공0회 | 양손 실행·학습 연결 검증 |
+| [전곡V1 학습](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_full_song_v1/training_v2/report.json) | 4096전이·8업데이트·학습 중 안전 전곡2회, 음악 성공0/2 | 첫 전곡 기반. 고정된 최종 모델 평가와 구분 |
+| [전곡 보상V2 학습](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_reward_v2/training_v1/report.json) | 새 보상 계약에서24업데이트 완료 | V1 Actor/std 이전 뒤 Critic·Adam·카운터 새 시작. V1과 업데이트 수를 한 실행처럼 합산하지 않음 |
+| [보상V2 최종 평가](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_reward_v2/final_evaluation_v1/result.json) | 고정 정책의1969tick 안전 완주. LH1/67·RH0/67·협응0/67, strict50/100ms 모두0, 음악 성공false | 별도 평가는 완료됨. 단일 곡·단일 평가 결과 |
+| [왼손 정밀화 장기 실행C](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_transition_refinement_long_v1/README.md) | 누적32회 모델에서 추가14업데이트·26,880반영 전이 후 시간예산으로 정상 종료. 누적 모델46. 학습 중 성공56/112 | 단음A·왼손 과제.128회 설정 상한에 도달한 실행이나 전곡46업데이트가 아님 |
+| [정밀화 모델 별도 평가](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_transition_refinement_long_v1/checkpoint_comparison_v1.json) | 참조32회 모델4/4, 최종46회 모델3/4. 모두 해제·물리 안전 통과 | 같은 persistent 장면의 네 번 reset. 독립seed 일반화나 통계적 우열 근거가 아님 |
+| [접촉 회복 수집 연결](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_contact_recovery_v1/collect_native_v2/result.json) | 교사 보조2case 정상 완료·단음 음악/물리 안전 통과. 두case 모두 상실0·회복0 | 설정한 교란은 실제 발동하지 않음. 수집 연결 검증이며 회복 자료나 정책 단독 성공이 아님 |
+
+정밀화 장기 실행B는 공유 소스 변경으로 중단되어 전체 무결성이 부적격이다. C와 두 모델 재평가는 원 입력을 동결한 격리 환경에서 수행했다. C의 정상 감사가 B 전체를 소급 복구하지 않으며, 현행 내부화 코드에 이 결과를 자동 상속하지 않는다. 재현에는 연결된 보고서의 동결 입력·격리 실행 조건을 따른다. 마지막 모델을 자동 채택하지 않고32회 모델을 재평가 참조로 유지한다.
+
+접촉 회복 경로는 [평가·교사 자료 수집 구현](/home/ajou/yigyu/3/guitar_learning/contact_recovery/README.md)이다. [persistent 평가](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_contact_recovery_v1/evaluate_native_v2/result.json)와 [탐색 포함 평가](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_contact_recovery_v1/evaluate_stochastic_native_v1/result.json)는 checkpoint의schema/architecture/input/control/config 불일치로 거절됐고, [새 프로세스 평가](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_contact_recovery_v1/evaluate_fresh_native_v1/result.json)도 완료하지 못했다. 평가 절차 비교나 실제 회복 성공은 아직 확인하지 못했다. 보상R1/R2·회복 BC/PPO·새 전곡 학습의 성과로 보고하지 않는다.
+
+## 다음 검증과 통과 조건
+
+1. **실행 입력 확정:** 현행 소스·자산·설정·checkpoint SHA를 고정한다. CPU 계약 검사와 원자료 감사를 통과하고, native 연결 평가·정상 종료·저장 후 strict load를 확인한다. 과거 결과는 비교 근거로만 둔다.
+2. **평가 조건 분리:** 같은 모델을 새 프로세스 첫 실행/반복reset, 결정론적/탐색 포함 조건으로 나눠 평가한다. strict load 뒤 명시seed를 적용하고 초기 관절·기타·제어 이력을 비교한다. 예시 소수조건은20조건 성능 평가와 구분한다.
+3. **회복 자료 채택:** 실제 접촉 상실·회복·원 음악·안전이 모두 감사된 교사 자료만 내보낸다. 교란 행동과 교사 보정이 없는 행은 제외한다. 정책 단독 평가는 별도로 수행한다.
+4. **개선안 검증:** [후속 계획](/home/ajou/yigyu/3/docs/plans/guitar_learning_contact_recovery_direction_20261019.md)의 획득→유지·회복→원 음악 조건을 순서대로 구현·평가한다. 제안된 고정20조건 중18회·물리 실패0 기준은 실험 전에 확정하며, 현재 통과한 것으로 표시하지 않는다. 새 보상·자료·초기화 계약이면 명시적 이전과 새 평가를 거친다.
+5. **전환·양손 확장:** A와B의 개별 검증 후 느린두음→원속도→오른손결합→전곡으로 확장한다. 속도 변경은 별도task이며 자동PPO 승급은 구현된 것으로 가정하지 않는다.
+
+분모는 단음 시도·전곡67음·완료 에피소드·부분 수집으로 구분한다. sampled/logged/durable/committed/discarded를 기록하고 누적 품질 스냅샷을 매tick 합산하지 않는다. 완주·음악·물리 실패·런타임 오류를 분리한다. 사람 모션 유사성·다곡 일반화·실제 압력/진동/음향은 미검증이다.

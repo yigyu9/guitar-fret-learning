@@ -1,0 +1,171 @@
+# 기존 학습 코드가 현재 자유 기타 학습으로 연결된 경로
+
+2026-10-19 구조 정리: 아래 내용은 이전 구현의 계보 기록이다. 현행 실행·계약은 [README](../README.md)를 따른다. 당시 공통 계약·실험 정리는 [2026-10-19 연구 계획 보관본](</media/ajou/새 볼륨1/Guitar/master_plan_20261019_archived_20261027/README.md>)에서 확인한다. 원 디렉토리는 보관 위치로 연결하며 과거 코드나 성공을 현재 입력으로 자동 채택하지 않는다.
+
+2026-10-18의 실제 소스와 최신 `actionable_preparation` 실행 계약을 기준으로 점검했다. **기존 fret·strike 학습 환경·보상·정책을 통째로 가져온 구조는 아니다.** 음악 목표 compiler와 물리 장면/유지 제어는 재사용하고, 목표 접촉·기하 타현·관측·보상·신경망·PPO 연결은 현재 작업에 맞게 구성했다. 그 과정에서 이전의 오압현 억제 등 일부 기능은 현재 경로에 들어오지 않았다.
+
+이번 작업은 읽기 전용 분석과 문서 작성이다. 환경·판정·보상·자산·체크포인트를 수정하거나 새 학습/물리 실험을 수행하지 않았다. 코드 구조의 계보와 학습 가중치의 계보를 따로 설명한다.
+
+## 1. ‘기존 코드’를 세 종류로 구분해야 한다
+
+| 코드 계열 | 위치와 역할 | 현재와의 관계 |
+|---|---|---|
+| 기존 고정 기타 fret/strike | [tab2body](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/tab2body), 특히 `env/rewards`, `learning`, `train_fret.py`, `train_strike.py` | 음악 compiler·자산 일부는 현재에도 의존한다. 기존 환경·보상 클래스·학습기 전체를 현재 실행하는 것은 아니다. |
+| 자유 기타 선행 구현/설계 | [fresh_learning_v1](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/stability_adapter_2/fresh_learning_v1), [fresh_music_v1](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/stability_adapter_2/fresh_music_v1), [music_pipeline_v2](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/stability_adapter_2/music_pipeline_v2), [free_guitar_learning_v1](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/stability_adapter_2/free_guitar_learning_v1) | 초기 기하·접촉·제어 계약의 복사 출처와 목표 loader/물리 의존성이다. 각 디렉토리가 모두 현재 학습기에 통째로 연결된 것은 아니다. |
+| 현재 개발 코드 | [guitar_learning](/home/ajou/yigyu/3/guitar_learning) | 현재 환경·관측·손별 Actor·PPO 및 실행기. 이 안에서도 기본/단계/타이밍/정책 준비 버전을 구분해야 한다. |
+
+아래에서 **직접 재사용**은 현재 실제 import/호출/파일 읽기를, **복사 확인**은 manifest와 SHA로 대응을 확인한 것을 뜻한다. **변경 구현**은 소스상 명시된 adaptation 또는 동작 비교다. 모양이 유사한 코드만으로 작성 이력이나 정확한 복사 출처를 단정하지 않는다.
+
+## 2. 가장 먼저 볼 현재 코드
+
+| 읽는 순서 | 코드 | 확인할 내용 |
+|---|---|---|
+| 1 | [train_actionable_preparation.py](/home/ajou/yigyu/3/guitar_learning/tool/training/train_actionable_preparation.py:73) | 최신 학습 진입점과 환경/Actor 이전 함수 교체 |
+| 2 | [actionable_preparation_environment.py](/home/ajou/yigyu/3/guitar_learning/quality/actionable_preparation_environment.py:38) | 처음부터 정책 행동, native 정착0초, 첫2초 준비 접촉 보상 |
+| 3 | [timing_environment.py](/home/ajou/yigyu/3/guitar_learning/timing/timing_environment.py:117) | 현재 최종 보상으로 교체되는 위치 |
+| 4 | [task_measurement.py](/home/ajou/yigyu/3/guitar_learning/core/task_measurement.py:16) | 실제 표본에서 목표 접촉·타현·유지·해제 측정 |
+| 5 | [fretting_v1.py](/home/ajou/yigyu/3/guitar_learning/core/fretting_v1.py:86), [strike.py](/home/ajou/yigyu/3/guitar_learning/core/strike.py:1) | 현재 압현 후보/피크 기하 통과의 정확한 조건 |
+| 6 | [specialist_policy.py](/home/ajou/yigyu/3/guitar_learning/skills/specialist_policy.py:19), [ppo.py](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:60) | 실제 선택되는 손별 모델과 PPO 갱신 |
+| 비교 원본 | [기존 fret 보상](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/tab2body/env/rewards/fret.py:2275), [기존 strike 보상](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/tab2body/env/rewards/strike.py), [기존 detector](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/tab2body/env/strike_detector.py) | 현재에 남은 것과 빠진 것을 대조할 출발점 |
+
+설정은 [왼손](/home/ajou/yigyu/3/guitar_learning/tool/training/configs/left_actionable_preparation_v1.json)과 [오른손](/home/ajou/yigyu/3/guitar_learning/tool/training/configs/right_actionable_preparation_v1.json)이다. 두 파일은 **단일 첫 음·손별·1환경·420단계·1업데이트의 짧은 실행 예산**이며 전곡 학습 설정은 아니다. 이 계보의 정책 준비 실행은 `tool.training.train_actionable_preparation`/`tool.evaluation.evaluate_actionable_preparation`이다. 현재 기본 학습은 [train.py](/home/ajou/yigyu/3/guitar_learning/train.py)를 따르며 루트의 재수출 environment.py는 보관했다.
+
+## 3. 현재 실행 경로: 파일이 많지만 별도 PPO를 계속 쌓은 것은 아니다
+
+학습 실행 호출은 다음과 같다. 가운데 단계들은 `unittest.mock.patch`를 실제 실행용 바인딩 교체에 사용하므로 import문만 읽으면 선택된 구현을 놓치기 쉽다.
+
+```text
+train_actionable_preparation.run
+  → train_timing.run
+    → train_specialists.run
+      → train_parallel.main
+        → Pool / Collector.collect
+        → SpecialistPolicy.act
+        → 실제 환경.step
+        → PPOTrainer.update
+        → 체크포인트·로그 저장
+```
+
+| 교체되는 연결 | 실제 선택 | 근거 |
+|---|---|---|
+| timing worker의 환경 factory | actionable preparation의 native_environment | [최신 runner](/home/ajou/yigyu/3/guitar_learning/tool/training/train_actionable_preparation.py:73) |
+| Actor 초기화 함수 | actionable_preparation_transfer.apply_actor_initialization | [최신 runner](/home/ajou/yigyu/3/guitar_learning/tool/training/train_actionable_preparation.py:73) |
+| 기본 병렬 Pool | timing 설정을 넣고 새 worker factory를 사용하는 Pool | [timing runner](/home/ajou/yigyu/3/guitar_learning/tool/training/train_timing.py:94) |
+| policy.Policy | SpecialistPolicy(role=left 또는 right) | [specialist runner](/home/ajou/yigyu/3/guitar_learning/tool/training/train_specialists.py:87) |
+| PPOTrainer 생성 | Actor 이전을 수행하는 wrapper를 거쳐 공통 PPOTrainer | [timing runner](/home/ajou/yigyu/3/guitar_learning/tool/training/train_timing.py:110), [기본 갱신](/home/ajou/yigyu/3/guitar_learning/training/runner.py:154) |
+
+환경 계층은 **ActionablePreparationEnvironment → TimingEnvironment → SkillTrainingEnvironmentV2 → SkillTrainingEnvironment → TrainingEnvironment**다. 그 안의 물리 접촉 환경은 actionable의 협력 상속과 factory 교체를 통해 v5 준비시간 지원·기존 접촉 측정·persistent session을 결합한다. [실제 factory](/home/ajou/yigyu/3/guitar_learning/quality/actionable_preparation_environment.py:83).
+
+`DenseTrainingEnvironment`나 `SpecialistTrainingEnvironment`가 모두 이 상속 경로에 들어가는 것은 아니다. 현재는 해당 파일들의 guide 설정·함수·ledger 등을 일부 사용한다. 파일을 import했다는 이유만으로 그 파일의 환경 보상이 최종 reward에 누적된다고 해석하면 안 된다.
+
+## 4. 부품별로 무엇을 가져왔는가
+
+| 부품 | 기존 → 현재 위치 | 가져온 방식 / 달라진 점 |
+|---|---|---|
+| 음악 목표 해석 | [fresh_music/events.py](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/stability_adapter_2/fresh_music_v1/events.py) 및 [tab2body/full/events.py](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/tab2body/full/events.py) → [music_task.py](/home/ajou/yigyu/3/guitar_learning/music_task.py:9) | loader/compiler는 직접 호출. 현재 ScoreTask가 대상 선택·시간 원점·stage·token을 별도 구성한다. |
+| 움직이는 기타 좌표계 | [이전 geometry_v1.py](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/stability_adapter_2/free_guitar_learning_v1/geometry_v1.py) → [현재 geometry_v1.py](/home/ajou/yigyu/3/guitar_learning/core/geometry_v1.py) | manifest에서 복사와 바이트 동일성을 확인했다. 손·현·프렛을 현재 기타 transform으로 평가한다. |
+| 압현 접촉 후보 | [이전 자유 기타 fretting_v1.py](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/stability_adapter_2/free_guitar_learning_v1/fretting_v1.py) → [현재 fretting_v1.py](/home/ajou/yigyu/3/guitar_learning/core/fretting_v1.py) | 자유 기타 선행 구현의 동일 파일을 사용한다. 고정 기타 FretReward 전체의 복사가 아니다. |
+| 타현 detector | [기존 detector](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/tab2body/env/strike_detector.py) → [현재 strike.py](/home/ajou/yigyu/3/guitar_learning/core/strike.py:1) | 기존 선분 교차의 NumPy adaptation이라고 소스에 명시. 기타 상대 좌표·깊이 상한·영역·240Hz rearm 등 현재 계약을 적용한다. StrikeReward 전체는 아니다. |
+| 행동 제어권 | [music_pipeline_v2/control.py](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/stability_adapter_2/music_pipeline_v2/control.py) → [control.py](/home/ajou/yigyu/3/guitar_learning/core/control.py) | 동일 파일 복사 확인. LH33+RH elbow/wrist6의39축 목표 offset, 나머지 목표 유지. |
+| 전신 이름/규약 | [music_pipeline_v3/control.py](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/stability_adapter_2/music_pipeline_v3/control.py) → [whole_body_control.py](/home/ajou/yigyu/3/guitar_learning/core/whole_body_control.py) | 변경된 정리본의 SHA가 manifest와 일치. 이 파일의 PD 구현 전체가 최신 실행 제어기라는 뜻은 아니다. |
+| 상태·이벤트 관측 | [observations.py](/home/ajou/yigyu/3/guitar_learning/core/observations.py:12) → [skill history](/home/ajou/yigyu/3/guitar_learning/skills/skill_environment_v2.py:61) → [timing history](/home/ajou/yigyu/3/guitar_learning/timing/timing_environment.py:33) | 현재 규약에 맞춘 구현. 기본468+skill37+timing31=536 상태. 예전 fret/strike 관측 ABI를 그대로 쓰지 않는다. |
+| 신경망 | [기존 fret 모델](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/tab2body/learning/fret_v2_model.py), [strike 모델](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/tab2body/learning/strike_v2_model.py)과 달리 [현재 policy.py](/home/ajou/yigyu/3/guitar_learning/training/policy.py:10), [specialist_policy.py](/home/ajou/yigyu/3/guitar_learning/skills/specialist_policy.py:19) | 현재 전용 상태/event attention과 손별 Actor를 사용. 기존 block encoder나 가중치를 그대로 호출하지 않는다. |
+| PPO | [선행 fresh PPO](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/stability_adapter_2/fresh_learning_v1/ppo.py)와 비교되는 [현재 ppo.py](/home/ajou/yigyu/3/guitar_learning/training/ppo.py) | dual reward/cost return·GAE·tanh Gaussian이라는 설계를 공유하지만 직접 import나 바이트 동일 복사는 아니다. 현재는 별도 optimizer·분석적 KL 복원·39채널/계약 검사를 사용한다. 역사적 정확한 복사량은 단정하지 않는다. |
+| 물리 장면·유지 제어 | [native_session.py](/home/ajou/yigyu/3/guitar_learning/runtime/native_session.py), [prepared_reset_v1.py](/home/ajou/yigyu/3/guitar_learning/runtime/prepared_reset_v1.py), [persistent_session.py](/home/ajou/yigyu/3/guitar_learning/runtime/persistent_session.py) | 기존 초기 자세035·자유 기타 장면·유한 유지 제어를 재사용한다. 정책이 물리 제어 전체를 새로 학습하는 구조는 아니다. |
+
+복사 출처의 정본 기록은 [origin_manifest.json](/home/ajou/yigyu/3/guitar_learning/assets/origin_manifest.json)이다. manifest의15개 대응은 각각 기록된 원본/정리본 SHA가 모두 일치한다. 원본과 정리본이 서로 바이트까지 같은 것은 기하·압현·control의3개이며, 나머지는 import/경로 등의 변경본이다. 다만 예전 `environment_v3.py`와 초기 검사도 포함한 기록이므로 현재 v4/v5·PPO·536 모델 전체를 증명하는 manifest로 확대하면 안 된다.
+
+## 5. 기존 fret/strike 기능에서 현재 빠진 것
+
+| 기존 기능 | 현재 상태 | 해석할 때 주의점 |
+|---|---|---|
+| Fret PRESS/NO_PRESS/DONT_CARE와 금지 압현 veto | fretted 목표의 전체 금지 압현 검사로 이식되지 않음 | 목표 접촉이 유효하면 다른 손가락·현·프렛의 접촉이 동시에 있어도 후보가 참일 수 있다. |
+| Fret 오압현 감점/NO_PRESS 보상 | 현재 timing reward에 없음 | raw contact의 wrong_finger/fret/string 거절 이유와 별도 음악 오류 분류·감점은 다르다. |
+| Fret 미접촉과 잘못된 위치 접촉의 분리 | target candidate=False라는 결과만으로는 분리하지 않음 | 현 단계의 deadline miss는 목표 미달을 감점하지만 두 원인을 구분하지 않는다. |
+| Fret 유지·해제 품질 | 접촉 유지·소실·해제 이력은 측정하지만 보상은 현재 timing 규칙 | 이전 sustain/dropout·NO_PRESS·release의 전 체계를 동일하게 학습하지 않는다. |
+| Strike ready/grip gate, ordered strum/recovery, 준비/대기/회복 실패 보상 | 전체 이식 아님 | guide가 있다는 것과 기존 준비 게이트를 성공의 필수조건으로 쓰는 것은 다르다. |
+| detector의 모든 실패를 기존 StrikeTask처럼 wrong_count로 합산 | 동일하지 않음 | 현재 적격 crossing만 ledger에 전달한다. 깊이/영역/rearm 탈락 후보의 진단과 실제 보상 오류 횟수는 다르다. |
+| muted traversal/소리 내지 않을 현에 대한 억제 | 기존 canonical에 정보가 있어도 현재 목표 투영/보상이 동등하게 보존하지 않음 | current ScoreTarget/단일 fretted task로 과거의 뮤팅·회피 감독을 모두 표현했다고 할 수 없다. |
+| 물리 피크 파지·실제 현 압력·음향 | 현재 검증 범위 밖 | `RH:pick`은 검지 자식의 빈 기준점이며, contact candidate는 소리/압현력을 인증하지 않는다. |
+
+이는 ‘기존을 전부 그대로 쓰면 된다’는 결론도 아니다. 고정 기타의 world 좌표·상태 덮어쓰기·고정 베이스와 결합된 부분은 자유 기타에 맞게 분리해야 한다. 복원할 수 있는 것은 먼저 **어떤 접촉/행동을 허용·금지할지에 관한 음악적 규칙**이며, 그 측정은 현재 움직이는 기타 좌표와 실제 접촉에 연결해야 한다.
+
+세부 원본 위치와 비교는 [음악 코드 이식 감사](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_code_lineage_audit_v1/legacy_music_v1.md), 실제 목표/추가 접촉 공존의 사례는 [직전 압현 감사 v2](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_pick_fret_audit_v1/fret_audit_v2.md)에 있다. 접촉 feature 표본을 실제 음향 오류 횟수로 해석하지 않는다.
+
+## 6. 지금 최종 보상에 남는 항목
+
+현재 실행에서 보상은 다음 순서로 처리된다.
+
+```text
+TrainingEnvironment: 원 음악 strict/lenient·유지·해제·접근 등 기본 보상 계산
+    ↓ SkillTrainingEnvironment에서 음악 보상을 skill 보상으로 교체
+    ↓ TimingEnvironment에서 다시 timing 보상으로 교체
+    ↓ ActionablePreparationEnvironment에서 LH 첫2초 접촉 준비 보상 추가
+```
+
+[skill 교체](/home/ajou/yigyu/3/guitar_learning/skills/skill_environment.py:300)와 [timing 교체](/home/ajou/yigyu/3/guitar_learning/timing/timing_environment.py:134)는 둘 다 기존 reward_terms 중 `action_change`, `terminal_failure`만 보존한다. 따라서 현재 반환 보상은 다음과 같다.
+
+`r = action_change + terminal_failure + timing 보상 합 + preparation_contact`
+
+- LH timing: 시간창 안의 유효 목표 접촉 유지·획득·단계 성공·정밀도·미달 감점.
+- RH timing: 목표 현의 적격 기하 통과/시각·방향에 따른 성공·정밀도·잘못되거나 불필요한 통과·미달 감점 및 guide.
+- LH preparation_contact: 처음2초에 이전/현재240Hz 표본이 모두 원 candidate 양성인 구간만0.2/s로 적분. RH 추가 준비 보상은0이며 기존 timing guide를 쓴다.
+- 실패한 control tick의 양성 추가 보상은 억제한다. [현재 timing 항](/home/ajou/yigyu/3/guitar_learning/timing/timing_curriculum.py), [준비 항](/home/ajou/yigyu/3/guitar_learning/quality/actionable_preparation_environment.py:53).
+
+안정성 **cost는 reward_terms와 별도로** 수집되어 cost critic과 PPO에 전달된다. Actor advantage는 `A_reward − cost_weight × A_cost`다. [비용 수집](/home/ajou/yigyu/3/guitar_learning/training/parallel.py:350), [PPO 결합](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:146). 현재 설정의 cost_weight=1, episode_cost_budget=null은 고정 비용 가중치이며, 수학적 안전 보장은 아니다.
+
+설정의 `reward_mode="legacy"`는 현재 guitar_learning의 기본 음악 경로를 선택하는 이름이다. **옛 tab2body FretReward/StrikeReward를 그대로 부른다는 뜻이 아니다.** 계약 JSON에 기본 보상 계수가 남아 있어도 최종 reward_terms 합에 실제 들어가는지 따로 확인해야 한다. 원 50/100ms 양손 음악 ledger는 측정/기록으로 남지만, 손별 완화 stage 성공과 동일하지 않다.
+
+## 7. 현재 네트워크·PPO는 기존 모델과 어떻게 다른가
+
+| 대표 모델 | 관측/행동 | 구조와 현재 사용 여부 |
+|---|---|---|
+| 기존 Fret-v2 | 420/30, 기본 value6 | 의미 블록별 ELU encoder와512→256 fusion. 현재 학습기가 호출하지 않는다. |
+| 기존 Strike-v2 | 303/30, value1 | 의미 블록별 ELU encoder와512→256 fusion. 현재 학습기가 호출하지 않는다. |
+| 선행 fresh54 | obs_dim/54 | support15·LH33·RH6, 기본 hidden128의 MLP와 공유 encoder/두 critic. 현재39 정책과 다른 계약이다. |
+| 현재 기본 Policy | 상태468 등/39 | 상태256→256, 이벤트128→128, attention과 우선 event2개, 별도 Actor/value encoder. 기본 연결 당시468 모델은 약1.93M이었다. |
+| 현재 실제 SpecialistPolicy | 상태536/39 계약, 학습 손은LH33 또는RH6 | 손별 독립 Actor encoder/head + 중앙 value encoder·reward/cost critic. 현재 타이밍 실행이 선택하는 모델이다. |
+
+536은 **state 벡터 차원**이다. 이와 별도로24차원 이벤트 token 최대64개, mask, 우선 token2개와 mask가 들어간다. 현재 state는 기본468+skill history37+timing history31이며, 목표는 reset부터 보이도록 [SkillScoreTask.tokens](/home/ajou/yigyu/3/guitar_learning/skills/skill_environment.py:57)에서 제공한다.
+
+medium의 fusion은512→512→256이다. 최신 실제 reset 계약으로 CPU 모델을 구성해 센 파라미터 수는 총 **2,944,336개**, 학습 가능 수는 LH1,964,874개/RH1,957,935개다. 총수에는 현재 학습하지 않는 반대 손 Actor의 저장 파라미터도 포함한다. log_std39개를 포함한 requires_grad 기준이며, 실제 likelihood·샘플링·entropy는 선택 손 채널에만 적용한다. [모델과 집계 근거](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_code_lineage_audit_v1/code_map_v1.json).
+
+행동은 토크39개가 아니라 **초기 기준 관절 목표에 대한 정규화 offset**이다. 범위 제한·0.2 smoothing·변화율 제한 후 기존 유한 구동 제어에 전달된다. RH finger21과 지지 상체 등은 기준 목표를 유지하고 하체는 외부 유한 제어가 맡는다. 105상태 관측/97비영범위축/8영범위축을 policy105출력과 혼동하지 않는다. 원래 영범위축도 실제 움직임이 항상0이라고 가정하지 않는다.
+
+PPO는 [tab2body/learning/ppo.py](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/tab2body/learning/ppo.py)를 직접 실행하지 않는다. 현재 [ppo.py](/home/ajou/yigyu/3/guitar_learning/training/ppo.py)는 reward/cost GAE를 나눠 계산하고 Actor/value Adam을 분리하며, analytic KL 초과 시 Actor/optimizer 복원·학습률 축소 재시도, 갱신 오류 시 전체 모델/optimizer/RNG 복원을 수행한다. 선행 fresh54와 설계를 비교할 수는 있지만 동일 optimizer·모델·schema의 이어 학습이 아니다.
+
+## 8. 코드 재사용과 가중치 재사용은 별개다
+
+| 형태 | 현재 의미와 위치 |
+|---|---|
+| 기존 고정 기타 checkpoint | 현재 loader가 임의로 읽어 쓰는 경로는 아니다. 현재 schema·관측·행동 계약과 다르다. |
+| 현재 자체 BC/손별 PPO Actor 이전 | [timing_transfer.py](/home/ajou/yigyu/3/guitar_learning/timing/timing_transfer.py:122), [actionable_preparation_transfer.py](/home/ajou/yigyu/3/guitar_learning/quality/actionable_preparation_transfer.py:64). 지정 손 Actor와 std를 명시 이전하고 critic/optimizer/학습 카운터는 새로 시작한다. |
+| 동일 계약 strict resume | [ppo.py:load](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:218). schema·architecture·관측·행동·목표·보상·종료·PPO 설정 일치를 확인하고 모델/optimizer/RNG/카운터를 복원한다. |
+
+현재 actionable 설정은 자체 timing stage1의 왼손/오른손 `final.pt`를 Actor 초기화에 쓴다. 기존 native정착2초+policy5초/pre-roll1에서 native0초+policy7초/pre-roll3으로 바꾸며, timing-history 정규화가 달라진 열은 첫 layer 가중치를 scale 비율로 보정한다. 원505 입력의 의미/순서 보존을 검사한다. 이 보정이 바뀐 초기 물리 상태에서 성능까지 보존한다는 뜻은 아니다.
+
+`--resume`도 PhysX solver 내부나 중간 물리 episode를 이어받는 기능은 아니다. 학습 상태를 복원하고 새 물리 episode로 시작한다. 시뮬레이터를 같은 worker에서 재사용하는 reset과도 별개의 개념이다.
+
+## 9. 고정 기타의 가정을 어떻게 분리했는가
+
+현재 native 장면은 옛 `tab2body.env.base`의 고정 기타 학습 환경을 통째로 사용하지 않는다. 대신 검증된 자유 기타 초기 장면과035 설정·준비 보정·유지 제어 및 저장된 reset 상태를 사용한다. `prepared_reset`은 시작에 한 번 상태를 복원하고 이후 기타를 매 step 덮어써 안정화하지 않는다.
+
+Root만 고정하고 하체는 외부 유한 제어다. 기타는 자유 강체·중력ON·스트랩OFF이며, body frame을 매 표본 다시 측정한다. 단, humanoid XML/손 mesh, 질량·관성 등 자산/기록에는 과거 코드 의존성이 남아 있다. **고정 기타 환경을 쓰지 않는다는 것과 legacy 자산/제어 의존성이 없다는 것은 다르다.**
+
+생성자에서는 과거 protocol/ready_spec, FK·anchor·support 참조도 여전히 사용한다. 정책 실행 중 옛 손 IK/스크립트 타현 일정을 우회한다고 해서 이 생성 의존 파일까지 제거할 수 있는 것은 아니다. 저장된 시작 상태는 step5280(22초)에서 얻은 것이지만 현재 reset 때22초를 다시 적분하지 않는다. 제어기는 성숙한 유지 제어 구간을 쓰도록 시간 view를 이동하며 실제 물리 시각은0에서 시작한다.
+
+`control.py` 내부에는 fixed-lower라는 예전 metadata 문구가 남고, v4가 복사한 반환 metadata에서 실제 유한 하체 제어로 보정한다. 내부 설명 문자열 하나보다 실제 호출과 반환 계약을 기준으로 읽어야 한다.
+
+전체 실제 import/호출·물리 자산/설정 위치·복사 SHA는 [native 계보 감사](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_code_lineage_audit_v1/native_provenance_v1.md)에 정리했다. 특히 `whole_body_control.py`에 PD 클래스가 존재해도 최신 실행은 그 PD 전체를 호출하지 않고 이름집합을 검사하며, 실제 하체 유지 제어는 기존 native 경로를 따른다.
+
+## 10. 이 분석에서 드러난 우선 점검 항목
+
+1. **압현의 음악적 허용/금지 규칙 복원.** 목표 접촉, 목표 미접촉, 잘못된 위치 접촉, 목표와 동시 발생한 오류를 구분하고 화음·바레·허용 지지 접촉을 고려해야 한다. 현재 후보 정의를 그대로 두고 ‘오압현까지 해결’했다고 말할 수 없다.
+2. **최종 보상 합을 기준으로 문서/로그 읽기.** 이전 reward 클래스나 계수가 코드에 있다는 사실보다 현재 wrapper가 최종으로 남기는 항목을 확인해야 한다.
+3. **타현 준비·추가 통과·회복/대기 감독의 명세.** guide와 최초 crossing 성공만으로 이전 StrikeTask의 모든 음악적 제약을 대체하지 못한다.
+4. **목표 projection 범위 점검.** 현재는 첫 단음이고, mute/ordered strum/전곡 복합 이벤트와 양손 결합을 이미 이식·학습한 것으로 설명하지 않는다.
+5. **파지 모양과 물리 피크 파지 분리.** 현재는 held 손가락 목표와 검지의 기준점을 사용한다. 피크를 실제로 눌러 잡는 기능을 원한다면 별도 모델·판정 설계가 필요하다.
+
+이는 후속 구현을 위한 점검 순서이며 이번 작업에서 판정·보상·학습 설정을 바꾼 것은 아니다. 기존 압현/타현 목표의 빠진 의미를 먼저 정한 뒤 자유 기타 측정기에 연결하는 것이, 옛 고정 기타 환경 전체를 다시 가져오는 것보다 변경 범위를 명확히 한다.
+
+감사 원자료·코드 위치·SHA·모델 집계·검수는 [이번 결과 디렉토리](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_code_lineage_audit_v1)에 보존한다.

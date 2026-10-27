@@ -1,0 +1,5 @@
+from pathlib import Path
+import shutil,subprocess,json,hashlib,time,os
+R=Path('/home/ajou/yigyu/3');P=R/'docs/2026-10-12/stability_adapter_2/results/body9_strap_minus4mm_v1';s=R/'stability_adapter_2/analyze_body9_strap_minus4mm.py';sha=lambda p:hashlib.sha256(Path(p).read_bytes()).hexdigest();before=sha(s);shutil.copyfile(s,P/'analysis_source.py');shutil.copyfile(__file__,P/'analysis_execution_producer.py');start=time.monotonic()
+with (P/'analysis.log').open('wb') as out:r=subprocess.run(['/home/ajou/miniconda3/envs/rl38/bin/python','-u','-m','stability_adapter_2.analyze_body9_strap_minus4mm'],cwd=str(R),env=dict(os.environ,OPENBLAS_NUM_THREADS='1',OMP_NUM_THREADS='1'),stdout=out,stderr=subprocess.STDOUT)
+(P/'analysis_execution.json').write_text(json.dumps(dict(exit_code=r.returncode,wall_seconds=time.monotonic()-start,source_sha256_before=before,source_sha256_after=sha(s),log_sha256=sha(P/'analysis.log'),native_calls=0),indent=2)+'\n');print((P/'analysis.log').read_text()[-5000:]);assert r.returncode==0 and before==sha(s)

@@ -1,8 +1,8 @@
-# tab2fingermapping — 오디오 → 탭 + 코드 트랙 (→ 운지) Stage1
+# tab2fingermapping — 오디오 → 탭 + 코드 트랙 + 운지 Stage1
 
 > 최종 갱신: 2026-08-03. 2026-07-15 재구성에서 구 `tabtrans/`의 활성 컴포넌트(conformer v1·consonance-ACE·chordtrack)를
 > 이곳으로 통합. `tabtrans/`는 아카이브(legacy 실험·examples)로 남음.
-> 다음 단계인 finger mapping(설계 = `docs/finger-mapping-design.md`)도 이 패키지에 구현 예정.
+> Finger mapping까지 이 패키지에 구현되어 `*.fingering.json`을 생성한다.
 
 ## 구성
 
@@ -34,13 +34,17 @@ $PY pipeline.py <audio.wav> --skip-ace       # 탭→규칙+필터만
 `*.notes.json`(--bpm 시).
 
 `_gen/<stem>_stage1`은 검수 전 작업 산출물이다. 환경 입력으로 확정한 곡은
-`tab2body/tools/register_song_bundle.py`로
+프로젝트 루트에서 `python -m guitar_learning.tool.register_song_bundle <song_id> --stage1 <stage1_directory>`로
 [`data/song_bundles/<song_id>`](../data/song_bundles/)에 등록한다. Isaac Gym은 Stage1 `_gen`
 경로를 직접 읽지 않는다.
+
+타임라인은 프로젝트 루트에서 `python -m guitar_learning.tool.render_timeline <fingering.json> <out.png> [strike_training.json]`으로 생성한다. 곡 입력 생성·계획·감사는 [도구 안내](/home/ajou/yigyu/3/guitar_learning/tool/README.md)를 따른다.
 
 ## 관례·주의
 
 - **줄 번호**: CSV/모델 = 0이 low-E, note JSON = frets[5]가 low-E (csv_to_notejson이 반전) — PROJECT_CONTEXT §7.
+- 물리 학습에 등록한 뒤에는 Full compiler가 source event ID와 string-convention manifest를 다시
+  검증한다. Stage1 `_gen` 산출물을 checkpoint 입력으로 직접 사용하지 않는다.
 - v1 그리드 86.13fps(hop 256)가 공통 시간축. ACE(43.07fps)는 .lab 구간으로만 소비.
 - ACE 파라미터는 검증된 완화 세트(τ0.3, min-dur 0.25s) 고정 — 근거는 PROJECT_CONTEXT §2(07-15 ACE 평가) — ace_eval은 07-16 유실.
 - 37클래스 어휘 `chords.py`는 `chordtrack/` 안에 자립(07-16 구 conformer_v2에서 추출). 구 conformer_v2 실험은 `../legacy/tabtrans_archive/`.

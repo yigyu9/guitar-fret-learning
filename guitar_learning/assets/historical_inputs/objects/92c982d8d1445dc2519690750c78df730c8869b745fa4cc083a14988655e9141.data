@@ -1,0 +1,17 @@
+"""Upright candidate capsule audit plus independent box/ground SAT checks."""
+from .upright_audit_v2 import audit
+from .upright_audit_v1 import *
+from .common import HUMAN
+from .upright_polytope_v1 import GuitarBoxes
+from stability_adapter_2.om_axilla_source_geometry_v3 import CapsuleBodyDistance
+from stability_adapter_2.initial_pose_noise_v1 import pose
+from scipy.spatial.transform import Rotation
+
+
+def main():
+    out=BASE/'upright_chest_support_v1/source_audit_v4';out.mkdir(exist_ok=False);source=BASE/'upright_chest_support_v1/source_v5';paths=[source/n for n in ('candidate.json','predicted_state.json','report.json','support_candidate.json')];pins=pin(extra=paths+[INITIAL,NATIVE/'native_properties.json',PLAN]);save(out/'inputs_before.json',pins);i=read(INITIAL);c=read(source/'candidate.json');baseline=read(BASE/'inputs/source_corrections_v4/chair_Y_minus_2p5mm_v1.json');rows=audit(c,i);old=audit(baseline,i);before={(r['a'],r['b'],r.get('geom','')):r['gap_m'] for r in old};negative=[r for r in rows if r['collision_relevant'] and r['gap_m']<-.0001 and r['gap_m']<before.get((r['a'],r['b'],r.get('geom','')),.02)-.0002 and not(r['a']=='Pelvis' and r['b_actor']=='chair')]
+    fk,_=full_fk(i['joint_names'],i['human_body_names'],i['native_initial_state'],np.array(i['q_ref105_rad']));poses=fk(np.array(c['q_ref_rad']));gp=np.array(c['guitar_position_W_m']);gr=Rotation.from_quat(c['guitar_quaternion_xyzw']);distance=CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']),HUMAN);boxes=GuitarBoxes(distance);boxgaps={n:boxes.measure(poses,n,gp,gr) for n in boxes.boxes};chair=read(ROOT/read(A/'config.json')['pose_source'])['params']['chair'];center=np.r_[np.array(chair['center_xy'])+np.array(c['chair_translation_W_m'])[:2],chair['half'][2]];poses['chair']=(center,Rotation.identity());boxes.boxes['chair']=(np.zeros(3),np.array(chair['half']),Rotation.identity());chairgap=boxes.measure(poses,'chair',gp,gr);ground=min(float((gp+gr.apply(v))[:,2].min()) for v,_,_,_ in distance.pieces);gates=dict(local_tilt_reach_gaps=read(source/'report.json')['local_geometry_reach_eligible'],no_new_relevant_capsule_intersection=not negative,no_body_box_guitar_body_intersection=min(boxgaps.values())>=.0001,no_guitar_body_chair_intersection=chairgap>=.0001,guitar_body_ground_clear=ground>=.001)
+    save(out/'report.json',dict(gates=gates,eligible_for_native=all(gates.values()),box_guitar_body_SAT_gap_m=boxgaps,chair_guitar_body_SAT_gap_m=chairgap,guitar_body_min_source_z_m=ground,new_capsule_intersections=negative,capsule_pairs=rows,scope='Capsules versus all flattened guitar source shapes and human/chair; independent human source boxes versus all original G:body convex pieces by complete polytope SAT (not Euclidean gap or cooked penetration). Chair/body and ground/body included. Earlier source_audit_v2/v3 excluded noncapsule human boxes; eligible only certified their limited capsule scope and missed source4 Pelvis box overlap. Hand meshes not source-certified, preserved guitar-local palm pose and native 240Hz actual contacts remain required. Inherited lower correction provenance fields do not certify upright.',inputs_unchanged=verify(pins)));print(gates,'boxes',boxgaps,'chair',chairgap,flush=True)
+
+
+if __name__=='__main__':main()

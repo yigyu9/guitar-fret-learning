@@ -1,0 +1,112 @@
+"""Keep offline teacher FK proof separate from the unchanged native model audit."""
+import argparse
+import copy
+import json
+import os
+from pathlib import Path
+import sys
+from ..native.paths import original_input_path
+
+ROOT=Path(__file__).resolve().parents[2]
+TEACHER_XML=str(ROOT/'stability_adapter_2/assets/humanoid_fixed_lower.xml')
+TEACHER_SHA256='b68c3cbced25d52ab9bfa6bab8fd8cb24bcc6dba78ebfcc33403f8f9a4fc1ba6'
+
+
+def projected_evidence(evidence,proof_pins):
+    """Classify exactly one known offline input; leave every other pin intact."""
+    pins={}
+    for path, sha in evidence['source_pins'].items():
+        identity=TEACHER_XML if str(original_input_path(path))==TEACHER_XML else path
+        if identity in pins and pins[identity]!=sha:
+            raise ValueError('conflicting source identity')
+        pins[identity]=sha
+    if pins.get(TEACHER_XML)!=TEACHER_SHA256:
+        raise ValueError('exact audited offline teacher FK XML required')
+    for name in ('attempt.json','support_wrapper.json'):
+        path=ROOT/'paper/initial_pose/lower_body_release_v1/front_facing_ready_v1/native_baseline_v14'/name
+        if TEACHER_XML in json.loads(path.read_text())['input_sha256']:
+            raise ValueError('a native baseline model cannot be classified as teacher-only')
+    result=dict(evidence)
+    result['source_pins']={path:sha for path,sha in pins.items() if path!=TEACHER_XML}
+    for path,sha in proof_pins.items():
+        if path in result['source_pins'] and result['source_pins'][path]!=sha:
+            raise ValueError('conflicting teacher proof pin')
+        result['source_pins'][path]=sha
+    return result
+
+
+def run(settings,args):
+    import isaacgym
+    from unittest.mock import patch
+    from guitar_learning.imitation.imitation import dataset_manifest
+    from guitar_learning.training.recording import write
+    from . import train
+    out=args.out.resolve()
+    proof=out.parent/(out.name+'_teacher_auxiliary_inputs.json')
+    audit=out.parent/(out.name+'_teacher_auxiliary_final_audit.json')
+    if out.exists() or proof.exists() or audit.exists():
+        raise FileExistsError('new output and teacher proof paths required: '+str(out))
+    original_validator=train.initialization_evidence
+    evidence=original_validator(settings,require_gate=True)
+    full_pins=copy.deepcopy(evidence['source_pins'])
+    if dataset_manifest(full_pins)!=full_pins:
+        raise RuntimeError('complete initialization inputs changed before teacher classification')
+    # Validate the one permitted classification before publishing its proof.
+    projected_evidence(evidence,{})
+    out.parent.mkdir(parents=True,exist_ok=True)
+    write(proof,dict(schema='guitar_learning.teacher_auxiliary_inputs.v1',
+        auxiliary_inputs={TEACHER_XML:dict(sha256=TEACHER_SHA256,
+            role='offline teacher FK reference, not the native training asset')},
+        full_initialization_inputs=full_pins,
+        scope='only the named offline XML is represented by this pinned JSON; native model parity is unchanged'))
+    proof_pins=dataset_manifest([proof])
+    def validator(value,*,require_gate=False):
+        actual=original_validator(value,require_gate=require_gate)
+        if actual['source_pins']!=full_pins or dataset_manifest(full_pins)!=full_pins:
+            raise RuntimeError('complete initialization/gate evidence changed')
+        if dataset_manifest([proof])!=proof_pins:
+            raise RuntimeError('teacher auxiliary proof changed')
+        return projected_evidence(actual,proof_pins)
+    primary=None;result=None
+    try:
+        with patch.object(train,'initialization_evidence',validator):
+            result=train.run(settings,args)
+    except BaseException as error:
+        primary=error
+        raise
+    finally:
+        audit_error=None;after=None;unchanged=False
+        try:
+            after=dataset_manifest(full_pins)
+            unchanged=after==full_pins and dataset_manifest([proof])==proof_pins
+            if not unchanged:raise RuntimeError('complete initialization/teacher inputs changed during training')
+        except BaseException as error:audit_error=error
+        try:
+            write(audit,dict(schema='guitar_learning.teacher_auxiliary_final_audit.v1',
+                completed=bool(primary is None and audit_error is None and unchanged
+                    and isinstance(result,dict) and result.get('completed') is True),
+                runner_completed=result.get('completed') if isinstance(result,dict) else None,
+                teacher_auxiliary_inputs=str(proof),teacher_auxiliary_proof_pins=proof_pins,
+                full_inputs_before=full_pins,full_inputs_after=after,source_unchanged=unchanged,
+                failure=dict(type=type(primary).__name__,message=str(primary)) if primary else None,
+                audit_error=dict(type=type(audit_error).__name__,message=str(audit_error)) if audit_error else None,
+                scope='full BC/4-gate evidence remains hash-verified; original native model parity was not patched'))
+        except BaseException as error:
+            if audit_error is None:audit_error=error
+        if audit_error is not None:
+            if primary is None:raise audit_error
+            print('[teacher proof] secondary audit error: '+str(audit_error),file=sys.stderr,flush=True)
+    return result
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--settings',type=Path,required=True);parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--resume',type=Path);args=parser.parse_args()
+    for key in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS'):os.environ[key]='1'
+    import isaacgym
+    from .train import settings_document
+    run(settings_document(json.loads(args.settings.read_text())),args)
+
+
+if __name__=='__main__':main()

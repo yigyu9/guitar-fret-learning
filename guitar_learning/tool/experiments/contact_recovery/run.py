@@ -1,0 +1,147 @@
+"""Versioned native evaluation and teacher collection; never starts PPO training."""
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+
+def _fresh(settings, args, protocol):
+    """Exec a new interpreter/native scene for each explicitly listed case."""
+    from guitar_learning.training.recording import write, digest, active_source_paths
+    from guitar_learning.tool.experiments.transition_refinement_runtime_v2.evidence import validate_report
+    out = args.out.resolve()
+    out.mkdir(parents=True, exist_ok=False)
+    sources = active_source_paths(Path(__file__).resolve().parents[3])
+    sources.update((args.settings.resolve(), args.protocol.resolve()))
+    if args.checkpoint: sources.add(args.checkpoint.resolve())
+    pins = {str(p): digest(p) for p in sources}
+    write(out/'inputs_before.json', pins)
+    write(out/'pipeline_settings.json', settings)
+    write(out/'protocol.json', protocol)
+    children = []
+    primary = None
+    try:
+        for index in range(len(protocol['cases'])):
+            child_out = out/('process_%03d'%index)
+            command = [sys.executable, '-u', '-m', 'guitar_learning.tool.experiments.contact_recovery.run', args.mode,
+                '--settings', str(args.settings.resolve()), '--protocol', str(args.protocol.resolve()),
+                '--out', str(child_out), '--case-index', str(index)]
+            if args.checkpoint: command += ['--checkpoint', str(args.checkpoint.resolve())]
+            with (out/('process_%03d.log'%index)).open('x') as stream:
+                result = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=False)
+            entry = dict(case_index=index, returncode=result.returncode, argv=command,
+                result=str(child_out/'result.json'), runtime_audit=str(out/(child_out.name+'_runtime_json_audit.json')))
+            children.append(entry)
+            if result.returncode != 0: raise RuntimeError('fresh native case failed: '+str(index))
+            native = json.loads((child_out/'result.json').read_text())
+            validate_report(Path(entry['runtime_audit']),child_out,args.mode)
+            if (native.get('schema') != 'guitar_learning.contact_recovery_probe.v1'
+                    or native.get('mode') != args.mode or native.get('completed') is not True
+                    or native.get('source_unchanged') is not True
+                    or native.get('physical_flags_ok') is not True
+                    or native.get('forbidden_calls') or native.get('missing_import_pins')
+                    or native.get('failure') or native.get('cleanup_error')):
+                raise RuntimeError('fresh native case did not finalize all guards')
+            entry.update(result_sha256=digest(child_out/'result.json'),
+                runtime_audit_sha256=digest(entry['runtime_audit']), successful_cases=len(native['successful_cases']))
+    except BaseException as error:
+        primary = error
+    unchanged = all(Path(name).is_file() and digest(name) == sha for name,sha in pins.items())
+    report = dict(schema='guitar_learning.contact_recovery.batch.v1', completed=primary is None and unchanged,
+        process_mode='fresh_process', mode=args.mode, children=children, source_unchanged=unchanged,
+        failure=dict(type=type(primary).__name__, message=str(primary)) if primary else None,
+        scope='separate interpreter and native scene per case; no independence or solver determinism guarantee')
+    write(out/'result.json', report)
+    if primary: raise primary
+    if not unchanged: raise RuntimeError('fresh batch sources changed')
+    return report
+
+
+def _native(settings, args, protocol):
+    # Native import is deliberately first, before NumPy/Torch and their helpers.
+    import isaacgym
+    from unittest.mock import patch
+    from guitar_learning.tool.experiments.transition_refinement_runtime_v2.activation import activated
+    from guitar_learning.tool.experiments.transition_refinement_runtime_v2.observer import Observer
+    from guitar_learning.tool.experiments.transition_refinement_runtime_v2.audit import publish
+    from guitar_learning.tool.experiments.transition_refinement_runtime_v2.evidence import validate_gates
+    from guitar_learning.tool.experiments.transition_refinement_runtime_v2.run import source_paths as runtime_sources
+    audit_path = args.out.parent/(args.out.name+'_runtime_json_audit.json')
+    if args.out.exists() or audit_path.exists(): raise FileExistsError('new output/audit paths required')
+    observer = Observer()
+    completed = False
+    try:
+        with activated(observer):
+            from guitar_learning.tool.experiments.transition_refinement import evidence, environment, policy, ppo, settings as parser
+            from guitar_learning.tool.experiments.transition import environment as legacy_environment, policy as legacy_policy, train
+            from guitar_learning.training import ppo as shared_ppo
+            from guitar_learning.imitation.imitation import dataset_manifest
+            from guitar_learning.tool.experiments.contact_recovery import native
+            settings = parser.settings_document(settings)
+            settings['refinement']['evaluation_mode'] = protocol['evaluation_mode']
+            original_sources = evidence.source_paths
+            with patch.object(evidence, 'source_paths', lambda: sorted(set(original_sources()+runtime_sources()))):
+                print('[contact recovery] auditing original checkpoint/native evidence',flush=True)
+                proof = evidence.initialization_evidence(settings, require_gate=args.mode == 'evaluate')
+            if args.mode == 'evaluate': proof = validate_gates(proof, settings)
+            data = proof.get('rehearsal_data')
+            class ConfiguredPolicy(policy.SpecialistPolicy):
+                def __init__(self, state_dim=500, event_dim=24, size='medium', contract=None):
+                    super().__init__(state_dim, event_dim, size, contract,
+                                     exploration=settings['refinement']['exploration'])
+            class ConfiguredTrainer(ppo.PPOTrainer):
+                def __init__(self, model, config=None):
+                    super().__init__(model, config, demonstration=data,
+                        refinement=settings['refinement']['learning'],
+                        demonstration_sha256=ppo.demonstration_digest(data))
+            def verified(value, *, require_gate=False):
+                if value != settings or require_gate and data is None:
+                    raise ValueError('initialization proof belongs to exact settings')
+                if dataset_manifest(proof['source_pins']) != proof['source_pins']:
+                    raise RuntimeError('native initialization evidence changed')
+                return proof
+            args.controller = 'policy' if args.mode == 'evaluate' else 'solver'
+            args.case_indices = [args.case_index] if args.case_index is not None else list(range(len(protocol['cases'])))
+            args.episodes = len(args.case_indices)
+            args.max_nfev, args.starts = 80, 2
+            with patch.object(train, 'initialization_evidence', verified), \
+                    patch.object(legacy_environment, 'build_environment', environment.build_environment), \
+                    patch.object(legacy_policy, 'SpecialistPolicy', ConfiguredPolicy), \
+                    patch.object(shared_ppo, 'PPOTrainer', ConfiguredTrainer):
+                result = native.run(settings, args, protocol)
+            completed = result['completed'] is True
+            return result
+    finally:
+        publish(observer, audit_path, completed=completed, mode=args.mode,
+                out=args.out, primary=sys.exc_info()[1])
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('mode', choices=('evaluate', 'collect'))
+    parser.add_argument('--settings', type=Path, required=True)
+    parser.add_argument('--protocol', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--checkpoint', type=Path)
+    parser.add_argument('--case-index', type=int, help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    for key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+        os.environ[key] = '1'
+    from guitar_learning.tool.experiments.contact_recovery.protocol import protocol_document
+    protocol = protocol_document(json.loads(args.protocol.read_text()), args.mode)
+    if (args.mode == 'evaluate') != (args.checkpoint is not None):
+        raise ValueError('evaluation requires a strict PPO checkpoint; collection uses a teacher')
+    if args.case_index is not None and (protocol['process_mode'] != 'fresh_process'
+            or not 0 <= args.case_index < len(protocol['cases'])):
+        raise ValueError('case index belongs to one fresh child process only')
+    raw = json.loads(args.settings.read_text())
+    if protocol['process_mode'] == 'fresh_process' and args.case_index is None:
+        _fresh(raw, args, protocol)
+    else:
+        _native(raw, args, protocol)
+
+
+if __name__ == '__main__':
+    main()

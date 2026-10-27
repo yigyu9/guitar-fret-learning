@@ -1,0 +1,110 @@
+<div id="fixed-song-guides-v1">
+  <style>
+    #fixed-song-guides-v1 { --guide-current:var(--orange); --guide-prep:var(--blue); --guide-wrist:var(--purple); }
+    #fixed-song-guides-v1 .guide-stage { width:100%; }
+    #fixed-song-guides-v1 svg { display:block; width:100%; overflow:hidden; }
+    #fixed-song-guides-v1 svg text { fill:var(--foreground); font-size:12px; paint-order:stroke; stroke:var(--background); stroke-width:3px; stroke-linejoin:round; }
+    #fixed-song-guides-v1 .guide-legend { display:flex; flex-wrap:wrap; gap:8px 16px; }
+    #fixed-song-guides-v1 .guide-legend span { display:inline-flex; align-items:center; gap:6px; }
+    #fixed-song-guides-v1 .guide-swatch { width:12px; height:8px; display:inline-block; }
+    #fixed-song-guides-v1 .guide-area { fill:var(--blue); fill-opacity:.10; stroke:var(--border); stroke-width:1px; }
+    #fixed-song-guides-v1 .guide-area.active { fill:var(--guide-current); fill-opacity:.34; }
+    #fixed-song-guides-v1 .guide-mark { stroke-linecap:round; fill:none; }
+    #fixed-song-guides-v1 .guide-details { overflow-wrap:anywhere; min-height:2em; }
+  </style>
+  <div class="viz-controls">
+    <button type="button" class="btn btn-secondary" data-play aria-pressed="false">재생</button>
+    <label class="form-label">곡 시점 <input class="form-range" data-time type="range" min="0" max="1969" step="1" value="219" aria-label="정책 시각"></label>
+    <output class="tabular-nums" data-clock></output>
+  </div>
+  <div class="guide-stage">
+    <svg role="img" aria-label="초기 자세 고정 기타 넥 프렛 영역과 현재 곡 목표 및 손목 안내">
+      <image data-neck href="__NECK_IMAGE__" x="0" y="0" width="1280" height="720"></image>
+      <image data-body href="__BODY_IMAGE__" x="20" y="440" width="300" height="169"></image>
+      <g data-areas></g><g data-marks></g>
+    </svg>
+  </div>
+  <div class="guide-legend text-small">
+    <span><i class="guide-swatch" style="background:var(--guide-current)"></i>현재 발음 목표</span>
+    <span><i class="guide-swatch" style="background:var(--guide-prep)"></i>손가락별 준비 목표</span>
+    <span><i class="guide-swatch" style="background:var(--guide-wrist)"></i>손목 안내 중심</span>
+    <span>위 6현 · 아래 1현 · 숫자는 프렛</span>
+  </div>
+  <div class="guide-details" data-detail aria-live="polite"></div>
+  <div class="text-small text-muted">휴머노이드·기타·실제 손목은 초기035/v14에 고정 · 시간과 안내만 변경 · 물리 적분 0회</div>
+  <script type="application/json" data-scene>__SCENE_JSON__</script>
+  <script>
+  (() => {
+    const root = document.getElementById('fixed-song-guides-v1');
+    const scene = JSON.parse(root.querySelector('[data-scene]').textContent);
+    const svg = root.querySelector('svg'), slider = root.querySelector('[data-time]');
+    const play = root.querySelector('[data-play]'), detail = root.querySelector('[data-detail]');
+    const fingers = ['엄지','검지','중지','약지','소지'];
+    let frame = Math.min(scene.control_ticks, Math.round(scene.targets[0].onset_s*60)+1);
+    let playing = false, origin = 0, originFrame = 0, width = 736, raf = null;
+    const stored = window.openai?.widgetState?.modelContent?.frame;
+    if (Number.isInteger(stored) && stored>=0 && stored<=scene.control_ticks) frame=stored;
+    slider.max = scene.control_ticks;
+    function persist() {
+      window.openai?.setWidgetState({modelContent:{frame},privateContent:null}).catch(() => {});
+    }
+    function draw(announce=true) {
+      const scale=width/1280, height=720*scale, now=frame/60;
+      slider.value=frame;
+      root.querySelector('[data-clock]').textContent=`정책 ${now.toFixed(3)}초 · 원곡 ${(now-scene.pre_roll_s).toFixed(3)}초`;
+      svg.setAttribute('viewBox',`0 0 ${width} ${height}`);
+      svg.style.height=`${height}px`;
+      root.querySelector('[data-neck]').setAttribute('width',width);
+      root.querySelector('[data-neck]').setAttribute('height',height);
+      const inset=root.querySelector('[data-body]');
+      for (const [k,v] of Object.entries({x:20,y:440,width:300,height:169})) inset.setAttribute(k,v*scale);
+      const audible=scene.targets.filter(t=>t.onset_s<=now&&now<t.end_s);
+      const activeIds=new Set(audible.map(t=>t.index));
+      const preparing=scene.tracking[frame].filter((i,j)=>scene.tracking_valid[frame][j]&&!activeIds.has(i)).map(i=>scene.targets[i]);
+      const usedFrets=new Set(audible.map(t=>t.fret));
+      const point=p=>`${(p[0]*scale).toFixed(3)},${(p[1]*scale).toFixed(3)}`;
+      const labelStride=width<420?8:width<650?2:1;
+      root.querySelector('[data-areas]').innerHTML=scene.cells.map(c=>{
+        const label=(c.fret===1||c.fret===22||c.fret%labelStride===0)?`<text x="${c.label_px[0]*scale}" y="${c.label_px[1]*scale+(c.fret>=15&&c.fret%2?14:0)}" text-anchor="middle" dominant-baseline="central">${c.fret}</text>`:'';
+        return `<polygon class="guide-area ${usedFrets.has(c.fret)?'active':''}" points="${c.quad_px.map(point).join(' ')}"><title>F${c.fret}: ${c.fret===1?'너트':`F${c.fret-1}`}부터 F${c.fret}까지의 6현 영역</title></polygon>${label}`;
+      }).join('');
+      let marks='';
+      for (const [targets,color] of [[preparing,'var(--guide-prep)'],[audible,'var(--guide-current)']]) {
+        for (const t of targets) {
+          const [a,b]=t.segment_px, p=t.center_px;
+          marks+=`<line class="guide-mark" x1="${a[0]*scale}" y1="${a[1]*scale}" x2="${b[0]*scale}" y2="${b[1]*scale}" stroke="${color}" stroke-width="5"/><circle cx="${p[0]*scale}" cy="${p[1]*scale}" r="4" fill="${color}"><title>${t.string}현 F${t.fret} ${fingers[t.finger]}</title></circle>`;
+        }
+      }
+      const [x,y]=scene.wrist_target_px[frame].map(v=>v*scale), [a,b]=scene.wrist_px.map(v=>v*scale);
+      marks+=`<line x1="${a}" y1="${b}" x2="${x}" y2="${y}" stroke="var(--guide-wrist)" stroke-width="1" stroke-dasharray="3 3"/><circle cx="${a}" cy="${b}" r="4" fill="none" stroke="var(--foreground)"><title>고정된 실제 손목</title></circle><circle cx="${x}" cy="${y}" r="9" fill="none" stroke="var(--guide-wrist)" stroke-width="2"/><path d="M${x-13},${y}h26 M${x},${y-13}v26" stroke="var(--guide-wrist)" stroke-width="2"/><text x="${x}" y="${y-18}" text-anchor="middle">손목 안내</text>`;
+      root.querySelector('[data-marks]').innerHTML=marks;
+      if (announce) {
+        const current=audible.map(t=>`${t.string}현 F${t.fret} ${fingers[t.finger]}`).join(' / ')||'현재 발음 목표 없음';
+        const prep=preparing.map(t=>`${t.string}현 F${t.fret} ${fingers[t.finger]}`).join(' / ')||'없음';
+        detail.textContent=`${current} · 준비 ${prep} · 손목 anchor F${scene.anchor_fret[frame].toFixed(2)}`;
+      }
+    }
+    function stop() { if(raf!==null)cancelAnimationFrame(raf);raf=null;playing=false;play.textContent='재생';play.setAttribute('aria-pressed','false');draw(); }
+    function loop(stamp) {
+      if (!playing)return;
+      frame=Math.min(scene.control_ticks,originFrame+Math.floor((stamp-origin)*.06));
+      draw(frame%15===0);
+      if (frame===scene.control_ticks) {stop();persist();return;}
+      raf=requestAnimationFrame(loop);
+    }
+    play.addEventListener('click',()=>{
+      if (playing) {stop();persist();return;}
+      if (frame===scene.control_ticks)frame=0;
+      playing=true;origin=performance.now();originFrame=frame;play.textContent='일시 정지';play.setAttribute('aria-pressed','true');raf=requestAnimationFrame(loop);
+    });
+    slider.addEventListener('input',()=>{const value=Number(slider.value);stop();frame=value;draw();});
+    slider.addEventListener('change',persist);
+    new ResizeObserver(entries=>{width=entries[0].contentRect.width;draw();}).observe(root.querySelector('.guide-stage'));
+    window.addEventListener('openai:set_globals',event=>{
+      const value=event.detail?.globals?.widgetState?.modelContent?.frame;
+      if (Number.isInteger(value)&&value>=0&&value<=scene.control_ticks){stop();frame=value;draw();}
+    });
+    draw();
+  })();
+  </script>
+</div>

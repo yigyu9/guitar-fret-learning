@@ -1,4 +1,4 @@
-"""왼손 운지 배정 — 규칙 1~5(docs/finger-mapping-design.md)의 빔 서치 구현.
+"""왼손 운지 배정 — 규칙 1~5(docs/archive/finger-mapping-design.md)의 빔 서치 구현.
 
 입력: 탭 노트(notes.csv: string,start,end,pitch) + 코드 트랙(chords.json — chordtrack 산출).
 출력: 노트별 finger(0=개방,1~4)·바레, 시간별 손 상태(P·그립), 진단 목록.

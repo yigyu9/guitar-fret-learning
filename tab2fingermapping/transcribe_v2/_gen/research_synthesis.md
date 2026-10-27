@@ -1,5 +1,7 @@
 # NEW MODEL DESIGN SPEC — "HCQT Onsets-&-Frames Conformer for Guitar Tablature" (v2)
 
+> **Status: generated research reference.** This is not the active Stage1 runtime contract.
+
 Consolidated from all 5 facets. Every choice is decisive and build-ready for unattended overnight runs. Citations in `(F#: paper)` form.
 
 ---

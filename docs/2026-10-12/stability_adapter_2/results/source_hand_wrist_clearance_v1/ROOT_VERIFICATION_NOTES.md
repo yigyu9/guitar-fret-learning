@@ -1,0 +1,13 @@
+# 손목13source조건 — root 확인 범위
+
+직전기저부4조건actual0step거절을근거로손목x/y/z한축0·±.05·±.1rad 총13source조건을비교했다. Source실행exit0,69입력·69사본전후SHA,8검사를통과했다. Wrist아래23body/17activecollisiongeom을함께옮기고finger1을포함한손의측정상대계층을고정했다. 손목초기각과held목표의차이인기존offset은모두유지했으며다른80初期/held·전81범위와sin양끝을검산했다. Held delta와initial delta는float32조립상1ULP수준으로다를수있어각각기록했다.
+
+모든조건에서thumb2–guitar교차가남아selected=null이다. Proposal/source_prediction/native디렉터리와native실행기록은없다. 새actualnative/physics/actor/학습0이고5초기타안정성은측정하지않았다. 모든조건의cross-hands/self1188/palmup및upperarm·nonmovingmesh·handrelativeidentity는통과했다.
+
+Wrist_y−.1rad는thumb2 LP공통내접반경을기준4.288364821→.815475676mm로줄였지만palm–guitar2.076522306mm와추가finger/fret교차를포함한HG총6쌍이남았다. Sourceclear는엄지하나의진단값으로결정하지않는다. Wrist_x+.1rad의평면정렬proxy는.999391469로좋지만thumb2/palm교차가남았다. 가까운평행은soft선호이고필수정렬이나지지인증이아니다.
+
+도표의첫series는thumb2–guitar source LP반경이며두번째는나머지보고된HGpair의최대반경이다. 두번째0은반경1e−7m초과인보고pair가없다는뜻이며표면간거리0이아니다. LP반경은PhysX침투깊이·동적접촉력과다르다. 재사용하는이전Gym시작프레임은직전손5관절거절phase의actualt0이며이번조건들의새native렌더로취급하지않는다. 기존영상152개를그대로보존한다.
+
+다음74source계획은원baseline과Wrist_y−.1가설에서Thorax/Shoulder/Elbow9축의작은변화를비교하는미실행계획이다. 기존실패를채택한것이아니라팔위치를바꿔palm과thumb양쪽겹침을줄일수있는지검사한다. 선택한한후보의freshactual직접gate/같은초기화5초는별도필수검증이다. Sourceclear/범위호환을초기기타안정화·자연성·연주/학습완료로확대하지않는다.
+
+LA/기타初期fullstate/root하체·몸통9목표/PD·최종66권한과자유기타/강제고정·손부착·지속pose덮어쓰기금지를유지한다. 최종감사는소비소스·입력·로그·현재SHA·사본·기존봉인inventory·영상모음·문서prefix를검사한다. Geometry/분석/렌더/physics는재실행하지않으며결과폴더안에열린stdoutlog를두지않는다.

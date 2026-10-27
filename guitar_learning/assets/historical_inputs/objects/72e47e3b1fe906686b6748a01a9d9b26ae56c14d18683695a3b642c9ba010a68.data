@@ -1,0 +1,77 @@
+"""두 스트로크 뒤 직전 제출한 유한 말단 목표를 유지하는 명세를 만든다."""
+import copy
+from pathlib import Path
+import numpy as np
+from ..lower_body_release_v1.common import ROOT,BASE,read,save,pin,verify,sha
+
+P=BASE/'grounded_guitar_support_v1';PLAY=P/'play_v1';OUT=PLAY/'preflight_v9'
+PLAN=ROOT/'docs/plans/grounded_guitar_terminal_hold_20261016.md'
+REFERENCE=PLAY/'native_combined_v7'
+
+
+def main():
+    OUT.mkdir(exist_ok=False)
+    previous=PLAY/'preflight_v8'
+    paths=[Path(__file__).resolve(),Path(__file__).with_name('runtime_v5.py'),PLAN,
+        previous/'play_spec.json',previous/'report.json',previous/'inputs_before.json',
+        PLAY/'inputs/combined_v8.json',PLAY/'analysis_combined_v7/summary.json',PLAY/'analysis_combined_v7/ownership_evidence.json']
+    paths += [REFERENCE/n for n in ('initial_values.json','states240.json','contacts240.json','efforts240.json','targets60.json','native_properties.json','report.json','attempt.json','support_wrapper.json')]
+    discovery=pin(extra=paths);save(OUT/'discovery_before.json',discovery)
+    oldreport=read(previous/'report.json');wrapper=read(REFERENCE/'support_wrapper.json')
+    inputs=pin(extra=list(discovery)+list(oldreport['input_sha256'])+list(wrapper['input_sha256'])+[OUT/'discovery_before.json'])
+    save(OUT/'inputs_before.json',inputs)
+    assert verify(discovery) and verify(oldreport['input_sha256']) and verify(wrapper['input_sha256'])
+    assert not any('/grounded_guitar_play_v1/'+n in p for p in inputs for n in ('motion_v7.py','run_v7.py','analyze_v8.py'))
+    oldspec=read(previous/'play_spec.json');spec=copy.deepcopy(oldspec)
+    spec['strike_timing']=dict(start_s=11.3,waypoint_times_s=[11.3,12.1,12.4,12.8,13.4,13.6,14.2,14.4],
+        observation_end_s=16,require_capture_before_start=True,initial_pick_reference_step=2400,
+        terminal_mode='hold_last_submitted_distal6_from14p4',terminal_start_s=14.4,terminal_source_target_step=3452)
+    initial=read(REFERENCE/'initial_values.json');targets=read(REFERENCE/'targets60.json')['rows'];names=initial['joint_names']
+    distal=[names.index(n+'_'+a) for n in ('R_Elbow','R_Wrist') for a in 'xyz']
+    terminal=next(row for row in targets if row['physics_step_before']==3452)
+    values=np.array(terminal['final105_rad'])[distal]
+    lower=np.array(initial['PD_properties']['lower'])[distal];upper=np.array(initial['PD_properties']['upper'])[distal]
+    caps=np.array(initial['PD_properties']['effort'])[distal];K=np.array(initial['control_K105_Nm_rad'])[distal];D=np.array(initial['control_D105_Nms_rad'])[distal]
+    originalcfg=read(PLAY/'inputs/combined_v8.json');cfg=copy.deepcopy(originalcfg)
+    cfg.update(validation_protocol='finite_prepare5_hold5_fret_strike_distal_hold6_v1',right_strike_interval_s=[11.3,14.4],distal_hold_interval_s=[14.4,16],
+        play_preflight_report=str(OUT/'report.json'),play_spec=str(OUT/'play_spec.json'))
+    allowed={'validation_protocol','right_strike_interval_s','distal_hold_interval_s','play_preflight_report','play_spec','play_spec_sha256'}
+    oldanalysis=read(PLAY/'analysis_combined_v7/summary.json')
+    gates=dict(source8_eligible_and_inputs_unchanged=oldreport['eligible_for_native'] and oldreport['inputs_unchanged'] and verify(oldreport['input_sha256']),
+        source8_spec_SHA_exact=sha(previous/'play_spec.json')==oldreport['spec_sha256'],
+        source8_finger_press_strike_exact=all(spec[k]==oldspec[k] for k in ('finger_control','finger_trajectory','press','strike')),
+        first8_waypoint_times_exact=spec['strike_timing']['waypoint_times_s']==oldspec['strike_timing']['waypoint_times_s'][:8],
+        original_fifth_hover_waypoint_preserved=len(spec['strike']['waypoints_G_m'])==5 and spec['strike']==oldspec['strike'],
+        reference_target3452_names_exact=terminal['joint_names']==names and len(distal)==6,
+        reference_target3452_finite=bool(np.isfinite(values).all()),
+        reference_target3452_float32_exact=bool(np.array_equal(values,values.astype(np.float32).astype(float))),
+        reference_target3452_original_strict_bounds=bool(np.all(values>=lower) and np.all(values<=upper)),
+        reference_target3452_principal_under160=bool(np.all(np.linalg.norm(values.reshape(2,3),axis=1)<np.deg2rad(160))),
+        original_distal_finite_caps_PD=bool(np.isfinite(np.r_[caps,K,D]).all() and np.all(caps>0) and np.all(K>0) and np.all(D>=0)),
+        config_other_fields_exact=all(cfg.get(k)==originalcfg.get(k) for k in set(cfg)|set(originalcfg) if k not in allowed),
+        original_static_mode_and16s=cfg['mode']=='static' and cfg['seconds']==16,
+        previous_actual_actions_passed=oldanalysis['gates']['requested_action_or_control_baseline'],
+        previous_actual_failure_preserved=not oldanalysis['passed'] and not oldanalysis['gates']['Chest_arm_play95'])
+    gates={k:bool(v) for k,v in gates.items()}
+    assert verify(inputs);save(OUT/'play_spec.json',spec)
+    fields=('source_candidate_sha256','reference_run','repeat_run','reference_time_s','repeat_verification_path','repeat_verification_sha256','raw_equal_sha256','actual10_strict_all105_bounds','inherited_actual_outside_bounds','source_query_latch')
+    report={k:copy.deepcopy(oldreport[k]) for k in fields}
+    report.update(eligible_for_native=all(gates.values()),gates=gates,inputs_unchanged=True,input_sha256=inputs,inputs_after_sha256={p:sha(p) for p in inputs},spec_sha256=sha(OUT/'play_spec.json'),
+        source8_reach_reference=str(previous/'report.json'),source8_reach_reference_sha256=sha(previous/'report.json'),source8_reference_gates=oldreport['gates'],
+        source8_nominal_right41_reused=True,new_source_FK_evaluations=0,new_finger_IK_evaluations=0,native_simulation_steps=0,
+        finger_control=spec['finger_control'],strike_timing=spec['strike_timing'],
+        terminal_reference=dict(run=str(REFERENCE),targets60_sha256=sha(REFERENCE/'targets60.json'),source_target_step=3452,hold_start_step=3456,
+            joint_names=[names[j] for j in distal],joint_indices105=distal,final6_rad=values.tolist(),lower_rad=lower.tolist(),upper_rad=upper.tolist(),
+            native_effort_caps_Nm=caps.tolist(),control_K_Nm_rad=K.tolist(),control_D_Nms_rad=D.tolist(),ball_norm_deg=np.degrees(np.linalg.norm(values.reshape(2,3),axis=1)).tolist(),
+            scope='원 V7 실제3452 제출값의 유한 범위 근거다. 새 runtime는 자신의 직전 제출값을 포착해야 하며 새 실제 첫3456 prefix 일치는 실행 후 판정한다. 실제 관절 상태를 고정하지 않는다.'),
+        previous_actual_failure_summary=str(PLAY/'analysis_combined_v7/summary.json'),previous_actual_failure_summary_sha256=sha(PLAY/'analysis_combined_v7/summary.json'),
+        old_hover_waypoint_execution='원 strike 명세의 다섯 번째 hover 점은 이력으로 보존하지만 새 실행에서는 사용하지 않는다.',
+        recording3_source_reference=oldreport['recording3_source_reference'],recording_CPU_reference=str(previous/'report.json'),recording_CPU_evidence_reused=oldreport['recording_CPU_evidence'],
+        scope='새 결합은14.4초까지 원 V7 경로를 유지하고 이후 hover 복귀 및 기타 상대 피크 IK를 중단한다. 직전3452의 유한 오른팔 말단6 목표를16초까지 유지하며 원 이득·제한·힘 제어는 그대로다. 검지 포착 목표도 원source8대로16초까지 유지한다. 원 source8 명목41 도달 및 기록3 CPU는 과거 근거로 재사용하며 새 FK/IK 또는 실제 성공이 아니다. 원3840행·26개 물리 기준과 세 지지창95%를 유지한다. 이전 실패를 보존하며 원 V7 첫3456스텝 및 acceptedpress6 첫2712스텝 동일성·말단PD384행은 새 실제 후 판정한다. 연주 종료에서 연속 해제한 경로나 손가락 휴지복귀 해결을 주장하지 않는다.')
+    save(OUT/'report.json',report);cfg['play_spec_sha256']=sha(OUT/'play_spec.json');save(PLAY/'inputs/combined_v9.json',cfg)
+    assert verify(inputs)
+    save(OUT/'generation.json',dict(eligible_for_native=report['eligible_for_native'],inputs_unchanged=True,input_sha256=inputs,native_simulation_steps=0,new_source_FK_evaluations=0,output_sha256={str(p):sha(p) for p in (OUT/'play_spec.json',OUT/'report.json',PLAY/'inputs/combined_v9.json')}))
+    print(dict(eligible=report['eligible_for_native'],gates=gates,terminal6_rad=values.tolist(),input_count=len(inputs)),flush=True)
+    assert report['eligible_for_native'],'유한 말단 목표 유지 사전 검사 실패: 실제 실행 금지'
+
+if __name__=='__main__':main()

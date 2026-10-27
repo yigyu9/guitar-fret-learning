@@ -1,0 +1,167 @@
+"""Regenerate play reach at the certified actual10s pose; no physics steps."""
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from ..lower_body_release_v1.common import ROOT, A, BASE, HUMAN, read, save, pin, verify, sha
+from ..lower_body_release_v1.controller_horizontal_v4 import full_fk
+from ..initial_pose_noise_v1 import pose
+from ..elbow_wrist_strike_source_v1 import string_segments, path_points, solve_pick
+from ..om_axilla_source_geometry_v3 import CapsuleBodyDistance
+from .motion_v1 import solve_finger, interpolate
+
+PHASE = BASE/'grounded_guitar_support_v1'
+PLAY = PHASE/'play_v1'
+REFERENCE = PHASE/'native_prepared_v17'
+REPEAT = PHASE/'native_prepared_repeat_v18'
+CERTIFICATE = PHASE/'prepared_repeat_verification_v1.json'
+PLAN = ROOT/'docs/plans/grounded_guitar_prepared_play_20261016.md'
+
+
+def main():
+    out = PLAY/'preflight_v1'
+    out.mkdir(parents=True, exist_ok=True)
+    baseline = PHASE/'prepared_hold_v17.json'
+    inspection = read(out/'inspection_inputs_before.json')
+    assert verify(inspection)
+    certificate = read(CERTIFICATE)
+    cfg = read(baseline)
+    paths = list(inspection)+list(certificate['input_sha256'])
+    paths += [Path(__file__).resolve(), Path(__file__).with_name('__init__.py'),
+              Path(__file__).with_name('motion_v1.py'), Path(__file__).with_name('runtime_v1.py'),
+              Path(__file__).with_name('run_v1.py'), PLAN, out/'inspection_inputs_before.json']
+    paths += [Path(cfg[k]) for k in ('candidate', 'source_report', 'upper_target105', 'posture_target_report',
+                                    'finite_right_goal_spec', 'finite_right_goal_report', 'hip_load_bias_spec', 'hip_load_bias_report')]
+    paths += list((A/'seated_foot_support_v1').glob('*.py'))
+    paths += [A/'grounded_guitar_support_v1'/n for n in ('__init__.py', 'runtime_v2.py', 'runtime_v11.py',
+                                                      'runtime_v14.py', 'runtime_v17.py', 'runtime_v18.py')]
+    inputs = pin(extra=paths)
+    save(out/'inputs_before.json', inputs)
+    assert certificate['passed'] and certificate['all23_gates_both_passed'] and verify(certificate['input_sha256'])
+    assert certificate['reference_run'] == str(REFERENCE) and certificate['repeat_run'] == str(REPEAT)
+    raw_equal = {n: sha(REFERENCE/n) == sha(REPEAT/n) for n in ('states240.json', 'contacts240.json', 'efforts240.json', 'targets60.json')}
+    assert all(raw_equal.values()) and all(certificate['raw_exact_sha256'].values())
+    summaries = [read(PHASE/n/'summary.json') for n in ('analysis_prepared_v17', 'analysis_prepared_repeat_v18')]
+    assert all(s['passed'] and len(s['gates']) == 23 and all(s['gates'].values()) for s in summaries)
+    initial = read(REFERENCE/'initial_values.json')
+    state = read(REFERENCE/'final_state.json')
+    assert state['physics_step'] == 2400
+    assert state == read(REPEAT/'final_state.json')
+    names, bodies = initial['joint_names'], initial['human_body_names']
+    qref = np.array(initial['q_ref105_rad'])
+    qactual = np.array([r['pos'] for r in state['human_dof_states']])
+    fk = full_fk(SimpleNamespace(names=names, q_ref=qref, human_bodies=bodies), initial['native_initial_state'])
+    actual_fk = fk(qactual)
+    fk_errors = {n: dict(position_m=float(np.linalg.norm(actual_fk[n][0]-pose(b)[0])),
+                        rotation_deg=float(np.degrees((actual_fk[n][1]*pose(b)[1].inv()).magnitude())))
+                 for n, b in zip(bodies, state['human_body_states'])}
+    targets = read(REFERENCE/'targets60.json')['rows']
+    latch = targets[-1]
+    assert latch['physics_step_before'] == 2396 and latch['joint_names'] == names
+    proximal = np.array([names.index(n+'_'+a) for n in ('R_Thorax', 'R_Shoulder') for a in 'xyz'])
+    distal = np.array([names.index(n+'_'+a) for n in ('R_Elbow', 'R_Wrist') for a in 'xyz'])
+    finger = np.array([names.index(n) for n in ('LH:index1_x', 'LH:index1_z', 'LH:index2', 'LH:index3')])
+    q = qactual.copy()
+    q[proximal] = np.array(latch['final105_rad'])[proximal]
+    gp, gr = pose(state['guitar_body_states'][0])
+    start, end = string_segments(dict(native_initial_state=state, guitar_body_names=initial['guitar_body_names']))
+    marker_G = lambda n: gr.inv().apply(pose(state['human_body_states'][bodies.index(n)])[0]-gp)
+    origin, pick = marker_G('LH:index3'), marker_G('RH:pick')
+    frets = [gr.inv().apply(pose(state['guitar_body_states'][initial['guitar_body_names'].index('G:fret'+str(f))])[0]-gp)[1] for f in range(1, 23)]
+    choices = []
+    for string in range(6):
+        for fret in range(1, 23):
+            previous = start[string, 1] if fret == 1 else frets[fret-2]
+            y = (previous+frets[fret-1])/2
+            fraction = (y-start[string, 1])/(end[string, 1]-start[string, 1])
+            point = start[string]+fraction*(end[string]-start[string])
+            choices.append(dict(distance_m=float(np.linalg.norm(point-origin)), string=string+1, fret=fret, target_G_m=point.tolist()))
+    selected = min(choices, key=lambda row: row['distance_m'])
+    target = np.array(selected['target_G_m'])
+    distance = CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']), HUMAN)
+    vertices = np.concatenate([v for v, _, _, _ in distance.pieces])
+    spec = dict(reference_run=str(REFERENCE), reference_time_s=10., repeat_run=str(REPEAT),
+        reference_state_sha256=sha(REFERENCE/'final_state.json'), repeat_verification=str(CERTIFICATE),
+        repeat_verification_sha256=sha(CERTIFICATE), source_candidate_sha256=cfg['candidate_sha256'],
+        string_start_G_m=start.tolist(), string_end_G_m=end.tolist(),
+        press=dict(string=selected['string'], fret=selected['fret'], finger='index', marker='LH:index3',
+            target_G_m=target.tolist(), lower_depth_m=.004, geometry_xy_m=.01, geometry_z_band_m=[-.006, .01], required_dwell_s=.1),
+        strike=dict(marker='RH:pick', lane_G_y_m=-.325, waypoints_G_m=path_points(start, end, -.325, 'strum').tolist(),
+            sweep_times_s=[11.5, 12.1, 12.3, 12.9]),
+        guitar_body_center_G_m=((vertices.min(0)+vertices.max(0))/2).tolist())
+    lower, upper = np.array(initial['PD_properties']['lower']), np.array(initial['PD_properties']['upper'])
+    candidate_q = np.array(read(cfg['candidate'])['q_ref_rad'])
+    inherited = [dict(name=names[j], actual_rad=float(qactual[j]), lower_rad=float(lower[j]), upper_rad=float(upper[j]))
+                 for j in np.flatnonzero((qactual < lower) | (qactual > upper))]
+    samples = []
+    seedf, seedr = q[finger].copy(), q[distal].copy()
+    points = np.array(spec['strike']['waypoints_G_m'])
+    for time in np.linspace(10, 14, 41):
+        hover, down = target+[0, 0, .008], target-[0, 0, .004]
+        goal = interpolate(time, [10, 10.8, 11.3, 13, 13.5, 14], np.array([origin, hover, down, down, hover, hover]))
+        values, error64 = solve_finger(fk, q, finger, lower, upper, qref, gp+gr.apply(goal), seedf)
+        seedf = values.astype(np.float32).astype(float)
+        ftrial = q.copy(); ftrial[finger] = seedf
+        ferror = float(np.linalg.norm(fk(ftrial)['LH:index3'][0]-(gp+gr.apply(goal))))
+        rgoal = interpolate(time, [10, 10.8, 11.1, 11.5, 12.1, 12.3, 12.9, 13.1, 13.5],
+                            np.vstack([pick, points[0], points[1], points[1], points[2], points[2], points[3], points[3], points[4]]))
+        fitted, rerror64, nfev = solve_pick(fk, q, distal, lower, upper, qref, gp+gr.apply(rgoal), seedr)
+        seedr = fitted[distal].astype(np.float32).astype(float)
+        combined = ftrial.copy(); combined[distal] = seedr
+        rerror = float(np.linalg.norm(fk(combined)['RH:pick'][0]-(gp+gr.apply(rgoal))))
+        unchanged = np.setdiff1d(np.arange(105), np.r_[finger, distal])
+        samples.append(dict(time_s=float(time), finger_goal_G_m=goal.tolist(), finger_IK_error_m=ferror,
+            finger_IK_float64_error_m=error64, finger_targets_rad=seedf.tolist(),
+            pick_goal_G_m=rgoal.tolist(), pick_IK_error_m=rerror, pick_IK_float64_error_m=rerror64,
+            pick_targets_rad=seedr.tolist(), pick_IK_nfev=nfev,
+            distal_ball_norm_deg=np.degrees(np.linalg.norm(seedr.reshape(2, 3), axis=1)).tolist(),
+            new10_targets_original_bounds=bool(np.all(combined[np.r_[finger, distal]] >= lower[np.r_[finger, distal]]) and np.all(combined[np.r_[finger, distal]] <= upper[np.r_[finger, distal]])),
+            other95_source_query_q_exact=bool(np.array_equal(combined[unchanged], q[unchanged]))))
+    maxp = max(r['position_m'] for r in fk_errors.values())
+    maxr = max(r['rotation_deg'] for r in fk_errors.values())
+    gates = dict(prepared_and_repeat_23gate_passed=all(s['passed'] for s in summaries), repeat_four_raw_SHA_exact=all(raw_equal.values()),
+        actual10_fullFK_under10um_0p01deg=maxp < 1e-5 and maxr < .01,
+        original_initial105_source_within_bounds=bool(np.all(candidate_q >= lower) and np.all(candidate_q <= upper)),
+        new_proximal6_latch_targets_within_bounds=bool(np.all(q[proximal] >= lower[proximal]) and np.all(q[proximal] <= upper[proximal])),
+        new_proximal6_ball_norm_under160deg=bool(np.all(np.linalg.norm(q[proximal].reshape(2, 3), axis=1) < np.deg2rad(160))),
+        finger41_float32_reach_under3mm=all(s['finger_IK_error_m'] <= .003 for s in samples),
+        pick41_float32_reach_under2mm=all(s['pick_IK_error_m'] <= .002 for s in samples),
+        distal41_float32_principal_under160deg=all(max(s['distal_ball_norm_deg']) < 160 for s in samples),
+        new10_float32_targets_original_bounds=all(s['new10_targets_original_bounds'] for s in samples),
+        other95_source_q_exact=all(s['other95_source_query_q_exact'] for s in samples),
+        source_candidate_SHA_exact=sha(cfg['candidate']) == cfg['candidate_sha256'],
+        upper_target_SHA_exact=sha(cfg['upper_target105']) == cfg['upper_target105_sha256'])
+    gates = {k: bool(v) for k, v in gates.items()}
+    assert verify(inputs)
+    save(out/'play_spec.json', spec)
+    report = dict(eligible_for_native=all(gates.values()), gates=gates, inputs_unchanged=True,
+        input_sha256=inputs, inputs_after_sha256={p: sha(p) for p in inputs},
+        spec_sha256=sha(out/'play_spec.json'), source_candidate_sha256=cfg['candidate_sha256'],
+        reference_run=str(REFERENCE), repeat_run=str(REPEAT), reference_time_s=10.,
+        repeat_verification_path=str(CERTIFICATE), repeat_verification_sha256=sha(CERTIFICATE),
+        raw_equal_sha256=raw_equal, actual10_FK_errors=fk_errors,
+        actual10_FK_max_position_m=maxp, actual10_FK_max_rotation_deg=maxr,
+        actual10_strict_all105_bounds=not bool(inherited), inherited_actual_outside_bounds=inherited,
+        source_query_latch=dict(target_step_before=2396, proximal_names=[names[j] for j in proximal],
+            actual10_rad=qactual[proximal].tolist(), latched_final_command_rad=q[proximal].tolist(),
+            query_minus_actual_rad=(q[proximal]-qactual[proximal]).tolist(),
+            scope='Source reach model only: actual10 q with proximal6 replaced by final step2396 commands. Not an exact reproduction of the actual10 pose.'),
+        all132_press_choices=choices, press_target=spec['press'], samples=samples, native_simulation_steps=0,
+        scope='41 source-only reach samples at actual10 G and fixed actual posture except the declared proximal6 target latch. Original initial105 bounds are strict; inherited actual zero8 drift is disclosed separately without clamp/reset/epsilon. New finger4/distal6 float32 commands are checked strictly. Native motion, actual fingertip contact, dwell, strum crossing, stability and hand mesh collisions are not certified; pick/string proxies do not certify force, vibration or sound.')
+    save(out/'report.json', report)
+    for case in ('baseline', 'press', 'strike', 'combined'):
+        casecfg = dict(cfg)
+        casecfg.update(seconds=14., mode='static', play_preflight_report=str(out/'report.json'),
+            play_spec=str(out/'play_spec.json'), play_spec_sha256=sha(out/'play_spec.json'), play_case=case,
+            play_start_s=10., validation_protocol='finite_prepare5_hold5_play4_v1')
+        save(PLAY/'inputs'/(case+'.json'), casecfg)
+    assert verify(inputs)
+    save(out/'generation.json', dict(input_sha256=inputs, inputs_unchanged=True, eligible_for_native=report['eligible_for_native'],
+        output_sha256={str(p): sha(p) for p in [out/'play_spec.json', out/'report.json', *sorted((PLAY/'inputs').glob('*.json'))]}, native_simulation_steps=0))
+    print(dict(eligible=report['eligible_for_native'], gates=gates, press=spec['press'],
+        maximum_finger_error_m=max(s['finger_IK_error_m'] for s in samples), maximum_pick_error_m=max(s['pick_IK_error_m'] for s in samples),
+        actual10_FK_max_position_m=maxp, actual10_FK_max_rotation_deg=maxr), flush=True)
+    assert report['eligible_for_native'], 'Source reach checks failed; native play forbidden.'
+
+
+if __name__ == '__main__':
+    main()

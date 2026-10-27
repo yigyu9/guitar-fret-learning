@@ -1,0 +1,130 @@
+"""Bounded finite-target probes around the existing measured-state teacher.
+
+There are no simulator writes here. A probe changes one explicitly named left
+wrist/assigned-finger requested target; the original codec still smooths and
+rate-limits the command. Probe rows must never become expert BC labels.
+"""
+import copy
+import math
+
+from guitar_learning.core.control import ACTIVE_NAMES
+from guitar_learning.tool.experiments.transition.contact_teacher import Controller as ContactTeacher
+from guitar_learning.tool.experiments.transition.solver import FINGERS
+from guitar_learning.tool.experiments.contact_recovery.capture import RecoveryLedger
+
+
+def validate_perturbation(perturbation, task):
+    if perturbation is None: return None
+    keys = {'channel', 'delta_rad', 'start_s', 'duration_s', 'eligibility', 'trigger_until_s'}
+    if set(perturbation)-keys or not keys-{'trigger_until_s'} <= set(perturbation):
+        raise ValueError('explicit channel/delta/start/duration/eligibility probe required')
+    result = copy.deepcopy(perturbation)
+    if len(task.targets) != 1 or task.targets[0].finger not in FINGERS:
+        raise ValueError('single assigned-finger target required for initial recovery probes')
+    finger = FINGERS[task.targets[0].finger]
+    allowed = tuple(name for name in ACTIVE_NAMES[:33]
+                    if name.startswith('L_Wrist_') or name.startswith('LH:'+finger))
+    if result['channel'] not in allowed:
+        raise ValueError('only explicit left wrist/assigned-finger action channels allowed')
+    for name in ('delta_rad', 'start_s', 'duration_s'):
+        value = result[name]
+        if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value):
+            raise ValueError('finite numeric perturbation values required')
+        result[name] = float(value)
+    if not 0 < abs(result['delta_rad']) <= .01:
+        raise ValueError('nonzero probe target offset limited to0.01rad')
+    if not 1/60.-1e-12 <= result['duration_s'] <= .2:
+        raise ValueError('probe duration must be one control tick to0.2s')
+    result['trigger_until_s'] = float(result.get('trigger_until_s', result['start_s']))
+    if (not math.isfinite(result['trigger_until_s']) or result['start_s'] < 0
+            or result['trigger_until_s'] < result['start_s']
+            or result['trigger_until_s']+result['duration_s'] > task.targets[0].end_s+1e-12):
+        raise ValueError('bounded trigger window and pulse must finish before note end')
+    if result['eligibility'] not in ('pre_contact', 'first_contact', 'held'):
+        raise ValueError('probe eligibility must be pre_contact, first_contact or held')
+    return result
+
+
+class Controller:
+    def __init__(self, plan, task, perturbation=None, transition=None):
+        if len(task.targets) != 1:
+            raise ValueError('initial recovery collection supports single targets only')
+        self.teacher = ContactTeacher(plan, task, transition)
+        self.task = task
+        self.perturbation = validate_perturbation(perturbation, task)
+        self.ledger = None
+        self.probe_start_s = None
+        self.probe_finished = False
+        self.diagnostic = {}
+
+    def observe_physics(self, music, stability):
+        if self.ledger is None:
+            raise RuntimeError('action at initial native time required before physics observations')
+        self.ledger.update(music, stability)
+
+    def _eligible(self):
+        stage = self.perturbation['eligibility']
+        if self.ledger.safety_invalidated: return False
+        if stage == 'pre_contact': return self.ledger.first_clean_s is None
+        if stage == 'first_contact':
+            return self.ledger.clean and self.ledger.acquired_s is None
+        return self.ledger.clean and self.ledger.acquired_s is not None
+
+    def action(self, now, observation=None, env=None):
+        import numpy as np
+        from guitar_learning.tool.experiments.local_skills.controls import normalize_target
+
+        if env is None: raise ValueError('actual live environment required')
+        if self.ledger is None:
+            if abs(now) > 1e-9: raise ValueError('new recovery controller must start at native time0')
+            self.ledger = RecoveryLedger(self.task.targets[0], env.last_measured, env.last_safety)
+        if (abs(now-self.ledger.previous['task_time_s']) > 1e-9
+                or env.last_measured['physics_step'] != self.ledger.previous['physics_step']):
+            raise ValueError('all consecutive native physics measurements must be observed before action')
+        teacher = list(self.teacher.action(now, observation, env))
+        output = list(teacher)
+        perturb = self.perturbation
+        active = False
+        applied_delta = 0.
+        if perturb and not self.probe_finished:
+            if (self.probe_start_s is None and perturb['start_s']-1e-9 <= now
+                    <= perturb['trigger_until_s']+1e-9 and self._eligible()):
+                self.probe_start_s = float(now)
+            active = (self.probe_start_s is not None
+                      and now < self.probe_start_s+perturb['duration_s']-1e-9)
+            if active:
+                codec = env.control.contract
+                channel = perturb['channel']
+                index = ACTIVE_NAMES.index(channel)
+                native_index = codec.names.index(channel)
+                if (codec.upper[native_index]-codec.lower[native_index] <= 1e-12
+                        or codec.action_upper[index]-codec.action_lower[index] <= 1e-12):
+                    raise ValueError('probe channel must have nonzero original native and effective range')
+                reference = codec.q_ref[codec.active_indices]
+                span = (codec.action_upper[index]-reference[index] if teacher[index] >= 0
+                        else reference[index]-codec.action_lower[index])
+                original = reference[index]+teacher[index]*span
+                requested = np.clip(original+perturb['delta_rad'],
+                    codec.action_lower[index], codec.action_upper[index])
+                applied_delta = float(requested-original)
+                # Preserve every other teacher action bit-for-bit. The original
+                # codec performs smoothing/rate limits once when env.step runs.
+                target = reference.copy()
+                target[index] = requested
+                output[index] = normalize_target(target, reference,
+                    codec.action_lower, codec.action_upper)[index]
+            elif self.probe_start_s is not None or now > perturb['trigger_until_s']+1e-9:
+                self.probe_finished = True
+        if (len(output) != 39 or any(not math.isfinite(v) or abs(v) > 1 for v in output)
+                or any(v != 0. for v in output[33:])):
+            raise ValueError('bounded39 target with right6 exactly zero required')
+        self.diagnostic = dict(schema='guitar_learning.contact_recovery.controller.v1',
+            task_time_s=float(now), teacher_action39=teacher, override_active=bool(active),
+            teacher_corrective=bool(self.teacher.diagnostic.get('contact_feedback_applied')),
+            bc_eligible=bool(not active and self.teacher.diagnostic.get('contact_feedback_applied')),
+            perturbation=copy.deepcopy(perturb), probe_start_s=self.probe_start_s,
+            probe_finished=self.probe_finished, actual_requested_delta_rad=applied_delta,
+            teacher=copy.deepcopy(self.teacher.diagnostic),
+            scope='teacher-assisted collection only; finite original target codec, no guitar/state/force/gain writes')
+        if active: self.ledger.mark_perturbation(now, self.diagnostic)
+        return output

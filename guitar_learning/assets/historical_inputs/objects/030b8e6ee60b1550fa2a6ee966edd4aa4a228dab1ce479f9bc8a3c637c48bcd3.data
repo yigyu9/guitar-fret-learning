@@ -1,0 +1,67 @@
+"""Bind old bounded control hypotheses to the new source, without inherited success."""
+import argparse
+from pathlib import Path
+import numpy as np
+from scipy.spatial.transform import Rotation
+from ..lower_body_release_v1.common import ROOT, A, BASE, read, save, sha, pin, verify
+
+OLD = BASE/'grounded_guitar_support_v1'
+
+
+def main(source, out):
+    out.mkdir(parents=True, exist_ok=False)
+    cfg = read(OLD/'prepared_hold_v17.json')
+    report = read(source/'report.json')
+    assert report['eligible_for_native'] and report['eligible_for_native_target'] and report['inputs_unchanged']
+    assert verify(read(source/'inputs_before.json'))
+    candidate = source/'candidate.json'; target = source/'upper_target105.json'
+    candidate_sha = sha(candidate)
+    assert candidate_sha==report['source_candidate_sha256'] and sha(target)==report['target_sha256']
+    old_goal_path = Path(cfg['finite_right_goal_spec'])
+    old_bias_path = Path(cfg['hip_load_bias_spec'])
+    old_goal, bias = read(old_goal_path), read(old_bias_path)
+    extras = [Path(__file__).resolve(), source/'inputs_before.json', source/'report.json', candidate, target,
+              Path(read(candidate)['support_candidate']), OLD/'prepared_hold_v17.json', old_goal_path, old_bias_path,
+              Path(bias['query_reference_run'])/'efforts240.json',
+              ROOT/'docs/plans/front_facing_pose_20261016.md', ROOT/'docs/plans/front_facing_execution_v1_20261016.md']
+    extras += list((A/'front_facing_pose_v1').glob('*.py'))
+    inputs = pin(extra=extras)
+    save(out/'inputs_before.json', inputs)
+    scope = 'Old-pose bounded numeric controller hypothesis reused for a new source. No new measured-load claim, old-pose dynamic success or geometry certificate is transferred. Actual new-pose test must decide stability.'
+    goal = dict(R_delta_xyzw=old_goal['R_delta_xyzw'], translation_W_m=old_goal['translation_W_m'],
+                initial_candidate_sha256=candidate_sha, initial_candidate_path=str(candidate),
+                reused_numeric_source=str(old_goal_path), reused_numeric_source_sha256=sha(old_goal_path), scope=scope)
+    rotation = Rotation.from_quat(goal['R_delta_xyzw'])
+    assert abs(np.linalg.norm(goal['R_delta_xyzw'])-1)<1e-12
+    assert rotation.magnitude()<np.deg2rad(1.) and np.linalg.norm(goal['translation_W_m'])<.002
+    goal_path = out/'right_goal_spec.json'; save(goal_path, goal)
+    save(out/'right_goal_report.json', dict(eligible_for_finite_human_goal=True, inputs_unchanged=verify(inputs),
+         source_candidate_sha256=candidate_sha, spec_sha256=sha(goal_path), scope=scope))
+    bias.update(initial_candidate_sha256=candidate_sha, initial_candidate_path=str(candidate),
+                reused_numeric_source=str(old_bias_path), reused_numeric_source_sha256=sha(old_bias_path), scope=scope)
+    assert bias['joint_names']==['R_Hip_x','R_Hip_y','R_Hip_z']
+    assert np.linalg.norm(bias['bias_Nm'])<=2. and np.max(np.abs(bias['bias_Nm']))<=2.
+    assert sha(Path(bias['query_reference_run'])/'efforts240.json')==bias['reference_efforts_sha256']
+    bias_path = out/'hip_load_bias_spec.json'; save(bias_path, bias)
+    save(out/'hip_load_bias_report.json', dict(eligible_for_finite_hip_load_bias=True, inputs_unchanged=verify(inputs),
+         source_candidate_sha256=candidate_sha, spec_sha256=sha(bias_path), scope=scope))
+    cfg.update(candidate=str(candidate), candidate_sha256=candidate_sha, source_report=str(source/'report.json'),
+               upper_target105=str(target), upper_target105_sha256=sha(target), posture_target_report=str(source/'report.json'),
+               upper_posture_mode='finite_front_facing_source_target_v1',
+               initial_pose_description='New forward feet and upper body; preserved free-guitar/Root/chair; refit arms. Source geometry is not actual stability.',
+               lower_initial_adjustment='New forward ankle heading; original finite lower control with source-bound heading IK.',
+               finite_right_goal_spec=str(goal_path), finite_right_goal_spec_sha256=sha(goal_path),
+               finite_right_goal_report=str(out/'right_goal_report.json'),
+               hip_load_bias_spec=str(bias_path), hip_load_bias_spec_sha256=sha(bias_path),
+               hip_load_bias_report=str(out/'hip_load_bias_report.json'),
+               validation_protocol='front_facing_prepare5_hold5_v1', reused_control_hypothesis=scope)
+    save(out/'static10.json', cfg)
+    assert verify(inputs)
+    save(out/'preparation_result.json', dict(passed=True, inputs_unchanged=True, scope=scope,
+         output_sha256={str(p):sha(p) for p in sorted(out.iterdir()) if p.is_file()}))
+    print(dict(passed=True, config=str(out/'static10.json')), flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser(); p.add_argument('--source', type=Path, required=True); p.add_argument('--out', type=Path, required=True)
+    a=p.parse_args(); main(a.source.resolve(), a.out.resolve())

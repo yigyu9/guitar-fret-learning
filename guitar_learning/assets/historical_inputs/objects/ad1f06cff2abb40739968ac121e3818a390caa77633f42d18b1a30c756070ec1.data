@@ -1,0 +1,146 @@
+"""Fresh transition PPO, gated by four audited unassisted BC reproductions."""
+import argparse
+from guitar_learning.core.dependency_inputs import pin_evidence
+import copy
+import json
+import os
+from pathlib import Path
+import sys
+
+from ..train_parallel import settings_document as _BASE_SETTINGS
+
+
+def settings_document(raw):
+    value=copy.deepcopy(raw)
+    config=value.pop('transition',None);initialization=value.pop('initialization',None)
+    if (not isinstance(config,dict) or set(config)!={'schema','mode','tempo_scale','role'}
+            or config['schema']!='guitar_learning.transition.v1'
+            or config['mode'] not in ('single_a','single_b','overlap','pair')
+            or isinstance(config['tempo_scale'],bool) or config['tempo_scale'] not in (.25,.5,1.)
+            or config['role'] not in ('left','joint')):
+        raise ValueError('explicit supported transition config required')
+    if (not isinstance(initialization,dict)
+            or set(initialization)!={'mode','checkpoint','gate_evaluations'}
+            or initialization['mode'] not in ('source_actor','bc')
+            or not isinstance(initialization['checkpoint'],str)
+            or not Path(initialization['checkpoint']).is_absolute()
+            or not Path(initialization['checkpoint']).is_file()
+            or not isinstance(initialization['gate_evaluations'],list)):
+        raise ValueError('explicit absolute source_actor/BC initialization required')
+    parsed=_BASE_SETTINGS(value)
+    if (parsed['stage']!='D' or parsed['music']!=dict(reward_mode='legacy',goal_event_indices=None)
+            or parsed['ppo']['cost_weight']<=0 or parsed['ppo']['gamma']!=.99 or parsed['tempo_scale']!=1.
+            or parsed['start_event_index']!=0):
+        raise ValueError('transition task owns musical schedule; unchanged safety cost required')
+    parsed.update(transition=config,initialization=initialization)
+    return parsed
+
+
+def initialization_evidence(settings, *, require_gate=False):
+    from .transfer import validate_source
+    from .learning import validate_initialization
+    from guitar_learning.imitation.imitation import dataset_manifest
+    config=settings['initialization'];path=config['checkpoint']
+    if config['mode']=='source_actor':
+        if require_gate:
+            raise ValueError('PPO requires successful teacher -> BC -> four unassisted policy evaluations')
+        if config['gate_evaluations']:
+            raise ValueError('source_actor has no inherited native success gate')
+        return validate_source(path)
+    evidence=validate_initialization(path)
+    architecture=evidence['payload']['architecture']
+    task=architecture['contract']['task']['transition']
+    for key,value in settings['transition'].items():
+        if task.get(key)!=value:
+            raise ValueError('BC task contract must match requested transition config')
+    if architecture['size']!=settings['size']:
+        raise ValueError('BC Actor size must match settings')
+    if not require_gate:
+        return evidence
+    from .capture import audit_capture
+    gates=config['gate_evaluations']
+    if len(gates)!=4 or len(set(gates))!=4:
+        raise ValueError('four distinct complete unassisted native policy evaluations required')
+    checkpoint_sha=dataset_manifest([path])[str(Path(path).resolve())]
+    pins=dict(evidence['source_pins'])
+    for folder in gates:
+        if not isinstance(folder,str) or not Path(folder).is_absolute():
+            raise ValueError('absolute evaluation case paths required')
+        audit=audit_capture(Path(folder));report=audit['report']
+        if (report.get('action_source')!='policy' or report.get('teacher_intervention') is not False
+                or report.get('initialization_checkpoint_sha256')!=checkpoint_sha
+                or audit['contract']!=architecture['contract']):
+            raise ValueError('gate must be exact BC unassisted policy, task and contract')
+        for source,sha in audit['source_pins'].items():
+            if source in pins and pins[source]!=sha:raise ValueError('conflicting gate evidence')
+            pins[source]=sha
+    return dict(evidence,source_pins=pins)
+
+
+def run(settings,args):
+    import isaacgym
+    from unittest.mock import patch
+    from guitar_learning.training import parallel, policy, ppo
+    from guitar_learning import train_parallel
+    from guitar_learning.training.recording import write
+    from guitar_learning.imitation.imitation import dataset_manifest
+    from guitar_learning.training.persistent_audit import finalize_persistent_run
+    from guitar_learning.training.monitoring import available_memory_bytes, LowMemoryError
+    from guitar_learning.native.lower_body_release_v1 import common
+    from .policy import SpecialistPolicy
+    from .transfer import initialize_actor
+    from .worker import native_environment
+    settings=copy.deepcopy(settings)
+    settings['min_available_memory_gib']=max(6.,settings['min_available_memory_gib'])
+    evidence=initialization_evidence(settings,require_gate=True);expected=evidence['source_pins']
+    out=args.out.resolve()
+    if out.exists():raise FileExistsError(str(out))
+    if available_memory_bytes()<8*1024**3:raise LowMemoryError('transition startup requires8GiB available')
+    original_pin,base_trainer,base_pool=common.pin,ppo.PPOTrainer,parallel.Pool
+    original_settings=train_parallel.settings_document
+    def dispatch(raw):
+        return copy.deepcopy(settings) if 'transition' in raw else original_settings(raw)
+    def pin(config,extra=()):
+        values = pin_evidence(original_pin, config, extra, expected)
+        return values
+    class Trainer(base_trainer):
+        def __init__(self,model,config=None):
+            if dataset_manifest(expected)!=expected:raise RuntimeError('transition evidence changed')
+            initialization=None if args.resume else initialize_actor(model,settings)
+            super().__init__(model,config)
+            write(out/'transition_initialization.json',dict(mode='strict_resume' if args.resume else 'BC_actor_std',
+                initialization=initialization,source_pins=expected,
+                resume=str(args.resume) if args.resume else None))
+    class Pool(base_pool):
+        def __init__(self,specs,**kwargs):
+            specs=copy.deepcopy(specs)
+            for spec in specs:spec['transition']=settings['transition']
+            super().__init__(specs,worker_factory=native_environment,**kwargs)
+    argv=[sys.argv[0],'--settings',str(args.settings),'--out',str(out)]
+    if args.resume:argv+=['--resume',str(args.resume)]
+    try:
+        with patch.object(train_parallel,'settings_document',dispatch), \
+                patch.object(parallel,'Pool',Pool),patch.object(policy,'Policy',SpecialistPolicy), \
+                patch.object(ppo,'PPOTrainer',Trainer),patch.object(common,'pin',pin),patch.object(sys,'argv',argv):
+            train_parallel.main()
+    finally:
+        primary=sys.exc_info()[1]
+        try:
+            passed=finalize_persistent_run(out)
+            if passed is False and primary is None:raise RuntimeError('transition persistent audit failed')
+        except BaseException as error:
+            if primary is None:raise
+            print('[transition] secondary finalization error: '+str(error),file=sys.stderr,flush=True)
+    return json.loads((out/'report.json').read_text())
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--settings',type=Path,required=True);parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--resume',type=Path);args=parser.parse_args()
+    for key in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS'):os.environ[key]='1'
+    import isaacgym
+    run(settings_document(json.loads(args.settings.read_text())),args)
+
+
+if __name__=='__main__':main()

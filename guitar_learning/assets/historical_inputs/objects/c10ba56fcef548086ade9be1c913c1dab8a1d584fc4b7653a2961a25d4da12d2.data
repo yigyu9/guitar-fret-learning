@@ -1,0 +1,37 @@
+"""83s canonical schedule; two independently measured LH release episodes."""
+import copy
+from .protocol_v5 import ROOT,A,BASE,PHASE,REFERENCE,REPEAT,CERTIFICATE,STRIKE_PHASE,STRIKE_REFERENCE,BASELINE_REFERENCE,CONFIG_REFERENCE,TASK_CHAIN,LEFT_PROXIMAL,LEFT_DISTAL,SETTLED_HOLD,SETTLED_PLAN,REGRASP_SETTLE_PLAN
+
+PROTOCOL='front_initial_pose_ready_continuous83_v1'
+PLAN=ROOT/'docs/plans/front_facing_ready_continuous83_20261017.md'
+STRIKES=(22.,26.,30.,39.,43.,47.,61.,70.,74.,78.)
+
+
+def schedule(case):
+    assert case in ('continuous83','fresh83')
+    episodes=[dict(id='release1',release=[34.,37.],free=[37.,52.],approach=[52.,54.],close=[54.,55.],settle=[55.,56.],dwell=[56.,61.]),
+              dict(id='release2',release=[65.,68.],free=[68.,83.],approach=None,close=None,settle=None,dwell=None)]
+    return dict(case=case,seconds=83.,strike_starts=list(STRIKES),episodes=episodes,**{k:copy.deepcopy(episodes[0][k]) for k in ('release','free','approach','close','settle','dwell')})
+
+
+def episode_view(plan,time_s):
+    assert plan==schedule(plan['case']) and 0<=time_s<=83.
+    episode=plan['episodes'][int(time_s>=65.)]
+    result=copy.deepcopy(plan)
+    result.update({k:copy.deepcopy(episode[k]) for k in ('release','free','approach','close','settle','dwell')})
+    result['episode_id']=episode['id']
+    return result
+
+
+def windows_for(plan):
+    assert plan==schedule(plan['case'])
+    result={'prepared5to10':[5.,10.],'settled_ready_hold5':[17.,22.],
+            'all_action':[10.,83.],'initial_repeat':[22.,34.],
+            'post_regrasp_strike':[61.,65.],'final_hold1':[82.,83.]}
+    for ep in plan['episodes']:
+        for key in ('release','free','approach','close','settle','dwell'):
+            if ep[key] is not None:result[ep['id']+'_'+key]=ep[key].copy()
+        result[ep['id']+'_open']=[ep['release'][0],ep['release'][0]+1.]
+        result[ep['id']+'_withdraw']=[ep['release'][0]+1.,ep['release'][1]]
+    for j,start in enumerate(STRIKES):result['strike'+str(j)]=[start,start+4.]
+    return result

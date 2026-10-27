@@ -1,0 +1,74 @@
+"""Paired deterministic prepared-pose checks after the long run, no PPO updates.
+
+Sixteen env instances are a functional comparison, not independent seeds or
+held-out-song generalization. Each saved curriculum also changes observations;
+compare whole checkpoint states and geometric metrics, not changing rewards.
+"""
+import copy
+import hashlib
+import json
+from pathlib import Path
+import time
+import isaacgym
+import torch
+from guitar_learning.training.gpu_pool import GpuPool,FIELDS
+from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.training.ppo import PPOTrainer,PPOConfig
+from guitar_learning.song.curriculum_runtime import CurriculumCoordinator
+
+torch.set_num_threads(1)
+torch.backends.cuda.matmul.allow_tf32=False
+p=Path(__file__).resolve().parent
+run=p/'train1024_large_2000'
+r=json.loads((run/'report.json').read_text())
+assert r['completed'] and r['optimizer_updates']==2000
+settings=json.loads((run/'settings.json').read_text())
+settings=copy.deepcopy(settings); settings['num_envs']=16
+results=[]
+for name in ('initial','final'):
+    out=p/('evaluation_'+name+'_16');out.mkdir(exist_ok=False)
+    checkpoint=run/(name+'.pt')
+    pins={path:value for path,value in json.loads((run/'inputs_before.json').read_text()).items()}
+    (out/'settings.json').write_text(json.dumps(settings,indent=2)+'\n')
+    pins[str(out/'settings.json')]=hashlib.sha256((out/'settings.json').read_bytes()).hexdigest()
+    pins[str(Path(__file__).resolve())]=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    pins[str(checkpoint)]=hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    (out/'inputs_before.json').write_text(json.dumps(pins,indent=2)+'\n')
+    pool=None
+    started=time.perf_counter()
+    try:
+        pool=GpuPool(settings,out)
+        policy=SpecialistPolicy(512,size='large',contract=pool.contract,role='left').to('cuda:0')
+        coordinator=CurriculumCoordinator(policy,pool)
+        trainer=PPOTrainer(policy,PPOConfig(**settings['ppo']))
+        trainer.load(checkpoint)
+        observation=coordinator.restore()
+        policy.eval()
+        completed={}
+        ticks=0
+        with torch.no_grad():
+            while len(completed)<16 and ticks<settings['song_training']['control_ticks']:
+                result=policy.act(*(observation[k] for k in FIELDS),deterministic=True)
+                observation,reward,cost,terminated,truncated,episodes=pool.step(result['action'])
+                for e in episodes:
+                    index=e['env_id']
+                    if index not in completed:completed[index]=e
+                done=(terminated|truncated).nonzero().flatten()
+                if done.numel():observation=pool.reset(done)[0]
+                ticks+=1
+        assert len(completed)==16
+        changed=[path for path,value in pins.items() if hashlib.sha256(Path(path).read_bytes()).hexdigest()!=value]
+        assert not changed,changed
+        episodes=[completed[i] for i in range(16)]
+        result=dict(completed=True,checkpoint=str(checkpoint),source_optimizer_updates=trainer.updates,
+            deterministic=True,num_envs=16,ticks=ticks,episodes=episodes,
+            curriculum_progress=coordinator.state.progress,
+            limitation='Same song and prepared pose, but each checkpoint restores its own curriculum and corresponding observation weights; this compares full saved policy states, not weights under identical observations. 16 env instances are not independent randomized trials. Geometric contact candidates do not certify acoustic success.',
+            wall_s=time.perf_counter()-started,input_pins_verified=len(pins))
+    finally:
+        if pool is not None:pool.close()
+    result['gpu_scene']=pool.scene.diagnostics
+    (out/'report.json').write_text(json.dumps(result,indent=2)+'\n')
+    results.append(result)
+(p/'checkpoint_evaluation.json').write_text(json.dumps({'completed':True,'results':results},indent=2)+'\n')
+print(json.dumps({'completed':True,'evaluated_checkpoints':[r['source_optimizer_updates'] for r in results]}))

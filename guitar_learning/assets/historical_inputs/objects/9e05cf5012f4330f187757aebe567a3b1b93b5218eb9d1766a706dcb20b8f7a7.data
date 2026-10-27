@@ -1,0 +1,168 @@
+"""Query settled geometry, then export a finite human-anchor correction only."""
+import copy
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from ..lower_body_release_v1.common import ROOT,A,BASE,HUMAN,read,save,sha,pin,verify
+from ..lower_body_release_v1.upright_source_v1 import NATIVE
+from ..lower_body_release_v1.upright_polytope_v2 import GuitarBoxes
+from ..lower_body_release_v1 import upright_audit_v2 as capsules
+from ..om_axilla_source_geometry_v3 import CapsuleBodyDistance
+from ..initial_pose_noise_v1 import pose
+
+PHASE=BASE/'grounded_guitar_support_v1'
+RUN=PHASE/'native_static_v11'
+SOURCE=PHASE/'source_v4'
+TARGET=PHASE/'posture_target_v2'
+PLAN=ROOT/'docs/plans/grounded_guitar_right_goal_20261016.md'
+
+
+def main():
+    out=PHASE/'right_goal_v1';out.mkdir(exist_ok=False)
+    cfgpath=TARGET/'static5.json';cfg=read(cfgpath)
+    paths=[Path(__file__).resolve(),Path(__file__).with_name('__init__.py'),PLAN,A/'AGENTS.md',cfgpath,
+           Path(__file__).with_name('runtime_v2.py'),Path(__file__).with_name('posture_target_v2.py'),
+           NATIVE/'native_properties.json']
+    paths += [RUN/n for n in ('initial_values.json','final_state.json','native_properties.json','report.json','attempt.json','support_wrapper.json')]
+    paths += [SOURCE/n for n in ('candidate.json','report.json','support_candidate.json','inputs_before.json')]
+    paths += [TARGET/n for n in ('upper_target105.json','report.json','inputs_before.json')]
+    paths += list((A/'seated_foot_support_v1').glob('*.py'))
+    inputs=pin(extra=paths);save(out/'inputs_before.json',inputs)
+    initial=read(RUN/'initial_values.json');actual=read(RUN/'final_state.json');run_report=read(RUN/'report.json')
+    properties=read(RUN/'native_properties.json');policy=properties['actual_shape_properties'];c=read(SOURCE/'candidate.json')
+    assert run_report['completed'] and run_report['physics_steps']==1200 and run_report['inputs_unchanged'] and not run_report['forbidden_calls']
+    assert cfg['candidate_sha256']==sha(SOURCE/'candidate.json') and cfg['upper_target105_sha256']==sha(TARGET/'upper_target105.json')
+    bodies=initial['human_body_names'];poses={n:pose(b) for n,b in zip(bodies,actual['human_body_states'])}
+    gp0,gr0=pose(actual['guitar_body_states'][0]);gp_initial,gr_initial=pose(initial['native_initial_state']['guitar_body_states'][0])
+    distance=CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']),HUMAN)
+    boxes=GuitarBoxes(distance);vertices=np.concatenate([v for v,_,_,_ in distance.pieces]);center_G=(vertices.min(0)+vertices.max(0))/2
+    center0=gp0+gr0.apply(center_G);initial_center=gp_initial+gr_initial.apply(center_G)
+    right=poses['R_Hip'][0]-poses['L_Hip'][0];right[2]=0.;right/=np.linalg.norm(right)
+    front=np.cross([0.,0.,1.],right);basis=np.column_stack([right,front,[0.,0.,1.]])
+    names=('Chest','Spine','R_Hip','R_Shoulder')
+    before_witness={n:distance.measure(poses,n,gp0,gr0) for n in names}
+    gaps0=np.array([before_witness[n]['gap_m']*1000 for n in names]);minimum=np.maximum(gaps0[1:]-.05,-.25)
+    lateral_reference=read(SOURCE/'report.json')['reference_lateral_coordinate_m']
+    def guitar(x):
+        rotation=Rotation.from_rotvec(basis@(x[3:]*.001))*gr0
+        center=center0+basis@(x[:3]*.001)
+        return center-rotation.apply(center_G),rotation
+    def evaluate(x):
+        gp,gr=guitar(x);gaps=np.array([distance.measure(poses,n,gp,gr)['gap_m']*1000 for n in names])
+        pelvis=boxes.measure(poses,'Pelvis',gp,gr)*1000
+        angle=float(np.rad2deg((gr_initial.inv()*gr).magnitude()))
+        neck=float(np.rad2deg(np.arcsin(np.clip(gr.apply([0.,1.,0.])[2],-1.,1.))))
+        lateral=float(((gp+gr.apply(center_G)-poses['Pelvis'][0])@right-lateral_reference)*1000)
+        return gaps,pelvis,angle,neck,lateral
+    def residual(x):
+        g,pelvis,angle,neck,lateral=evaluate(x)
+        return np.r_[20*(g[0]+.2),30*np.minimum(g[1:]-minimum,0),.5*(g[1:]-gaps0[1:]),
+            .02*x[:3],.006*x[3:],30*min(pelvis-.1,0),30*max(angle-5,0),
+            30*max(abs(neck)-3,0),30*max(abs(lateral)-20,0),30*max(np.linalg.norm(x[:3])-1,0)]
+    fit=least_squares(residual,np.zeros(6),bounds=(-np.array([1,1,1,3,3,3]),np.array([1,1,1,3,3,3])),
+                      max_nfev=100,diff_step=1e-3,ftol=1e-10,xtol=1e-10,gtol=1e-8)
+    x=fit.x;gp,gr=guitar(x);gaps,pelvis,angle,neck,lateral=evaluate(x)
+    rotation=gr*gr0.inv();translation=gp-rotation.apply(gp0)
+    queried=copy.deepcopy(actual)
+    for body in queried['guitar_body_states']:
+        p,r=pose(body);body['pose']={'p':dict(zip('xyz',(rotation.apply(p)+translation).tolist())),
+                                  'r':dict(zip('xyzw',(rotation*r).as_quat().tolist()))}
+    # Geometry-only internal records: never written as an initial candidate.
+    actual_i=copy.deepcopy(initial);actual_i['native_initial_state']=actual
+    actual_i['q_ref105_rad']=[row['pos'] for row in actual['human_dof_states']]
+    base=copy.deepcopy(c);base.update(q_ref_rad=actual_i['q_ref105_rad'],expected_initial_state=actual,
+          guitar_position_W_m=gp0.tolist(),guitar_quaternion_xyzw=gr0.as_quat().tolist())
+    query=copy.deepcopy(base);query.update(expected_initial_state=queried,guitar_position_W_m=gp.tolist(),guitar_quaternion_xyzw=gr.as_quat().tolist())
+    chairp,chairr=pose(actual['chair_body_states'][0]);pose_path=(ROOT/read(A/'config.json')['pose_source']).resolve();original_read=capsules.read
+    def chair_read(path):
+        value=original_read(path)
+        if Path(path).resolve()==pose_path:
+            value['params']['chair']['half']=list(c['chair_half_m'])
+            value['params']['chair']['center_xy']=(chairp[:2]-np.array(c['chair_translation_W_m'])[:2]).tolist()
+        return value
+    def classify(rows):
+        result=[]
+        for old in rows:
+            row=dict(old);row['helper_collision_relevant']=bool(row['collision_relevant'])
+            if row['b_actor']=='guitar':
+                hp=policy['human'][row['a']];gg=policy['guitar'][row['b']]
+                active=any((a['filter']&b['filter'])==0 for a in hp for b in gg)
+                row.update(collision_relevant=bool(active),actual_native_cross_actor_enabled=bool(active),
+                           human_filters=[v['filter'] for v in hp],guitar_filters=[v['filter'] for v in gg])
+            result.append(row)
+        return result
+    with patch.object(capsules,'read',chair_read):
+        oldrows=classify(capsules.audit(base,actual_i));rows=classify(capsules.audit(query,actual_i))
+    key=lambda row:(row['a'],row['b'],row.get('geom',''));oldgaps={key(row):row['gap_m'] for row in oldrows}
+    worsened=[dict(row,baseline_gap_m=oldgaps.get(key(row))) for row in rows if row['collision_relevant']
+              and row['gap_m']<-.0001 and row['gap_m']<oldgaps.get(key(row),.02)-.00005
+              and not(row['a']=='Pelvis' and row['b_actor']=='chair')]
+    disclosed=[row for row in worsened if row['a']=='Chest' and row['b_actor']=='guitar' and row['gap_m']>=-.00025]
+    rejected=[row for row in worsened if row not in disclosed]
+    boxrows=[dict(body=n,before_gap_m=boxes.measure(poses,n,gp0,gr0),query_gap_m=boxes.measure(poses,n,gp,gr)) for n in boxes.boxes]
+    chairposes=dict(poses);chairposes['chair']=(chairp,chairr)
+    boxes.boxes['chair']=(np.zeros(3),np.array(c['chair_half_m']),Rotation.identity())
+    chairgap=boxes.measure(chairposes,'chair',gp,gr)
+    ground=min(float((gp+gr.apply(v))[:,2].min()) for v,_,_,_ in distance.pieces)
+    ref=next(v for v in properties['support_references'] if v['body']=='R_Shoulder')
+    initial_poses={n:pose(b) for n,b in zip(bodies,initial['native_initial_state']['human_body_states'])}
+    palm,palm_r=initial_poses['RH:palm'];sp,sr=initial_poses['R_Shoulder']
+    anchors_before=dict(palm_W_m=palm.tolist(),material_W_m=(sp+sr.apply(ref['local_m'])).tolist(),
+         task_goal_W_m=(gp_initial+gr_initial.apply(ref['goal_G_m'])).tolist(),palm_xyzw=palm_r.as_quat().tolist())
+    anchors_after={k:(rotation.apply(v)+translation).tolist() for k,v in anchors_before.items() if k!='palm_xyzw'}
+    anchors_after['palm_xyzw']=(rotation*palm_r).as_quat().tolist()
+    anchor_shifts={k:(np.array(anchors_after[k])-np.array(v)).tolist() for k,v in anchors_before.items() if k!='palm_xyzw'}
+    old_preload=np.array(anchors_before['task_goal_W_m'])-np.array(anchors_before['material_W_m'])
+    new_preload=np.array(anchors_after['task_goal_W_m'])-np.array(anchors_after['material_W_m'])
+    limits=dict(Chest_gap_target_m=-.0002,other_gap_max_worsening_m=.00005,other_gap_min_m=-.00025,
+                bodycenter_delta_max_m=.001,rotation_delta_max_deg=.5,initial_relative_rotation_max_deg=5.,
+                neck_abs_max_deg=3.,lateral_abs_error_max_m=.020,new_active_nonChest_gap_worsening_m=.00005)
+    gates=dict(reference_completed5s=bool(run_report['completed'] and run_report['physics_steps']==1200),
+         Chest_query_gap_within0p025mm=abs(gaps[0]+.2)<=.025,
+         other_support_gap_worsening_under0p05mm=bool(np.all(gaps[1:]>=gaps0[1:]-.05)),
+         other_support_gaps_over_minus0p25mm=bool(np.all(gaps[1:]>=-.25)),
+         query_center_change_under1mm=float(np.linalg.norm(x[:3]))<=1.,query_rotation_change_under0p5deg=float(np.rad2deg(rotation.magnitude()))<=.5,
+         query_total_center_change_under30mm=float(np.linalg.norm(gp+gr.apply(center_G)-initial_center))<=.030,
+         query_initial_relative_rotation_under5deg=angle<=5.,query_neck_under3deg=abs(neck)<=3.,query_lateral_error_under20mm=abs(lateral)<=20.,
+         all_human_BOX_Gbody_clear=all(row['query_gap_m']>=.0001 for row in boxrows),chair_Gbody_clear=chairgap>=.0001,Gbody_ground_clear=ground>=.001,
+         no_new_active_intersection_worsening_except_disclosed_Chest=not rejected,
+         actual_native_policy_unchanged=policy==read(NATIVE/'native_properties.json')['actual_shape_properties'],
+         all_human_dof_and_chair_query_state_exact=all(queried[k]==actual[k] for k in ('human_body_states','human_dof_states','chair_body_states')),
+         quaternion_unit=abs(np.linalg.norm(rotation.as_quat())-1.)<1e-12,
+         affine_maps_actual_Groot_to_query=bool(np.linalg.norm(rotation.apply(gp0)+translation-gp)<1e-12),
+         original_human_preload_vector_rotated_only=bool(np.linalg.norm(new_preload-rotation.apply(old_preload))<1e-12),
+         max_human_anchor_change_under1mm=max(np.linalg.norm(v) for v in anchor_shifts.values())<=.001)
+    spec=dict(R_delta_xyzw=rotation.as_quat().tolist(),translation_W_m=translation.tolist(),query_reference_run=str(RUN),
+         initial_candidate_sha256=sha(cfg['candidate']),initial_candidate_path=cfg['candidate'],
+         initial_anchor_predictions=dict(reference=str(RUN/'initial_values.json'),reference_sha256=sha(RUN/'initial_values.json'),
+              before=anchors_before,after=anchors_after,world_displacement_m=anchor_shifts),
+         query_G_geometry_only=dict(actual_root_W_m=gp0.tolist(),actual_xyzw=gr0.as_quat().tolist(),query_root_W_m=gp.tolist(),query_xyzw=gr.as_quat().tolist()),
+         scope='Apply this affine ONLY to finite human right palm/material/task world anchors and palm orientation. Query G pose is a geometric diagnostic, never initial candidate, G target, state update, attachment or force.')
+    assert verify(inputs);save(out/'right_goal_spec.json',spec)
+    save(out/'query_geometry_state.json',dict(state=queried,scope='Pure fixed-human/G geometry query; not an initial state and never linked as cfg.candidate. No simulation.'))
+    report=dict(eligible_for_finite_human_goal=all(gates.values()),gates=gates,limits=limits,input_sha256=inputs,inputs_unchanged=True,
+         spec_sha256=sha(out/'right_goal_spec.json'),spec_path=str(out/'right_goal_spec.json'),source_candidate_sha256=sha(cfg['candidate']),
+         source_candidate_path=cfg['candidate'],query_reference_run=str(RUN),fit_success=bool(fit.success),fit_nfev=int(fit.nfev),fit_cost=float(fit.cost),
+         parameters_center_RFU_mm_rotation_RFU_mrad=x.tolist(),baseline_gaps_m=dict(zip(names,(gaps0*.001).tolist())),query_gaps_m=dict(zip(names,(gaps*.001).tolist())),
+         baseline_support_witnesses=before_witness,query_support_witnesses={n:distance.measure(poses,n,gp,gr) for n in names},
+         body_center_displacement_W_m=(gp+gr.apply(center_G)-center0).tolist(),rotation_delta_deg=float(np.rad2deg(rotation.magnitude())),
+         query_initial_relative_rotation_deg=angle,query_neck_elevation_deg=neck,query_lateral_error_m=lateral*.001,
+         old_capsule_rows=oldrows,query_capsule_rows=rows,disclosed_Chest_preload_rows=disclosed,rejected_new_active_intersections=rejected,
+         human_BOX_Gbody_pairs=boxrows,chair_Gbody_SAT_gap_m=chairgap,Gbody_min_source_z_m=ground,
+         initial_anchor_predictions=spec['initial_anchor_predictions'],
+         scope='Actual settled human fixed for source geometry query only; Chest bounded negative gap is a disclosed virtual preload, not cooked PhysX penetration or actual contact success. All source rows retained, actual native masks distinguish disabled G pairs; same-actor parent/exclude/filter retained, chair uses inherited helper relevance. Hand meshes/anatomical pads not fully certified. Execution changes finite human anchors only; source4 initial G/human/chair and target2/PD/caps remain unchanged.')
+    save(out/'report.json',report)
+    cfg.update(finite_right_goal_spec=str(out/'right_goal_spec.json'),finite_right_goal_spec_sha256=sha(out/'right_goal_spec.json'),
+         finite_right_goal_report=str(out/'report.json'),finite_right_goal_mode='constant_world_affine_human_anchors_v1')
+    save(out/'static5.json',cfg);assert verify(inputs)
+    save(PHASE/'right_goal_generation_v1.json',dict(input_sha256=inputs,inputs_unchanged=True,
+         output_sha256={str(p):sha(p) for p in out.iterdir() if p.is_file()},eligible_for_finite_human_goal=report['eligible_for_finite_human_goal'],native_simulation_steps=0))
+    print(dict(eligible=report['eligible_for_finite_human_goal'],gates=gates,gaps_mm=dict(zip(names,gaps.tolist())),
+         center_delta_mm=((gp+gr.apply(center_G)-center0)*1000).tolist(),rotation_delta_deg=report['rotation_delta_deg'],
+         anchor_displacements_mm={k:(np.array(v)*1000).tolist() for k,v in anchor_shifts.items()},rejected=rejected),flush=True)
+    assert report['eligible_for_finite_human_goal'],'Geometry/anchor gate failed; native run forbidden.'
+
+
+if __name__=='__main__':main()

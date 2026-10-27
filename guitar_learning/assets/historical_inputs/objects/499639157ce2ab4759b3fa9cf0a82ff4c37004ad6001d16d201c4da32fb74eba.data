@@ -1,0 +1,27 @@
+"""Prepared control and world right12 IK preserved; only finite left release added."""
+from ..seated_foot_support_v1.runtime_v6 import Scene as FootScene
+from ..grounded_guitar_support_v1.runtime_v18 import Controller as PreparedController
+from .motion_v1 import Motion
+
+
+class Scene(FootScene):
+    def command(self,named):
+        motion=getattr(self,'release_logic',None)
+        if motion is not None:named=motion.apply(named)
+        row=super().command(named)
+        if motion is not None and motion.started:row['left_release']=motion.info.copy()
+        return row
+
+
+class Controller(PreparedController):
+    def __init__(self,scene):
+        super().__init__(scene)
+        assert scene.cfg['seconds']==25 and scene.cfg['mode']=='static' and scene.cfg['release_start_s']==10
+        scene.release_logic=Motion(scene,self.fk)
+
+    def targets(self):
+        row=super().targets()
+        if self.s.steps>=2400:
+            row.update(stage=self.s.release_logic.stage,right_world_palm_IK_active=True,
+                release_scope='Original world right12 IK/material support and finite feet continue; only named finite left targets change.')
+        return row

@@ -1,0 +1,17 @@
+# Changed files — three-face finger target hold
+
+| File | Recorded content |
+|---|---|
+| [Phase README](</home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/three_face_finger_target_hold_v1/README.md:1>) | Trial conditions, measured error/contact tables, scope limits, figures 112–113, execution/video provenance, historical-plan status, and main/next-plan links. |
+| [Cumulative visual report](</home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/VISUAL_REPORT.md:1458>) | Appended section 79 and figure captions 112–113. Earlier report sections were preserved. |
+| [Figure 112](</home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/three_face_finger_target_hold_v1/artifacts/three_face_finger_hold_curves.png>) | Saved 240 Hz guitar errors and post-physics positive raw-lambda sample timelines. |
+| [Figure 113](</home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/three_face_finger_target_hold_v1/artifacts/three_face_finger_hold_hands.png>) | Actual Isaac Gym hands camera frames at steps 0 and 1200 for both trials. |
+| [Artifact manifest](</home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/three_face_finger_target_hold_v1/artifacts/artifact_manifest.json>) | Producer, sealed input before/after SHA256 values, output SHA256 values, and `native_calls: 0`. |
+| [Artifact execution record](</home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/three_face_finger_target_hold_v1/artifact_execution.json>) | Exact command and producer SHA; return code 0, elapsed 0.7420416880631819 s, `native_calls: 0`. |
+| [Four actual native videos](</home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/three_face_finger_target_hold_v1/README.md:48>) | Hands and whole-body videos for each trial, 151 frames at 30 fps. |
+| [Review and final verification](</home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/three_face_finger_target_hold_v1/review.md>) · [verification record](</home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/three_face_finger_target_hold_v1/final_verification.json>) | Final artifact/source audit records. |
+| [Artifact producer](</home/ajou/yigyu/3/stability_adapter_2/make_three_face_finger_hold_artifacts.py:33>) | Validates saved curves/native frame hashes, plots contact samples and actual frames, and writes the provenance manifest. |
+| [Analysis source](</home/ajou/yigyu/3/stability_adapter_2/analyze_three_face_finger_hold.py:20>) | Derives the saved-data summary and curve arrays from the two completed trials. |
+| [Trial preparation source](</home/ajou/yigyu/3/stability_adapter_2/prepare_three_face_finger_hold.py:16>) | Defines the two approved finger-target rows and their shared initial/control conditions. |
+| [Main stability plan](</home/ajou/yigyu/3/stability_adapter_2/PLAN.md:1489>) · [project README](</home/ajou/yigyu/3/stability_adapter_2/README.md:832>) · [dated README](</home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/README.md:502>) | Main tracking references for the executed comparison and current status. |
+| [Historical finger-target plan](</home/ajou/yigyu/3/stability_adapter_2/THREE_FACE_FINGER_TARGET_HOLD_PLAN.md>) · [next support-loss diagnosis](</home/ajou/yigyu/3/stability_adapter_2/THREE_FACE_SUPPORT_LOSS_DIAGNOSTIC_PLAN.md:1>) · [multi-face grip objective](</home/ajou/yigyu/3/stability_adapter_2/MULTI_FACE_GRIP_PLAN.md>) | The frozen finger plan retains its earlier unexecuted status; this result phase has executed. The next diagnostic remains unexecuted and preserves the face-layout objective. |

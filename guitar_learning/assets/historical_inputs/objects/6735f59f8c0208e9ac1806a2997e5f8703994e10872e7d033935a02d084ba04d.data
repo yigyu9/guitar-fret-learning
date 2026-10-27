@@ -1,0 +1,34 @@
+"""The real trial must allow PD targets and reject state/force shortcuts."""
+import unittest
+from types import SimpleNamespace
+from stability_adapter_2.underneck_pose_trial_v2 import NoStrapGym
+
+
+class FakeGym:
+    def __init__(self): self.state_writes = 0; self.targets = 0
+    def set_actor_dof_states(self, *args): self.state_writes += 1; return True
+    def set_actor_rigid_body_states(self, *args): self.state_writes += 1; return True
+    def set_actor_dof_position_targets(self, *args): self.targets += 1; return True
+
+
+class TrialGuardTests(unittest.TestCase):
+    def test_initialization_then_only_targets(self):
+        owner = SimpleNamespace(started=False, forbidden_calls=[])
+        raw = FakeGym(); gym = NoStrapGym(raw, owner)
+        gym.set_actor_dof_states(); gym.set_actor_rigid_body_states()
+        owner.started = True
+        for name in ('set_actor_dof_states', 'set_actor_rigid_body_states'):
+            with self.assertRaises(RuntimeError): getattr(gym, name)()
+        self.assertTrue(gym.set_actor_dof_position_targets())
+        self.assertEqual(raw.state_writes, 2)
+        self.assertEqual(raw.targets, 1)
+
+    def test_external_force_and_effort_always_blocked(self):
+        owner = SimpleNamespace(started=False, forbidden_calls=[])
+        gym = NoStrapGym(FakeGym(), owner)
+        for name in ('apply_body_force_at_pos', 'apply_actor_dof_efforts', 'apply_rigid_body_force_tensors'):
+            with self.assertRaises(RuntimeError): getattr(gym, name)()
+        self.assertEqual(len(owner.forbidden_calls), 3)
+
+
+if __name__ == '__main__': unittest.main()

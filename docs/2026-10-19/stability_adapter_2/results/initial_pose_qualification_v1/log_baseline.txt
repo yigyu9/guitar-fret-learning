@@ -1,0 +1,50 @@
+Importing module 'gym_38' (/home/ajou/yigyu/3/isaacgym/python/isaacgym/_bindings/linux-x86_64/gym_38.so)
+Setting GYM_USD_PLUG_INFO_PATH to /home/ajou/yigyu/3/isaacgym/python/isaacgym/_bindings/linux-x86_64/usd/plugInfo.json
+Not connected to PVD
+Physics Engine: PhysX
+Physics Device: cpu
+GPU Pipeline: disabled
+[Error] [carb.gym.plugin] Could not load visual geom 
+[Error] [carb.gym.plugin] Could not load visual geom 
+[Error] [carb.gym.plugin] Could not load visual geom 
+[Error] [carb.gym.plugin] Could not load visual geom 
+[Error] [carb.gym.plugin] Could not load visual geom 
+[Error] [carb.gym.plugin] Could not load visual geom 
+[Warning] [carb.gym.plugin] Incomplete articulation start index in function setRigidBodyStates
+[Warning] [carb.gym.plugin] Incomplete articulation end index in function setRigidBodyStates
+PyTorch version 2.4.1+cu121
+Device count 1
+/home/ajou/yigyu/3/isaacgym/python/isaacgym/_bindings/src/gymtorch
+Using /tmp/strike_live_guitar_torch_extensions as PyTorch extensions root...
+Emitting ninja build file /tmp/strike_live_guitar_torch_extensions/gymtorch/build.ninja...
+Building extension module gymtorch...
+Allowing ninja to set a default number of workers... (overridable by setting the environment variable MAX_JOBS=N)
+ninja: no work to do.
+Loading extension module gymtorch...
+Traceback (most recent call last):
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_qualification_v1.py", line 86, in run
+    sample();capture();action=contract.neutral_action()
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_qualification_v1.py", line 74, in capture
+    s=native_state(scene);recorder.capture();body={'human/'+n:b for n,b in zip(bodies,s['human_body_states'])};body.update({'guitar/'+n:b for n,b in zip(scene.guitar_bodies,s['guitar_body_states'])});points=[]
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_om_no_strap_upper_arm_v1.py", line 48, in capture
+    before=native_state(self.env);super().capture();self.strap_rows.append({**self.env.strap_state(),'physics_step':self.env.steps,'time_s':self.env.steps/self.env.config['physics_hz']})
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_guitar_focused_view_v1.py", line 15, in capture
+    env.gym.set_camera_location(env.cameras['OM_appearance'],env.env,gymapi.Vec3(*eye),gymapi.Vec3(*target))
+KeyError: 'OM_appearance'
+
+Traceback (most recent call last):
+  File "/home/ajou/miniconda3/envs/rl38/lib/python3.8/runpy.py", line 194, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/home/ajou/miniconda3/envs/rl38/lib/python3.8/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_qualification_v1.py", line 132, in <module>
+    if __name__=='__main__':main()
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_qualification_v1.py", line 130, in main
+    with patch.object(runner,'main',lambda:run(cfg,args.out.resolve())):strike.main()
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_elbow_wrist_ready_v7.py", line 126, in main
+    runner.main()
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_qualification_v1.py", line 130, in <lambda>
+    with patch.object(runner,'main',lambda:run(cfg,args.out.resolve())):strike.main()
+  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_qualification_v1.py", line 103, in run
+    if failure or not unchanged or forbidden:raise RuntimeError(failure or 'input/guard violation')
+RuntimeError: {'type': 'KeyError', 'message': "'OM_appearance'", 'traceback': 'Traceback (most recent call last):\n  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_qualification_v1.py", line 86, in run\n    sample();capture();action=contract.neutral_action()\n  File "/home/ajou/yigyu/3/stability_adapter_2/run_initial_pose_qualification_v1.py", line 74, in capture\n    s=native_state(scene);recorder.capture();body={\'human/\'+n:b for n,b in zip(bodies,s[\'human_body_states\'])};body.update({\'guitar/\'+n:b for n,b in zip(scene.guitar_bodies,s[\'guitar_body_states\'])});points=[]\n  File "/home/ajou/yigyu/3/stability_adapter_2/run_om_no_strap_upper_arm_v1.py", line 48, in capture\n    before=native_state(self.env);super().capture();self.strap_rows.append({**self.env.strap_state(),\'physics_step\':self.env.steps,\'time_s\':self.env.steps/self.env.config[\'physics_hz\']})\n  File "/home/ajou/yigyu/3/stability_adapter_2/run_guitar_focused_view_v1.py", line 15, in capture\n    env.gym.set_camera_location(env.cameras[\'OM_appearance\'],env.env,gymapi.Vec3(*eye),gymapi.Vec3(*target))\nKeyError: \'OM_appearance\'\n'}

@@ -1,6 +1,6 @@
 """코드 그립 사전 — (root, quality) → 운지 템플릿(손가락 번호까지).
 
-규칙 1(코드면 사전 조회)의 구현. docs/finger-mapping-design.md §6.
+규칙 1(코드면 사전 조회)의 구현. docs/archive/finger-mapping-design.md §6.
 줄 인덱스 = CSV/모델 관례: s0=low-E(6번줄) … s5=high-e(1번줄).
 finger: 0=개방(손가락 없음), 1=검지, 2=중지, 3=약지, 4=소지.
 그립 = dict s → (fret, finger). 사전에 없는 줄 = 뮤트/미사용.

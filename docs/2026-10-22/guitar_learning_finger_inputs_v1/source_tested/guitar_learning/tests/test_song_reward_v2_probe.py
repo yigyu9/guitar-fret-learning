@@ -1,0 +1,109 @@
+"""CPU probe lifecycle: both ledgers consume exactly the same four native rows."""
+import copy
+from contextlib import ExitStack
+import gzip
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+import torch._dynamo
+from guitar_learning.training import monitoring
+from guitar_learning.imitation.imitation import dataset_manifest
+from guitar_learning.runtime.persistent_session import PersistentHeadlessPreparedSession
+from guitar_learning.tool.experiments.song_reward_v2 import probe, policy, transfer, worker
+from guitar_learning.song import reward_environment as environment
+from guitar_learning.tests.test_song_evaluate import RecordedSongEnvironment,RecordedSongPolicy
+
+
+class ProbeEnvironment(RecordedSongEnvironment):
+    def __init__(self,**kwargs):
+        super().__init__(**kwargs);self.last_measured={'initial':True}
+        self.song_ledger=SimpleNamespace(summary=lambda completed:dict(samples=self.steps*4,stage_success=False,completed=completed))
+    def step(self,action):
+        observation,_,terminated,truncated,info=super().step(action)
+        for row in info['physics_measurements']:
+            row['music']=dict(task_time_s=row['physics_step']/240.,actual_marker=row['physics_step'])
+            row['song_reward_terms']={'new_shaping':.25}
+        info.update(reward_terms=dict(action_change=-.1,terminal_failure=0.,new_shaping=1.),
+            failure_reasons=[],reward_shaping={'potential':.5})
+        return observation,.9,terminated,truncated,info
+
+
+class ProbeTests(unittest.TestCase):
+    def setUp(self):
+        self.folder=tempfile.TemporaryDirectory();self.root=Path(self.folder.name)
+        self.source=self.root/'expert';self.source.write_bytes(b'x')
+        self.settings_path=self.root/'settings.json';self.settings_path.write_text('{}')
+        self.settings=dict(seed=7,size='medium',device='cpu',song=dict(window_s=.5,left_fraction=.4))
+    def tearDown(self):self.folder.cleanup()
+    def harness(self,env,memory=16*1024**3):
+        stack=ExitStack();self.addCleanup(stack.close)
+        self.seen=[];seen=self.seen
+        class Shadow:
+            def __init__(self,task,initial,**kwargs):
+                self.samples=0
+                if initial!={'initial':True}:raise AssertionError('reset measurement missing')
+            def update(self,measurement,sample):
+                if measurement['actual_marker']!=sample['native']['physics_step']:raise AssertionError('sample clock mismatch')
+                seen.append((copy.deepcopy(measurement),copy.deepcopy(sample)));self.samples+=1
+                return {'old_guide':.125}
+            def summary(self,completed):return dict(samples=self.samples,completed=completed,stage_success=False)
+        stack.enter_context(patch.dict('sys.modules',{'isaacgym':SimpleNamespace()}))
+        def build(config,out,**kwargs):
+            self.assertIs(kwargs['session_factory'],PersistentHeadlessPreparedSession)
+            self.assertTrue(callable(kwargs['session_factory'].reset_episode));self.assertEqual(kwargs['song'],self.settings['song'])
+            return env
+        self.build=stack.enter_context(patch('guitar_learning.song.reward_environment.build_environment',side_effect=build))
+        stack.enter_context(patch('guitar_learning.tool.experiments.song_reward_v2.policy.RewardPolicy',RecordedSongPolicy))
+        stack.enter_context(patch('guitar_learning.tool.experiments.song_reward_v2.transfer.validate_experts',return_value=dict(source_pins=dataset_manifest([self.source]))))
+        stack.enter_context(patch('guitar_learning.tool.experiments.song_reward_v2.transfer.apply_experts',return_value=dict(source_pins=dataset_manifest([self.source]))))
+        stack.enter_context(patch('guitar_learning.tool.experiments.song_reward_v2.worker.compact',side_effect=lambda env,info,action:copy.deepcopy(info)))
+        stack.enter_context(patch('guitar_learning.song.metrics.SongLedger',Shadow))
+        stack.enter_context(patch('guitar_learning.imitation.imitation_io.pin_inputs',side_effect=lambda paths:dataset_manifest(paths)))
+        self.memory=stack.enter_context(patch('guitar_learning.training.monitoring.available_memory_bytes',return_value=memory))
+        stack.enter_context(patch('builtins.print'))
+        return SimpleNamespace(out=self.root/'probe',settings=self.settings_path,ticks=2)
+    def test_same_eight_samples_two_ticks_reward_accounting_only(self):
+        env=ProbeEnvironment();args=self.harness(env);result=probe.run(self.settings,args)
+        self.assertTrue(result['completed']);self.assertTrue(result['source_unchanged']);self.assertTrue(result['physical_flags_ok'])
+        self.assertEqual(result['steps'],2);self.assertEqual(result['trace_rows'],2);self.assertEqual(env.close_calls,1)
+        self.assertEqual(result['old_metrics']['samples'],8);self.assertEqual(result['new_metrics']['samples'],8)
+        self.assertEqual(result['totals']['old'],dict(action_change=-.2,terminal_failure=0.,old_guide=1.))
+        self.assertEqual(result['totals']['new'],dict(action_change=-.2,terminal_failure=0.,new_shaping=2.))
+        self.assertIn('not a trained-policy performance comparison',result['scope'])
+        with gzip.open(args.out/'comparison.jsonl.gz','rt') as stream:rows=[json.loads(line) for line in stream]
+        self.assertEqual([sample['physics_step'] for row in rows for sample in row['samples']],list(range(1,9)))
+        self.assertEqual([measurement['actual_marker'] for measurement,_ in self.seen],list(range(1,9)))
+        self.assertEqual(rows[-1]['native_last_sample']['physics_step'],8)
+        self.assertTrue(all(len(row['action'])==39 and len(row['samples'])==4 for row in rows))
+    def test_step_error_remains_primary_when_close_fails(self):
+        env=ProbeEnvironment(step_error=True,close_error=True);args=self.harness(env)
+        with self.assertRaisesRegex(ValueError,'primary recorded song step error'):probe.run(self.settings,args)
+        result=json.loads((args.out/'result.json').read_text())
+        self.assertFalse(result['completed']);self.assertEqual(result['failure']['type'],'ValueError')
+        self.assertEqual(result['cleanup_error']['message'],'recorded song close error');self.assertEqual(env.close_calls,1)
+    def test_close_error_invalidates_complete_tick_count(self):
+        env=ProbeEnvironment(close_error=True);args=self.harness(env)
+        with self.assertRaisesRegex(RuntimeError,'recorded song close error'):probe.run(self.settings,args)
+        result=json.loads((args.out/'result.json').read_text())
+        self.assertEqual(result['steps'],2);self.assertFalse(result['completed']);self.assertIsNone(result['failure'])
+        self.assertEqual(result['cleanup_error']['message'],'recorded song close error')
+    def test_start_and_runtime_memory_guards(self):
+        env=ProbeEnvironment();args=self.harness(env,memory=7*1024**3)
+        with self.assertRaises(monitoring.LowMemoryError):probe.run(self.settings,args)
+        self.build.assert_not_called();self.assertEqual(env.close_calls,0)
+        args.out=self.root/'runtime';self.memory.side_effect=[16*1024**3,5*1024**3]
+        with self.assertRaises(monitoring.LowMemoryError):probe.run(self.settings,args)
+        self.assertEqual(env.steps,0);self.assertEqual(env.close_calls,1)
+    def test_bounds_rejected_before_environment(self):
+        env=ProbeEnvironment();args=self.harness(env)
+        for ticks in (0,1970,True):
+            args.ticks=ticks
+            with self.assertRaises(ValueError):probe.run(self.settings,args)
+        self.build.assert_not_called()
+
+
+if __name__=='__main__':unittest.main()

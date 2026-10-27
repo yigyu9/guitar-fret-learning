@@ -1,0 +1,8 @@
+# Strike EFFORT damped arm v1 — 진행 기록
+
+- **상태:** 5초 native diagnostic 및 analysis 완료; adoption 판정은 **NOT ADOPTED**.
+- **실행:** 1,200 physics steps, 151 native frames, 24 checks 통과. PREPARE/PLAY/HOLD=49/251/0, policy actor samples=251, PLAY source outputs=R9 arm + 21 RH fingers. Input closure 1,078 files changed 0; analysis input SHA 7개 unchanged.
+- **명령 경계:** frozen Strike checkpoint `strike_010000.pt` (SHA-256 `9244b33c87426afb28c10a1176b88f23832a50a57605586d4e28084a48160e87`), learning updates 0. PLAY에서 R9 EFFORT/stiffness0 + explicit spring `clip(kp*(target−actual), ±effort_limit)`, phase0 damping baseline·phase1 quarter; other72 POSITION. Request log는 측정 drive torque가 아니다.
+- **결과:** target_hit/physical_target_hit/accepted release=0, physical release=1, miss=10, wrong crossing=1, READY success=1, partial strike F1=0. 기타 회전 변화 max/end 46.354493°/43.328547°, 위치 변화 max/end 46.353646/30.453770 mm; playable region control49/300·policy3/251. Source는 5초까지 terminal 되지 않았고 음악 완료 false.
+- **다음:** geometry PI 후속은 [별도 계획](/home/ajou/yigyu/3/stability_adapter_2/STRIKE_EFFORT_GEOMETRY_PI_PLAN.md:1)과 [phase 경로](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_effort_geometry_pi_v1/)로 분리되어 있다. 이번 결과는 후속 단계의 효과나 원인 판정이 아니다.
+- **참조:** [phase README](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_effort_damped_arm_v1/README.md:1), [native report](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_effort_damped_arm_v1/native/data/report.json), [analysis summary](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strike_effort_damped_arm_v1/analysis/summary.json).

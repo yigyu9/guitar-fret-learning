@@ -1,0 +1,25 @@
+# 이번 연결 작업의 변경 파일
+
+아래는 이번 Fret native 연결 시도에서 추가한 계획·실행·검증 파일과 결과 요약이다. 체크포인트가 참조하는 원본 자산·구현 파일은 수정하지 않았다. 누락/차이 항목은 결과 기록에서만 분류했다.
+
+## 계획과 실행 코드
+
+- v1 독립 연결 설계: [FRET_NATIVE_CONNECTION_PLAN.md](/home/ajou/yigyu/3/stability_adapter_2/FRET_NATIVE_CONNECTION_PLAN.md:1), [fret_native_view.py](/home/ajou/yigyu/3/stability_adapter_2/fret_native_view.py:22), [run_fret_native_connection.py](/home/ajou/yigyu/3/stability_adapter_2/run_fret_native_connection.py:42), [fret_native_preserved_run.py](/home/ajou/yigyu/3/stability_adapter_2/fret_native_preserved_run.py:21), [preflight_fret_native_connection.py](/home/ajou/yigyu/3/stability_adapter_2/preflight_fret_native_connection.py:1). v1 시도는 의자 자산 mismatch에서 멈췄다.
+- v2 설계와 연결: [FRET_NATIVE_CONNECTION_V2_PLAN.md](/home/ajou/yigyu/3/stability_adapter_2/FRET_NATIVE_CONNECTION_V2_PLAN.md:1), [fret_native_view_v2.py](/home/ajou/yigyu/3/stability_adapter_2/fret_native_view_v2.py:76), [run_fret_native_connection_v2.py](/home/ajou/yigyu/3/stability_adapter_2/run_fret_native_connection_v2.py:67), [fret_native_v2_preserved_run.py](/home/ajou/yigyu/3/stability_adapter_2/fret_native_v2_preserved_run.py:54), [preflight_fret_native_connection_v2.py](/home/ajou/yigyu/3/stability_adapter_2/preflight_fret_native_connection_v2.py:1). v2 preflight의 이동 판정 혼동 가능성과 native 실행의 missing chair SHA 실패 기록을 보존했다.
+- v3 수정 실행: [FRET_NATIVE_CONNECTION_V3_PLAN.md](/home/ajou/yigyu/3/stability_adapter_2/FRET_NATIVE_CONNECTION_V3_PLAN.md:1), [run_fret_native_connection_v3.py](/home/ajou/yigyu/3/stability_adapter_2/run_fret_native_connection_v3.py:68), [fret_native_v3_preserved_run.py](/home/ajou/yigyu/3/stability_adapter_2/fret_native_v3_preserved_run.py:54), [preflight_fret_native_connection_v3.py](/home/ajou/yigyu/3/stability_adapter_2/preflight_fret_native_connection_v3.py:50). v3는 missing asset을 변경 목록으로 남기며, 기존 물리·제어·종료 조건을 유지했다.
+
+## 결과 문서와 원시 기록
+
+- 이 결과 요약: [README.md](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/fret_native_connection_v1/README.md:1).
+- 검증 요약 17항목: [analysis/summary.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/fret_native_connection_v1/analysis/summary.json:1). 실행 입력 closure: [analysis/inputs.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/fret_native_connection_v1/analysis/inputs.json:1).
+- v3 실행 판정·구성: [native_v3/data/report.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/fret_native_connection_v1/native_v3/data/report.json:1), [native_v3/data/initial_values.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/fret_native_connection_v1/native_v3/data/initial_values.json:1), [native_v3/data/initial_audit.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/fret_native_connection_v1/native_v3/data/initial_audit.json:1).
+- terminal, frame trace, controls: [native_v3/data/terminal_info.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/fret_native_connection_v1/native_v3/data/terminal_info.json:1), [native_v3/data/trace.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/fret_native_connection_v1/native_v3/data/trace.json:1), [native_v3/data/controls.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/fret_native_connection_v1/native_v3/data/controls.json:1).
+- 입력 불변 및 카메라 기록: [native_v3/inputs_before.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/fret_native_connection_v1/native_v3/inputs_before.json:1), [native_v3/inputs_after.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/fret_native_connection_v1/native_v3/inputs_after.json:1), [native_v3/data/images/capture.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/fret_native_connection_v1/native_v3/data/images/capture.json:1).
+
+## 프로젝트 인계와 영상 모음
+
+- A 계획의 실제 결과 및 다음 단계: [stability_adapter_2/PLAN.md](/home/ajou/yigyu/3/stability_adapter_2/PLAN.md:524), [stability_adapter_2/README.md](/home/ajou/yigyu/3/stability_adapter_2/README.md:1820).
+- 결과 후처리 감사 스크립트 진입점: [analyze_fret_native_connection.py](/home/ajou/yigyu/3/stability_adapter_2/analyze_fret_native_connection.py:10).
+- 영상 인덱스: [VIDEO_INDEX_fret_native.md](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/VIDEO_INDEX_fret_native.md:1). 복사와 SHA-256 기록: [VIDEO_COLLECTION_fret_native.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/VIDEO_COLLECTION_fret_native.json:1).
+- 배포 복사본: [/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/videos/fret_native_connection_v1__whole_body.mp4](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/videos/fret_native_connection_v1__whole_body.mp4) (`43cb234407d53e5c8df6d33b18c95320298e264c79c18775fd53291c20489781`), [/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/videos/fret_native_connection_v1__hands.mp4](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/videos/fret_native_connection_v1__hands.mp4) (`8bd1cb646d54b84d125bb677974117dfdb86a8e8f9f9bba8cb2dbfd0b7741861`). 둘 다 native_v3 원본과 SHA-256이 일치한다.
+- 이어갈 작업 상태: [CONTINUOUS_WORK_STATUS.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/CONTINUOUS_WORK_STATUS.json:5).

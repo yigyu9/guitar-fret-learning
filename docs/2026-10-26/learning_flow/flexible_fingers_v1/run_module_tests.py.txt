@@ -1,0 +1,21 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+import json, os, re, subprocess, sys, time
+
+root=Path('/home/ajou/yigyu/3');phase=root/'docs/2026-10-26/learning_flow/flexible_fingers_v1';logs=phase/'module_tests';logs.mkdir(exist_ok=True)
+env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1',PYTHONFAULTHANDLER='1',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1',TORCH_EXTENSIONS_DIR='/tmp/guitar_structure_torch_extensions')
+modules=['guitar_learning.tests.'+p.stem for p in sorted((root/'guitar_learning/tests').glob('test_*.py'))]
+started=time.monotonic();rows=[]
+def run(module):
+ name=module.rsplit('.',1)[1];path=logs/(name+'.log');start=time.monotonic()
+ with path.open('w') as out:
+  try:result=subprocess.run([sys.executable,'-B','-X','faulthandler','-m','unittest',module,'-v'],cwd=root,env=env,stdout=out,stderr=subprocess.STDOUT,timeout=240);code=result.returncode
+  except subprocess.TimeoutExpired:code='timeout'
+ text=path.read_text();match=re.search(r'Ran (\d+) tests? in ([\d.]+)s',text)
+ return dict(module=module,returncode=code,result='OK' if code==0 and re.search(r'\nOK\s*$',text) else 'SIGFPE' if code in (-8,136) else 'FAILED',tests=int(match[1]) if match else None,seconds=round(time.monotonic()-start,3),log=str(path.relative_to(phase)))
+with ThreadPoolExecutor(max_workers=2) as pool:
+ for future in as_completed([pool.submit(run,module) for module in modules]):
+  row=future.result();rows.append(row);print(json.dumps(row),flush=True)
+  (phase/'module_tests_summary.json').write_text(json.dumps(dict(completed=False,modules=len(modules),finished=len(rows),results=sorted(rows,key=lambda r:r['module'])),indent=2)+'\n')
+report=dict(completed=True,all_passed=all(r['result']=='OK' for r in rows),modules=len(modules),passed_modules=sum(r['result']=='OK' for r in rows),failed_modules=[r['module'] for r in rows if r['result']!='OK'],passed_tests=sum(r['tests'] or 0 for r in rows if r['result']=='OK'),seconds=round(time.monotonic()-started,3),results=sorted(rows,key=lambda r:r['module']))
+(phase/'module_tests_summary.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps({k:v for k,v in report.items() if k!='results'}),flush=True)

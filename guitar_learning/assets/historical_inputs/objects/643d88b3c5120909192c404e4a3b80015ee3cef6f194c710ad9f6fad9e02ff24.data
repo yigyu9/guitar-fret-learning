@@ -1,0 +1,165 @@
+"""Actual105 V6: fixed root, finite lower stable-PD, free guitar."""
+import isaacgym
+from isaacgym import gymapi,gymtorch
+from pathlib import Path
+from unittest.mock import patch
+from functools import reduce
+from operator import or_
+import numpy as np
+from .common import ROOT,A,HUMAN,LOWER,read,save
+from stability_adapter_2.environment import InitialEnvironment
+from stability_adapter_2.initial_pose_noise_v1 import pose
+
+
+def serialize(names,props):return [{'name':n,'mass_kg':float(v.mass),'COM_body_m':[float(getattr(v.com,k)) for k in 'xyz'],'inertia_COM_kg_m2':[[float(getattr(getattr(v.inertia,i),j)) for j in 'xyz'] for i in 'xyz']} for n,v in zip(names,props)]
+
+
+class Guard:
+ def __init__(self,gym,owner):self.gym,self.owner=gym,owner
+ def __getattr__(self,name):
+  if name=='create_sim':return lambda c,g,e,p:self.gym.create_sim(c,0,e,p)
+  if name=='load_asset':
+   def load(sim,folder,file,options):
+    self.owner.loaded_assets.append({'path':str((Path(folder)/file).resolve()),'fixed_base':bool(options.fix_base_link),'gravity_disabled':bool(options.disable_gravity)})
+    return self.gym.load_asset(sim,folder,file,options)
+   return load
+  if name=='create_actor':
+   def create(env,asset,transform,label,group,filter):
+    actor=self.gym.create_actor(env,asset,transform,label,group,-1 if label=='human' else filter)
+    if label=='human':self.owner.importer_filters=[int(p.filter) for p in self.gym.get_actor_rigid_shape_properties(env,actor)]
+    if label=='guitar':
+     names=list(self.gym.get_actor_rigid_body_names(env,actor));props=self.gym.get_actor_rigid_body_properties(env,actor);before=serialize(names,props);expected=read(ROOT/'docs/2026-10-12/stability_adapter_2/results/realistic_guitar_proportions_v1/native_realistic_v2/native_properties.json')['applied'];assert names==[r['name'] for r in expected]
+     for prop,row in zip(props,expected):
+      ratio=row['mass_kg']/prop.mass;prop.mass=row['mass_kg']
+      for i in 'xyz':
+       for j in 'xyz':setattr(getattr(prop.inertia,i),j,float(getattr(getattr(prop.inertia,i),j))*ratio)
+     assert self.gym.set_actor_rigid_body_properties(env,actor,props,False) is not False
+     self.owner.guitar_properties={'imported':before,'applied':serialize(names,self.gym.get_actor_rigid_body_properties(env,actor)),'reference':expected}
+    return actor
+   return create
+  if name=='apply_actor_dof_efforts':
+   def efforts(env,actor,values):
+    o=self.owner;v=np.asarray(values)
+    if not(o.controlling and env==o.env and actor==o.human and v.shape==(105,) and np.isfinite(v).all() and np.all(abs(v)<=o.pd_properties['effort']+1e-6) and np.all(v[o.position_indices]==0)):
+     o.forbidden_calls.append(name);raise RuntimeError('105 finite human effort owner/cap violation')
+    return self.gym.apply_actor_dof_efforts(env,actor,v)
+   return efforts
+  if name.startswith(('apply_','set_')) and ('force' in name or 'effort' in name):
+   def forbid(*args,**kwargs):self.owner.forbidden_calls.append(name);raise RuntimeError('external force API forbidden: '+name)
+   return forbid
+  if name=='set_rigid_transform' or(name.startswith('set_') and 'state' in name):
+   def state(*args,**kwargs):
+    if self.owner.initialization_complete:self.owner.forbidden_calls.append(name);raise RuntimeError('runtime state overwrite forbidden')
+    self.owner.initial_state_calls.append(name);return getattr(self.gym,name)(*args,**kwargs)
+   return state
+  if name in ('set_actor_dof_properties','set_actor_rigid_body_properties','set_actor_dof_position_targets'):
+   def owned(*args,**kwargs):
+    if self.owner.initialization_complete and(name!='set_actor_dof_position_targets' or not self.owner.submitting_targets):self.owner.forbidden_calls.append(name);raise RuntimeError('runtime property/target owner violation')
+    return getattr(self.gym,name)(*args,**kwargs)
+   return owned
+  return getattr(self.gym,name)
+
+
+class Scene(InitialEnvironment):
+ def __init__(self,cfg):
+  assert cfg['lower_control_mode']=='external_rotational_stable_pd'
+  self.cfg=cfg;self.candidate=read(cfg['candidate']);self.initialization_complete=False;self.controlling=False;self.submitting_targets=False;self.forbidden_calls=[];self.initial_state_calls=[];self.loaded_assets=[]
+  try:
+   acquire=gymapi.acquire_gym
+   with patch.object(gymapi,'acquire_gym',lambda:Guard(acquire(),self)):super().__init__({})
+   self.initialization_complete=True;self.pd_properties=self.gym.get_actor_dof_properties(self.env,self.human).copy();self.q_ref=self.initial_q.astype(float).copy();self.last_target=self.target.astype(float).copy()
+   assert self.names==self.candidate['joint_names'] and len(self.names)==105 and self.human_root_fixed and not self.guitar_root_fixed and not self.guitar_gravity_disabled
+   self.human_properties=serialize(self.human_bodies,self.gym.get_actor_rigid_body_properties(self.env,self.human));self.com={row['name']:np.array(row['COM_body_m']) for row in self.human_properties}
+   self.com.update({row['name']:np.array(row['COM_body_m']) for row in self.guitar_properties['applied']})
+   self.jacobian=gymtorch.wrap_tensor(self.gym.acquire_jacobian_tensor(self.sim,'human'));assert tuple(self.jacobian.shape)==(1,len(self.human_bodies)-1,6,105)
+   self.mass=np.array([r['mass_kg'] for r in self.human_properties]);self.hcom=np.array([r['COM_body_m'] for r in self.human_properties]);self.jacobian_mode='COM';self.references=[]
+   self.mass_matrix=gymtorch.wrap_tensor(self.gym.acquire_mass_matrix_tensor(self.sim,'human'));assert tuple(self.mass_matrix.shape)==(1,105,105)
+   assert np.all(self.pd_properties['driveMode'][self.lower_indices]==gymapi.DOF_MODE_EFFORT) and np.all(self.pd_properties['stiffness'][self.lower_indices]==0) and np.all(self.pd_properties['damping'][self.lower_indices]==0)
+   old_upper=read(Path(read(A/'working_initial_pose_v1/manifest.json')['native_initial']))
+   for j,n in enumerate(old_upper['joint_names']):
+    for field in self.pd_properties.dtype.names:assert self.pd_properties[field][self.names.index(n)]==old_upper['PD_properties'][field][j]
+   self.upper_effort_indices=np.array([i for i in self.effort_indices if i not in self.lower_indices]);assert len(self.upper_effort_indices)==33
+   self.control_kp=np.zeros(105);self.control_kd=np.zeros(105)
+   for i,n in enumerate(self.names):
+    if n.startswith(LOWER):self.control_kp[i]=self.control_kd[i]=0. # Lower efforts are computed separately by rotational stable-PD.
+    elif n.startswith(('Torso_','Spine_','Chest_')):self.control_kp[i],self.control_kd[i]=150,1
+    elif n.startswith(('L_','R_')):self.control_kp[i],self.control_kd[i]={'Thorax':(30,1),'Shoulder':(60,3),'Elbow':(60,3),'Wrist':(20,1)}[n.split('_')[1]]
+   initial=self.native();gp,gr=pose(initial['guitar_body_states'][0]);support=read(self.candidate['support_candidate'])['right_block_cradle']
+   for name,witness,cap,depth in [('R_Thorax',support['capsule_body']['R_Thorax'],10.,.004),('R_Shoulder',support['proximal_upper_arm30_witness'],20.,.008)]:
+    i=self.human_bodies.index(name);p,r=pose(initial['human_body_states'][i]);surface=np.array(witness['guitar_surface_G_m']);normal=np.array(witness['capsule_axis_G_m'])-surface;normal/=np.linalg.norm(normal);point=gp+gr.apply(surface+normal*witness['gap_m']);indices=np.array([j for j,n in enumerate(self.names) if n.startswith(('Torso_','Spine_','Chest_','R_Thorax_')) or(name=='R_Shoulder' and n.startswith('R_Shoulder_'))])
+    self.references.append({'body':name,'index':i,'local_m':r.inv().apply(point-p).tolist(),'goal_G_m':(surface+normal*(witness['gap_m']-depth)).tolist(),'cap_N':cap,'indices':indices.tolist()})
+  except BaseException:
+   try:
+    out=Path(cfg['attempt_out'])
+    try:save(out/'constructor_failure_state.json',{'state':self.native() if getattr(self,'sim',None) is not None else None,'sim_available':getattr(self,'sim',None) is not None,'loaded_assets':self.loaded_assets,'physics_steps':getattr(self,'steps',0)})
+    except BaseException as error:save(out/'constructor_snapshot_error.json',{'error':str(error)})
+    if getattr(self,'sim',None) is not None and getattr(self,'cameras',None):
+     try:
+      from stability_adapter_2.gym_trial_recording import GymTrialRecording
+      self.steps=getattr(self,'steps',0);recording=GymTrialRecording(self,out/'constructor_media');recording.views=tuple(self.cameras)
+      for view in recording.views:(recording.out/'frames'/view).mkdir(parents=True,exist_ok=True)
+      recording.capture();recording.encode()
+     except BaseException as error:save(out/'constructor_capture_error.json',{'error':str(error)})
+   finally:self.close()
+   raise
+
+ def _create_scene(self):
+  delta=np.array(self.candidate.get('chair_translation_W_m',[0.,0.,0.]),dtype=float);assert delta.shape==(3,) and np.isfinite(delta).all() and delta[0]==0 and delta[2]==0 and delta[1] in (0.,-.0025,-.003)
+  chair=self.pose['params']['chair'];before=list(chair['center_xy']);chair['center_xy']=(np.array(before)+delta[:2]).tolist();self.chair_placement={'reference_center_xy_W_m':before,'translation_W_m':delta.tolist(),'applied_center_xy_W_m':chair['center_xy'],'half_m':chair['half'],'scope':'Initial chair placement only; no runtime transform/state write.'}
+  geometry=read(A/'assets/om_body_geometry_v3/manifest.json');self.config['humanoid_asset']=str(HUMAN);self.config['guitar_asset']=geometry['asset'];self.config['strap']['buttons_G_m']=geometry['strap_buttons_G_m'];self.goal_position=np.array(self.candidate['guitar_position_W_m']);x,y,z,w=self.candidate['guitar_quaternion_xyzw'];self.pose['params']['guitar_quat_wxyz_computed']=[w,x,y,z]
+  super()._create_scene();self.initial_q=np.array(self.candidate['q_ref_rad'],dtype=np.float32)
+  assert np.all(self.initial_q>=self.lower) and np.all(self.initial_q<=self.upper)
+  old=read(Path(read(A/'working_initial_pose_v1/manifest.json')['native_initial']));lookup={n:i for i,n in enumerate(old['joint_names'])};props=self.gym.get_actor_dof_properties(self.env,self.human);self.lower_indices=np.array([i for i,n in enumerate(self.names) if n.startswith(LOWER)]);self.zero_indices=np.flatnonzero(self.lower==self.upper);assert len(self.lower_indices)==24 and len(self.zero_indices)==8
+  for i,n in enumerate(self.names):
+   if n in lookup:
+    j=lookup[n];assert self.lower[i]==old['PD_properties']['lower'][j] and self.upper[i]==old['PD_properties']['upper'][j]
+    for f in props.dtype.names:props[f][i]=old['PD_properties'][f][j]
+   else:props['driveMode'][i]=gymapi.DOF_MODE_EFFORT;props['stiffness'][i]=0.;props['damping'][i]=0.
+  assert self.gym.set_actor_dof_properties(self.env,self.human,props) is not False
+  self.position_indices=np.flatnonzero(props['driveMode']==gymapi.DOF_MODE_POS);self.effort_indices=np.flatnonzero(props['driveMode']==gymapi.DOF_MODE_EFFORT);assert len(self.position_indices)==48 and len(self.effort_indices)==57
+  human=self.gym.get_actor_rigid_shape_properties(self.env,self.human);spans=self.gym.get_actor_rigid_body_shape_indices(self.env,self.human);masks=self.importer_filters.copy();occupied=reduce(or_,masks,0);spare=iter(1<<i for i in range(31) if not occupied&(1<<i));guitar_bit=next(spare);le=masks[spans[self.human_bodies.index('L_Elbow')].start];re=masks[spans[self.human_bodies.index('R_Elbow')].start];assert le and re and not le&re
+  for name,span in zip(self.human_bodies,spans):
+   for i in range(span.start,span.start+span.count):
+    if name=='L_Wrist' or name.startswith('LH:'):masks[i]&=~re
+    elif name=='R_Wrist' or name.startswith('RH:'):masks[i]&=~le
+    if name!='LH:thumb_pad' and not masks[i]:masks[i]=next(spare)
+  blocked=reduce(or_,masks,guitar_bit)
+  for name,span in zip(self.human_bodies,spans):
+   for i in range(span.start,span.start+span.count):human[i].filter=blocked if name=='LH:thumb_pad' else masks[i]
+  self.gym.set_actor_rigid_shape_properties(self.env,self.human,human);guitar=self.gym.get_actor_rigid_shape_properties(self.env,self.guitar);ranges=self.gym.get_actor_rigid_body_shape_indices(self.env,self.guitar)
+  for name,span in zip(self.guitar_bodies,ranges):
+   for i in range(span.start,span.start+span.count):guitar[i].filter=blocked if name in ('G:thumb_support_proxy','G:pluck_range') else guitar_bit
+  self.gym.set_actor_rigid_shape_properties(self.env,self.guitar,guitar);self.collision_policy={'guitar_bit':guitar_bit,'left_elbow':le,'right_elbow':re,'scope':'Original105 importer exclusions retained; same opposite-hand/elbow split and proxy exclusions as fixed-lower scene.'};self.shape_properties={}
+  for actor,label,names in [(self.human,'human',self.human_bodies),(self.guitar,'guitar',self.guitar_bodies)]:
+   spans=self.gym.get_actor_rigid_body_shape_indices(self.env,actor);ps=self.gym.get_actor_rigid_shape_properties(self.env,actor);self.shape_properties[label]={name:[{'filter':int(ps[i].filter),'friction':float(ps[i].friction),'contact_offset_m':float(ps[i].contact_offset)} for i in range(s.start,s.start+s.count)] for name,s in zip(names,spans)}
+   for i,name in enumerate(names):self.gym.set_rigid_body_color(self.env,actor,i,gymapi.MESH_VISUAL_AND_COLLISION,gymapi.Vec3(*((.12,.65,.3) if name.startswith('LH:') else(.8,.12,.5) if name.startswith('RH:') else(.65,.65,.65))))
+  self.cameras={};self.camera_spec={'whole_body':([0,3.1,.8],[0,0,.72]),'hands':([3.1,0,.8],[0,0,.72]),'feet':([.8,1.5,.35],[0,0,.15])}
+  for name,(eye,target) in self.camera_spec.items():
+   p=gymapi.CameraProperties();p.width,p.height,p.horizontal_fov=1280,720,55.;c=self.gym.create_camera_sensor(self.env,p);assert c>=0;self.gym.set_camera_location(c,self.env,gymapi.Vec3(*eye),gymapi.Vec3(*target));self.cameras[name]=c
+  self.chair_actor=self.gym.find_actor_handle(self.env,'chair');assert self.chair_actor>=0
+  self.force_sensor_enabled=self.gym.enable_actor_dof_force_sensors(self.env,self.human) is not False
+
+ def native(self):
+  from stability_adapter_2.run_joint_hold import native_state
+  state=native_state(self)
+  if hasattr(self,'chair_actor'):
+   from stability_adapter_2.native_contacts import plain
+   state['chair_body_states']=plain(self.gym.get_actor_rigid_body_states(self.env,self.chair_actor,gymapi.STATE_ALL))
+  return state
+
+ def command(self,named):
+  assert set(named)==set(self.names) and len(named)==105;request=np.array([named[n] for n in self.names],dtype=float);assert np.isfinite(request).all()
+  assert np.all(request>=self.lower-1e-8) and np.all(request<=self.upper+1e-8)
+  rate=np.array([.4 if n.startswith(LOWER) else .1 if n.startswith(('Torso_','Spine_','Chest_')) else .5 if n.startswith(('Neck_','Head_')) else 1.5 if n.startswith(('LH:','RH:')) else 3. for n in self.names]);self.target=np.clip(request,self.target-rate/60,self.target+rate/60).astype(np.float32);self.target[self.zero_indices]=self.q_ref[self.zero_indices];before=self.native();self.submitting_targets=True
+  try:assert self.gym.set_actor_dof_position_targets(self.env,self.human,self.target) is not False
+  finally:self.submitting_targets=False
+  actual=self.gym.get_actor_dof_position_targets(self.env,self.human);assert np.array_equal(actual[self.position_indices],self.target[self.position_indices]) and self.native()==before
+  return {'physics_step_before':self.steps,'joint_names':self.names,'requested105_rad':request.tolist(),'final105_rad':self.target.astype(float).tolist(),'native105_position_readback_rad':actual.astype(float).tolist(),'position_readback_exact':True,'native_position_count':len(self.position_indices)}
+
+ def step_physics(self):raise RuntimeError('legacy step_physics/strap/leg duplicate path prohibited; use integrate105')
+
+ def integrate105(self,effort):
+  self.controlling=True
+  try:assert self.gym.apply_actor_dof_efforts(self.env,self.human,effort) is not False
+  finally:self.controlling=False
+  self.gym.simulate(self.sim);self.gym.fetch_results(self.sim,True);self.steps+=1

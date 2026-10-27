@@ -1,0 +1,61 @@
+"""Independent source placement audit alongside the original full shape audit."""
+import argparse
+from pathlib import Path
+import numpy as np
+from scipy.spatial.transform import Rotation
+from .common import ROOT, A, BASE, HUMAN, read, save, pin, verify
+from .upright_source_v1 import INITIAL, full_fk, metrics
+from .upright_audit_v10 import main as geometry_audit
+from stability_adapter_2.initial_pose_noise_v1 import pose
+from stability_adapter_2.om_axilla_source_geometry_v3 import CapsuleBodyDistance
+
+
+def main(source, out):
+    out.mkdir(exist_ok=False)
+    pins = pin(extra=[INITIAL, source/'candidate.json', source/'report.json',
+                      source/'predicted_state.json', source/'support_candidate.json',
+                      BASE/'upright_chest_support_v1/source_v9/candidate.json',
+                      ROOT/'docs/plans/upright_horizontal_20261015.md',
+                      ROOT/'docs/plans/upright_horizontal_yaw_20261015.md'])
+    save(out/'inputs_before.json', pins)
+    geometry_audit(source, out/'geometry')
+    initial = read(INITIAL)
+    candidate = read(source/'candidate.json')
+    q0 = np.array(initial['q_ref105_rad'])
+    fk, _ = full_fk(initial['joint_names'], initial['human_body_names'], initial['native_initial_state'], q0)
+    poses = fk(np.array(candidate['q_ref_rad']))
+    old = fk(q0)
+    right = old['R_Hip'][0]-old['L_Hip'][0]
+    right[2] = 0
+    right /= np.linalg.norm(right)
+    distance = CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']), HUMAN)
+    vertices = np.concatenate([v for v, _, _, _ in distance.pieces])
+    center_G = (vertices.min(0)+vertices.max(0))/2
+    oldgp, oldgr = pose(initial['native_initial_state']['guitar_body_states'][0])
+    reference = float((oldgp+oldgr.apply(center_G)-old['Pelvis'][0])@right)
+    gp = np.array(candidate['guitar_position_W_m'])
+    gr = Rotation.from_quat(candidate['guitar_quaternion_xyzw'])
+    actual = float((gp+gr.apply(center_G)-poses['Pelvis'][0])@right)
+    neck = float(np.rad2deg(np.arcsin(np.clip(gr.apply([0., 1., 0.])[2], -1., 1.))))
+    measured = metrics(poses, distance, gp, gr)
+    source9 = np.array(read(BASE/'upright_chest_support_v1/source_v9/candidate.json')['q_ref_rad'])
+    protected = [j for j,n in enumerate(initial['joint_names'])
+                 if not n.startswith(tuple(s+'_'+b+'_' for s in ('L','R') for b in ('Thorax','Shoulder','Elbow','Wrist')))]
+    gates = dict(full_geometry_eligible=read(out/'geometry/report.json')['eligible_for_native'],
+                 source_neck_level_under_0p01deg=abs(neck)<.01,
+                 original_body_lateral_coordinate_under_10um=abs(actual-reference)<1e-5,
+                 trunk_head_lower_and_fingers_unchanged=bool(np.array_equal(np.array(candidate['q_ref_rad'])[protected], source9[protected])),
+                 source_Torso_Chest_total_under5_right_under3=all(measured[n]['tilt_deg']<=5 and abs(measured[n]['right_tilt_deg'])<=3 for n in ('Torso','Chest')))
+    save(out/'report.json', dict(gates=gates, eligible_for_native=all(gates.values()),
+         original_body_right_coordinate_m=reference, candidate_body_right_coordinate_m=actual,
+         source_neck_elevation_deg=neck, source_body_center_G_m=center_G.tolist(),
+         inputs_unchanged=verify(pins), scope='Placement independently reconstructed from original asset vertices and native reference; free-guitar initial condition only, not a dynamic constraint or attachment.'))
+    print(gates, actual, neck, flush=True)
+
+
+if __name__=='__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--source', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    args = parser.parse_args()
+    main(args.source.resolve(), args.out.resolve())

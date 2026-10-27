@@ -1,6 +1,7 @@
 # 기타 프로젝트 온보딩 문서
 
-> **작성 당시 설명 자료 — 2026-09-12.** 아래 구조·차원은 당시 기준이다. 최신 실행과 구현 상태는 [현재 문서 목차](../DOCUMENT_INDEX.md), 자유 기타 학습은 [StabilityAdapter](../../stability_adapter/README.md)를 따른다.
+> **작성 당시 설명 자료 — 2026-09-12.** StabilityAdapter 관련 구조·차원은 폐기되었다.
+> 최신 상태는 [현재 문서 목차](../DOCUMENT_INDEX.md)를 따른다.
 
 이 문서의 목적은 지금까지 진행된 기타 프로젝트를 처음 접하는 사람이 다음 질문에 답할 수 있게 하는 것입니다.
 
@@ -20,7 +21,7 @@
 4. [Strike: 오른손 타현](04_Strike_오른손타현.md)
 5. [시뮬레이터·학습·실행](05_시뮬레이터_학습_운영.md)
 6. [G0 동기화와 전체 결합](06_G0_동기화_전체결합.md)
-7. [자유 기타·스트랩·안정화](07_자유기타_스트랩_안정화.md)
+7. StabilityAdapter 자료는 기존 환경 제거로 폐기
 
 마지막으로 [설명회 진행 체크리스트](08_설명회_진행_체크리스트.md)와 [용어집](90_용어집.md)을 참고합니다.
 
@@ -56,7 +57,7 @@ G1/G2 목표: 자유 기타·스트랩·안정화 residual까지 포함한 전�
 
 ![Tab2Body 전체 아키텍처](images/system-architecture.svg)
 
-주요 설명 그림: [전체 architecture](images/system-architecture.svg) · [한 control step](images/runtime-one-step.svg) · [action 소유권](images/action-ownership.svg) · [줄 인덱스 변환](images/string-index-map.svg) · [G0–G2 단계](images/g0-g1-g2-roadmap.svg)
+주요 설명 그림: [전체 architecture](images/system-architecture.svg) · [한 control step](images/runtime-one-step.svg) · [줄 인덱스 변환](images/string-index-map.svg) · [G0–G2 단계](images/g0-g1-g2-roadmap.svg)
 
 ## 현재 계약을 빠르게 보기
 
@@ -64,7 +65,7 @@ G1/G2 목표: 자유 기타·스트랩·안정화 residual까지 포함한 전�
 |---|---:|---:|---|
 | Fret-v2 | 420차원 | 30차원 | 왼팔·왼손의 목표 동작 제안 |
 | Strike-v2 | 303차원 | 30차원 | 오른팔·오른손의 목표 동작 제안 |
-| Stability Adapter | 264차원 | 43차원 residual | 몸·하체·팔 지지 동작을 보정하는 현재 설계 |
+| Stability Adapter | 미정 | 미정 | 기존 환경 제거 후 재설계 중 |
 | Full action ABI | 모듈 출력과 hold | 105 slots (97 movable DOF) | 전신 관절 슬롯에 이름으로 배치하는 최종 인터페이스 |
 | 유효 이동 축 | 105 슬롯 중 8개 zero-range 제외 | 97축 | 실제로 움직일 수 있는 축 수 |
 
@@ -79,7 +80,7 @@ G1/G2 목표: 자유 기타·스트랩·안정화 residual까지 포함한 전�
 - 규칙 기반 Canonical event compiler와 Synchronizer, 105-slot action bridge(97 movable axes), CPU integration probe가 구현되어 있습니다.
 - 하나의 Isaac Gym에서 Fret·Strike·안정화 정책을 함께 물리 rollout하는 `FullG0Task`는 아직 다음 단계입니다.
 - 자유 기타와 스트랩 관련 실험은 진행 중이지만, 자유 기타 상태에서 안정적으로 전곡을 연주하는 G1/G2는 완료되지 않았습니다.
-- 일부 상태 문서에는 과거 51차원/304차원 StabilityAdapter 설계가 남아 있습니다. 현재 코드 기준 StabilityAdapter 계약은 43차원 action, 264차원 observation입니다.
+- StabilityAdapter의 과거 action·observation 계약은 폐기했으며 새 환경 문서에서 다시 정의합니다.
 
 ## 가장 중요한 구분
 

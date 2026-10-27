@@ -1,0 +1,53 @@
+"""Explicit feature initialization; no single-note history or success inheritance."""
+import json
+from pathlib import Path
+import torch
+from guitar_learning.imitation.imitation import dataset_manifest
+
+
+def validate_experts(settings):
+    from ..joint.transfer import validate_experts as validated_pair
+    from ..local_skills.learning import settings_document
+    paths = settings['joint_experts']
+    source = settings_document(json.loads(Path(paths['left_settings']).read_text()))
+    source['joint_experts'] = paths
+    evidence = validated_pair(source)
+    if any(s['size'] != settings['size'] for s in evidence['settings'].values()):
+        raise ValueError('full-score actor width must match validated source actors')
+    return evidence
+
+
+def apply_experts(model,settings):
+    evidence = validate_experts(settings)
+    target = model.architecture['contract']; expected = model.state_dict()
+    if model.architecture.get('schema') != 'guitar_learning_song39_v1':
+        raise ValueError('explicit song architecture required')
+    reports = {}
+    with torch.no_grad():
+        for role,section in (('left',slice(0,33)),('right',slice(33,39))):
+            payload = evidence['payloads'][role]; source = payload['architecture']['contract']
+            if target['action'] != source['action'] or target['termination'] != source['termination']:
+                raise ValueError('full-score physical control/safety contract changed')
+            old, new = source['observation'], target['observation']
+            for key in ('event_dim','event_fields','event_scales','capacity','priority_slots'):
+                if old[key] != new[key]: raise ValueError('full-score event encoder semantics changed: '+key)
+            old_indices = {name:i for i,name in enumerate(old['fields'][:468]) if not name.startswith('music.')}
+            columns = [(i,old_indices[name]) for i,name in enumerate(new['fields']) if name in old_indices
+                and new['scales'][i] == old['scales'][old_indices[name]]]
+            if len(columns) != 460: raise ValueError('all460 unchanged physical columns required')
+            for key,value in payload['model'].items():
+                if not key.startswith(('actor_encoders.'+role+'.','actor_heads.'+role+'.')): continue
+                if key.endswith('.state.0.weight'):
+                    expanded = torch.zeros_like(expected[key])
+                    for dest,origin in columns: expanded[:,dest].copy_(value[:,origin])
+                    expected[key].copy_(expanded)
+                else:
+                    if expected[key].shape != value.shape: raise ValueError('actor tensor mismatch: '+key)
+                    expected[key].copy_(value)
+            model.log_std[section].copy_(payload['model']['log_std'][section])
+            reports[role] = dict(copied_physical_columns=len(columns), new_columns_zero=40,
+                dropped_single_note_history_columns=95,scope='feature initialization only; changed full-score tokens and history do not preserve old policy outputs or success')
+    if dataset_manifest(evidence['source_pins']) != evidence['source_pins']:
+        raise RuntimeError('expert evidence changed during song initialization')
+    return dict(schema='guitar_learning.song_initialization.v1',source_pins=evidence['source_pins'],actors=reports,
+        critic='fresh',optimizer='fresh',ppo_updates=0)

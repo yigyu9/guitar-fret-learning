@@ -1,0 +1,91 @@
+"""Pure ownership tests; no native environment or default-pose selection."""
+import json
+from pathlib import Path
+import unittest
+import numpy as np
+
+from .control import JointTargetContract,ACTIVE_NAMES,HELD_NAMES,EXPECTED_NAMES,RIGHT_GRIP_NAMES
+
+
+def contract(names=None,**kwargs):
+    names = tuple(ACTIVE_NAMES+HELD_NAMES if names is None else names)
+    options = dict(q_ref=np.zeros(81),lower=np.full(81,-1.),upper=np.full(81,1.),
+                   rates_rad_s=np.full(81,3.),half_range_rad=np.full(39,.8),
+                   control_hz=60.,smoothing_alpha=1.)
+    options.update(kwargs)
+    return JointTargetContract(names,**options)
+
+
+class ControlTest(unittest.TestCase):
+    def test_exact39_plus42_and_no_lower_dofs(self):
+        self.assertEqual((len(ACTIVE_NAMES),len(HELD_NAMES),len(EXPECTED_NAMES)),(39,42,81))
+        self.assertTrue(set(ACTIVE_NAMES).isdisjoint(HELD_NAMES))
+        self.assertFalse(any(part in name for name in EXPECTED_NAMES for part in ('Hip','Knee','Ankle','Toe','Pelvis')))
+
+    def test_right_grip_and_all_held_targets_cannot_move(self):
+        c = contract(q_ref=np.linspace(-.2,.2,81))
+        old = c.reset_targets()
+        for sign in (1.,-1.,1.):
+            requested,old = c.targets(np.full(39,sign),old)
+            np.testing.assert_array_equal(requested[c.held_indices],c.q_ref[c.held_indices])
+            np.testing.assert_array_equal(old[c.held_indices],c.q_ref[c.held_indices])
+        grip = [c.names.index(name) for name in RIGHT_GRIP_NAMES]
+        np.testing.assert_array_equal(old[grip],c.q_ref[grip])
+
+    def test_semantic_action_order_independent_of_native_order(self):
+        c = contract(names=tuple(reversed(ACTIVE_NAMES+HELD_NAMES)))
+        action = np.zeros(39)
+        action[0],action[-1] = 1.,-1.
+        requested,final = c.targets(action,c.reset_targets())
+        self.assertEqual(requested[c.names.index('L_Thorax_x')],.8)
+        self.assertEqual(requested[c.names.index('R_Wrist_z')],-.8)
+        self.assertEqual(np.count_nonzero(final),2)
+
+    def test_native_bound_clipping_rate_and_smoothing(self):
+        c = contract(q_ref=np.full(81,.9),half_range_rad=np.ones(39),smoothing_alpha=.5)
+        requested,final = c.targets(np.ones(39),c.reset_targets())
+        np.testing.assert_allclose(requested[c.active_indices],1.)
+        np.testing.assert_allclose(final[c.active_indices],.95)
+        requested,final = c.targets(-np.ones(39),c.reset_targets())
+        np.testing.assert_allclose(requested[c.active_indices],-.1)
+        np.testing.assert_allclose(final[c.active_indices],.85)
+
+    def test_held_contamination_is_rejected_not_silently_repaired(self):
+        c = contract()
+        previous = c.reset_targets()
+        previous[c.names.index('RH:index2')] = .001
+        with self.assertRaises(ValueError): c.targets(np.zeros(39),previous)
+
+    def test_bad_names_nonfinite_reference_and_bad_actions_fail_closed(self):
+        names = list(ACTIVE_NAMES+HELD_NAMES)
+        for replacement in ('L_Hip_x',names[0],'LH:index1_y'):
+            bad = names.copy(); bad[-1] = replacement
+            with self.assertRaises(ValueError): contract(names=bad)
+        bad_ref = np.zeros(81);bad_ref[3] = np.nan
+        with self.assertRaises(ValueError): contract(q_ref=bad_ref)
+        with self.assertRaises(ValueError): contract(q_ref=np.ones(81)*2)
+        with self.assertRaises(ValueError): contract(lower=np.ones(81))
+        c = contract()
+        for action in (np.zeros(38),np.full(39,np.nan),np.full(39,1.1)):
+            with self.assertRaises(ValueError): c.targets(action,c.reset_targets())
+
+    def test_inputs_cannot_mutate_contract_and_outputs_are_independent(self):
+        reference = np.zeros(81)
+        c = contract(q_ref=reference)
+        reference[:] = 1
+        self.assertTrue(np.all(c.q_ref==0))
+        reset = c.reset_targets();reset[:] = 1
+        self.assertTrue(np.all(c.q_ref==0))
+
+    def test_external_preset_names_validate_without_automatic_pose_selection(self):
+        root = Path(__file__).resolve().parents[2]
+        preset = json.loads((root/'stability_adapter_2/chest_upperarm_pose_test_v1/initial.json').read_text())
+        reference = json.loads((root/'docs/2026-10-19/stability_adapter_2/results/right_block_cradle_v1/config_v1/body9_effort_reference.json').read_text())
+        self.assertEqual(preset['joint_names'],reference['joint_names'])
+        c = contract(names=preset['joint_names'],q_ref=preset['q_ref_rad'],
+                     lower=preset['PD_properties']['lower'],
+                     upper=preset['PD_properties']['upper'])
+        np.testing.assert_array_equal(c.reset_targets(),preset['q_ref_rad'])
+
+
+if __name__=='__main__': unittest.main()

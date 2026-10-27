@@ -1,0 +1,40 @@
+"""Preserved initial-pose trials: compare outcomes and export the static candidate."""
+import csv
+from pathlib import Path
+import numpy as np
+from .initial_pose_noise_v1 import read,save,sha,pose
+
+ROOT=Path(__file__).resolve().parents[1]
+P=ROOT/'docs/2026-10-19/stability_adapter_2/results/initial_pose_search_v1'
+CASES=[('margin_only','static'),('roll_m2','static'),('roll_p2','static'),('torso_p2','static'),('margin_only','left'),('torso_p2','left'),('roll_m2','left'),('margin_only','strike'),('margin_only','static_repeat')]
+
+
+def main():
+    out=P/'comparison_v1';out.mkdir(exist_ok=False)
+    paths={Path(__file__).resolve(),Path(__file__).with_name('initial_pose_noise_v1.py'),P/'search_v2/report.json',P/'static_candidate_decision_v1.md'}
+    for label,mode in CASES:
+        n=P/('native_'+label+'_'+mode+'_v1')
+        paths|={n/f for f in ('report.json','initial_values.json','actual_contacts.json','trace.json','final_efforts.json','final_state.json')}
+        paths.add(P/('analysis_'+label+'_'+mode+'_v1.json'))
+    candidate=P/'search_v2/margin_only/candidate.json';paths.add(candidate)
+    pins={str(f):sha(f) for f in paths};save(out/'inputs_before.json',pins)
+    rows=[]
+    for label,mode in CASES:
+        n=P/('native_'+label+'_'+mode+'_v1');report=read(n/'report.json');a=read(P/('analysis_'+label+'_'+mode+'_v1.json'));m=a['measured'];s=m['stages'][0]
+        initial=read(n/'initial_values.json');states=[initial['native_initial_state']['guitar_body_states'][0]]+[r['guitar_state'] for r in read(n/'actual_contacts.json')['rows']]
+        positions=np.array([pose(state)[0] for state in states]);root_mm=np.linalg.norm(positions-positions[0],axis=1)*1000
+        assert all(v for k,v in a['invariants'].items() if k!='completed')
+        rows.append({'label':label,'mode':mode,'native':str(n),'analysis':str(P/('analysis_'+label+'_'+mode+'_v1.json')),'completed':report['completed'],'physics_end_s':report['physics_seconds'],'max_BB_mm':s['motion']['maximum_body_mm'],'max_SO3_deg':s['motion']['maximum_SO3_deg'],'max_actor_root_mm':float(root_mm.max()),'contacts':s['contacts'],'stages':m['stages'],'failure':report['failure'],'safety_translation_crossed':bool(root_mm.max()>200),'safety_rotation_crossed':bool(s['motion']['maximum_SO3_deg']>35)})
+    native=P/'native_margin_only_static_v1';initial=read(native/'initial_values.json');c=read(candidate);gp,gr=pose(initial['native_initial_state']['guitar_body_states'][0]);center=np.array(read(P/'analysis_margin_only_static_v1.json')['measured']['body_center_G_m']);bb=gp+gr.apply(center)
+    q=np.array(initial['q_ref_rad']);actual=np.array([v['pos'] for v in initial['native_initial_state']['human_dof_states']]);assert np.max(abs(q-np.array(c['joint_angles_rad'])))<2e-6
+    save(out/'static_candidate_initial_values.json',{'candidate':str(candidate),'candidate_sha256':sha(candidate),'native_initial':str(native/'initial_values.json'),'scope':'provisional static candidate only; not validated left-hand release/regrasp or adopted global default; native DOF scalars, suffix not world rotation axes','guitar_actor_root_W_m':gp.tolist(),'guitar_body_BB_center_W_m':bb.tolist(),'guitar_quaternion_xyzw':gr.as_quat().tolist(),'joint_names':initial['joint_names'],'target81_rad':q.tolist(),'native_initial_actual81_rad':actual.tolist(),'root_lower_fixed':True,'strap_enabled':False})
+    with (out/'static_candidate_joint_angles.csv').open('x',newline='') as f:
+        writer=csv.writer(f);writer.writerow(['joint','target_rad','target_deg','native_initial_actual_rad','native_initial_actual_deg'])
+        writer.writerows(zip(initial['joint_names'],q,np.rad2deg(q),actual,np.rad2deg(actual)))
+    names=('initial_values.json','trace.json','actual_contacts.json','final_efforts.json','final_state.json')
+    repeat={f:sha(native/f)==sha(P/'native_margin_only_static_repeat_v1'/f) for f in names}
+    assert all(sha(f)==h for f,h in pins.items())
+    save(out/'report.json',{'input_sha256':pins,'inputs_unchanged':True,'source_proposed':7,'source_eligible':read(P/'search_v2/report.json')['selected_source_labels'],'trials':rows,'static_repeat_same_raw_sha256':repeat,'provisional_static_candidate':'margin_only','full_left_task_qualified_candidates':[r['label'] for r in rows if r['mode']=='left' and r['completed']],'global_default_changed':False,'scope':'BB/SO3/contact240Hz; actor-root safety distinct; source audit not cooked continuous clearance; finite human support not passive equilibrium'})
+    print([(r['label'],r['mode'],r['completed'],r['physics_end_s'],r['max_BB_mm'],r['max_SO3_deg']) for r in rows],flush=True)
+
+if __name__=='__main__':main()

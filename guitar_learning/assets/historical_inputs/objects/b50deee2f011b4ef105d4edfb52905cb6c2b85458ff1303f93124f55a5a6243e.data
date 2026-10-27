@@ -1,0 +1,40 @@
+"""Duration-only adaptation of frozen control audits; numerical formulas unchanged."""
+from ..front_facing_pose_v1.analyze_v1 import lower_math
+from ..grounded_guitar_support_v1.analyze_v19 import chest_extra_evidence
+from ..front_facing_strike_v1.support_margin_math_v1 import action_preload_evidence,restore_base_rows
+from ..front_facing_strike_v1.rotational_math_v1 import rotational_evidence,restore_rotational_rows
+
+
+def adapted(evidence,remove,checks,scope):
+    old=dict(evidence['checks']);current={k:v for k,v in old.items() if k not in remove};current.update(checks)
+    return dict(passed=all(current.values()),checks=current,legacy_duration_checks={k:old[k] for k in remove},
+        max_errors=evidence['max_errors'],limits=evidence.get('limits'),evaluated_samples=len(evidence['samples']),
+        scope=evidence['scope']+' '+scope)
+
+
+def control_evidence(initial,properties,states,efforts,targets,cfg):
+    N=round(240*cfg['seconds']);post=N-2400
+    assert N>=2400 and N==240*cfg['seconds']
+    complete=dict(fullN=len(efforts)==N,contiguousN=[r['physics_step_before'] for r in efforts]==list(range(N)),
+        states_N_plus1=[r['physics_step'] for r in states]==list(range(N+1)),
+        targets_60Hz=[r['physics_step_before'] for r in targets]==list(range(0,N,4)))
+    rotational=rotational_evidence(initial,states,efforts,targets,cfg)
+    rot=adapted(rotational,('full3360','contiguous3360','full3361states','full840targets','post960_metadata','full960_math'),
+        dict(complete,postN_metadata=all('distal_rotational_feedback' in r for r in efforts if r['physics_step_before']>=2400) and sum('distal_rotational_feedback' in r for r in efforts)==post,
+             full_postN_math=len(rotational['samples'])==post),
+        f'Prospective duration adaptation only: N={N}, post10 rows={post}. Frozen helper evaluated all supplied rows; original fixed14s predicates retained separately. No numerical threshold/formula changed.')
+    before_rotation=restore_rotational_rows(efforts)
+    action=action_preload_evidence(initial,properties,states,before_rotation,cfg)
+    action_numeric=bool(action['samples'] and all(action['max_errors'][k] is not None and action['max_errors'][k]<=limit for k,limit in action['limits'].items()))
+    preload=adapted(action,('full3360','contiguous3360','full3361states','post960_metadata','full960_math'),
+        dict(complete,postN_metadata=all('chest_action_preload' in r for r in before_rotation if r['physics_step_before']>=2400) and sum('chest_action_preload' in r for r in before_rotation)==post,
+             full_postN_math=len(action['samples'])==post and action_numeric),
+        f'Prospective duration adaptation only: N={N}, post10 rows={post}. SO3 parent records restored first; all original action-preload numerical limits preserved.')
+    before_action=restore_base_rows(before_rotation)
+    base=chest_extra_evidence(initial,properties,states,before_action,cfg)
+    chest=adapted(base,('full2400',),complete,
+        f'Frozen Chest source/velocity/JTF audit evaluated every original restored row. Only legacy2400 duration replaced by N={N}.')
+    lower=lower_math(initial,states,efforts,targets,cfg)
+    checks=dict(complete,lower16=lower['passed'],Chest_base=chest['passed'],Chest_action=preload['passed'],SO3_and_upper33=rot['passed'])
+    return dict(passed=all(checks.values()),checks=checks,physics_steps=N,post10_steps=post,lower=lower,Chest_base=chest,Chest_action=preload,SO3_and_upper33=rot,
+        scope='All actual rows, original mass/gain/cap/geometry/velocity/PD/JTF/f32 limits. Exact parent-row restoration order is SO3 then Chest action, then immutable Chest runtime18 math. Duration predicates alone are prospectively parameterized; no inherited stability certificate or physical gate change.')

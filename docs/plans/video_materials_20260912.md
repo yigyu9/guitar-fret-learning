@@ -1,5 +1,7 @@
 # 2026-09-12 설명 자료용 영상 발굴·반영 계획
 
+> StabilityAdapter·하체·strap 후보 산출물은 2026-09-17 제거했으며 더 이상 사용할 수 없다.
+
 ## 목표
 
 저장소에 이미 있는 영상을 검토해 프로젝트 구조와 현재 검증 상태를 설명하는 데 실제로 도움이 되는 자료만 골라 `docs/2026-09-12/`에서 찾기 쉽게 연결한다.
@@ -19,11 +21,7 @@
 |---|---|---|
 | Fret 왼손 | `fret/training/runs/20260911_1710_02_Jazz1-200-B_solo/videos/fret_035500_rollout.mp4` | 최신 full-song deterministic 녹화. F1 0.212, sustain 성공 1/35. `goal_finished`는 시간축 완료이지 연주 성공이 아님을 함께 설명한다. |
 | Strike 오른손 | `strike/training/runs/20260911_2235_02_Jazz1-200-B_solo/videos/strike_012000_full_song_{current,remembered}.mp4` | 선택된 best full-song 결과. 계획 event 42/42 완료, traversal F1 1.0, FP/FN·blocked/wrong crossing 0, timing abs p95 4.94 ms, grip 평가 통과. 단일 곡의 오른손 policy 평가이며 전체 전신 시스템 일반화의 증거는 아니다. |
-| 하체 지지 | `lower_body/training/runs/20260908_physical_contact_final/videos/final_rollout.mp4` | 10초 rollout, 최대 자세 오차 4.29°, 평균 pose quality 0.972, 조기 reset 0. 하체 seated-pose 선행 검증이며 자유 기타 안정화 성공과는 구분한다. |
-| Strap 비교 | `strap_sim/_output/simulation.mp4` | strap 없음/있음 물리 결과를 나란히 보여 주는 6초 비교 영상. 낙하 억제와 위치 drift 감소를 설명하되, 연주 자세·회전 유지에는 실패했다는 결과도 명시한다. |
-| Strap 렌더링 | `strap_sim/_output/isaacgym_multiview.mp4` | Isaac Gym RGB 네 시점 녹화. 물리 경로를 depth-aware로 겹쳐 보인 것이며 strap 자체가 collision mesh라는 뜻은 아니다. |
 | G0 결합 | `docs/2026-09-07/synchronizer/synchronizer_dual_hand_preview_incomplete.mp4` | 파일 자체가 incomplete preview로 표시한다. 구조를 상상하는 보조 그림으로만 쓰고 실제 one-simulator 물리 통합의 증거로 제시하지 않는다. |
-| 자유 기타 복귀 | `stability_adapter/02_world_recovery/output/settle_then_recover_v2.mp4` | WAIT→RECOVER 전환을 보여 주는 pilot 진단. report상 복귀 성공 0회이므로 성공 사례가 아니라 현재 검증 경계 설명에만 쓴다. |
 
 ## 반영 단계
 

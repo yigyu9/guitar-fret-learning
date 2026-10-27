@@ -1,0 +1,121 @@
+"""Versioned recovery replay preserving the original float64 codec history.
+
+The v1 evidence/auditors remain unchanged. Only their recovery replay callback
+is scoped to this independently checked codec reconstruction.
+"""
+import gzip
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+from . import audit as _base
+
+_ORIGINAL_CAPTURE = _base.audit_capture
+
+
+def source_paths():
+    return [Path(__file__).resolve(), Path(__file__).with_name('dataset_v2.py').resolve()]
+
+
+def _initial_codec_state(codec, initial_state):
+    import numpy as np
+    previous = np.asarray(initial_state['codec_target81'], dtype=float)
+    if (previous.shape != (81,) or not np.isfinite(previous).all()
+            or not np.array_equal(previous, codec.reset_targets())):
+        raise ValueError('initial float64 codec target must equal the original reset targets exactly')
+    return previous.copy()
+
+
+def _replay_codec_step(codec, action, previous, control):
+    import numpy as np
+    requested, final = codec.targets(np.asarray(action, dtype=np.float32), previous)
+    if not np.array_equal(requested, np.asarray(control['requested_upper81_rad'], dtype=float)):
+        raise ValueError('independent float64 requested codec target did not reproduce exactly')
+    if not np.array_equal(final, np.asarray(control['codec_target_upper81_rad'], dtype=float)):
+        raise ValueError('independent float64 final codec target did not reproduce exactly')
+    return final.copy()
+
+
+def _audit_recovery(folder, evidence):
+    import numpy as np
+    from ..transition.task import make_task
+    from guitar_learning.imitation.imitation_io import BUNDLE
+    from .controller import Controller
+    from .capture import select_bc_rows
+    read = lambda name: json.loads((folder/name).read_text())
+    initial, context, plan = read('initial.json'), read('context.json'), read('plan.json')
+    task = make_task(BUNDLE, evidence['settings']['transition'])
+    report = evidence['report']
+    controller = Controller(plan, task, report.get('perturbation'), evidence['settings']['transition'])
+    env, _ = _base._teacher_environment(evidence['contract'], context, initial)
+    initial_state = read('initial_state.json')
+    codec = env.control.contract
+    env.control.codec_previous = _initial_codec_state(codec, initial_state)
+    labels = []
+    last_override = None
+    with gzip.open(folder/'trace.jsonl.gz', 'rt') as stream:
+        for index, line in enumerate(stream):
+            row = json.loads(line)
+            diagnostic = row['teacher_diagnostic']
+            action = np.asarray(controller.action(row['task_time_before_s'], row['before_observation'], env), dtype=np.float32)
+            if not np.array_equal(action, np.asarray(row['action'])):
+                raise ValueError('measured-state teacher/probe action did not replay exactly')
+            if diagnostic != controller.diagnostic:
+                raise ValueError('measured-state teacher/probe diagnostic did not replay exactly')
+            if (type(diagnostic.get('teacher_corrective')) is not bool
+                    or diagnostic['teacher_corrective'] != diagnostic['teacher']['contact_feedback_applied']):
+                raise ValueError('actual teacher corrective label required')
+            if type(diagnostic.get('override_active')) is not bool:
+                raise ValueError('explicit actual probe override label required')
+            teacher = np.asarray(diagnostic['teacher_action39'], dtype=np.float32).tolist()
+            actual = np.asarray(row['action'], dtype=np.float32).tolist()
+            if row.get('teacher_action39_float32') != teacher:
+                raise ValueError('canonical float32 teacher label must match replayed teacher command')
+            if not diagnostic['override_active'] and actual != teacher:
+                raise ValueError('nonoverride expert label must equal actual canonical float32 action')
+            if diagnostic['override_active']: last_override = index
+            measurements = row['info']['physics_measurements']
+            for sample in measurements:
+                controller.observe_physics(sample['music'], sample['stability'])
+            labels.append(dict(task_time_s=float(row['task_time_before_s']), action39=actual,
+                teacher_action39=teacher, override_active=diagnostic['override_active'],
+                teacher_corrective=diagnostic['teacher_corrective'],
+                native_safe=not row['info']['failure_reasons'] and all(
+                    not sample['stability']['failure_reasons'] for sample in measurements)))
+            env.last_sample = row['info']['native_control']['physics_samples240'][-1]
+            env.last_measured, env.last_safety = measurements[-1]['music'], measurements[-1]['stability']
+            final = _replay_codec_step(codec, row['action'], env.control.codec_previous,
+                                       row['info']['native_control'])
+            # Native target105 is a float32 submission. The actual teacher keeps
+            # this original float64 codec state, not the rounded submission.
+            env.control.codec_previous = final.copy()
+    summary = controller.ledger.summary(completed=True,
+        musical_success=report['episode']['transition']['successful'])
+    if read('recovery.json') != summary:
+        raise ValueError('240Hz recovery ledger did not replay exactly')
+    selected = select_bc_rows(labels, summary, completed=True,
+        input_pins_verified=True, native_audit_verified=True)
+    # Nominal controls and states before the probe are baseline evidence only.
+    # A command override without actual measured loss/recovery is not recovery data.
+    if last_override is None or summary['recovery_success'] is not True:
+        selected = []
+    else:
+        selected = [index for index in selected if index > last_override]
+    evidence.update(recovery=summary, selected_indices=selected,
+        teacher_replayed=True, recovery_replayed=True)
+
+
+
+def audit_capture(folder):
+    from guitar_learning.imitation.imitation import dataset_manifest
+    version_pins = dataset_manifest(source_paths())
+    with patch.object(_base, '_audit_recovery', _audit_recovery):
+        evidence = _ORIGINAL_CAPTURE(folder)
+    for path, sha in version_pins.items():
+        if path in evidence['source_pins'] and evidence['source_pins'][path] != sha:
+            raise RuntimeError('versioned recovery audit source pin conflict')
+    evidence['source_pins'].update(version_pins)
+    if dataset_manifest(evidence['source_pins']) != evidence['source_pins']:
+        raise RuntimeError('capture or versioned audit inputs changed during replay')
+    evidence['codec_history_replayed'] = True
+    return evidence

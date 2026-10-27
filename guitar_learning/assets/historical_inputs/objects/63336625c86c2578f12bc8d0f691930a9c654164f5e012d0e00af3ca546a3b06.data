@@ -1,0 +1,70 @@
+"""Verify actual frame hashes and encoded native-camera coverage, without replay."""
+import argparse
+import json
+import subprocess
+from pathlib import Path
+from PIL import Image
+from ..lower_body_release_v1.common import read, save, sha, verify
+from .protocol_v6 import schedule,PROTOCOL,SETTLED_HOLD,SETTLED_PLAN,REGRASP_SETTLE_PLAN
+
+
+def main(runs, out):
+    out.mkdir(exist_ok=False)
+    paths={Path(__file__).resolve(),Path(__file__).with_name('protocol_v6.py'),SETTLED_PLAN,REGRASP_SETTLE_PLAN}; expected={}; metadata=[]
+    views={"whole_body","hands","feet"}; dimensions={}; frame_counts={}
+    for run in runs:
+        cfgpath=Path(read(run/'attempt.json')['config']);cfg=read(cfgpath);case=schedule(cfg['ready_case']);assert cfg['seconds']==case['seconds'] and cfg['validation_protocol']==PROTOCOL and cfg['ready_schedule']==case and cfg.get('ready_settled_hold_s')==SETTLED_HOLD
+        dimensions[run]=round(240*case['seconds']);frame_counts[run]=len(range(0,dimensions[run]+1,48));paths.add(cfgpath)
+    for run in runs:
+        paths |= {run/'media/capture.json',run/'media/strap/capture.json',run/'media/videos.json',run/'camera_frames.json'}
+        for name in ('media/capture.json','media/strap/capture.json'):
+            data=read(run/name); metadata.append((run,name,data))
+            assert data['frames']
+            for frame in data['frames']:
+                assert len(frame['image_sha256'])==3
+                assert {Path(f).parent.name for f in frame['image_sha256']}==views
+                for file,digest in frame['image_sha256'].items():
+                    if file in expected: assert expected[file]==digest
+                    expected[file]=digest; paths.add(Path(file))
+        assert set(read(run/'media/videos.json'))==views
+        paths |= {Path(v['path']) for v in read(run/'media/videos.json').values()}
+    inputs={str(p):sha(p) for p in sorted(paths)}; save(out/'inputs_before.json',inputs)
+    image_checks=[]
+    for file,digest in expected.items():
+        assert inputs[file]==digest,file
+        with Image.open(file) as image:
+            assert image.size==(1280,720),file
+            image.verify()
+        image_checks.append(dict(path=file,sha256=digest))
+    coverage=[]; videos=[]
+    for run,name,data in metadata:
+        assert data['fps']==5
+        assert [f['physics_step'] for f in data['frames']]==list(range(0,dimensions[run]+1,48))
+        assert all(f['time_s']==f['physics_step']/240 and f['render_preserves_states'] for f in data['frames'])
+        hold=[f for f in data['frames'] if SETTLED_HOLD[0]<=f['time_s']<=SETTLED_HOLD[1]]
+        assert [f['physics_step'] for f in hold]==list(range(round(SETTLED_HOLD[0]*240),round(SETTLED_HOLD[1]*240)+1,48))
+        coverage.append(dict(run=str(run),capture=name,fps=5,frames=len(data['frames']),physical_seconds=dimensions[run]/240,settled_hold_interval_s=SETTLED_HOLD,settled_hold_frames=len(hold)))
+    for run in runs:
+        camera=read(run/'camera_frames.json')['frames']
+        assert [f['physics_step'] for f in camera]==list(range(0,dimensions[run]+1,8))
+        assert [f['physics_step'] for f in camera if SETTLED_HOLD[0]<=f['physics_step']/240<=SETTLED_HOLD[1]]==list(range(round(SETTLED_HOLD[0]*240),round(SETTLED_HOLD[1]*240)+1,8))
+        for view,entry in read(run/'media/videos.json').items():
+            path=Path(entry['path']); assert sha(path)==entry['sha256']
+            command=['ffprobe','-v','error','-count_frames','-select_streams','v:0','-show_entries','stream=width,height,avg_frame_rate,nb_read_frames,duration','-of','json',str(path)]
+            result=subprocess.run(command,check=True,capture_output=True,text=True)
+            stream=json.loads(result.stdout)['streams'][0]
+            assert stream['width']==1280 and stream['height']==720
+            assert stream['avg_frame_rate']=='5/1' and int(stream['nb_read_frames'])==frame_counts[run]
+            assert abs(float(stream['duration'])-frame_counts[run]/5)<=.002
+            videos.append(dict(run=str(run),view=view,path=str(path),sha256=sha(path),ffprobe_command=command,stream=stream))
+    assert len(image_checks)==sum(frame_counts.values())*3*2
+    assert len(videos)==len(runs)*3
+    unchanged=verify(inputs); assert unchanged
+    save(out/'report.json',dict(passed=True,inputs_unchanged=unchanged,captures=coverage,images=len(image_checks),videos=videos,
+         scope='Actual native raw PNG and string-overlay PNG byte hashes/dimensions plus independent ffprobe of MP4s. Physical duration follows the frozen case schedule. Frame count is floor(N/48)+1 at5fps including initial frame; encoded duration is frames/5. Camera telemetry at30Hz is separate. Visual appearance is manually inspected; this audit does not certify physical support.'))
+    print(dict(passed=True,images=len(image_checks),videos=len(videos)),flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--runs',type=Path,nargs='+',required=True);p.add_argument('--out',type=Path,required=True)
+    a=p.parse_args();main([r.resolve() for r in a.runs],a.out.resolve())

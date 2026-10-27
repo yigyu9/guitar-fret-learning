@@ -1,0 +1,240 @@
+"""새 정면 actual10초의 손목41점과 개방축을 재계산하는 source-only 사전검사."""
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from ..lower_body_release_v1.common import ROOT, A, BASE, read, save, pin, verify, sha
+from ..lower_body_release_v1.controller_horizontal_v4 import full_fk
+from ..initial_pose_noise_v1 import pose
+from ..grounded_guitar_release_v1.motion_v1 import solve_wrist, smoothstep
+
+PHASE = BASE/'front_facing_pose_v1'
+PLAN = ROOT/'docs/plans/front_facing_release_20261016.md'
+PROTOCOL = 'front_facing_prepare5_hold5_withdraw3_free15_v1'
+
+
+STATIC_GATES = {
+    'completed_10s','hold_1201_samples','restrictions','native_integrity','wrapper_inputs','runner_inputs',
+    'body_displacement30mm','rotation5deg','neck3deg','lateral20mm','trunk5deg','trunk_right3deg','Spine5deg',
+    'support95pct','feet95pct','feet_1to10_95pct','four_soles_still','actual_video_5fps','initial_heading2deg',
+    'hold_heading5deg','submitted_target_heading2deg','lower_math','right_goal_math','Chest_math','analysis_inputs'}
+
+
+def validate_reference(reference, repeat, certificate):
+    reference, repeat, certificate = map(lambda p: Path(p).resolve(), (reference, repeat, certificate))
+    assert reference != repeat
+    cert = read(certificate)
+    pinned = cert['input_sha256']
+    assert cert['passed'] is True and isinstance(pinned,dict) and pinned and verify(pinned)
+    assert Path(cert['reference_run']).resolve() == reference and Path(cert['repeat_run']).resolve() == repeat
+    analyses = [Path(cert[k]).resolve() for k in ('reference_analysis','repeat_analysis')]
+    assert analyses[0] != analyses[1] and analyses[0].parent != analyses[1].parent
+    static_config = Path(cert['config']).resolve()
+    candidate_path = Path(cert['candidate']).resolve()
+    for path in (static_config,candidate_path,*analyses):
+        assert pinned.get(str(path)) == sha(path)
+    cfg = read(static_config)
+    assert cfg['seconds']==10 and cfg['mode']=='static' and cfg['validation_protocol']=='front_facing_prepare5_hold5_v1'
+    assert Path(cfg['candidate']).resolve()==candidate_path and sha(candidate_path)==cfg['candidate_sha256']
+    candidate = read(candidate_path)
+    source = read(cfg['source_report'])
+    assert source['eligible_for_native'] is True and source['inputs_unchanged'] is True
+    assert source['source_candidate_sha256']==cfg['candidate_sha256']
+    assert Path(source['source_candidate']).resolve()==candidate_path
+    assert verify(read(candidate_path.parent/'inputs_before.json'))
+    summaries = []
+    raw_names = ('states240.json','contacts240.json','efforts240.json','targets60.json')
+    raw_hashes = cert['raw_hashes']
+    assert len(raw_hashes)==4 and {r['name'] for r in raw_hashes}==set(raw_names)
+    declared_hashes = {r['name']:r for r in raw_hashes}
+    for run,analysis in zip((reference,repeat),analyses):
+        summary = read(analysis)
+        assert summary['passed'] is True and summary['inputs_unchanged'] is True
+        assert set(summary['gates'])==STATIC_GATES and all(v is True for v in summary['gates'].values())
+        summaries.append(summary)
+        amap_path = analysis.parent/'inputs_before.json'
+        assert pinned.get(str(amap_path))==sha(amap_path)
+        amap = read(amap_path)
+        assert isinstance(amap,dict) and amap and verify(amap)
+        attempt = read(run/'attempt.json')
+        assert Path(attempt['config']).resolve()==static_config and sha(attempt['config'])==pinned[str(static_config)]
+        assert attempt['input_sha256'] and verify(attempt['input_sha256'])
+        report = read(run/'report.json')
+        assert report['completed'] is True and report['physics_steps']==2400 and report['inputs_unchanged'] is True
+        assert Path(report['config']).resolve()==static_config
+        wrapper = read(run/'support_wrapper.json')
+        assert wrapper['inputs_unchanged'] is True and wrapper['input_sha256'] and verify(wrapper['input_sha256'])
+        assert wrapper['actual_scene_class']=='seated_foot_support_v1.runtime_v6.Scene'
+        assert wrapper['controller']=='front_facing_pose_v1.runtime_v1.Controller'
+        assert wrapper['validation_protocol']==cfg['validation_protocol']
+        for mapping in (attempt['input_sha256'],wrapper['input_sha256']):
+            assert mapping.get(str(static_config))==sha(static_config) and mapping.get(str(candidate_path))==sha(candidate_path)
+        initial = read(run/'initial_values.json')
+        assert initial['joint_names']==candidate['joint_names']
+        assert np.array_equal(initial['q_ref105_rad'],np.asarray(candidate['q_ref_rad'],dtype=np.float32).astype(float))
+        assert np.array_equal([s['pos'] for s in initial['native_initial_state']['human_dof_states']],initial['q_ref105_rad'])
+        required = [run/n for n in raw_names]+[run/'attempt.json',run/'report.json',static_config,candidate_path]
+        for path in required:
+            assert amap.get(str(path))==sha(path)
+        for path in (run/'initial_values.json',run/'support_wrapper.json'):
+            assert amap.get(str(path))==sha(path)
+        for path in [run/n for n in raw_names]+[static_config,candidate_path,run/'report.json',run/'support_wrapper.json']:
+            assert pinned.get(str(path))==sha(path)
+    exact = {n:sha(reference/n)==sha(repeat/n) for n in raw_names}
+    assert all(exact.values())
+    for n in raw_names:
+        assert declared_hashes[n]['reference_sha256']==sha(reference/n)==declared_hashes[n]['repeat_sha256']
+    return cert, analyses, summaries, exact, static_config
+
+
+def main(config, reference, repeat, certificate, out):
+    OUT, REFERENCE, REPEAT, CERTIFICATE = map(lambda p: Path(p).resolve(), (out, reference, repeat, certificate))
+    assert PHASE in OUT.parents
+    baseline = Path(config).resolve()
+    OUT.mkdir(parents=True, exist_ok=False)
+    discovery = pin(extra=[baseline, CERTIFICATE, PLAN, Path(__file__).resolve(),
+                           Path(__file__).with_name('__init__.py'), A/'grounded_guitar_release_v1/motion_v1.py']+
+                    [r/n for r in (REFERENCE,REPEAT) for n in ('attempt.json','report.json','initial_values.json','native_properties.json','final_state.json','states240.json','contacts240.json','efforts240.json','targets60.json','support_wrapper.json')])
+    save(OUT/'discovery_before.json', discovery)
+    cfg = read(baseline)
+    cert = read(CERTIFICATE)
+    analyses = [Path(cert[k]).resolve() for k in ('reference_analysis','repeat_analysis')]
+    paths = list(cert['input_sha256'])+list(discovery)+[OUT/'discovery_before.json', A/'AGENTS.md']
+    paths += [Path(cfg[k]) for k in ('candidate', 'source_report', 'upper_target105', 'posture_target_report',
+                                    'finite_right_goal_spec', 'finite_right_goal_report', 'hip_load_bias_spec', 'hip_load_bias_report')]
+    paths += list((A/'seated_foot_support_v1').glob('*.py'))+list((A/'front_facing_pose_v1').glob('*.py'))
+    paths += analyses+[r/n for r in (REFERENCE,REPEAT) for n in ('attempt.json','report.json','initial_values.json','native_properties.json','final_state.json','states240.json','contacts240.json','efforts240.json','targets60.json','support_wrapper.json')]
+    paths += [A/'grounded_guitar_support_v1'/n for n in ('__init__.py', 'runtime_v2.py', 'runtime_v11.py',
+                                                      'runtime_v14.py', 'runtime_v17.py', 'runtime_v18.py')]
+    inputs = pin(extra=paths)
+    save(OUT/'inputs_before.json', inputs)
+    cert, analyses, summaries, exact, verified_config = validate_reference(REFERENCE, REPEAT, CERTIFICATE)
+    assert sha(baseline) == sha(verified_config)
+    assert verify(discovery) and verify(cert['input_sha256'])
+    initial = read(REFERENCE/'initial_values.json')
+    state = read(REFERENCE/'final_state.json')
+    assert state['physics_step'] == 2400 and state == read(REPEAT/'final_state.json')
+    names, bodies = initial['joint_names'], initial['human_body_names']
+    qref = np.array(initial['q_ref105_rad'])
+    actual = np.array([r['pos'] for r in state['human_dof_states']])
+    lower, upper = np.array(initial['PD_properties']['lower']), np.array(initial['PD_properties']['upper'])
+    base = np.array(read(cfg['upper_target105'])['q_target_rad105'])
+    fk = full_fk(SimpleNamespace(names=names, q_ref=qref, human_bodies=bodies), initial['native_initial_state'])
+    reproduced = fk(actual)
+    fk_errors = {n: dict(position_m=float(np.linalg.norm(reproduced[n][0]-pose(b)[0])),
+                        rotation_deg=float(np.degrees((reproduced[n][1]*pose(b)[1].inv()).magnitude())))
+                 for n, b in zip(bodies, state['human_body_states'])}
+    arm = np.array([names.index(n+'_'+a) for n in ('L_Thorax', 'L_Shoulder', 'L_Elbow', 'L_Wrist') for a in 'xyz'])
+    origin, rotation = pose(state['human_body_states'][bodies.index('L_Wrist')])
+    gp, gr = pose(state['guitar_body_states'][0])
+    delta = gr.apply([.08, 0., 0.])
+    weights = {'LH:'+digit+suffix: w for digit in ('index', 'middle', 'ring', 'pinky') for suffix, w in (('1_x', .7), ('2', 1.), ('3', .6))}
+    weights.update({'LH:thumb2': 1., 'LH:thumb3': .6})
+    fingers = np.array([names.index(n) for n in weights])
+    lo, hi = np.maximum(lower[arm], qref[arm]-.8), np.minimum(upper[arm], qref[arm]+.8)
+    reference_command = read(REFERENCE/'targets60.json')['rows'][-1]
+    assert reference_command['physics_step_before'] == 2396 and reference_command['joint_names'] == names
+    opening_rows = []
+    for n, weight in weights.items():
+        j = names.index(n)
+        command = float(reference_command['final105_rad'][j])
+        goal = float(np.float32(np.clip(base[j]-.3*weight, lower[j], upper[j])))
+        amount = abs(command-goal)
+        opening_rows.append(dict(name=n, index105=j, reference_command_rad=command,
+            open_goal_rad=goal, expected_command_opening_rad=amount, direction=float(np.sign(command-goal)),
+            required_signed_opening_rad=min(.10, .5*amount)))
+    opening_gate = dict(selection_min_command_change_rad=.02, evaluation_interval_s=[13., 28.],
+        actual_reference_time_s=10., threshold_cap_rad=.10, expected_command_fraction=.5,
+        actual_signed_opening_formula='direction * (actual10_q - current_actual_q)',
+        active_joints=[row for row in opening_rows if row['expected_command_opening_rad'] >= .02],
+        excluded_joints=[dict(row, reason='Expected clipped command opening is below0.02rad; excluded before physics.')
+                         for row in opening_rows if row['expected_command_opening_rad'] < .02])
+    spec = dict(reference_run=str(REFERENCE), repeat_run=str(REPEAT), reference_time_s=10.,
+        reference_state_sha256=sha(REFERENCE/'final_state.json'), initial_candidate_sha256=cfg['candidate_sha256'], initial_candidate_path=cfg['candidate'],
+        repeat_verification_path=str(CERTIFICATE), repeat_verification_sha256=sha(CERTIFICATE),
+        wrist_origin_W_m=origin.tolist(), wrist_rotation_xyzw=rotation.as_quat().tolist(),
+        withdraw_delta_W_m=delta.tolist(), withdraw_delta_G10_m=[.08, 0., 0.],
+        open_interval_s=[10., 11.], withdraw_interval_s=[11., 13.], opening_rad=.3,
+        finger_opening_weights=weights, finger_base_targets_rad={n: float(base[names.index(n)]) for n in weights},
+        opening_gate=opening_gate,
+        joint_names=[names[j] for j in arm], joint_indices105=arm.tolist(),
+        arm_qref_radius_rad=.8, principal_limit_deg=160.,
+        runtime_hard_position_error_m=.01, runtime_hard_rotation_error_rad=.05,
+        release_interval_s=[10., 28.], completed_withdrawal_test_interval_s=[13., 28.], full_release_interval_s=[13., 28.],
+        scope='새 실제10초의 world 손목/G10+X 80mm 경로와 개방축을 재계산. 해제10..28, 완전이탈 검증13..28은15초. Source 도달은 실제 무접촉/안정성 인증이 아님.')
+    seed = actual[arm].copy()
+    samples = []
+    for time in np.linspace(10., 13., 41):
+        opening = .3*smoothstep(time, 10., 11.)
+        goal = origin+delta*smoothstep(time, 11., 13.)
+        values, error64, rotation_error64, nfev = solve_wrist(fk, actual, arm, lower, upper, qref, goal, rotation, seed)
+        seed = values.astype(np.float32).astype(float)
+        trial = actual.copy(); trial[arm] = seed
+        for n, w in weights.items():
+            j = names.index(n)
+            trial[j] = float(np.float32(np.clip(base[j]-w*opening, lower[j], upper[j])))
+        p, r = fk(trial)['L_Wrist']
+        selected = np.r_[arm, fingers]
+        frozen = np.setdiff1d(np.arange(105), selected)
+        samples.append(dict(time_s=float(time), opening_rad=opening, withdraw_fraction=smoothstep(time, 11., 13.),
+            goal_wrist_W_m=goal.tolist(), goal_wrist_xyzw=rotation.as_quat().tolist(),
+            arm_targets_rad=seed.tolist(), finger_targets_rad={n: float(trial[names.index(n)]) for n in weights},
+            float32_position_error_m=float(np.linalg.norm(p-goal)), float32_rotation_error_rad=float((rotation.inv()*r).magnitude()),
+            principal_ball_norm_deg=np.degrees(np.linalg.norm(seed.reshape(4, 3), axis=1)).tolist(),
+            new26_strict_original_bounds=bool(np.all(trial[selected] >= lower[selected]) and np.all(trial[selected] <= upper[selected])),
+            arm_strict_qref_radius=bool(np.all(seed >= lo) and np.all(seed <= hi)),
+            other79_source_actual_q_exact=bool(np.array_equal(trial[frozen], actual[frozen])),
+            float64_position_error_m=error64, float64_rotation_error_rad=rotation_error64, solver_nfev=int(nfev)))
+    maxp = max(e['position_m'] for e in fk_errors.values())
+    maxr = max(e['rotation_deg'] for e in fk_errors.values())
+    candidate_q = np.array(read(cfg['candidate'])['q_ref_rad'])
+    gates = dict(prepared_repeat_all_actual_gates_pass=all(s['passed'] for s in summaries), four_raw_SHA_exact=all(exact.values()),
+        actual10_fullFK_under10um_0p01deg=maxp < 1e-5 and maxr < .01,
+        original_initial105_source_strict_bounds=bool(np.all(candidate_q >= lower) and np.all(candidate_q <= upper)),
+        new26_float32_strict_original_bounds=all(s['new26_strict_original_bounds'] for s in samples),
+        left12_float32_strict_qref_radius0p8=all(s['arm_strict_qref_radius'] for s in samples),
+        left12_float32_principal_under160=all(max(s['principal_ball_norm_deg']) < 160 for s in samples),
+        source41_position_under2mm=all(s['float32_position_error_m'] <= .002 for s in samples),
+        source41_rotation_under0p02rad=all(s['float32_rotation_error_rad'] <= .02 for s in samples),
+        new_commands_exclude_zero8=not bool(set(np.r_[arm, fingers]) & set(initial['zero_range_indices'])),
+        other79_source_actual_q_exact=all(s['other79_source_actual_q_exact'] for s in samples),
+        opening14_named_commands_partitioned_before_physics=len(opening_rows) == 14 and len(opening_gate['active_joints'])+len(opening_gate['excluded_joints']) == 14,
+        active_opening_thresholds_positive=bool(opening_gate['active_joints']) and all(row['required_signed_opening_rad'] > 0 for row in opening_gate['active_joints']),
+        actual_initial_qref_exact_source=bool(np.array_equal(qref,candidate_q)),
+        fixed_world_withdraw80mm=abs(float(np.linalg.norm(delta))-.08) < 1e-12,
+        source_candidate_SHA_exact=sha(cfg['candidate']) == cfg['candidate_sha256'],
+        upper_target_SHA_exact=sha(cfg['upper_target105']) == cfg['upper_target105_sha256'])
+    gates = {k: bool(v) for k, v in gates.items()}
+    assert verify(inputs)
+    save(OUT/'release_spec.json', spec)
+    report = dict(prepared_static_config=str(baseline), prepared_static_config_sha256=sha(baseline), eligible_for_native=all(gates.values()), gates=gates, inputs_unchanged=True,
+        input_sha256=inputs, inputs_after_sha256={p: sha(p) for p in inputs},
+        spec_sha256=sha(OUT/'release_spec.json'), source_candidate_sha256=cfg['candidate_sha256'],
+        reference_run=str(REFERENCE), repeat_run=str(REPEAT), reference_time_s=10.,
+        repeat_verification_path=str(CERTIFICATE), repeat_verification_sha256=sha(CERTIFICATE),
+        actual10_FK_errors=fk_errors, actual10_FK_max_position_m=maxp, actual10_FK_max_rotation_deg=maxr,
+        source_candidate_path=cfg['candidate'], lower_indices105=initial['lower_indices'],
+        initial_lower24_q_rad=qref[initial['lower_indices']].tolist(), actual10_lower24_q_rad=actual[initial['lower_indices']].tolist(),
+        actual10_strict_all105_bounds=bool(np.all(actual >= lower) and np.all(actual <= upper)),
+        inherited_actual_outside_bounds=[dict(name=names[j], actual_rad=float(actual[j]), lower_rad=float(lower[j]), upper_rad=float(upper[j])) for j in np.flatnonzero((actual < lower) | (actual > upper))],
+        actual10_LHpalm_G_m=gr.inv().apply(pose(state['human_body_states'][bodies.index('LH:palm')])[0]-gp).tolist(),
+        samples=samples, native_simulation_steps=0,
+        scope='Source wrist reach only; no native release or no-contact certification. Actual inherited zero8/thumb drift is disclosed without clamp/reset/epsilon. Only new12 arm+14 finger float32 commands are strict checked. Actual right12 world support remains active; source query fixes other actual posture. Release phase10..28 includes withdrawal; full withdrawal test13..28 lasts15s. No old-pose success is inherited. No direct guitar command/force, human state overwrite, fixed hip or new PPO.')
+    save(OUT/'report.json', report)
+    cfg.update(seconds=28., prepared_static_config=str(baseline), prepared_static_config_sha256=sha(baseline), prepared_reference_run=str(REFERENCE), prepared_repeat_run=str(REPEAT), prepared_repeat_certificate=str(CERTIFICATE), full_release_interval_s=[13.,28.], mode='static', release_preflight_report=str(OUT/'report.json'),
+        release_spec=str(OUT/'release_spec.json'), release_spec_sha256=sha(OUT/'release_spec.json'),
+        release_start_s=10., validation_protocol=PROTOCOL)
+    save(OUT.parent/'inputs/release_v2.json', cfg)
+    assert verify(inputs)
+    save(OUT/'generation.json', dict(input_sha256=inputs, inputs_unchanged=True, eligible_for_native=report['eligible_for_native'],
+        output_sha256={str(p): sha(p) for p in (OUT/'release_spec.json', OUT/'report.json', OUT.parent/'inputs/release_v2.json')}, native_simulation_steps=0))
+    print(dict(eligible=report['eligible_for_native'], gates=gates, max_position_error_m=max(s['float32_position_error_m'] for s in samples),
+        max_rotation_error_rad=max(s['float32_rotation_error_rad'] for s in samples),
+        max_principal_deg=max(max(s['principal_ball_norm_deg']) for s in samples)), flush=True)
+    assert report['eligible_for_native'], 'Source reach gate failed; physical release forbidden.'
+
+
+if __name__ == '__main__':
+    import argparse
+    p=argparse.ArgumentParser()
+    for key in ('config','reference','repeat','certificate','out'):p.add_argument('--'+key,type=Path,required=True)
+    a=p.parse_args();main(a.config,a.reference,a.repeat,a.certificate,a.out)

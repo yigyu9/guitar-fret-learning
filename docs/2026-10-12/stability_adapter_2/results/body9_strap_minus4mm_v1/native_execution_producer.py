@@ -1,0 +1,8 @@
+from pathlib import Path
+import json,hashlib,os,shutil,subprocess,time
+R=Path('/home/ajou/yigyu/3');A=R/'stability_adapter_2';P=R/'docs/2026-10-12/stability_adapter_2/results/body9_strap_minus4mm_v1';s=A/'run_small_wrist_recorded_diagnostic.py'
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+trial=A/'trials/body9_strap_minus4mm_v1/la_minus4mm.json';proposal=P/'proposal.json';paths=[s,A/'SMALL_WRIST_MOTION_PLAN.md',A/'BODY9_STRAP_MINUS4MM_EXECUTION.md',trial,proposal,A/'strap_trial_recording.py',A/'warmstart_targets.py'];before={str(p):sha(p) for p in paths};assert sha(P/'native_source.py')==sha(s);shutil.copyfile(__file__,P/'native_execution_producer.py')
+env=dict(os.environ,OPENBLAS_NUM_THREADS='1',OMP_NUM_THREADS='1',MUJOCO_GL='disable',MPLBACKEND='Agg',MPLCONFIGDIR='/tmp/stability2_small_wrist',PYTHONPATH=str(R/'isaacgym/python')+':'+str(R),LD_LIBRARY_PATH='/home/ajou/miniconda3/envs/rl38/lib');cmd=['/home/ajou/miniconda3/envs/rl38/bin/python','-u','-m','stability_adapter_2.run_small_wrist_recorded_diagnostic','--trial',str(trial),'--proposal',str(proposal),'--out',str(P/'native')];start=time.monotonic()
+with (P/'native_execution.log').open('wb') as log:r=subprocess.run(cmd,cwd=str(R),env=env,stdout=log,stderr=subprocess.STDOUT)
+after={str(p):sha(p) for p in paths};(P/'native_execution.json').write_text(json.dumps(dict(command=cmd,exit_code=r.returncode,wall_seconds=time.monotonic()-start,input_sha256_before=before,input_sha256_after=after,log_sha256=sha(P/'native_execution.log')),indent=2)+'\n');print(r.returncode,(P/'native_execution.log').read_text()[-2500:]);assert r.returncode==0 and before==after

@@ -1,0 +1,15 @@
+# Native lowerPOSITION 제어사용범위 검증·유한gain 비교
+
+Root 승인된 후속: 같은원gain으로5초관찰하며 lowerJ는전표본진단, 실제제어에사용하는upperJ의.01m/s검증유지. 원gain이명백히부적합하면동일코드/초기값에서K×10,D×sqrt10 유한nativegain 조건1회5초비교. 정지물리검증후에만15초왼손해제.
+
+- [ ] 새scene_v5/controller_v4/run_v7/입력동결 및독립검수, 원gain5초 관찰.
+- [ ] 필요시동일candidate/gain10 조건5초, 원nativeeffortcap은그대로.
+- [ ] 물리적으로적합한조건에서15초해제, 실제105상태/제어/접촉/끝영상/입력SHA확인.
+
+기존native_lower_position_static_v1은55step(.22917s) LAnkleJ잔차.03251m/s로종료,upperelbow1.43e−5/Rankle2.51e−5m/s. lower24는이미nativePOSITION으로서lowerJ가command torque에사용되지않는다. 고정root tree구조에서lowerbody의upper33 EFFORT columns와upperbody의lower24 columns가모두0임을 매step실제nativeJ로검증/기록한다. upper33제어의프레임은실제support link RThorax/RShoulder/RElbow세몸체의COM/origin velocity대조로선택하고같은.01m/s gate유지. lowerL/RAnkle 양mode오차는매stepeffort row에남기지만제어검증을위한중단조건으로쓰지않는다. 이는lower실측오차를숨기거나수치threshold를높이는것이아니라사용되지않는J의진단과실제제어검증범위를분리하는변경이다.
+
+물리안전은그대로: actualnativeqdot>50rad/s·비유한·G actor displacement>.20m/35deg·API/고정root/chair불변위반시즉시종료,실패step contact 및마지막비격자frame포함. 입력candidate chair−2.5mm/rightfootv2/상체81/H0lower기준/자기충돌/물성/ground동일. 런타임stateoverwrite/부착/기타직접힘/strap/새RL 없음.
+
+Gain1 native하체기준 Hip/Knee K300/D75,Ankle200/50,Toe30/7.5. Gain10은K3000/D237.1708,Ankle2000/158.1139,Toe300/23.7171. 전부finite native POSITION stiffness/damping, 원nativeeffortcap변경없음. 외부하체EFFORT/중력보상은0. nativePOSITION과외부EFFORT혼합금지. nativeforce readback는구속력을포함할수있는generalized force이며PD모터토크라고단정하지않는다.
+
+의자교정후에도중력처짐으로동적Hip–chair재접촉과G19.13mm변위가발생했으므로5초완료자체를지지성공이라고부르지않는다. 실제 q/qd와발/의자/기타접촉·G흔들림으로판단한다. 실패한원gain/각종초기화시도도모두별도보존한다.

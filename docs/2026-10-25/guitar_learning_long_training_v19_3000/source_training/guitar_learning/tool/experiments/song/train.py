@@ -1,0 +1,121 @@
+"""Run bounded continuous-score PPO without changing frozen single-note code."""
+import argparse
+from guitar_learning.core.dependency_inputs import pin_evidence
+import copy
+import json
+import os
+from pathlib import Path
+import sys
+
+
+def summarize(out):
+    from guitar_learning.training.recording import write, digest
+    out = Path(out); report=json.loads((out/'report.json').read_text())
+    counts = dict(completed_episodes=0,full_safe_episodes=0,physical_failure_episodes=0,
+        whole_song_successful_episodes=0,target_count=0,left_success_count=0,right_success_count=0,coupled_hit_count=0)
+    path=out/'episodes.jsonl'
+    if path.is_file():
+        with path.open() as stream:
+            for line in stream:
+                episode=json.loads(line).get('episode')
+                if not episode or episode.get('valid') is not True: continue
+                song=episode.get('song',{})
+                counts['completed_episodes']+=1
+                counts['physical_failure_episodes']+=int(episode['reason']=='terminal_failure')
+                counts['full_safe_episodes']+=int(episode['reason']=='timeline_complete' and song.get('safety_invalidated') is False)
+                counts['whole_song_successful_episodes']+=int(song.get('stage_success') is True)
+                for key in ('target_count','left_success_count','right_success_count','coupled_hit_count'):
+                    counts[key]+=song.get(key,0)
+    # Counts are snapshots; never sum a cumulative per-tick musical value.
+    last_by_worker={};max_time=0.;max_expired=0.
+    import gzip
+    trace=out/'transitions.jsonl.gz'
+    if trace.is_file():
+        with gzip.open(trace,'rt') as stream:
+            for line in stream:
+                for worker,info in enumerate(json.loads(line)['infos']):
+                    song=info.get('song',{})
+                    max_time=max(max_time,info.get('task_time_s',0.))
+                    last_by_worker[str(worker)]={k:v for k,v in song.items() if k not in ('per_note','targets','events')}
+                    max_expired=max(max_expired,song.get('expired_count',0))
+    result=dict(schema='guitar_learning.song_training_report.v1',completed=report['completed'],
+        optimizer_updates=report.get('optimizer_updates'),accounting=report.get('accounting'),counts=counts,
+        maximum_episode_time_s=max_time,maximum_expired_targets=max_expired,last_by_worker=last_by_worker,
+        episode_records=dict(path=str(path.resolve()),sha256=digest(path)) if path.is_file() else None,
+        scope='continuous full-score attempt; incomplete trajectories are not successful full-song performances')
+    write(out/'song_report.json',result);return result
+
+
+def run(settings,args):
+    import isaacgym
+    from unittest.mock import patch
+    from guitar_learning.training import parallel, policy, ppo
+    from guitar_learning.training import runner as train_parallel
+    from guitar_learning.training.recording import write
+    from guitar_learning.imitation.imitation import dataset_manifest
+    from guitar_learning.training.persistent_audit import finalize_persistent_run
+    from guitar_learning.training.monitoring import available_memory_bytes, LowMemoryError
+    from guitar_learning.native.lower_body_release_v1 import common
+    from guitar_learning.tool.experiments.song.policy import SongPolicy
+    from guitar_learning.tool.experiments.song.transfer import validate_experts, apply_experts
+    from guitar_learning.tool.experiments.song.worker import native_environment
+    settings=copy.deepcopy(settings);settings['min_available_memory_gib']=max(6.,settings['min_available_memory_gib'])
+    out=args.out.resolve()
+    if out.exists(): raise FileExistsError(str(out))
+    if available_memory_bytes()<8*1024**3: raise LowMemoryError('song startup requires8GiB available')
+    evidence=validate_experts(settings); expected=evidence['source_pins']
+    original_pin,base_trainer,base_pool=common.pin,ppo.PPOTrainer,parallel.Pool
+    original_settings=train_parallel.settings_document
+    def dispatch_settings(raw):
+        # Only this run uses song settings. Expert proof parsers must retain
+        # their own single-note settings while the shared runner is patched.
+        return copy.deepcopy(settings) if 'song' in raw else original_settings(raw)
+    def pin(config,extra=()):
+        values = pin_evidence(original_pin, config, extra, expected)
+        return values
+    class Trainer(base_trainer):
+        def __init__(self,model,config=None):
+            transfer=None
+            if args.resume is None:
+                if dataset_manifest(expected)!=expected: raise RuntimeError('song evidence changed')
+                transfer=apply_experts(model,settings)
+                if transfer['source_pins']!=expected: raise RuntimeError('song transfer source changed')
+            super().__init__(model,config)
+            write(out/'song_initialization.json',dict(mode='strict_resume' if args.resume else 'physical_feature_actor_only',
+                transfer=transfer,source_pins=expected,resume=str(args.resume) if args.resume else None))
+    class Pool(base_pool):
+        def __init__(self,specs,**kwargs):
+            specs=copy.deepcopy(specs)
+            for spec in specs:spec['song']=settings['song']
+            super().__init__(specs,worker_factory=native_environment,**kwargs)
+    argv=[sys.argv[0],'--settings',str(args.settings),'--out',str(out)]
+    if args.resume:argv+=['--resume',str(args.resume)]
+    summary=None
+    try:
+        with patch.object(train_parallel,'settings_document',dispatch_settings), \
+                patch.object(parallel,'Pool',Pool),patch.object(policy,'Policy',SongPolicy), \
+                patch.object(ppo,'PPOTrainer',Trainer),patch.object(common,'pin',pin),patch.object(sys,'argv',argv):
+            train_parallel.main()
+    finally:
+        primary=sys.exc_info()[1]
+        try:
+            passed=finalize_persistent_run(out)
+            if (out/'report.json').is_file():summary=summarize(out)
+            if passed is False and primary is None:raise RuntimeError('song persistent audit failed')
+        except BaseException as error:
+            if primary is None:raise
+            print('[song] secondary finalization error: '+str(error),file=sys.stderr,flush=True)
+    return summary
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--settings',type=Path,required=True);parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--resume',type=Path);args=parser.parse_args()
+    for key in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS'):os.environ[key]='1'
+    import isaacgym
+    from guitar_learning.tool.experiments.song.settings import settings_document
+    run(settings_document(json.loads(args.settings.read_text())),args)
+
+
+if __name__=='__main__':main()

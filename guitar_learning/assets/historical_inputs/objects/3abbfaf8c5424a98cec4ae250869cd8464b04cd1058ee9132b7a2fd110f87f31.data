@@ -1,0 +1,164 @@
+"""Refit only both arms to the original guitar-relative palms, source-only."""
+import copy
+import itertools
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from scipy.optimize import least_squares,lsq_linear
+from scipy.spatial.transform import Rotation
+from ..lower_body_release_v1.common import ROOT,A,BASE,HUMAN,MANIFEST,read,save,sha,pin,verify
+from ..lower_body_release_v1.upright_source_v1 import INITIAL,NATIVE,full_fk,metrics,make_state
+from ..lower_body_release_v1.source_geometry_v1 import foot_vertices
+from ..lower_body_release_v1.upright_polytope_v2 import GuitarBoxes
+from ..lower_body_release_v1 import upright_audit_v2 as capsules
+from ..om_axilla_source_geometry_v3 import CapsuleBodyDistance
+from ..initial_pose_noise_v1 import pose
+
+PHASE=BASE/'grounded_guitar_support_v1'
+SOURCE=PHASE/'source_v2'
+FOOT=BASE/'seated_foot_support_v1'
+BASELINE=FOOT/'source_v3'
+PLAN=ROOT/'docs/plans/grounded_guitar_arm_alignment_20261016.md'
+
+
+def main():
+    out=PHASE/'source_v3';out.mkdir(exist_ok=False)
+    cfgpath=SOURCE/'static5.json';cfg=read(cfgpath)
+    extras=[PLAN,ROOT/'docs/plans/grounded_guitar_support_20261016.md',
+            ROOT/'docs/plans/grounded_guitar_spine_clearance_20261016.md',
+            INITIAL,NATIVE/'native_properties.json',cfgpath,Path(read(MANIFEST)['native_initial']),
+            FOOT/'artifact_inventory.json',FOOT/'final_verification.json']
+    extras+=list(Path(__file__).parent.glob('*.py'))+list((A/'seated_foot_support_v1').glob('*.py'))
+    extras+=[p/n for p in (SOURCE,BASELINE) for n in ('candidate.json','predicted_state.json','report.json','support_candidate.json','upper_target105.json')]
+    pins=pin(extra=extras);save(out/'inputs_before.json',pins)
+    c=read(SOURCE/'candidate.json');previous=copy.deepcopy(c);baseline=read(BASELINE/'candidate.json');i=read(INITIAL)
+    assert cfg['candidate_sha256']==sha(SOURCE/'candidate.json') and cfg['right_arm_reference_mode']=='initial_world_finite_human_v2'
+    assert 'chest_normal_goal_depth_m' not in cfg and cfg['foot_support_mode']=='coherent_interior_hip_soles_v6'
+    names,bodies=c['joint_names'],i['human_body_names'];q0=np.array(c['q_ref_rad']);q=q0.copy()
+    fk,parents=full_fk(names,bodies,c['expected_initial_state'],q0)
+    bounds=np.column_stack([i['PD_properties']['lower'],i['PD_properties']['upper']])
+    gp=np.array(c['guitar_position_W_m']);gr=Rotation.from_quat(c['guitar_quaternion_xyzw'])
+    bgp=np.array(baseline['guitar_position_W_m']);bgr=Rotation.from_quat(baseline['guitar_quaternion_xyzw'])
+    original={n:pose(b) for n,b in zip(bodies,baseline['expected_initial_state']['human_body_states'])}
+    distance=CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']),HUMAN)
+    boxes=GuitarBoxes(distance);props=read(NATIVE/'native_properties.json')['actual_shape_properties']['human']
+    excluded={frozenset((e.get('body1'),e.get('body2'))) for e in ET.parse(HUMAN).findall('./contact/exclude')}
+    def enabled(a,b):
+        return parents.get(a)!=b and parents.get(b)!=a and frozenset((a,b)) not in excluded and any((x['filter']&y['filter'])==0 for x in props[a] for y in props[b])
+    def self_gaps(poses,pairs):
+        caps={n:(poses[n][0]+poses[n][1].apply(seg),radius) for n,(seg,radius) in distance.capsules.items()}
+        result=[]
+        for a,b in pairs:
+            x,ra=caps[a];y,rb=caps[b];matrix=np.column_stack([x[1]-x[0],y[0]-y[1]])
+            fit=lsq_linear(matrix,y[0]-x[0],bounds=([0.,0.],[1.,1.]),tol=1e-12)
+            result.append(float(np.linalg.norm(matrix@fit.x-(y[0]-x[0]))-ra-rb))
+        return np.array(result)
+    changed_indices=[];fits={};goals={};pairs_by_side={}
+    for side in ('R','L'):
+        ix=np.array([j for j,n in enumerate(names) if n.startswith(tuple(side+'_'+part+'_' for part in ('Thorax','Shoulder','Elbow','Wrist')))])
+        changed_indices.extend(ix.tolist());moving={side+'_'+part for part in ('Thorax','Shoulder','Elbow')}
+        pairs=[(a,b) for a,b in itertools.combinations(distance.capsules,2) if (a in moving or b in moving) and enabled(a,b)]
+        pairs_by_side[side]=pairs
+        op,ori=original[side+'H:palm'];goalp=gp+gr.apply(bgr.inv().apply(op-bgp));goalr=gr*bgr.inv()*ori;goals[side]=(goalp,goalr)
+        low=np.maximum(bounds[ix,0]+1e-6,q0[ix]-.9);high=np.minimum(bounds[ix,1]-1e-6,q0[ix]+.9)
+        def residual(v):
+            trial=q.copy();trial[ix]=v;ps=fk(trial);p,r=ps[side+'H:palm']
+            near={part:distance.measure(ps,side+'_'+part,gp,gr)['gap_m'] for part in ('Thorax','Shoulder','Elbow')}
+            rows=[1500*(p-goalp),100*(goalr.inv()*r).as_rotvec(),
+                  10000*np.minimum(self_gaps(ps,pairs)-.001,0.),
+                  10000*np.minimum(np.array(list(near.values()))-.0001,0.),.05*(v-q0[ix])]
+            if side=='R':rows.append(np.array([5000*(near['Shoulder']-.0005),6000*min(near['Elbow']-.007,0.)]))
+            return np.concatenate(rows)
+        fit=least_squares(residual,np.clip(q[ix],low+1e-8,high-1e-8),bounds=(low,high),
+                          max_nfev=180,diff_step=1e-4,ftol=1e-10,xtol=1e-10,gtol=1e-9)
+        q[ix]=fit.x
+        fits[side]=dict(success=bool(fit.success),cost=float(fit.cost),nfev=int(fit.nfev),
+                        names=[names[j] for j in ix],delta_rad=(q[ix]-q0[ix]).tolist(),
+                        related_capsule_pairs=[list(p) for p in pairs])
+        print(side,'arm fit',fits[side],flush=True)
+    q=q.astype(np.float32).astype(float);ps=fk(q)
+    state=make_state(c['expected_initial_state'],bodies,q,ps,gp,gr)
+    affected=lambda n:n.startswith(('LH:','RH:')) or n in {side+'_'+part for side in ('L','R') for part in ('Thorax','Shoulder','Elbow','Wrist')}
+    for j,n in enumerate(bodies):
+        if not affected(n):state['human_body_states'][j]=copy.deepcopy(c['expected_initial_state']['human_body_states'][j])
+    state['guitar_body_states']=copy.deepcopy(c['expected_initial_state']['guitar_body_states'])
+    ps={n:pose(b) for n,b in zip(bodies,state['human_body_states'])}
+    reference=read(read(MANIFEST)['native_initial']);upper=dict(zip(reference['joint_names'],reference['q_ref_rad']))
+    c.update(q_ref_rad=q.tolist(),expected_initial_state=state,
+             upper_deltas_rad={n:float(q[names.index(n)]-v) for n,v in upper.items()},
+             support_candidate=str(out/'support_candidate.json'),
+             scope='Source2 free-guitar/Root/chair/trunk/head/lower/finger q unchanged; only both12-arm initial channels refit to FOOTsource3 guitar-relative palms with relevant source capsule clearance. Source is not actual dynamic contact or stability.')
+    measured=metrics(ps,distance,gp,gr);hands={};selfrows={}
+    for side,(goalp,goalr) in goals.items():
+        p,r=ps[side+'H:palm'];hands[side]=dict(position_error_m=float(np.linalg.norm(p-goalp)),
+             rotation_error_deg=float(np.rad2deg((goalr.inv()*r).magnitude())),goal_W_m=goalp.tolist(),goal_xyzw=goalr.as_quat().tolist())
+        gaps=self_gaps(ps,pairs_by_side[side]);selfrows[side]=[dict(a=a,b=b,gap_m=float(g)) for (a,b),g in zip(pairs_by_side[side],gaps)]
+    save(out/'support_candidate.json',{'right_block_cradle':{'capsule_body':measured['capsules'],
+         'upper_arm_witness':measured['capsules']['R_Shoulder'],'scope':'Recomputed from new arms and unchanged source2 guitar; native evidence required.'}})
+    shifted_i=copy.deepcopy(i)
+    for b in shifted_i['native_initial_state']['human_body_states']:
+        for k,v in zip('xyz',c['root_initial_translation_W_m']):b['pose']['p'][k]+=v
+    pose_path=(ROOT/read(A/'config.json')['pose_source']).resolve();original_read=capsules.read
+    def chair_read(path):
+        value=original_read(path)
+        if Path(path).resolve()==pose_path:value['params']['chair']['half']=list(c['chair_half_m'])
+        return value
+    with patch.object(capsules,'read',chair_read):
+        old_rows=capsules.audit(previous,shifted_i);foot_rows=capsules.audit(baseline,shifted_i);new_rows=capsules.audit(c,shifted_i)
+    key=lambda r:(r['a'],r['b'],r.get('geom',''))
+    def worsened(oldrows):
+        old={key(r):r['gap_m'] for r in oldrows}
+        return [dict(r,baseline_gap_m=old.get(key(r))) for r in new_rows if r['collision_relevant'] and r['gap_m']<-.0001 and r['gap_m']<old.get(key(r),.02)-.0002 and not(r['a']=='Pelvis' and r['b_actor']=='chair')]
+    worse=worsened(old_rows);footworse=worsened(foot_rows)
+    boxrows=[dict(body=n,gap_m=boxes.measure(ps,n,gp,gr)) for n in boxes.boxes]
+    boxworse=[r for r in boxrows if r['gap_m']<.0001]
+    chairps=dict(ps);chairps['chair']=(np.array(c['chair_initial_center_W_m']),Rotation.identity())
+    boxes.boxes['chair']=(np.zeros(3),np.array(c['chair_half_m']),Rotation.identity())
+    chairgap=boxes.measure(chairps,'chair',gp,gr)
+    ground=min(float((gp+gr.apply(v))[:,2].min()) for v,_,_,_ in distance.pieces)
+    frozen=np.ones(105,dtype=bool);frozen[changed_indices]=False
+    feet={n:dict(min_z_m=float(v[:,2].min()),max_bottom_z_m=float(b[:,2].max()),bottom_z_span_m=float(np.ptp(b[:,2]))) for n,(v,b) in foot_vertices(ps).items()}
+    gates=dict(only_arm24_q_changed=bool(np.array_equal(q[frozen],q0[frozen])),
+         original105_limits=bool(np.all(q>=bounds[:,0]) and np.all(q<=bounds[:,1])),
+         zero8_exact=bool(np.array_equal(q[i['zero_range_indices']],q0[i['zero_range_indices']])),
+         non_arm_human_states_exact=all(state['human_body_states'][j]==previous['expected_initial_state']['human_body_states'][j] for j,n in enumerate(bodies) if not affected(n)),
+         G_all_states_exact=state['guitar_body_states']==previous['expected_initial_state']['guitar_body_states'],
+         chair_states_exact=state['chair_body_states']==previous['expected_initial_state']['chair_body_states'],
+         root_chair_G_metadata_exact=all(c[k]==previous[k] for k in ('root_initial_translation_W_m','chair_half_m','chair_initial_center_W_m','chair_translation_W_m','guitar_position_W_m','guitar_quaternion_xyzw')),
+         upper81_delta_float32_exact=all(float(np.float32(v+c['upper_deltas_rad'][n]))==q[names.index(n)] for n,v in upper.items()),
+         palms_under5mm2deg=all(v['position_error_m']<=.005 and v['rotation_error_deg']<=2. for v in hands.values()),
+         related_arm_self_capsules_above0p1mm=all(r['gap_m']>=.0001 for rows in selfrows.values() for r in rows),
+         RShoulder_near0p5mm=.0001<=measured['capsules']['R_Shoulder']['gap_m']<=.001,
+         RElbow_above7mm=measured['capsules']['R_Elbow']['gap_m']>=.007,
+         support_capsules_nonnegative=all(v['gap_m']>=.00005 for v in measured['capsules'].values()),
+         initial_Spine_source_gap_at_least4p9mm=measured['capsules']['Spine']['gap_m']>=.0049,
+         no_new_capsule_intersection_vs_source2=not worse,no_new_capsule_intersection_vs_FOOT=not footworse,
+         all_human_BOX_Gbody_clear=not boxworse,chair_Gbody_clear=chairgap>=.0001,Gbody_ground_clear=ground>=.001)
+    assert verify(pins)
+    save(out/'candidate.json',c);save(out/'predicted_state.json',state)
+    target=dict(joint_names=names,q_target_rad105=q.tolist(),scope='New source3 initial105 q target; original finite runtime rates/gains/caps preserved, lower24 exact.')
+    save(out/'upper_target105.json',target)
+    report=dict(gates=gates,eligible_for_native=all(gates.values()),candidate_metrics=measured,hands=hands,
+         arm_fits=fits,arm_related_capsule_pairs=selfrows,feet=feet,new_capsule_pairs=new_rows,
+         source2_capsule_pairs=old_rows,FOOT_capsule_pairs=foot_rows,
+         new_or_worsened_capsule_intersections_vs_source2=worse,new_or_worsened_capsule_intersections_vs_FOOT=footworse,
+         human_BOX_Gbody_pairs=boxrows,chair_Gbody_SAT_gap_m=chairgap,Gbody_min_source_z_m=ground,
+         reference_body_center_G_m=read(SOURCE/'report.json')['reference_body_center_G_m'],
+         reference_lateral_coordinate_m=read(SOURCE/'report.json')['reference_lateral_coordinate_m'],
+         preserved_G_geometry_report=dict(path=str(SOURCE/'report.json'),sha256=sha(SOURCE/'report.json')),
+         source_geometry_scope='Both arms source FK and enabled capsule self/capsule-convex audit against source2 and FOOT baselines. All human BOX/Gbody SAT plus chair and ground. Same-hand meshes and anatomical pads are not fully certified. Initial geometry does not prove native dynamic contacts or stability.',inputs_unchanged=True)
+    save(out/'report.json',report)
+    cfg.update(candidate=str(out/'candidate.json'),candidate_sha256=sha(out/'candidate.json'),source_report=str(out/'report.json'),
+         upper_target105=str(out/'upper_target105.json'),upper_target105_sha256=sha(out/'upper_target105.json'),
+         initial_pose_description='Source2 Spine5mm guitar; both initial arms aligned to FOOTsource3 guitar-relative palms; grounded legs/trunk/head/fingers preserved')
+    save(out/'static5.json',cfg);assert verify(pins)
+    outputs={str(p):sha(p) for p in out.iterdir() if p.is_file()}
+    save(PHASE/'source_generation_v3.json',dict(input_sha256=pins,inputs_unchanged=True,output_sha256=outputs,
+         eligible_for_native=report['eligible_for_native'],native_simulation_steps=0))
+    print(dict(eligible=report['eligible_for_native'],gates=gates,hands=hands,
+         gaps_mm={n:v['gap_m']*1000 for n,v in measured['capsules'].items()},worse=worse,FOOTworse=footworse),flush=True)
+    assert report['eligible_for_native'],'Source arm fit/audit failed; no native run.'
+
+
+if __name__=='__main__':main()

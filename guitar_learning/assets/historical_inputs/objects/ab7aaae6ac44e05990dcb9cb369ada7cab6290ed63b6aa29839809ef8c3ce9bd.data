@@ -1,0 +1,255 @@
+"""Real-score CPU observations and explicit target-specific task history.
+
+Geometry/contact eligibility is measured by the caller. This module makes no
+claim about sound generation, force, or lower-fret acoustic correctness.
+"""
+from dataclasses import dataclass
+import math
+
+from stability_adapter_2.fresh_music_v1.events import load_music_task
+
+EVENT_FIELDS = ('onset_delta_s', 'end_delta_s', 'press_delta_s', 'string_1based',
+                'fret', 'finger', 'direction', 'current', 'preparing',
+                'matched_50', 'matched_100', 'continuous_dwell_s',
+                'held_s', 'hold_fraction', 'released', 'release_delta_s',
+                'delta_x', 'delta_y', 'delta_z', 'velocity_x', 'velocity_y',
+                'velocity_z', 'strict_deadline_delta_s', 'lenient_deadline_delta_s')
+EVENT_DIM = len(EVENT_FIELDS)
+STATE_FIELDS = ('remaining_s', 'strict_matches', 'lenient_matches', 'target_count',
+                'held_total_s', 'released_count', 'nearest_strict_deadline_s',
+                'elapsed_s')
+STATE_DIM = len(STATE_FIELDS)
+
+
+def finite(value, name):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f'{name} must be finite')
+    return float(value)
+
+
+@dataclass(frozen=True)
+class ScoreTarget:
+    target_id: str
+    event_id: str
+    string: int  # canonical simulator convention: 0 high-e ... 5 low-E
+    fret: int
+    finger: int
+    direction: int
+    onset_s: float
+    end_s: float
+    press_s: float
+    source_onset_s: float
+    source_end_s: float
+
+
+@dataclass(frozen=True)
+class ScoreTask:
+    targets: tuple
+    lookahead_s: float = 2.0
+    capacity: int = 64
+    provenance: object = None
+
+    def __post_init__(self):
+        if finite(self.lookahead_s, 'lookahead_s') <= 0:
+            raise ValueError('lookahead_s must be positive')
+        if isinstance(self.capacity, bool) or not isinstance(self.capacity, int) or self.capacity < 1:
+            raise ValueError('capacity must be positive integer')
+        if not self.targets or len({t.target_id for t in self.targets}) != len(self.targets):
+            raise ValueError('targets must be nonempty with unique IDs')
+        for t in self.targets:
+            for name in ('onset_s', 'end_s', 'press_s', 'source_onset_s', 'source_end_s'):
+                finite(getattr(t, name), name)
+            if not 0 <= t.press_s <= t.onset_s <= t.end_s:
+                raise ValueError(f'invalid target timing: {t.target_id}')
+            if (type(t.string) is not int or not 0 <= t.string < 6 or
+                    type(t.fret) is not int or not 0 <= t.fret <= 22 or
+                    type(t.finger) is not int or t.finger not in ((0,) if t.fret == 0 else (1, 2, 3, 4)) or
+                    t.direction not in (-1, 1)):
+                raise ValueError(f'invalid target mapping: {t.target_id}')
+        for i, t in enumerate(self.targets):
+            for other in self.targets[i+1:]:
+                if (t.string == other.string and (t.fret, t.finger) != (other.fret, other.finger)
+                        and max(t.onset_s, other.onset_s) < min(t.end_s, other.end_s)):
+                    raise ValueError('conflicting audible targets on one string')
+
+    @classmethod
+    def from_bundle(cls, bundle_root, *, stage='B', start_event_index=0,
+                    phrase_events=8, tempo_scale=1.0, preroll_s=1.0,
+                    lookahead_s=2.0, capacity=64):
+        # Reuse immutable compiler/provenance. Selection here is explicit and
+        # contiguous: unsupported events raise rather than being filtered.
+        source = load_music_task(bundle_root, stage='B', tempo_scale=tempo_scale,
+                                 preroll_s=preroll_s)
+        if stage not in ('B', 'C', 'D'):
+            raise ValueError('stage must be B, C, or D')
+        count = {'B': 1, 'C': 2, 'D': phrase_events}[stage]
+        if type(count) is not int or count < 1 or type(start_event_index) is not int or start_event_index < 0:
+            raise ValueError('invalid event selection')
+        selected = source.timeline.events[start_event_index:start_event_index + count]
+        if len(selected) != count:
+            raise ValueError('selected interval exceeds timeline')
+        unsupported = [e.event_id for e in selected if not e.supported]
+        if unsupported:
+            raise ValueError(f'unsupported selected event IDs: {unsupported}')
+        if stage == 'B' and (len(selected[0].string_targets) != 1 or selected[0].string_targets[0].fret == 0):
+            raise ValueError('B requires explicitly selected single fretted event')
+        origin = min(t.press_start_s if t.press_start_s is not None else t.note_on_s for e in selected for t in e.string_targets)
+        convert = lambda value: preroll_s + (value - origin) / tempo_scale
+        targets = []
+        for event in selected:
+            for t in event.string_targets:
+                onset = event.score_time_s + t.traversal_offset_s
+                end = min(t.sustain_until_s, t.release_s if t.release_s is not None else t.sustain_until_s)
+                targets.append(ScoreTarget(f'{event.event_id}/string-{t.string + 1}/note-{t.mapping_note_index}',
+                    event.event_id, t.string, t.fret, t.finger or 0,
+                    1 if event.strike.direction == 'down' else -1,
+                    convert(onset), convert(end),
+                    convert(t.press_start_s if t.press_start_s is not None else t.note_on_s), onset, end))
+        metadata = source.content_document()
+        metadata.pop('observation_dim')
+        metadata.pop('lookahead')
+        metadata.update(schema='music_pipeline.score.v2', stage=stage,
+                        event_ids=[e.event_id for e in selected], source_origin_s=origin,
+                        timing_mode='tempo_scaled' if tempo_scale != 1 else 'easy_training',
+                        event_fields=EVENT_FIELDS, state_fields=STATE_FIELDS,
+                        lookahead_s=lookahead_s, capacity=capacity,
+                        temporal_composition='target-specific current and preparation owners; conflicting audible targets rejected',
+                        geometry_frame='caller supplied guitar frame; delta meters and relative velocity meters/second',
+                        priority_slots='current with earliest end; unmatched nearest nonexpired strict deadline within token window')
+        return cls(tuple(targets), lookahead_s, capacity, metadata)
+
+    @property
+    def duration_s(self):
+        return max(t.end_s for t in self.targets) + 0.1
+
+    def tokens(self, now_s, geometry, ledger):
+        """Geometry delta is actual target-relative G-frame meters; velocity m/s.
+
+        Both vectors must be measured by the native caller for each target.
+        """
+        now = finite(now_s, 'now_s')
+        ledger.require_task(self)
+        selected = [t for t in self.targets if t.onset_s <= now + self.lookahead_s and
+                    (now <= max(t.end_s, t.onset_s + .1) or not ledger.progress[t.target_id].released)]
+        if len(selected) > self.capacity:
+            raise ValueError(f'event token capacity overflow: {len(selected)} > {self.capacity}')
+        features = []
+        for t in selected:
+            g = geometry[t.target_id]  # Missing measurements fail closed.
+            delta, velocity = tuple(g['delta']), tuple(g['velocity'])
+            if len(delta) != 3 or len(velocity) != 3:
+                raise ValueError('geometry delta/velocity must have three components')
+            values = tuple(finite(v, 'geometry') for v in delta + velocity)
+            p = ledger.progress[t.target_id]
+            duration = t.end_s - t.onset_s
+            features.append((t.onset_s-now, t.end_s-now, t.press_s-now,
+                float(t.string+1), float(t.fret), float(t.finger), float(t.direction),
+                float(t.onset_s <= now < t.end_s), float(t.press_s <= now < t.onset_s),
+                float(t.target_id in ledger.matches[.05]), float(t.target_id in ledger.matches[.1]),
+                p.dwell_s, p.held_s, p.held_s/duration if duration > 0 else 0.0,
+                float(p.released), p.release_s-now if p.release_s is not None else 0.0,
+                *values, t.onset_s+.05-now, t.onset_s+.1-now))
+        return (tuple(features) + ((0.0,) * EVENT_DIM,) * (self.capacity-len(features)),
+                (True,) * len(features) + (False,) * (self.capacity-len(features)),
+                tuple(t.target_id for t in selected) + (None,) * (self.capacity-len(features)))
+
+    def priority_tokens(self, features, mask, target_ids):
+        """Two direct input slots, in addition to all tokens in attention.
+
+        Simultaneous current targets all remain in the attention set; the one
+        ending first receives the current bypass. Deadlines use the same window.
+        """
+        rows = [(row, identity) for row, valid, identity in zip(features, mask, target_ids) if valid]
+        current = [(row, identity) for row, identity in rows if row[EVENT_FIELDS.index('current')]]
+        deadlines = [(row, identity) for row, identity in rows
+                     if not row[EVENT_FIELDS.index('matched_50')] and row[EVENT_FIELDS.index('strict_deadline_delta_s')] >= 0]
+        selections = [min(current, key=lambda x: (x[0][1], x[1])) if current else None,
+                      min(deadlines, key=lambda x: (x[0][-2], x[1])) if deadlines else None]
+        return (tuple(item[0] if item else (0.0,)*EVENT_DIM for item in selections),
+                tuple(item is not None for item in selections),
+                tuple(item[1] if item else None for item in selections))
+
+    def state(self, now_s, ledger):
+        now = finite(now_s, 'now_s')
+        ledger.require_task(self)
+        deadlines = [t.onset_s+.05-now for t in self.targets if t.target_id not in ledger.matches[.05] and t.onset_s+.05 >= now]
+        return (max(0.0, self.duration_s-now), float(len(ledger.matches[.05])),
+                float(len(ledger.matches[.1])), float(len(self.targets)),
+                sum(p.held_s for p in ledger.progress.values()),
+                float(sum(p.released for p in ledger.progress.values())),
+                min(deadlines) if deadlines else 0.0, now)
+
+
+@dataclass
+class TargetProgress:
+    held_s: float = 0.0
+    dwell_s: float = 0.0
+    released: bool = False
+    release_s: object = None
+
+
+class MusicLedger:
+    def __init__(self, task):
+        self.task = task
+        self.progress = {t.target_id: TargetProgress() for t in task.targets}
+        self.matches = {.05: {}, .1: {}}
+        self.crossing_ids = set()
+        self.interval_end_s = None
+
+    def require_task(self, task):
+        if task is not self.task:
+            raise ValueError('ledger belongs to another task')
+
+    def update_interval(self, start_s, end_s, valid_target_ids):
+        """Integrate measured eligibility over [start,end], clipped to audio.
+
+        Caller samples at physics dt and validates the complete interval. No
+        minimum 100 ms hold is imposed, including on short audible notes.
+        """
+        start, end = finite(start_s, 'start_s'), finite(end_s, 'end_s')
+        valid = set(valid_target_ids)
+        if not valid <= self.progress.keys() or start < 0 or end < start or (self.interval_end_s is not None and start < self.interval_end_s):
+            raise ValueError('invalid/overlapping measurement interval or target ID')
+        for t in self.task.targets:
+            p = self.progress[t.target_id]
+            amount = max(0.0, min(end, t.end_s)-max(start, t.onset_s)) if t.target_id in valid else 0.0
+            # Contact age includes preparation; only audible hold is clipped.
+            if t.target_id in valid:
+                contiguous = self.interval_end_s == start
+                p.dwell_s = p.dwell_s + end-start if contiguous else end-start
+            else:
+                p.dwell_s = 0.0
+            p.held_s += amount
+        self.interval_end_s = end
+
+    def crossing(self, crossing_id, at_s, string, direction, valid_target_ids):
+        """Match one externally validated crossing independently at 50/100 ms.
+
+        valid_target_ids must come from geometry/contact before/after checks.
+        One candidate cannot consume two targets within either ledger.
+        """
+        at = finite(at_s, 'at_s')
+        valid = set(valid_target_ids)
+        if (at < 0 or type(string) is not int or not 0 <= string < 6 or
+                type(direction) is not int or direction not in (-1, 1)):
+            raise ValueError('invalid crossing time/string/direction')
+        if crossing_id in self.crossing_ids or not valid <= self.progress.keys():
+            raise ValueError('duplicate crossing or unknown eligible target')
+        self.crossing_ids.add(crossing_id)
+        matched = {}
+        for tolerance in (.05, .1):
+            candidates = [t for t in self.task.targets if t.target_id in valid and t.string == string and t.direction == direction and t.target_id not in self.matches[tolerance] and abs(at-t.onset_s) <= tolerance + 1e-12]
+            if candidates:
+                target = min(candidates, key=lambda t: (abs(at-t.onset_s), t.onset_s, t.target_id))
+                self.matches[tolerance][target.target_id] = crossing_id
+                matched[tolerance] = target.target_id
+        return matched
+
+    def release(self, target_id, at_s):
+        at = finite(at_s, 'at_s')
+        if at < 0:
+            raise ValueError('release time must be nonnegative')
+        p = self.progress[target_id]
+        if p.released:
+            raise ValueError('target release already recorded')
+        p.released, p.release_s = True, at

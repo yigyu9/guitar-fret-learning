@@ -1,0 +1,116 @@
+"""Lower initial seat/root/guitar together and fit only ten effective leg axes."""
+import copy
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from ..lower_body_release_v1.common import ROOT,A,BASE,read,save,sha,pin,verify
+from ..lower_body_release_v1.upright_source_v1 import INITIAL,NATIVE,full_fk,make_state
+from ..lower_body_release_v1.source_geometry_v1 import foot_vertices
+from ..lower_body_release_v1 import upright_audit_v2 as capsules
+
+PHASE=BASE/'seated_foot_support_v1'
+PREVIOUS=BASE/'upright_horizontal_v1'
+PLAN=ROOT/'docs/plans/seated_foot_support_20261016.md'
+DZ=-.028
+
+
+def translate(state,dz):
+    state=copy.deepcopy(state)
+    for key in ('human_body_states','guitar_body_states'):
+        for body in state[key]:body['pose']['p']['z']+=dz
+    return state
+
+
+def main():
+    out=PHASE/'source_v1';out.mkdir(exist_ok=False)
+    extras=[Path(__file__).resolve(),PLAN,INITIAL,NATIVE/'native_properties.json',
+            PREVIOUS/'source_v4/candidate.json',PREVIOUS/'source_v4/report.json',
+            PREVIOUS/'source_v4/support_candidate.json',PREVIOUS/'inputs/static_v7.json',
+            PREVIOUS/'inputs/upper_initial_target_v3.json',PREVIOUS/'artifact_inventory.json']
+    pins=pin(extra=extras);save(out/'inputs_before.json',pins)
+    c=read(PREVIOUS/'source_v4/candidate.json');i=read(INITIAL)
+    names,bodies=i['joint_names'],i['human_body_names'];q0=np.array(c['q_ref_rad'])
+    bounds=np.column_stack([i['PD_properties']['lower'],i['PD_properties']['upper']])
+    shifted=translate(c['expected_initial_state'],DZ)
+    fk,_=full_fk(names,bodies,shifted,q0);initial=fk(q0)
+    indices=np.array([names.index(s+'_'+n) for s in ('L','R') for n in ('Knee_x','Ankle_x','Ankle_y','Ankle_z','Toe_x')])
+    q=q0.copy();footnames=('L_Ankle','L_Toe','R_Ankle','R_Toe')
+    def trial(x):
+        qq=q0.copy();qq[indices]=x;return qq
+    def residual(x):
+        poses=fk(trial(x));feet=foot_vertices(poses);rows=[]
+        for n in footnames:
+            rows.extend([2000*(feet[n][1][:,2]-.0005),
+                         2*(poses[n][0][:2]-initial[n][0][:2])])
+        rows.append(.01*(x-q0[indices]));return np.concatenate(rows)
+    low=np.maximum(bounds[indices,0]+1e-7,q0[indices]-.6)
+    high=np.minimum(bounds[indices,1]-1e-7,q0[indices]+.6)
+    fit=least_squares(residual,np.clip(q0[indices],low+1e-8,high-1e-8),bounds=(low,high),max_nfev=300,ftol=1e-12,xtol=1e-12,gtol=1e-12)
+    q=trial(fit.x).astype(np.float32).astype(float);poses=fk(q)
+    gp=np.array(c['guitar_position_W_m'])+np.array([0,0,DZ]);gr=Rotation.from_quat(c['guitar_quaternion_xyzw'])
+    state=make_state(shifted,bodies,q,poses,gp,gr)
+    config=read(A/'config.json');chair=read(ROOT/config['pose_source'])['params']['chair']
+    chair['half'][2]+=DZ/2
+    c.update(q_ref_rad=q.tolist(),expected_initial_state=state,guitar_position_W_m=gp.tolist(),
+             root_initial_translation_W_m=[0.,0.,DZ],chair_half_m=chair['half'],
+             lower_deltas_rad={n:float(c['lower_deltas_rad'].get(n,0.)+q[j]-q0[j]) for j,n in enumerate(names)
+                               if j in i['lower_indices'] and abs(c['lower_deltas_rad'].get(n,0.)+q[j]-q0[j])>1e-10},
+             support_candidate=str(out/'support_candidate.json'),
+             predicted_corrected_human_body_poses={n:state['human_body_states'][bodies.index(n)]['pose']
+                        for n in ('L_Hip','L_Knee','L_Ankle','L_Toe','R_Hip','R_Knee','R_Ankle','R_Toe')},
+             scope='New initial common Z shift and chair height; hips/upper/G-relative placement unchanged, only ten effective Knee/Ankle/Toe axes refit. Root/chair fixed during simulation. Source fit is not actual ground support.')
+    # Remove inherited certificates that describe a different root/chair condition.
+    for key in ('source_candidate_valid','source_geometry_report','source_correction_constraints','predicted_corrected_source_state_path','chair_initial_half_extents_m','chair_minimum_dynamic_source_gap_m'):
+        c.pop(key,None)
+    c['chair_initial_half_extents_m']=list(chair['half'])
+    c['chair_initial_center_W_m']=[*(np.array(chair['center_xy'])+np.array(c['chair_translation_W_m'])[:2]).tolist(),chair['half'][2]]
+    c['chair_condition']='Previous initial world-Y -2.5mm retained; new full height reduced28mm, floor bottom remains z0.'
+    save(out/'support_candidate.json',read(PREVIOUS/'source_v4/support_candidate.json'))
+    feet={n:dict(min_z_m=float(v[:,2].min()),max_bottom_z_m=float(bottom[:,2].max()),bottom_z_span_m=float(np.ptp(bottom[:,2])))
+          for n,(v,bottom) in foot_vertices(poses).items()}
+    # Reuse analytic capsule distances with explicitly shifted calibration and new chair.
+    shifted_i=copy.deepcopy(i);shifted_i['native_initial_state']=translate(i['native_initial_state'],DZ)
+    old_rows=capsules.audit(read(PREVIOUS/'source_v4/candidate.json'),i)
+    original_read=capsules.read;pose_path=(ROOT/config['pose_source']).resolve()
+    def new_read(path):
+        value=original_read(path)
+        if Path(path).resolve()==pose_path:value['params']['chair']['half']=chair['half']
+        return value
+    with patch.object(capsules,'read',new_read):new_rows=capsules.audit(c,shifted_i)
+    key=lambda r:(r['a'],r['b'],r.get('geom',''))
+    oldgaps={key(r):r['gap_m'] for r in old_rows}
+    worse=[r for r in new_rows if r['collision_relevant'] and r['gap_m']<-.0001
+           and r['gap_m']<oldgaps.get(key(r),.02)-.0002 and not(r['a']=='Pelvis' and r['b_actor']=='chair')]
+    protected=np.ones(105,dtype=bool);protected[indices]=False
+    gates=dict(q_within_original_limits=bool(np.all(q>=bounds[:,0]) and np.all(q<=bounds[:,1])),
+               only_ten_effective_leg_axes_changed=bool(np.array_equal(q[protected],q0[protected])),
+               zero8_unchanged=bool(np.array_equal(q[i['zero_range_indices']],q0[i['zero_range_indices']])),
+               all_four_source_boxes_above_ground=all(.0001<=r['min_z_m']<=.001 for r in feet.values()),
+               all_four_bottom_spans_under1mm=all(r['bottom_z_span_m']<=.001 for r in feet.values()),
+               no_new_relevant_capsule_intersection=not worse)
+    save(out/'candidate.json',c);save(out/'predicted_state.json',state)
+    previous_report=read(PREVIOUS/'source_v4/report.json')
+    save(out/'report.json',dict(gates=gates,eligible_for_native=all(gates.values()),feet=feet,
+         changed_angles_rad={names[j]:float(q[j]-q0[j]) for j in indices},
+         root_translation_W_m=[0,0,DZ],chair_full_size_m=(2*np.array(chair['half'])).tolist(),
+         reference_body_center_G_m=previous_report['reference_body_center_G_m'],
+         reference_lateral_coordinate_m=previous_report['reference_lateral_coordinate_m'],
+         new_capsule_pairs=new_rows,previous_capsule_pairs=old_rows,new_or_worsened_capsule_intersections=worse,
+         source_geometry_scope='Analytic capsule/convex and capsule/capsule audit with new root and chair. Foot box minimum/bottom vertices from XML. Source and cooked PhysX contact are distinct; hand meshes not certified.',
+         inputs_unchanged=verify(pins)))
+    target=read(PREVIOUS/'inputs/upper_initial_target_v3.json')
+    target['q_target_rad105']=[float(q[j]) if j in i['lower_indices'] else v for j,v in enumerate(target['q_target_rad105'])]
+    save(out/'upper_target105.json',target)
+    cfg=read(PREVIOUS/'inputs/static_v7.json')
+    cfg.update(candidate=str(out/'candidate.json'),candidate_sha256=sha(out/'candidate.json'),source_report=str(out/'report.json'),
+               upper_target105=str(out/'upper_target105.json'),upper_target105_sha256=sha(out/'upper_target105.json'),
+               lower_initial_adjustment='new source foot level fit and root/chair -28mm initial shift',
+               initial_pose_description='Original level/lateral guitar posture, seated lower with both foot source soles at0.5mm')
+    save(out/'static5.json',cfg)
+    print(dict(gates=gates,feet=feet,changed_angles_rad={names[j]:float(q[j]-q0[j]) for j in indices}),flush=True)
+    assert all(gates.values()) and verify(pins)
+
+
+if __name__=='__main__':main()

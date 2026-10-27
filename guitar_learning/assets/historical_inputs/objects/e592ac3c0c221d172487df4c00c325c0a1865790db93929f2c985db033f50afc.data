@@ -1,0 +1,26 @@
+"""Preserve source8 upper pose/G/Hip; refit only finite right lower-leg axes."""
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from .upright_source_v1 import full_fk,make_state,INITIAL,NATIVE
+from .source_geometry_v1 import foot_vertices
+from .common import ROOT,BASE,read,save,sha,pin,verify
+
+
+def main():
+    source=BASE/'upright_chest_support_v1/source_v8';out=BASE/'upright_chest_support_v1/source_v9';out.mkdir(exist_ok=False);plan=ROOT/'docs/plans/upright_foot_clearance_20261015.md';inputs=[source/n for n in ('candidate.json','report.json','support_candidate.json','predicted_state.json','inputs_before.json')]+[INITIAL,NATIVE/'native_properties.json',plan];pins=pin(extra=inputs);save(out/'inputs_before.json',pins);assert verify(read(source/'inputs_before.json'))
+    c=read(source/'candidate.json');i=read(INITIAL);names=i['joint_names'];bodies=i['human_body_names'];q0=np.array(i['q_ref105_rad']);oldq=np.array(c['q_ref_rad']);q=oldq.copy();fk,_=full_fk(names,bodies,i['native_initial_state'],q0);original=fk(q0);before=fk(oldq);leg=np.array([names.index(n) for n in ('R_Knee_x','R_Ankle_x','R_Ankle_y','R_Ankle_z','R_Toe_x')]);bounds=np.column_stack([i['PD_properties']['lower'],i['PD_properties']['upper']])
+    def residual(v):
+        z=q.copy();z[leg]=v;ps=fk(z);feet=foot_vertices(ps);rows=[]
+        for n in ('R_Ankle','R_Toe'):
+            bottom=feet[n][1];rows.extend([2000*np.minimum(bottom[:,2]-.005,0),30*(bottom[:,2]-.005),80*(original[n][1].inv()*ps[n][1]).as_rotvec()])
+        rows.append(.1*(v-q0[leg]));return np.concatenate(rows)
+    lo=np.maximum(bounds[leg,0]+1e-6,q0[leg]-.45);hi=np.minimum(bounds[leg,1]-1e-6,q0[leg]+.45);fit=least_squares(residual,np.clip(q[leg],lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=150);q[leg]=fit.x;q=q.astype(np.float32).astype(float);ps=fk(q);feet={n:dict(min_z_m=float(v[:,2].min()),bottom_z_span_m=float(np.ptp(bottom[:,2]))) for n,(v,bottom) in foot_vertices(ps).items()}
+    for n in bodies:
+        if n in ('R_Knee','R_Ankle','R_Toe'):continue
+        assert np.linalg.norm(ps[n][0]-before[n][0])<1e-10 and (ps[n][1].inv()*before[n][1]).magnitude()<1e-10
+    assert np.array_equal(q[i['zero_range_indices']],q0[i['zero_range_indices']]) and np.all(q>=bounds[:,0]) and np.all(q<=bounds[:,1]);gp=np.array(c['guitar_position_W_m']);gr=Rotation.from_quat(c['guitar_quaternion_xyzw']);state=make_state(i['native_initial_state'],bodies,q,ps,gp,gr);save(out/'support_candidate.json',read(source/'support_candidate.json'));c.update(q_ref_rad=q.tolist(),expected_initial_state=state,support_candidate=str(out/'support_candidate.json'),lower_deltas_rad={n:float(c['lower_deltas_rad'].get(n,0.)+q[j]-oldq[j]) for j,n in enumerate(names) if j in i['lower_indices'] and abs(c['lower_deltas_rad'].get(n,0.)+q[j]-oldq[j])>1e-10},scope='source8 upper/G/Hip retained, only right lower-leg foot clearance corrected; right foot may float; original finite control and physical constraints preserved.')
+    c['predicted_corrected_human_body_poses']={n:state['human_body_states'][bodies.index(n)]['pose'] for n in ('L_Hip','L_Knee','L_Ankle','L_Toe','R_Hip','R_Knee','R_Ankle','R_Toe')};save(out/'candidate.json',c);save(out/'predicted_state.json',state);r=read(source/'report.json');r['previous_foot_fit']=r['raised_thigh']['feet'];r['raised_thigh']['feet']=feet;valid=bool(r['local_geometry_reach_eligible'] and min(x['min_z_m'] for x in feet.values())>=.0005 and max(feet[n]['bottom_z_span_m'] for n in ('R_Ankle','R_Toe'))<=.003);r.update(local_geometry_reach_eligible=valid,final_foot_clearance=feet,foot_fit_cost=float(fit.cost),foot_fit_success=bool(fit.success),parent_source=str(source),source8_upper_G_Hip_unchanged=True,inputs_unchanged=verify(pins),candidate_sha256=sha(out/'candidate.json'));save(out/'report.json',r);print('valid',valid,'feet',feet,'qdelta',dict(zip([names[j] for j in leg],(q[leg]-oldq[leg]).tolist())),flush=True);assert verify(pins)
+
+
+if __name__=='__main__':main()

@@ -1,0 +1,113 @@
+"""CPU dispatch doubles verify fresh joint migration and strict-resume separation."""
+import copy
+import json
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from guitar_learning.training import parallel, policy, ppo
+from guitar_learning import train_parallel
+from guitar_learning.training import persistent_audit, monitoring
+from guitar_learning.imitation.imitation import dataset_manifest
+from guitar_learning.joint import train,transfer,proofs,worker
+from guitar_learning.joint.policy import JointPolicy
+from guitar_learning.local_skills.learning import contract_digest
+from guitar_learning.native.lower_body_release_v1 import common
+
+
+class JointTrainTests(unittest.TestCase):
+    def dispatch(self,folder,*,resume=False,fail=False,bad_contract=False,changed_pin=False,cleanup=False):
+        root=Path(folder);source=root/'source.txt';source.write_text('immutable')
+        pins=dataset_manifest([source]);settings=dict(min_available_memory_gib=4.,timing={'pre_roll_s':3.})
+        args=SimpleNamespace(out=root/'train',settings=root/'settings.json',resume=root/'resume.pt' if resume else None)
+        args.settings.write_text('{}');calls=[];contract={'synthetic':'runtime'}
+        model=SimpleNamespace(architecture={'contract':dict(contract,changed=True) if bad_contract else contract})
+        original_pool=parallel.Pool;original_policy=policy.Policy;original_trainer=ppo.PPOTrainer
+        original_pin=common.pin;original_argv=sys.argv
+        class Trainer:
+            def __init__(self,model,config=None):calls.append('optimizer')
+        def apply(model,settings):calls.append('actors');return dict(source_pins=pins)
+        def pin(config,extra=()):return dataset_manifest(extra)
+        def core():
+            args.out.mkdir()
+            current=train_parallel.settings_document({})
+            self.assertEqual(current['min_available_memory_gib'],6.)
+            self.assertIs(policy.Policy,JointPolicy)
+            with patch.object(original_pool,'__init__',return_value=None) as initialize:
+                parallel.Pool([{'original':1}],timeout_s=12.)
+            self.assertEqual(initialize.call_args.args[0],[{'original':1,'timing':{'pre_roll_s':3.}}])
+            self.assertIs(initialize.call_args.kwargs['worker_factory'],worker.native_environment)
+            if changed_pin:source.write_text('changed')
+            common.pin(None)
+            ppo.PPOTrainer(model)
+            if fail:raise KeyboardInterrupt('primary')
+        with patch.dict(sys.modules,{'isaacgym':SimpleNamespace()}), \
+                patch.object(monitoring,'available_memory_bytes',return_value=16*1024**3), \
+                patch.object(transfer,'validate_experts',return_value={'source_pins':pins}), \
+                patch.object(transfer,'apply_experts',side_effect=apply), \
+                patch.object(proofs,'validate_preflight',return_value=dict(pins=pins,contract_sha256=contract_digest(contract))) as preflight, \
+                patch.object(ppo,'PPOTrainer',Trainer),patch.object(common,'pin',side_effect=pin), \
+                patch.object(train_parallel,'main',side_effect=core), \
+                patch.object(persistent_audit,'finalize_persistent_run',side_effect=OSError('cleanup') if cleanup else lambda out:True):
+            if fail:
+                with self.assertRaises(KeyboardInterrupt):train.run(settings,args)
+            elif bad_contract or changed_pin:
+                with self.assertRaises(ValueError if bad_contract else RuntimeError):train.run(settings,args)
+            else:train.run(settings,args)
+            self.assertEqual(preflight.call_count,0 if resume else 1)
+        self.assertIs(parallel.Pool,original_pool);self.assertIs(policy.Policy,original_policy)
+        self.assertIs(ppo.PPOTrainer,original_trainer);self.assertIs(common.pin,original_pin);self.assertIs(sys.argv,original_argv)
+        self.assertEqual(settings['min_available_memory_gib'],4.)
+        return calls,args
+
+    def test_fresh_actor_copy_precedes_optimizer_and_restores_bindings_on_primary_failure(self):
+        for fail in (False,True):
+            with tempfile.TemporaryDirectory() as folder:
+                calls,args=self.dispatch(folder,fail=fail,cleanup=fail)
+                self.assertEqual(calls,['actors','optimizer'])
+                record=json.loads((args.out/'joint_initialization.json').read_text())
+                self.assertEqual(record['mode'],'validated_experts_actor_only_fresh_joint_critics_and_Adam')
+
+    def test_resume_skips_fresh_gate_and_actor_transfer(self):
+        with tempfile.TemporaryDirectory() as folder:
+            calls,args=self.dispatch(folder,resume=True)
+            self.assertEqual(calls,['optimizer'])
+            record=json.loads((args.out/'joint_initialization.json').read_text())
+            self.assertEqual(record['mode'],'strict_resume');self.assertIsNone(record['transfer'])
+
+    def test_changed_runtime_contract_or_proof_rejects_before_optimizer(self):
+        for key in ('bad_contract','changed_pin'):
+            with tempfile.TemporaryDirectory() as folder:
+                calls,_=self.dispatch(folder,**{key:True});self.assertEqual(calls,[])
+
+    def test_start_memory_floor_prevents_native_startup(self):
+        with tempfile.TemporaryDirectory() as folder:
+            args=SimpleNamespace(out=Path(folder)/'train',settings=Path(folder)/'settings.json',resume=None)
+            with patch.dict(sys.modules,{'isaacgym':SimpleNamespace()}), \
+                    patch.object(monitoring,'available_memory_bytes',return_value=7*1024**3), \
+                    patch.object(train_parallel,'main') as core:
+                with self.assertRaises(monitoring.LowMemoryError):train.run({},args)
+                core.assert_not_called()
+            self.assertFalse(args.out.exists())
+
+    def test_summary_retains_nested_hands_and_separates_safe_execution_from_joint_success(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'report.json').write_text(json.dumps(dict(completed=True,optimizer_updates=1,transitions=840,accounting={})))
+            episode=dict(valid=True,reason='timeline_complete',steps=420,task_time_s=7.,music=dict(target_count=1,matched50=0,matched100=1),
+                joint=dict(safety_invalidated=False,stage_success=False),coordination={'stage_success':True},
+                musical_quality=dict(stage_success=False,left=dict(stage_success=True),right=dict(stage_success=False)))
+            (root/'episodes.jsonl').write_text(json.dumps(dict(worker_id=0,episode_index=0,update_index=0,episode=episode))+'\n')
+            result=train.summarize_run(root);counts=result['counts']
+            self.assertEqual(counts['safe_complete_episodes'],1);self.assertEqual(counts['joint_successful_episodes'],0)
+            self.assertEqual(counts['coordination_successful_episodes'],1)
+            self.assertEqual(counts['hand_quality_successful_episodes'],{'left':1,'right':0})
+            self.assertNotIn('episodes',result)
+            self.assertEqual(Path(result['episode_records']['path']),root/'episodes.jsonl')
+            retained=json.loads(Path(result['episode_records']['path']).read_text())
+            self.assertEqual(retained['episode'],episode)
+
+
+if __name__=='__main__':unittest.main()

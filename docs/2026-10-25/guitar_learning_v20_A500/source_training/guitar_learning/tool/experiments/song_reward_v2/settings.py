@@ -1,0 +1,39 @@
+"""Explicit reward revision; keep the frozen full-score observation/control contract."""
+import copy
+from pathlib import Path
+from unittest.mock import patch
+
+from guitar_learning.training import runner as train_parallel
+from guitar_learning.tool.experiments.song import settings as original_settings, transfer as original_transfer
+
+_BASE_SETTINGS = train_parallel.settings_document
+_SONG_SETTINGS = original_settings.settings_document
+_ORIGINAL_EXPERTS = original_transfer.validate_experts
+SCHEMA = 'guitar_learning.song_reward.v2'
+
+
+def parse_original(raw):
+    # The shared runner temporarily replaces these module functions. Source
+    # evidence must still be parsed using its own frozen settings semantics.
+    with patch.object(train_parallel, 'settings_document', _BASE_SETTINGS), \
+            patch.object(original_transfer, 'validate_experts', _ORIGINAL_EXPERTS):
+        return _SONG_SETTINGS(raw)
+
+
+def settings_document(raw):
+    from guitar_learning.tool.experiments.song_reward_v2.transfer import validate_experts
+    value = copy.deepcopy(raw)
+    revision = value.pop('reward_revision', None)
+    if (not isinstance(revision, dict)
+            or set(revision) != {'schema', 'initialization_checkpoint'}
+            or revision['schema'] != SCHEMA):
+        raise ValueError('explicit song reward v2 initialization required')
+    path = revision['initialization_checkpoint']
+    if not isinstance(path, str) or not Path(path).is_absolute() or not Path(path).is_file():
+        raise ValueError('absolute full-score initialization checkpoint required')
+    parsed = parse_original(value)
+    if parsed['ppo']['gamma'] != .99:
+        raise ValueError('reward v2 potential shaping requires PPO gamma=.99')
+    parsed['reward_revision'] = revision
+    validate_experts(parsed)
+    return parsed

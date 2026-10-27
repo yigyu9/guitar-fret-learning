@@ -1,0 +1,133 @@
+"""원native 상태와 최종목표로 distal6 SO3 feedback 및 최종상체33을 독립 계산한다."""
+import copy
+import xml.etree.ElementTree as ET
+import numpy as np
+from scipy.spatial.transform import Rotation
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import HUMAN
+
+MODE = 'finite_distal6_SO3_child_PD_v1'
+
+
+def restore_rotational_rows(efforts):
+    rows = copy.deepcopy(efforts)
+    for row in rows:
+        if 'distal_rotational_feedback' not in row:
+            continue
+        extra = row.pop('distal_rotational_feedback')
+        for field in ('raw_requested105_Nm','submitted105_Nm','scalar_PD105_Nm','support_task105_Nm'):
+            row[field] = extra['previous_'+field]
+    return rows
+
+
+def rotational_evidence(initial, states, efforts, targets, cfg):
+    names, bodies = initial['joint_names'], initial['human_body_names']
+    lower = np.array(initial['lower_indices'],dtype=int)
+    zero = np.array(initial['zero_range_indices'],dtype=int)
+    position = np.array(initial['position_indices'],dtype=int)
+    upper = np.array([j for j in initial['effort_indices'] if j not in lower])
+    K, D = (np.array(initial[k]) for k in ('control_K105_Nm_rad','control_D105_Nms_rad'))
+    caps = np.array(initial['PD_properties']['effort'])
+    xml = ET.parse(HUMAN)
+    groups = []
+    for body,parent,k,d,cap in (('R_Elbow','R_Shoulder',60.,3.,100.),('R_Wrist','R_Elbow',20.,1.,60.)):
+        joints = xml.find(".//body[@name='"+body+"']").findall('joint')
+        ix = np.array([names.index(j.get('name')) for j in joints])
+        basis = np.column_stack([np.fromstring(j.get('axis'),sep=' ') for j in joints])
+        groups.append((body,parent,ix,basis,k,d,cap))
+    selected = np.concatenate([g[2] for g in groups])
+    outside = np.setdiff1d(np.arange(105),selected)
+    stateby = {s['physics_step']:s['state'] for s in states}
+    targetby = {t['physics_step_before']:np.array(t['final105_rad']) for t in targets}
+    checks = dict(full3360=len(efforts)==3360,contiguous3360=[e['physics_step_before'] for e in efforts]==list(range(3360)),
+        full3361states=[s['physics_step'] for s in states]==list(range(3361)),
+        full840targets=[t['physics_step_before'] for t in targets]==list(range(0,3360,4)),
+        fixed_config=cfg.get('distal_rotational_feedback_mode')==MODE and cfg.get('distal_rotational_feedback_start_s')==10.,
+        original_gains_caps=all(np.array_equal(K[ix],np.full(3,k)) and np.array_equal(D[ix],np.full(3,d)) and np.array_equal(caps[ix],np.full(3,cap)) for _,_,ix,_,k,d,cap in groups),
+        six_only=len(selected)==6 and len(set(selected))==6 and set(selected)<=set(upper) and not set(selected)&set(zero),
+        pre2400_metadata_absent=True,post960_metadata=True,finite=True,records_present=True,metadata_constants=True,
+        scalar_diagnostic_preserved=True,material_task_preserved=True,outside6_exact=True,lower_POS_zero_exact=True,
+        runtime_preservation_assertions=True,actual_coordinate_gate=True,actual_child_angular_gate=True)
+    errors = dict(error_rad=0.,PD_Nm=0.,delta_Nm=0.,base_raw_upper33_Nm=0.,final_raw_upper33_Nm=0.,final_submitted_upper33_Nm=0.,coordinate_diagnostic_rad=0.,velocity_diagnostic_rad_s=0.)
+    samples = []
+    def compare(key,a,b):
+        a,b = np.asarray(a,dtype=float),np.asarray(b,dtype=float)
+        finite = bool(np.isfinite(a).all() and np.isfinite(b).all())
+        checks['finite'] &= finite
+        errors[key] = max(errors[key],float(np.max(abs(a-b))) if finite else float('inf'))
+    held = None
+    post_count = 0
+    for row in efforts:
+        step = row['physics_step_before']
+        if step in targetby:
+            held = targetby[step]
+        if step not in stateby or held is None:
+            checks['records_present'] = False
+            continue
+        state = stateby[step]
+        q = np.array([v['pos'] for v in state['human_dof_states']])
+        qd = np.array([v['vel'] for v in state['human_dof_states']])
+        scalar = K*(held-q)-D*qd
+        base_raw = np.array(row['gravity105_Nm'])+scalar+np.array(row['support_task105_Nm'])
+        expected_delta = np.zeros(105)
+        if step < 2400:
+            checks['pre2400_metadata_absent'] &= 'distal_rotational_feedback' not in row
+        elif 'distal_rotational_feedback' not in row:
+            checks['post960_metadata'] = False
+        else:
+            post_count += 1
+            extra = row['distal_rotational_feedback']
+            checks['metadata_constants'] &= extra['mode']==MODE and extra['start_s']==10. and extra['indices105']==selected.tolist() and extra['joint_names']==[names[j] for j in selected] and len(extra['groups'])==2
+            sample = dict(step=step,time_s=step/240)
+            for actual,(body,parent,ix,basis,k,d,cap) in zip(extra['groups'],groups):
+                current = Rotation.from_rotvec(basis@q[ix])
+                desired = Rotation.from_rotvec(basis@held[ix])
+                error = basis.T@Rotation.from_matrix(current.as_matrix().T@desired.as_matrix()).as_rotvec()
+                scalar_error = held[ix]-q[ix]
+                rotational_pd = K[ix]*error-D[ix]*qd[ix]
+                expected_delta[ix] = K[ix]*(error-scalar_error)
+                child = state['human_body_states'][bodies.index(body)]
+                parent_state = state['human_body_states'][bodies.index(parent)]
+                _, cr = pose(child)
+                _, pr = pose(parent_state)
+                relative = pr.inv()*cr
+                coordinate = float((current.inv()*relative).magnitude())
+                omega = np.array([child['vel']['angular'][a]-parent_state['vel']['angular'][a] for a in 'xyz'])
+                predicted = cr.apply(basis@qd[ix])
+                velocity = float(np.linalg.norm(omega-predicted))
+                checks['actual_coordinate_gate'] &= coordinate < 1e-5
+                checks['actual_child_angular_gate'] &= velocity < .01
+                checks['metadata_constants'] &= actual['body']==body and actual['parent']==parent and actual['indices105']==ix.tolist() and actual['joint_names']==[names[j] for j in ix] and np.array_equal(actual['basis3x3'],basis) and np.array_equal(actual['K3_Nm_rad'],K[ix]) and np.array_equal(actual['D3_Nms_rad'],D[ix]) and np.array_equal(actual['caps3_Nm'],caps[ix])
+                for a,b in ((actual['q3_rad'],q[ix]),(actual['target3_rad'],held[ix]),(actual['native_qd3_rad_s'],qd[ix]),(actual['scalar_error3_rad'],scalar_error),(actual['SO3_error3_child_axes_rad'],error)):
+                    compare('error_rad',a,b)
+                compare('PD_Nm',actual['scalar_PD3_Nm'],scalar[ix])
+                compare('PD_Nm',actual['rotational_PD3_Nm'],rotational_pd)
+                compare('delta_Nm',actual['delta3_Nm'],expected_delta[ix])
+                compare('coordinate_diagnostic_rad',actual['coordinate_residual_rad'],coordinate)
+                compare('coordinate_diagnostic_rad',(Rotation.from_quat(actual['actual_relative_xyzw']).inv()*relative).as_rotvec(),np.zeros(3))
+                compare('velocity_diagnostic_rad_s',actual['actual_relative_angular_W_rad_s'],omega)
+                compare('velocity_diagnostic_rad_s',actual['predicted_relative_angular_W_rad_s'],predicted)
+                compare('velocity_diagnostic_rad_s',actual['velocity_residual_rad_s'],velocity)
+                sample[body] = dict(SO3_error3_child_axes_rad=error.tolist(),scalar_error3_rad=scalar_error.tolist(),delta3_Nm=expected_delta[ix].tolist(),coordinate_residual_rad=coordinate,velocity_residual_rad_s=velocity)
+            compare('delta_Nm',extra['delta105_Nm'],expected_delta)
+            compare('base_raw_upper33_Nm',np.array(extra['previous_raw_requested105_Nm'])[upper],base_raw[upper])
+            checks['scalar_diagnostic_preserved'] &= np.array_equal(row['scalar_PD105_Nm'],extra['previous_scalar_PD105_Nm'])
+            checks['material_task_preserved'] &= np.array_equal(row['support_task105_Nm'],extra['previous_support_task105_Nm'])
+            previous = np.array(extra['previous_submitted105_Nm'])
+            previous_raw = np.array(extra['previous_raw_requested105_Nm'])
+            checks['outside6_exact'] &= np.array_equal(np.array(row['raw_requested105_Nm'])[outside],previous_raw[outside]) and np.array_equal(np.array(row['submitted105_Nm'])[outside],previous[outside]) and np.all(np.array(extra['delta105_Nm'])[outside]==0.)
+            checks['lower_POS_zero_exact'] &= all(np.array_equal(np.array(row['submitted105_Nm'])[ids],previous[ids]) for ids in (lower,position,zero)) and np.all(np.array(row['submitted105_Nm'])[position]==0.) and np.all(np.array(row['submitted105_Nm'])[zero]==0.)
+            checks['runtime_preservation_assertions'] &= all(extra[k] is True for k in ('outside6_unchanged','lower_unchanged','position48_unchanged','zero8_unchanged','state_preserved','target_preserved'))
+            samples.append(sample)
+        compare('PD_Nm',np.array(row['scalar_PD105_Nm'])[upper],scalar[upper])
+        final_raw = base_raw+expected_delta
+        expected_submitted = np.clip(final_raw[upper],-caps[upper],caps[upper]).astype(np.float32).astype(float)
+        compare('final_raw_upper33_Nm',np.array(row['raw_requested105_Nm'])[upper],final_raw[upper])
+        compare('final_submitted_upper33_Nm',np.array(row['submitted105_Nm'])[upper],expected_submitted)
+    checks['post960_metadata'] &= post_count==960
+    checks['full960_math'] = len(samples)==960
+    limits = {k:(1e-6 if k in ('base_raw_upper33_Nm','final_raw_upper33_Nm','final_submitted_upper33_Nm') else 1e-10) for k in errors}
+    checks['numerical_math'] = all(errors[k]<=limits[k] for k in errors)
+    checks = {k:bool(v) for k,v in checks.items()}
+    return dict(passed=all(checks.values()),checks=checks,max_errors=errors,limits=limits,samples=samples,
+        scope='원native q/qd/최종held targets로 SO3 feedback을 독립 계산. 기존scalar 진단+material+gravity+새6축delta의 최종upper33 전체합산/cap을3360행 검증. post960행 실제relative/childangular좌표와보존기록 검사. Source reach나실제지지/타현성공이아님. 상태불변은runtime equality이며실제prefix/root/물성감사는별도.')

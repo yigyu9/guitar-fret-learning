@@ -1,0 +1,183 @@
+"""Actual heading, grounded support and finite commands for the new pose."""
+import argparse
+import csv
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import numpy as np
+from scipy.spatial.transform import Rotation
+
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import ROOT, A, BASE, HUMAN, read, save, sha, pin, verify
+from ..lower_body_release_v1 import upright_native_audit_v3
+from ..lower_body_release_v1.control_math_v1 import stable_pd, rotation_error
+from ..lower_body_release_v1.upright_source_v1 import full_fk
+from ..seated_foot_support_v1.analyze_v6 import measure, contact_interval, sole_summary, RAW, LAYOUT_REFERENCE
+from ..grounded_guitar_support_v1.analyze_v19 import interval, right_goal_evidence, chest_extra_evidence
+
+PARTS = ('L_Ankle', 'L_Toe', 'R_Ankle', 'R_Toe', 'Torso', 'Spine', 'Chest', 'Head')
+GAIN_REFERENCE = BASE/'grounded_guitar_support_v1/native_prepared_v17/efforts240.json'
+
+
+def heading(rotation, front):
+    direction = rotation.apply([0., -1., 0.])[:2]
+    assert np.linalg.norm(direction) > .1
+    direction /= np.linalg.norm(direction)
+    return float(np.rad2deg(np.arctan2(front[0]*direction[1]-front[1]*direction[0], front@direction)))
+
+
+def lower_math(initial, states, efforts, targets, cfg):
+    names = initial['joint_names']
+    low = initial['lower_indices']
+    zero = initial['zero_range_indices']
+    active = [j for j in low if j not in zero]
+    local = [low.index(j) for j in active]
+    groups = []
+    for body in ET.parse(HUMAN).iter('body'):
+        joints = body.findall('joint')
+        if joints and all(j.get('name') in names and names.index(j.get('name')) in low for j in joints):
+            groups.append(([names.index(j.get('name')) for j in joints], np.column_stack([np.fromstring(j.get('axis'), sep=' ') for j in joints])))
+    spec = read(cfg['hip_load_bias_spec'])
+    bias = np.zeros(len(active))
+    for j, value in zip(spec['joint_indices105'], spec['bias_Nm']):
+        bias[active.index(j)] = value
+    by_step = {t['physics_step_before']: np.array(t['final105_rad']) for t in targets}
+    caps = np.array(initial['PD_properties']['effort'])
+    preserved = read(GAIN_REFERENCE)['rows'][0]['lower_stable_pd']
+    expected_kp = np.array(preserved['K16_Nm_rad'])
+    expected_kd = np.array(preserved['D16_Nms_rad'])
+    errors = []
+    checks = dict(records_complete=len(states)==len(efforts)+1,
+                  active16_zero8=len(active)==16 and len(zero)==8,
+                  original_per_joint_gains=True, finite=True, unchanged_bias_spec=True)
+    target = None
+    for k, row in enumerate(efforts):
+        if k in by_step:
+            target = by_step[k]
+        assert target is not None and row['physics_step_before']==states[k]['physics_step']==k
+        state = states[k]['state']
+        q = np.array([s['pos'] for s in state['human_dof_states']])
+        qd = np.array([s['vel'] for s in state['human_dof_states']])
+        error24 = np.zeros(len(low))
+        for ix, basis in groups:
+            error24[[low.index(j) for j in ix]] = rotation_error(q[ix], target[ix], basis)
+        d = row['lower_stable_pd']
+        e = d['observed_hip_load_bias']
+        mass = np.array(d['mass_native_lower24'])[np.ix_(local, local)]
+        g = np.array(d['gravity_lower24_Nm'])[local]
+        kp, kd = np.array(d['K16_Nm_rad']), np.array(d['D16_Nms_rad'])
+        u = float(np.clip((k/240-.15)/.6, 0, 1))
+        scheduled = bias*u*u*(3-2*u)
+        raw, predicted, feedback = stable_pd(mass, error24[local], qd[active], kp, kd, g+scheduled, 1/240)
+        expected = np.zeros(len(low))
+        expected[local] = np.clip(raw, -caps[active], caps[active]).astype(np.float32).astype(float)
+        for actual, wanted in ((e['observed_bias16_Nm'], scheduled), (e['total_forcing16_Nm'], g+scheduled),
+                               (e['error16_rad'], error24[local]), (e['velocity16_rad_s'], qd[active]),
+                               (e['raw_effort16_Nm'], raw), (e['predicted_velocity16_rad_s'], predicted),
+                               (e['feedback16_Nm'], feedback), (np.array(row['submitted105_Nm'])[low], expected)):
+            actual = np.array(actual)
+            checks['finite'] &= bool(np.isfinite(actual).all())
+            errors.append(float(np.max(abs(actual-wanted))))
+        checks['original_per_joint_gains'] &= bool(np.array_equal(kp,expected_kp) and np.array_equal(kd,expected_kd))
+        checks['unchanged_bias_spec'] &= e['spec_sha256']==cfg['hip_load_bias_spec_sha256'] and e['selected_indices105']==spec['joint_indices105']
+    maximum = max(errors) if errors else None
+    checks['independent_math'] = maximum is not None and maximum<=1e-6
+    return dict(passed=all(checks.values()), checks=checks, max_error=maximum,
+                gain_reference=str(GAIN_REFERENCE), gain_reference_sha256=sha(GAIN_REFERENCE),
+                K16_Nm_rad=expected_kp.tolist(), D16_Nms_rad=expected_kd.tolist(),
+                scope='Full actual-q/target/native-mass reconstruction of finite rotational stable PD. Old bias numbers are a trial hypothesis, not a new load measurement or inherited stability certificate.')
+
+
+def main(run, out):
+    out.mkdir(exist_ok=False)
+    cfgpath = Path(read(run/'attempt.json')['config'])
+    cfg = read(cfgpath)
+    extras = [run/n for n in RAW]+[run/'support_wrapper.json', cfgpath, LAYOUT_REFERENCE, GAIN_REFERENCE,
+             ROOT/'docs/plans/front_facing_pose_20261016.md', ROOT/'docs/plans/front_facing_execution_v1_20261016.md']
+    for package in ('front_facing_pose_v1', 'grounded_guitar_support_v1', 'seated_foot_support_v1'):
+        extras += list((A/package).glob('*.py'))
+    for key in ('source_report', 'posture_target_report', 'upper_target105', 'finite_right_goal_spec', 'finite_right_goal_report', 'hip_load_bias_spec', 'hip_load_bias_report'):
+        extras.append(Path(cfg[key]))
+    before_paths = {Path(cfg[key]).parent/'inputs_before.json' for key in
+                    ('source_report', 'posture_target_report', 'finite_right_goal_report', 'hip_load_bias_report')}
+    extras += list(before_paths)+[Path(read(cfg['candidate'])['support_candidate']), run/'media/capture.json', run/'media/strap/capture.json']
+    pins = pin(cfgpath, extra=extras)
+    for before in before_paths:
+        for path, expected in read(before).items():
+            assert path not in pins or pins[path]==expected
+            pins[path] = expected
+    assert verify(pins)
+    save(out/'inputs_before.json', pins)
+    upright_native_audit_v3.main([run], out/'integrity')
+    initial = read(run/'initial_values.json')
+    names = initial['human_body_names']
+    states = read(run/'states240.json')['rows']
+    efforts = read(run/'efforts240.json')['rows']
+    targets = read(run/'targets60.json')['rows']
+    rows, ground = measure(run)
+    front = pose(initial['native_initial_state']['human_body_states'][names.index('Pelvis')])[1].apply([0., -1., 0.])[:2]
+    front /= np.linalg.norm(front)
+    fk, _ = full_fk(initial['joint_names'], names, initial['native_initial_state'], np.array(initial['q_ref105_rad']))
+    predicted = []
+    for target in targets:
+        ps = fk(np.array(target['final105_rad']))
+        predicted.append(dict(step=target['physics_step_before'], **{n:heading(ps[n][1], front) for n in PARTS}))
+    for row, state in zip(rows, states):
+        assert row['step']==state['physics_step']
+        for name in PARTS:
+            rotation = pose(state['state']['human_body_states'][names.index(name)])[1]
+            row[name+'_heading_deg'] = heading(rotation, front)
+            if name=='Spine':
+                row['Spine_total_tilt_deg'] = float(np.rad2deg(np.arccos(np.clip(rotation.apply([0.,0.,1.])[2],-1.,1.))))
+    with (out/'samples.csv').open('x', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0])); writer.writeheader(); writer.writerows(rows)
+    save(out/'target_heading.json', dict(rows=predicted, scope='Submitted finite q target FK, distinct from actual body heading.'))
+    hold = [r for r in rows if 5<=r['time_s']<=10]
+    whole = interval(rows)
+    whole['max_Spine_total_tilt_deg'] = max(r['Spine_total_tilt_deg'] for r in rows)
+    settled = interval(hold) if hold else None
+    feet = contact_interval(hold, ground)
+    feet_1to10 = contact_interval([r for r in rows if 1<=r['time_s']<=10], ground)
+    soles = sole_summary(rows)
+    math = lower_math(initial, states, efforts, targets, cfg)
+    save(out/'lower_math.json', math)
+    right = right_goal_evidence(run, cfg, initial, efforts)
+    chest = chest_extra_evidence(initial, read(run/'native_properties.json'), states, efforts, cfg)
+    save(out/'right_goal_evidence.json', right); save(out/'chest_evidence.json', chest)
+    report = read(run/'report.json'); wrapper = read(run/'support_wrapper.json')
+    integrity = read(out/'integrity/report.json')
+    captures = [read(run/p) for p in ('media/capture.json', 'media/strap/capture.json')]
+    headings = {n:dict(initial_deg=rows[0][n+'_heading_deg'], final_deg=rows[-1][n+'_heading_deg'],
+                          max_abs_hold_deg=max(abs(r[n+'_heading_deg']) for r in hold) if hold else None) for n in PARTS}
+    gates = dict(completed_10s=bool(report['completed'] and report['physics_steps']==2400),
+        hold_1201_samples=len(hold)==1201,
+        restrictions=bool(not report['failure'] and not report['cleanup_errors'] and not report['forbidden_calls'] and all(report['initial_checks'].values())
+                          and report['root_fixed'] and report['guitar_free'] and not report['strap_enabled'] and report['training_updates']==0),
+        native_integrity=bool(integrity['inputs_unchanged'] and integrity['runs'][0]['all_checks']),
+        wrapper_inputs=bool(wrapper['inputs_unchanged'] and wrapper['input_sha256'] and verify(wrapper['input_sha256'])
+            and wrapper['actual_scene_class']=='seated_foot_support_v1.runtime_v6.Scene'
+            and wrapper['controller']=='front_facing_pose_v1.runtime_v1.Controller'
+            and wrapper['validation_protocol']==cfg['validation_protocol']=='front_facing_prepare5_hold5_v1'),
+        runner_inputs=bool(report['inputs_unchanged'] and verify(read(run/'attempt.json')['input_sha256'])),
+        body_displacement30mm=whole['max_body_displacement_m']<=.03, rotation5deg=whole['max_rotation_deg']<=5.,
+        neck3deg=whole['max_abs_neck_deg']<=3., lateral20mm=whole['max_abs_lateral_m']<=.02,
+        trunk5deg=whole['max_Torso_Chest_tilt_deg']<=5., trunk_right3deg=whole['max_abs_Torso_Chest_right_deg']<=3.,
+        Spine5deg=whole['max_Spine_total_tilt_deg']<=5.,
+        support95pct=bool(settled and settled['simultaneous_support_fraction']>=.95),
+        feet95pct=bool(feet['all_contact_rows_present'] and feet['both_feet_positive_fraction'] is not None and feet['both_feet_positive_fraction']>=.95),
+        feet_1to10_95pct=bool(feet_1to10['all_contact_rows_present'] and feet_1to10['both_feet_positive_fraction'] is not None and feet_1to10['both_feet_positive_fraction']>=.95),
+        four_soles_still=soles['all_four_parts_passed'],
+        actual_video_5fps=all(c['fps']==5 and [f['physics_step'] for f in c['frames']]==list(range(0,2401,48)) for c in captures),
+        initial_heading2deg=all(abs(r['initial_deg'])<=2 for r in headings.values()),
+        hold_heading5deg=bool(hold and all(r['max_abs_hold_deg']<=5 for r in headings.values())),
+        submitted_target_heading2deg=bool(predicted and all(abs(t[n])<=2 for t in predicted for n in PARTS)),
+        lower_math=math['passed'], right_goal_math=right['passed'], Chest_math=chest['passed'], analysis_inputs=verify(pins))
+    save(out/'summary.json', dict(passed=all(gates.values()), gates=gates, whole=whole, hold=settled, feet=feet,
+        soles_last1=soles, feet_1to10=feet_1to10, headings=headings, inputs_unchanged=verify(pins),
+        scope='New source and finite targets; actual stationary test only. No inherited old-pose playing/release certificate, no PPO. Positive contact lambda is not a measured load in N.'))
+    print(dict(passed=all(gates.values()), gates=gates, whole=whole, headings=headings), flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser(); p.add_argument('--run', type=Path, required=True); p.add_argument('--out', type=Path, required=True)
+    args=p.parse_args(); main(args.run.resolve(), args.out.resolve())

@@ -1,0 +1,71 @@
+# Python bytecode and test/tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+.ipynb_checkpoints/
+
+# Local environments and editor/OS files
+.venv/
+venv/
+/env/
+.conda/
+.env
+.env.*
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Local logs and temporary output
+*.log
+*.out
+*.tmp
+*.bak
+*.orig
+tensorboard/
+wandb/
+
+# Nested repositories must not become embedded repositories in the root repo
+**/.git/
+
+# Frozen reference implementations; add explicitly only when provenance is needed
+related_work/
+DIGIT/
+
+# Training runs and local archives
+**/training/runs/
+fret/training/archive_*/
+fret/training/diagnostics/
+
+# Generated renders, frame dumps, and experiment outputs
+fret/renders/
+**/frames/
+tab2body/_gen/checkpoints/*
+tab2body/_gen/diagnostics/
+tab2body/_gen/isaac_pose_frames/
+tab2body/_gen/render_pose_frames/
+tab2body/_gen/fret_training/
+tab2body/_gen/strike_training/
+tab2fingermapping/_gen/*_stage1/
+tab2fingermapping/_gen/random_*/
+tab2fingermapping/chordtrack/_gen/
+docs/_gen/*
+
+# Keep the small generated inputs/contracts that are required by the current code
+!tab2body/_gen/mjcf_gains.json
+!tab2body/_gen/checkpoints/fret_s0_pilot/
+tab2body/_gen/checkpoints/fret_s0_pilot/*
+!tab2body/_gen/checkpoints/fret_s0_pilot/RESULTS.md
+!docs/_gen/fretboard-24fret-map.png
+!tab2fingermapping/transcribe_v2/_gen/research_synthesis.md
+
+# Packaged inference checkpoints under tab2fingermapping/*/checkpoints/ are kept;
+# large model files are handled by Git LFS via .gitattributes.

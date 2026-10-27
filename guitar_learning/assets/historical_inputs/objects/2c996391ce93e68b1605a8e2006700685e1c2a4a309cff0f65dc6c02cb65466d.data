@@ -1,0 +1,32 @@
+"""Explicit new-scene wrapper; frozen runner records actual native evidence."""
+import isaacgym
+import argparse
+from pathlib import Path
+from unittest.mock import patch
+from ..lower_body_release_v1 import run_horizontal_v7 as runner,scene_v8
+from ..lower_body_release_v1.common import ROOT,BASE,pin,verify,read,save
+from .runtime_v1 import Scene
+
+
+def main(config,out):
+    cfg=read(config);package=Path(__file__).resolve().parent
+    phase=BASE/'seated_foot_support_v1'
+    source=Path(cfg['candidate']).parent
+    report=read(cfg['source_report'])
+    assert report['eligible_for_native'] and report['inputs_unchanged'] and verify(read(source/'inputs_before.json'))
+    extras=[package/n for n in ('__init__.py','source_v1.py','metadata_v2.py','runtime_v1.py','run_v1.py')]
+    extras += [ROOT/'docs/plans/seated_foot_support_20261016.md',ROOT/'docs/plans/seated_foot_support_metadata_20261016.md',Path(cfg['source_report']),Path(cfg['upper_target105']),
+               Path(cfg['candidate']).parent/'inputs_before.json',BASE/'upright_horizontal_play_v1/artifact_inventory.json']
+    inputs=pin(config,extra=extras);before=phase/'provenance'/(out.name+'_before.json');save(before,inputs)
+    try:
+        with patch.object(scene_v8,'Scene',Scene):runner.run(config,out)
+    finally:
+        save(out/'seat_wrapper.json',dict(input_sha256=inputs,inputs_unchanged=verify(inputs),before_manifest=str(before),
+             actual_scene_class='seated_foot_support_v1.runtime_v1.Scene',controller='unchanged controller_horizontal_v4',
+             scope='Initial root/chair/guitar height and leg q only. Runtime fixed root and finite lower; free guitar/gravity ON/strap OFF.'))
+    assert verify(inputs)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--config',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
+    a=p.parse_args();main(a.config.resolve(),a.out.resolve())

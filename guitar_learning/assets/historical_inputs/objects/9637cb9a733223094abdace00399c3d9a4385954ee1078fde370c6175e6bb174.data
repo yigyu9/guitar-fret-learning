@@ -1,0 +1,44 @@
+"""Full trajectory, terminal behavior, and left-contact evidence for new trials."""
+import argparse
+from pathlib import Path
+import numpy as np
+from scipy.spatial.transform import Rotation
+from .common import BASE,ROOT,read,save,sha,verify
+
+
+CENTRE=ROOT/'docs/2026-10-19/stability_adapter_2/results/user_guided_no_left_v1/diagnostic_v1/diagnostic.json'
+
+
+def analyze(native,out):
+    out.mkdir(exist_ok=False)
+    files=[Path(__file__).resolve(),Path(__file__).with_name('common.py'),CENTRE]
+    files.extend(native/n for n in ('report.json','initial_values.json','states240.json','contacts240.json','targets60.json','efforts240.json'))
+    pins={str(p):sha(p) for p in files};save(out/'inputs_before.json',pins)
+    initial=read(native/'initial_values.json');report=read(native/'report.json');states=read(native/'states240.json')['rows'];contacts=read(native/'contacts240.json')['rows'];targets=read(native/'targets60.json')['rows'];efforts=read(native/'efforts240.json')['rows'];names=initial['joint_names'];lower=initial['lower_indices'];zero=initial['zero_range_indices'];n=report['physics_steps']
+    q=np.array([[x['pos'] for x in s['state']['human_dof_states']] for s in states]);qd=np.array([[x['vel'] for x in s['state']['human_dof_states']] for s in states]);time=np.arange(n+1)/240
+    p=np.array([[s['state']['guitar_body_states'][0]['pose']['p'][k] for k in 'xyz'] for s in states]);r=Rotation.from_quat([[s['state']['guitar_body_states'][0]['pose']['r'][k] for k in 'xyzw'] for s in states]);bb=p+r.apply(read(CENTRE)['guitar_centre_G_m']);drift=np.linalg.norm(bb-bb[0],axis=1)*1000;angle=np.rad2deg((r[0].inv()*r).magnitude())
+    target=np.array([targets[min(i//4,len(targets)-1)]['final105_rad'] for i in range(n+1)])
+    left={'L_Thorax','L_Shoulder','L_Elbow','L_Wrist'}
+    def left_contact(row,positive=False):
+        for c in row['contacts']:
+            a,b=c['body0_name'],c['body1_name']
+            if a.startswith('guitar/') and b.startswith('human/'):a,b=b,a
+            if a.startswith('human/') and b.startswith('guitar/') and (a[6:] in left or a[6:].startswith('LH:')) and (not positive or c['lambda']>0):return True
+        return False
+    raw=np.array([left_contact(c) for c in contacts]);positive=np.array([left_contact(c,True) for c in contacts]);phases=[]
+    for label,start,end in [('prepare',0.,2.),('release_motion',2.,5.),('released_hold',5.,float(time[-1])),('last_one_second',max(0.,float(time[-1])-1),float(time[-1]))]:
+        mask=(time>=start)&(time<=end)
+        if not mask.any():continue
+        post=mask&(time>0)
+        phases.append(dict(phase=label,sample_start_s=float(time[mask][0]),sample_end_s=float(time[mask][-1]),BB_max_mm=float(drift[mask].max()),rotation_max_deg=float(angle[mask].max()),BB_displacement_range_mm=[float(drift[mask].min()),float(drift[mask].max())],rotation_range_deg=[float(angle[mask].min()),float(angle[mask].max())],lower_max_abs_native_qd_rad_s=float(abs(qd[mask][:,lower]).max()),lower_max_axis_peak_to_peak_q_rad=float(np.ptp(q[mask][:,lower],axis=0).max()),lower_max_abs_q_minus_current_target_rad=float(abs(q[mask][:,lower]-target[mask][:,lower]).max()),left_raw_contact_samples=int(raw[post].sum()),left_positive_lambda_contact_samples=int(positive[post].sum()),postphysics_samples=int(post.sum()),scope='Phase endpoints inclusive; shared boundary samples are not independent duration. Contact counts exclude t0 cached queries.'))
+    no_contact={}
+    for label,hits in [('raw',raw),('positive_lambda',positive)]:
+        hit_indices=np.flatnonzero(hits & (time>0));last=int(hit_indices[-1]) if len(hit_indices) else 0;start=last+1
+        no_contact[label]=dict(last_postphysics_contact_s=float(time[last]) if len(hit_indices) else None,final_consecutive_no_contact_first_sample_s=float(time[start]) if start<=n else None,final_no_contact_sample_span_s=float(time[-1]-time[start]) if start<=n else 0.,final_consecutive_no_contact_samples=int(n-last),scope='Observed sampled no-contact span at240Hz. Positive lambda is separate from raw contact existence and is not calibrated N.')
+    limits=np.column_stack([initial['PD_properties']['lower'],initial['PD_properties']['upper']]);movable=[i for i in range(105) if i not in zero];violations=np.maximum(np.maximum(limits[:,0]-q,q-limits[:,1]),0.)
+    result=dict(run=native.name,completed=report['completed'],physics_steps=n,seconds=float(time[-1]),BB_max_mm=float(drift.max()),BB_final_mm=float(drift[-1]),rotation_max_deg=float(angle.max()),rotation_final_deg=float(angle[-1]),max_abs_native_qd_rad_s=float(abs(qd).max()),lower_max_abs_native_qd_rad_s=float(abs(qd[:,lower]).max()),zero8_max_abs_actual_q_rad=float(abs(q[:,zero]).max()),zero8_max_abs_actual_qd_rad_s=float(abs(qd[:,zero]).max()),movable97_max_scalar_limit_excess_rad=float(violations[:,movable].max()),phases=phases,left_contact=no_contact,lower24_final=[dict(joint=names[i],q_rad=float(q[-1,i]),target_rad=float(target[-1,i]),qd_native_rad_s=float(qd[-1,i])) for i in lower],max_lower_explicit_effort_Nm=float(abs(np.array([e['submitted105_Nm'] for e in efforts])[:,lower]).max()) if efforts else None,scope='Fixed root; finite dynamic lower; same original105 asset; free gravity-on guitar/strapOFF. Bounded trial observations, not free-root balance, walking, music or general stability proof.')
+    save(out/'metrics.json',result);save(out/'verification.json',dict(inputs_unchanged=verify(pins)))
+
+
+if __name__=='__main__':
+    parser=argparse.ArgumentParser();parser.add_argument('--native',type=Path,required=True);parser.add_argument('--out',type=Path,required=True);args=parser.parse_args();analyze(args.native.resolve(),args.out.resolve())

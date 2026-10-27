@@ -1,0 +1,71 @@
+"""Separate source IK fit errors from measured native hand/support tracking."""
+import argparse
+import csv
+from pathlib import Path
+import numpy as np
+from .common import A, read, save, sha, verify
+from stability_adapter_2.initial_pose_noise_v1 import pose
+
+
+def main(runs, out):
+    out.mkdir(exist_ok=False)
+    files = [Path(__file__).resolve(), Path(__file__).with_name('common.py'),
+             A/'initial_pose_noise_v1.py']
+    for run in runs:
+        files += [run/n for n in ('initial_values.json', 'states240.json',
+                                  'efforts240.json', 'targets60.json', 'report.json')]
+    pins = {str(p): sha(p) for p in files}
+    save(out/'inputs_before.json', pins)
+    reports = []
+    for run in runs:
+        initial = read(run/'initial_values.json')
+        states = read(run/'states240.json')['rows']
+        efforts = read(run/'efforts240.json')['rows']
+        targets = read(run/'targets60.json')['rows']
+        names = initial['human_body_names']
+        gp0, gr0 = pose(states[0]['state']['guitar_body_states'][0])
+        rp0, rr0 = pose(states[0]['state']['human_body_states'][names.index('RH:palm')])
+        anchor = gr0.inv().apply(rp0-gp0)
+        rotation = gr0.inv()*rr0
+        rows = []
+        for sample in states:
+            state = sample['state']
+            gp, gr = pose(state['guitar_body_states'][0])
+            rp, rr = pose(state['human_body_states'][names.index('RH:palm')])
+            rows.append(dict(step=sample['physics_step'], time_s=sample['time_s'],
+                             actual_RPalm_position_error_m=float(np.linalg.norm(rp-gp-gr.apply(anchor))),
+                             actual_RPalm_rotation_error_deg=float(np.rad2deg(((gr*rotation).inv()*rr).magnitude()))))
+        with (out/(run.name+'_hand_samples.csv')).open('w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        def interval(samples):
+            return dict(samples=len(samples),
+                        max_RPalm_position_error_m=max(r['actual_RPalm_position_error_m'] for r in samples),
+                        max_RPalm_rotation_error_deg=max(r['actual_RPalm_rotation_error_deg'] for r in samples))
+        support = {}
+        for name in ('Chest', 'R_Shoulder'):
+            points = [p for e in efforts for p in e['support_points'] if p['body']==name]
+            support[name] = dict(
+                max_material_point_goal_error_m=max(float(np.linalg.norm(np.array(p['goal_W_m'])-p['point_W_m'])) for p in points),
+                last_material_point_goal_error_m=float(np.linalg.norm(np.array(points[-1]['goal_W_m'])-points[-1]['point_W_m'])),
+                max_virtual_human_force_request_N=max(float(np.linalg.norm(p['virtual_force_request_W_N'])) for p in points))
+        ik = [t for t in targets if 'right_source_IK_step' in t]
+        reports.append(dict(run=str(run), actual_whole=interval(rows),
+                            actual_last_1s=interval([r for r in rows if r['time_s']>=rows[-1]['time_s']-1]),
+                            source_IK_unique_updates=len({t['right_source_IK_step'] for t in ik}),
+                            source_IK_max_position_error_m=max((t['right_source_IK_position_error_m'] for t in ik), default=None),
+                            source_IK_max_rotation_error_rad=max((t['right_source_IK_rotation_error_rad'] for t in ik), default=None),
+                            source_IK_max_support_error_m=max((t['right_source_IK_support_point_error_m'] for t in ik), default=None),
+                            support_material_point_tracking=support))
+    save(out/'report.json', dict(runs=reports, inputs_unchanged=verify(pins),
+         scope='Measured normalized native RPalm pose relative to moving free guitar. Source IK residuals precede target rate limits; neither is actual contact evidence. Virtual human force requests are distinct from contact lambda and guitar force. This does not validate fret or strike accuracy.'))
+    print(reports, flush=True)
+
+
+if __name__=='__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--run', type=Path, nargs='+', required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    args = parser.parse_args()
+    main([r.resolve() for r in args.run], args.out.resolve())

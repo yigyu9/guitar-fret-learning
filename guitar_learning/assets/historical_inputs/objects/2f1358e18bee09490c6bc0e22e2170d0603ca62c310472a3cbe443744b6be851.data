@@ -1,0 +1,164 @@
+"""Right-foot-only hard constrained source search; v1 is immutable input."""
+import copy
+import json
+import traceback
+from pathlib import Path
+
+import numpy as np
+from scipy.optimize import minimize
+
+from . import source_geometry_v1 as v1
+from .common import BASE,A,H0,MANIFEST,read,save,sha,restore
+
+OUT=BASE/'analysis/source_geometry_v2'
+CORRECTIONS=BASE/'inputs/source_corrections_v2'
+PLAN=Path(__file__).with_name('SOURCE_GEOMETRY_V2_PLAN.md')
+VARIABLES=('R_Knee_x','R_Ankle_x','R_Ankle_y','R_Ankle_z','R_Toe_x')
+FEET=('R_Ankle','R_Toe')
+FLOOR_M=.001
+MAX_TILT_DEG=3.
+
+
+def metrics(q,fk):
+    poses=fk(q);feet=v1.foot_vertices(poses);rows={}
+    for n in FEET:
+        vertices,bottom=feet[n];normal=poses[n][1].apply([0.,0.,1.])
+        rows[n]={'minimum_z_m':float(vertices[:,2].min()),
+            'bottom_face_z_span_m':float(np.ptp(bottom[:,2])),
+            'sole_normal_W':normal.tolist(),
+            'sole_tilt_deg':float(np.rad2deg(np.arccos(np.clip(normal[2],-1,1)))),
+            'vertices_W_m':vertices.tolist()}
+    return rows
+
+
+def search(q0,names,fk,native_bounds,knee_negative):
+    indices=np.array([names.index(n) for n in VARIABLES]);scale=np.array([knee_negative,.15,.15,.15,.15])
+    lo=np.maximum(native_bounds[indices,0],q0[indices]-scale)
+    hi=np.minimum(native_bounds[indices,1],q0[indices]+np.array([.10,.15,.15,.15,.15]))
+    def trial(x):
+        q=q0.copy();q[indices]=x[:5];return q
+    def geometry_constraints(x,clearance):
+        poses=fk(trial(x));feet=v1.foot_vertices(poses);rows=[]
+        for n in FEET:
+            vertices,_=feet[n];rows.extend(1000*(vertices[:,2]-clearance))
+            rows.append(100*(poses[n][1].apply([0.,0.,1.])[2]-np.cos(np.deg2rad(MAX_TILT_DEG))))
+        return np.array(rows)
+    def relative_cost(x):return float(np.sum(((x[:5]-q0[indices])/scale)**2))
+    previous=read(BASE/'inputs/source_corrections_v1/bounded_feet.json')
+    previous_q=np.array(previous['q_ref_rad'])[indices]
+    compensated=q0[indices].copy();compensated[0]-=knee_negative;compensated[1]+=knee_negative
+    seeds=[q0[indices],previous_q,compensated]
+    attempts=[];results=[]
+    for seed_id,seed in enumerate(seeds):
+        start=np.r_[np.clip(seed,lo,hi),-.02]
+        fit=minimize(lambda x:-1000*x[5]+1e-5*relative_cost(x),start,
+            method='SLSQP',bounds=list(zip(lo,hi))+[(-.05,.05)],
+            constraints={'type':'ineq','fun':lambda x:geometry_constraints(x,x[5])},
+            options={'maxiter':400,'ftol':1e-10,'disp':False})
+        q=trial(fit.x);m=metrics(q,fk);violation=float(max(0.,-geometry_constraints(fit.x,fit.x[5]).min()))
+        attempts.append({'seed_id':seed_id,'success':bool(fit.success),'message':str(fit.message),
+            'iterations':int(fit.nit),'objective':float(fit.fun),'max_constraint_violation_scaled':violation,
+            'optimized_minimum_z_m':float(fit.x[5]),'right_feet':m,
+            'angles_rad':{n:float(q[i]) for n,i in zip(VARIABLES,indices)}})
+        if np.isfinite(fit.x).all():results.append((float(min(v['minimum_z_m'] for v in m.values())),violation,fit.x,q))
+    if not results:raise RuntimeError('all source solver attempts nonfinite')
+    # A solution is feasible only when its actual vertices/normals pass, never
+    # from optimizer success alone. Keep failed attempts for the audit.
+    admissible=[r for r in results if r[1]<1e-5]
+    best=max(admissible or results,key=lambda r:r[0]);q=best[3]
+    feasible=bool(best[0]>=FLOOR_M-1e-8 and max(v['sole_tilt_deg'] for v in metrics(q,fk).values())<=MAX_TILT_DEG+1e-5)
+    refinement=None
+    if feasible:
+        fit=minimize(relative_cost,best[2][:5],method='SLSQP',bounds=list(zip(lo,hi)),
+            constraints={'type':'ineq','fun':lambda x:geometry_constraints(x,FLOOR_M)},
+            options={'maxiter':400,'ftol':1e-11,'disp':False})
+        refined=trial(fit.x);m=metrics(refined,fk)
+        refined_valid=bool(min(v['minimum_z_m'] for v in m.values())>=FLOOR_M-1e-8 and max(v['sole_tilt_deg'] for v in m.values())<=MAX_TILT_DEG+1e-5)
+        refinement={'success':bool(fit.success),'message':str(fit.message),'iterations':int(fit.nit),
+            'relative_delta_cost':relative_cost(fit.x),'actual_constraints_valid':refined_valid,'right_feet':m}
+        if refined_valid:q=refined
+    return q,{'knee_negative_delta_limit_rad':knee_negative,'knee_positive_delta_limit_rad':.10,
+        'variables':list(VARIABLES),'effective_lower_rad':lo.tolist(),'effective_upper_rad':hi.tolist(),
+        'source_feasible_before_float32':feasible,'max_min_attempts':attempts,'minimum_delta_refinement':refinement,
+        'scope':'deterministic local constrained search; solver failure is not a global infeasibility certificate'}
+
+
+def validate(q,q0,names,fk,bounds,knee_negative):
+    delta=q-q0;ix=[names.index(n) for n in VARIABLES]
+    unchanged=np.ones(len(names),dtype=bool);unchanged[ix]=False
+    assert np.array_equal(q[unchanged],q0[unchanged])
+    assert np.all(q>=bounds[:,0]-1e-6) and np.all(q<=bounds[:,1]+1e-6)
+    assert -knee_negative-1e-7<=delta[ix[0]]<=.10+1e-7
+    assert np.all(abs(delta[ix[1:]])<=.15+1e-7)
+    feet=metrics(q,fk)
+    valid=min(v['minimum_z_m'] for v in feet.values())>=FLOOR_M-1e-7
+    valid&=max(v['sole_tilt_deg'] for v in feet.values())<=MAX_TILT_DEG+1e-4
+    return bool(valid),feet
+
+
+def main():
+    OUT.mkdir(parents=True,exist_ok=False);CORRECTIONS.mkdir(parents=True,exist_ok=False)
+    pins=v1.input_pins();pins.update({str(p.resolve()):sha(p) for p in (Path(__file__),PLAN,
+        BASE/'inputs/source_corrections_v1/bounded_feet.json')})
+    save(OUT/'inputs_before.json',pins)
+    report={'schema':'lower_body_source_correction_v2','status':'started','input_sha256':pins,
+        'scope':'source only; no native steps/cooked PhysX clearance certification',
+        'fixed':'root,upper81,guitar,all left leg,hips,chair,groundz0,original geometry and zero-range8',
+        'hard_floor_m':FLOOR_M,'maximum_sole_tilt_deg':MAX_TILT_DEG,'stages':[],'selected_candidate':None}
+    try:
+        baseline=restore();names=baseline['joint_names'];q0=np.array(baseline['q_ref_rad']);bounds=v1.limits(names)
+        bodies=read(H0/'report.json')['human_body_names']
+        assert bodies==read(Path(read(MANIFEST)['native_initial']))['human_body_names']
+        fk,parents,initial=v1.lower_fk(baseline,bodies)
+        geometry=read(A/'assets/om_body_geometry_v3/manifest.json');asset=Path(geometry['asset'])
+        cfg=read(A/'config.json');chair=read(v1.ROOT/cfg['pose_source'])['params']['chair']
+        baseline_poses=fk(q0)
+        original,original_state=v1.audit(baseline,bodies,baseline_poses,parents,asset,chair)
+        save(OUT/'original_audit.json',original)
+        original_self={(r['a_geom'],r['b_geom']):r['signed_gap_m'] for r in original['lower_human_pairs'] if r['source_candidate_collision_relevant']}
+        for knee_limit in (.10,.125,.15):
+            stage='knee_minus_'+str(knee_limit).replace('.','p')
+            q,solver=search(q0,names,fk,bounds,knee_limit);q=q.astype(np.float32).astype(float)
+            floor_valid,right_feet=validate(q,q0,names,fk,bounds,knee_limit)
+            poses=fk(q);audit,state=v1.audit(baseline,bodies,poses,parents,asset,chair)
+            self_worse=[r for r in audit['lower_human_pairs'] if r['source_candidate_collision_relevant'] and r['signed_gap_m']<min(-.001,original_self[(r['a_geom'],r['b_geom'])]-.001)]
+            chair_worse=[r for r,b in zip(audit['lower_chair_pairs'],original['lower_chair_pairs']) if r['signed_gap_m']<min(-.001,b['signed_gap_m']-.001)]
+            hip_geometry_unchanged=all(np.array_equal(poses[n][0],baseline_poses[n][0]) and (baseline_poses[n][1].inv()*poses[n][1]).magnitude()<1e-12 for n in ('L_Hip','R_Hip'))
+            guitar_pairs_unchanged=audit['lower_guitar_pairs']==original['lower_guitar_pairs']
+            # Only the thigh/guitar rows must remain equal; distal gaps can move.
+            thigh_guitar_unchanged=[r for r in audit['lower_guitar_pairs'] if r['a'] in ('L_Hip','R_Hip')]==[r for r in original['lower_guitar_pairs'] if r['a'] in ('L_Hip','R_Hip')]
+            assert hip_geometry_unchanged and thigh_guitar_unchanged
+            valid=floor_valid and not self_worse and not chair_worse
+            deltas={n:float(v) for n,v in zip(names,q-q0) if abs(v)>1e-10}
+            solver.update(stage=stage,actual_float32_floor_tilt_valid=floor_valid,right_feet=right_feet,
+                source_candidate_valid=bool(valid),changed_angles_rad=deltas,
+                source_self_worsening_pairs=self_worse,source_chair_worsening_pairs=chair_worse,
+                hip_geometry_unchanged=True,thigh_guitar_signed_gap_rows_exact=True,
+                all_lower_guitar_rows_exact=guitar_pairs_unchanged)
+            save(OUT/(stage+'_solver.json'),solver);save(OUT/(stage+'_audit.json'),audit)
+            state['human_dof_states']=[dict(pos=float(v),vel=0.) for v in q]
+            save(OUT/(stage+'_source_state.json'),state)
+            candidate=copy.deepcopy(baseline);candidate['q_ref_rad']=q.tolist();candidate['lower_deltas_rad']=deltas
+            candidate['lower24_q_rad']={n:float(q[names.index(n)]) for n in baseline['lower24_q_rad']}
+            candidate['predicted_corrected_human_body_poses']={n:state['human_body_states'][bodies.index(n)]['pose'] for n in v1.LOWER_BODIES}
+            candidate['predicted_corrected_source_state_path']=str(OUT/(stage+'_source_state.json'))
+            candidate['source_geometry_report']=str(OUT/'report.json');candidate['source_candidate_valid']=bool(valid)
+            candidate['source_correction_constraints']={'right_knee_negative_delta_limit_rad':knee_limit,
+                'right_knee_positive_delta_limit_rad':.10,'right_ankle_toe_delta_limit_rad':.15,
+                'minimum_right_foot_vertex_z_m':FLOOR_M,'maximum_right_sole_tilt_deg':MAX_TILT_DEG}
+            candidate['scope']='Right-only source hard-floor/tilt correction; baseline expected_initial_state unchanged; lower8 predicted poses require independent native FK/contact validation. Root/upper/guitar/hips/left unchanged.'
+            path=CORRECTIONS/(stage+'.json');save(path,candidate)
+            report['stages'].append({k:solver[k] for k in ('stage','source_candidate_valid','actual_float32_floor_tilt_valid','changed_angles_rad','right_feet','source_self_worsening_pairs','source_chair_worsening_pairs','thigh_guitar_signed_gap_rows_exact')})
+            print(stage,'source_valid',valid,'min_z_mm',min(v['minimum_z_m'] for v in right_feet.values())*1000,flush=True)
+            if valid:
+                report['selected_candidate']=str(path);break
+        report['status']='completed';report['source_candidate_found']=report['selected_candidate'] is not None
+    except Exception:
+        report.update(status='failed',error=traceback.format_exc());raise
+    finally:
+        report['input_sha256_after']={p:sha(p) for p in pins};report['inputs_unchanged']=pins==report['input_sha256_after']
+        save(OUT/'report.json',report)
+        assert report['inputs_unchanged'],'input changed; preserve failure and create a new source version'
+
+
+if __name__=='__main__':main()

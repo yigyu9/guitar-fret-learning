@@ -1,0 +1,9 @@
+# 변경 파일 색인
+
+- [README.md](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strap_fallback_training_v1/artifacts_initial_v1/README.md:1) — 비교 영상 5행, native 원본 프레임·caption evidence 21행, 실제 측정 그래프 47행, OFF/ON 결과표 53행, 이미지/overlay/측정값 출처 구분 72행.
+- [comparison_whole_body.mp4](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strap_fallback_training_v1/artifacts_initial_v1/comparison_whole_body.mp4) 및 [comparison_hands.mp4](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strap_fallback_training_v1/artifacts_initial_v1/comparison_hands.mp4) — 원본 저장 영상 두 조건을 좌우로 재인코딩한 492-frame 비교물.
+- [native_raw_contact_sheet.png](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strap_fallback_training_v1/artifacts_initial_v1/native_raw_contact_sheet.png) — t=0/2/5/16.3667초 whole-body/hands raw capture 패널.
+- [measured_control_and_rotation_traces.png](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strap_fallback_training_v1/artifacts_initial_v1/measured_control_and_rotation_traces.png) — controls.json의 위치범위 밖 벡터 norm·last-applied 장력 및 trace quaternion 회전량.
+- [produce_artifacts.py](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strap_fallback_training_v1/artifacts_initial_v1/produce_artifacts.py) — SHA 대조, 시각 선택, 차트 및 영상 생성 producer.
+- [input_hashes.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strap_fallback_training_v1/artifacts_initial_v1/input_hashes.json) 및 [producer_execution.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/strap_fallback_training_v1/artifacts_initial_v1/producer_execution.json) — 입력 목록의 전후 SHA 대조와 producer 실행 전후 SHA 기록.
+- `pre_korean_font_fix_v1/`, `pre_video_title_fix_v1/`, `pre_frame_caption_fix_v1/` — 이후 시각 품질 수정 전 producer/산출물/manifest를 보존한 중간 묶음. Native 입력은 포함하거나 수정하지 않았다.

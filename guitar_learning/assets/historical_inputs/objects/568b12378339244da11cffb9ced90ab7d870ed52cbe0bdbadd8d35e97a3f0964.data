@@ -1,0 +1,89 @@
+"""Whole-window240Hz foot audit; original five sole thresholds, no dynamics."""
+import argparse
+import csv
+from pathlib import Path
+import numpy as np
+from ..lower_body_release_v1.common import ROOT,read,save,pin,verify,sha
+from ..seated_foot_support_v1.analyze_v6 import FEET,measure,contact_interval,sole_summary
+from .analyze_v6 import input_pins
+from .protocol_v2 import PROTOCOL,schedule,SETTLED_HOLD,SETTLED_PLAN
+
+PLAN=ROOT/'docs/plans/front_facing_ready_feet_20261016.md'
+
+
+def summarize_window(rows):
+    """Apply original sole_summary metrics to every supplied row, without trimming."""
+    if not rows:return dict(samples=0,bodies={},all_four_parts_passed=False)
+    bodies={}
+    for name in FEET:
+        position=np.array([[r[name+'_body_origin_W_'+a+'_m'] for a in 'xyz'] for r in rows])
+        metrics=dict(min_bottom_z_m=min(r[name+'_source_bottom_min_z_m'] for r in rows),
+            max_bottom_min_z_m=max(r[name+'_source_bottom_min_z_m'] for r in rows),
+            max_bottom_z_m=max(r[name+'_source_bottom_max_z_m'] for r in rows),
+            max_bottom_span_m=max(r[name+'_source_bottom_span_m'] for r in rows),
+            max_sole_tilt_deg=max(r[name+'_source_sole_tilt_deg'] for r in rows),
+            body_origin_position_ptp_xyz_m=np.ptp(position,axis=0).tolist(),
+            body_origin_position_ptp_norm_m=float(np.linalg.norm(np.ptp(position,axis=0))),
+            max_body_origin_linear_speed_m_s=max(r[name+'_body_origin_linear_speed_m_s'] for r in rows),
+            max_native_COM_linear_speed_m_s=max(r[name+'_native_COM_linear_speed_m_s'] for r in rows),
+            max_angular_speed_rad_s=max(r[name+'_angular_speed_rad_s'] for r in rows))
+        keys=('_source_bottom_min_z_m','_source_bottom_max_z_m','_source_bottom_span_m','_source_sole_tilt_deg','_body_origin_linear_speed_m_s','_native_COM_linear_speed_m_s','_angular_speed_rad_s')
+        finite=bool(np.isfinite(position).all() and np.isfinite([[r[name+k] for k in keys] for r in rows]).all())
+        gates=dict(sole_full_bottom_height_minus1_to3mm=metrics['min_bottom_z_m']>=-.001 and metrics['max_bottom_z_m']<=.003,
+            sole_tilt_2deg=metrics['max_sole_tilt_deg']<=2.,body_origin_ptp_3mm=metrics['body_origin_position_ptp_norm_m']<=.003,
+            body_origin_linear_speed_002m_s=metrics['max_body_origin_linear_speed_m_s']<=.02,
+            angular_speed_02rad_s=metrics['max_angular_speed_rad_s']<=.2)
+        bodies[name]=dict(metrics=metrics,gates=gates,finite_all_samples=finite,passed=bool(finite and all(gates.values())))
+    return dict(actual_first_time_s=rows[0]['time_s'],actual_last_time_s=rows[-1]['time_s'],samples=len(rows),bodies=bodies,
+        all_four_parts_passed=all(v['passed'] for v in bodies.values()))
+
+
+def windows_for(case):
+    windows=dict(settled_ready_hold5=SETTLED_HOLD,prepared5to10=[5.,10.],all_prepared5toT=[5.,case['seconds']],all_action10toT=[10.,case['seconds']])
+    for key in ('release','free','approach','close','dwell'):
+        if case[key] is not None:windows[key]=case[key]
+    for i,start in enumerate(case['strike_starts']):windows['strike'+str(i)]=[start,start+4.]
+    return windows
+
+
+def main(run,out):
+    out.mkdir(exist_ok=False)
+    attempt=read(run/'attempt.json');cfgpath=Path(attempt['config']);cfg=read(cfgpath);case=schedule(cfg['ready_case']);N=round(case['seconds']*240)
+    inputs=input_pins(run,cfgpath,cfg)
+    for p,h in pin(extra=[Path(__file__).resolve(),PLAN,SETTLED_PLAN,Path(__file__).with_name('protocol_v2.py')]).items():
+        assert p not in inputs or inputs[p]==h,p
+        inputs[p]=h
+    assert verify(inputs);save(out/'inputs_before.json',inputs)
+    sequences={}
+    for filename in ('states240.json','contacts240.json'):
+        raw=read(run/filename)['rows']
+        sequences[filename]=dict(samples=len(raw),expected_samples=N+1,
+            exact_steps=[r['physics_step'] for r in raw]==list(range(N+1)),
+            exact_times=all(abs(r['time_s']-r['physics_step']/240)<=1e-12 for r in raw))
+        del raw
+    rows,ground=measure(run);windows={}
+    for label,(lo,hi) in windows_for(case).items():
+        selected=[r for r in rows if lo<=r['time_s']<=hi];soles=summarize_window(selected);contacts=contact_interval(selected,ground)
+        expected=list(range(round(lo*240),round(hi*240)+1))
+        checks=dict(full240Hz_window=[r['step'] for r in selected]==expected,
+            four_soles_all_rows=soles['all_four_parts_passed'],
+            feet_positive95=bool(contacts.get('all_contact_rows_present') and contacts['both_feet_positive_fraction'] is not None and contacts['both_feet_positive_fraction']>=.95))
+        windows[label]=dict(interval_s=[lo,hi],expected_samples=len(expected),soles=soles,contacts=contacts,checks=checks,passed=all(checks.values()))
+    gates=dict(protocol=cfg['validation_protocol']==PROTOCOL and cfg['seconds']==case['seconds'] and cfg['ready_schedule']==case and cfg.get('ready_settled_hold_s')==SETTLED_HOLD,
+        raw240Hz_full=all(s['samples']==s['expected_samples'] and s['exact_steps'] and s['exact_times'] for s in sequences.values()),
+        measured240Hz_full=[r['step'] for r in rows]==list(range(N+1)),
+        all_windows=all(w['passed'] for w in windows.values()),inputs_unchanged=verify(inputs))
+    with (out/'samples.csv').open('x',newline='') as stream:
+        writer=csv.DictWriter(stream,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+    save(out/'ground_contacts.json',dict(rows=ground,scope='Original native foot/ground raw contacts and lambda; no inferred force or cooked penetration.'))
+    summary=dict(run=str(run),case=case['case'],seconds=case['seconds'],config_path=str(cfgpath),config_sha256=sha(cfgpath),
+        ready_spec_path=cfg['ready_spec'],ready_spec_sha256=sha(cfg['ready_spec']),
+        passed=all(gates.values()),gates=gates,raw_sequences=sequences,windows=windows,soles_last1_legacy=sole_summary(rows),
+        input_sha256=inputs,inputs_unchanged=verify(inputs),
+        scope='Mandatory independent AND audit, not part of existing core29 gates. Original five sole criteria applied to every240Hz sample in each declared window, including5..T. PTP is the norm of xyz peak-to-peak over the full window, not just endpoint displacement. Native COM velocity is distinguished from body-origin velocity. Source box bottom geometry is not a PhysX cooked clearance or continuous-time certificate. Root fixed; no simulation or state/control changes.')
+    save(out/'summary.json',summary);print(dict(passed=summary['passed'],case=case['case'],gates=gates),flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--run',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
+    args=p.parse_args();main(args.run.resolve(),args.out.resolve())

@@ -1,0 +1,64 @@
+"""V5: coherent lower16 targets anchor level soles in world XY; finite PD unchanged."""
+import itertools
+import xml.etree.ElementTree as ET
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from ..lower_body_release_v1.common import HUMAN
+from ..lower_body_release_v1.controller_horizontal_v4 import Controller as PreviousController
+from .runtime_v1 import Scene as InitialSeatScene
+
+
+class Scene(InitialSeatScene):
+    def command(self,named):
+        named,diagnostic=self.foot_target_logic.apply(named)
+        row=super().command(named);row['foot_world_target_IK']=diagnostic
+        return row
+
+
+class Controller(PreviousController):
+    def __init__(self,scene):
+        super().__init__(scene)
+        assert scene.cfg['foot_support_mode']=='world_anchored_soles_lower16_v5' and scene.cfg['right_hip_preferred_bias_rad']==-.01
+        self.leg=np.array([scene.names.index(side+'_'+n) for side in ('L','R') for n in ('Hip_x','Hip_y','Hip_z','Knee_x','Ankle_x','Ankle_y','Ankle_z','Toe_x')])
+        self.locals={};self.reference=self.fk(scene.q_ref)
+        signs=np.array(list(itertools.product((-1.,1.),repeat=3)))
+        for body in ET.parse(HUMAN).iter('body'):
+            name=body.get('name')
+            if name in ('L_Ankle','L_Toe','R_Ankle','R_Toe'):
+                geom=body.find('geom');half=np.fromstring(geom.get('size'),sep=' ')
+                center=np.fromstring(geom.get('pos'),sep=' ');rotation=Rotation.from_quat(np.roll(np.fromstring(geom.get('quat','1 0 0 0'),sep=' '),-1))
+                self.locals[name]=center+rotation.apply(signs[signs[:,2]==-1]*half)
+        scene.foot_target_logic=self
+
+    def apply(self,named):
+        s=self.s;q=np.array([r['pos'] for r in s.native()['human_dof_states']]);ix=self.leg
+        u=np.clip((s.steps/240)/.5,0,1);ramp=u*u*(3-2*u);goal=.0005-.002*ramp
+        radius=np.array([.1 if '_Hip_' in s.names[j] else .6 for j in ix])
+        lo=np.maximum(s.lower[ix]+1e-7,s.q_ref[ix]-radius);hi=np.minimum(s.upper[ix]-1e-7,s.q_ref[ix]+radius)
+        preferred=s.q_ref[ix].copy();preferred[list(ix).index(s.names.index('R_Hip_x'))]+=s.cfg['right_hip_preferred_bias_rad']
+        regular=np.array([3. if '_Hip_' in s.names[j] else .02 for j in ix])
+        def prediction(x):
+            trial=q.copy();trial[ix]=x;return self.fk(trial)
+        def residual(x):
+            poses=prediction(x);rows=[]
+            for name,local in self.locals.items():
+                p,r=poses[name];bottom=p+r.apply(local)
+                rows.extend([2000*(bottom[:,2]-goal),1000*(p[:2]-self.reference[name][0][:2])])
+            rows.append(regular*(x-preferred));return np.concatenate(rows)
+        fit=least_squares(residual,np.clip(s.target[ix],lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=150,ftol=1e-9,xtol=1e-9,gtol=1e-9)
+        ps=prediction(fit.x);feet={}
+        for name,local in self.locals.items():
+            p,r=ps[name];bottom=p+r.apply(local)
+            feet[name]=dict(min_bottom_z_m=float(bottom[:,2].min()),max_bottom_z_m=float(bottom[:,2].max()),bottom_span_m=float(np.ptp(bottom[:,2])),XY_error_m=float(np.linalg.norm(p[:2]-self.reference[name][0][:2])))
+        assert np.isfinite(fit.x).all() and all(abs(row['min_bottom_z_m']-goal)<.0005 and row['bottom_span_m']<.001 and row['XY_error_m']<.001 for row in feet.values()),feet
+        for side in ('L','R'):
+            ankle=np.array([fit.x[list(ix).index(s.names.index(side+'_Ankle_'+axis))] for axis in 'xyz'])
+            assert np.linalg.norm(ankle)<np.deg2rad(160)
+        request=dict(named)
+        legacy_hip=float(request['R_Hip_x'])
+        for j,value in zip(ix,fit.x):request[s.names[j]]=float(value)
+        return request,dict(desired_source_bottom_z_m=float(goal),ramp_fraction=float(ramp),predicted_feet=feet,
+                            legacy_R_Hip_x_request_rad=legacy_hip,final_R_Hip_x_request_rad=request['R_Hip_x'],
+                            actual_hip_q_rad={s.names[j]:float(q[j]) for j in s.lower_indices if '_Hip_' in s.names[j]},
+                            scope='Sixteen effective lower targets solve coherent worldXY/level soles within hip-neighborhood and original limits. Existing finite PD and caps unchanged. Predicted geometry is before command rate limiting, not actual state; desired negative Z induces contact without state injection.')

@@ -1,0 +1,423 @@
+"""Full-interval free-guitar and seated-foot acceptance from native raw samples."""
+import argparse
+import csv
+import numpy as np
+from scipy.spatial.transform import Rotation
+from ..initial_pose_noise_v1 import pose
+from pathlib import Path
+from ..lower_body_release_v1.common import ROOT, BASE, read, save, pin, verify, sha
+from ..lower_body_release_v1 import upright_native_audit_v3
+from ..seated_foot_support_v1.analyze_v6 import measure, contact_interval, sole_summary, RAW, LAYOUT_REFERENCE
+
+
+def interval(rows):
+    return dict(samples=len(rows), first_s=rows[0]['time_s'], last_s=rows[-1]['time_s'],
+        max_body_displacement_m=max(r['guitar_body_displacement_from_initial_m'] for r in rows),
+        max_rotation_deg=max(r['guitar_rotation_from_initial_deg'] for r in rows),
+        max_abs_neck_deg=max(abs(r['neck_elevation_deg']) for r in rows),
+        max_abs_lateral_m=max(abs(r['lateral_error_m']) for r in rows),
+        max_Torso_Chest_tilt_deg=max(r[n+'_total_tilt_deg'] for r in rows for n in ('Torso', 'Chest')),
+        max_abs_Torso_Chest_right_deg=max(abs(r[n+'_right_tilt_deg']) for r in rows for n in ('Torso', 'Chest')),
+        Chest_fraction=sum(r['Chest_guitar_positive_contacts'] > 0 for r in rows)/len(rows),
+        RShoulder_fraction=sum(r['R_Shoulder_guitar_positive_contacts'] > 0 for r in rows)/len(rows),
+        simultaneous_support_fraction=sum(r['Chest_guitar_positive_contacts'] > 0 and r['R_Shoulder_guitar_positive_contacts'] > 0 for r in rows)/len(rows))
+
+
+
+def right_goal_evidence(run, config, initial, efforts):
+    spec_path = Path(config['finite_right_goal_spec'])
+    goal_path = Path(config['finite_right_goal_report'])
+    spec, report = read(spec_path), read(goal_path)
+    rotation = Rotation.from_quat(spec['R_delta_xyzw'])
+    translation = np.array(spec['translation_W_m'])
+    native = initial['native_initial_state']
+    gp, gr = pose(native['guitar_body_states'][0])
+    candidate = read(config['candidate'])
+    support = read(candidate['support_candidate'])['right_block_cradle']['upper_arm_witness']
+    surface = np.array(support['guitar_surface_G_m'])
+    normal = np.array(support['capsule_axis_G_m'])-surface
+    normal /= np.linalg.norm(normal)
+    palm, palm_rotation = pose(native['human_body_states'][initial['human_body_names'].index('RH:palm')])
+    before = dict(palm_W_m=palm, material_W_m=gp+gr.apply(surface+normal*support['gap_m']),
+                  task_goal_W_m=gp+gr.apply(surface+normal*(support['gap_m']-.004)))
+    after = {name: rotation.apply(point)+translation for name, point in before.items()}
+    after_rotation = rotation*palm_rotation
+    targets = read(run/'targets60.json')['rows']
+    checks = dict(
+        certified_query=bool(report['eligible_for_finite_human_goal'] and report['inputs_unchanged']
+            and verify(read(goal_path.parent/'inputs_before.json'))),
+        linked_spec=sha(spec_path) == config['finite_right_goal_spec_sha256'] == report['spec_sha256'],
+        initial_candidate_unchanged=sha(config['candidate']) == config['candidate_sha256'] == spec['initial_candidate_sha256'] == report['source_candidate_sha256'],
+        mode=config['finite_right_goal_mode'] == 'constant_world_affine_human_anchors_v1',
+        unit_rotation=bool(abs(np.linalg.norm(spec['R_delta_xyzw'])-1.) < 1e-12),
+        all_target_records=bool(targets), all_effort_records=bool(efforts))
+    errors = []
+    for target in targets:
+        record = target['finite_human_right_goal']
+        checks['all_target_records'] &= (record['spec_sha256'] == config['finite_right_goal_spec_sha256']
+            and record['R_delta_xyzw'] == spec['R_delta_xyzw'] and record['translation_W_m'] == spec['translation_W_m'])
+        for key in before:
+            errors += [float(np.linalg.norm(np.array(record['before'][key])-before[key])),
+                       float(np.linalg.norm(np.array(record['after'][key])-after[key]))]
+        for actual, expected in [('right_palm_anchor_W_m', 'palm_W_m'), ('right_material_anchor_W_m', 'material_W_m'), ('right_task_anchor_W_m', 'task_goal_W_m')]:
+            errors.append(float(np.linalg.norm(np.array(target[actual])-after[expected])))
+        errors += [float((palm_rotation.inv()*Rotation.from_quat(record['before']['palm_xyzw'])).magnitude()),
+                   float((after_rotation.inv()*Rotation.from_quat(record['after']['palm_xyzw'])).magnitude()),
+                   float((after_rotation.inv()*Rotation.from_quat(target['right_palm_anchor_xyzw'])).magnitude())]
+    for effort in efforts:
+        checks['all_effort_records'] &= effort['finite_human_right_goal_spec_sha256'] == config['finite_right_goal_spec_sha256']
+        point = next(v for v in effort['support_points'] if v['body'] == 'R_Shoulder')
+        errors.append(float(np.linalg.norm(np.array(point['goal_W_m'])-after['task_goal_W_m'])))
+    checks['all_actual_anchor_transforms'] = bool(errors and max(errors) <= 1e-10)
+    return dict(checks=checks, passed=all(checks.values()), max_anchor_error_m_or_rad=max(errors),
+                scope='Independent initial-state anchor reconstruction and human affine goals; no actual guitar query-pose claim.')
+
+def load_bias_evidence(run, initial, states, efforts, config):
+    """Recompute observed3 bias and every implicit lower-PD call before native cap."""
+    import xml.etree.ElementTree as ET
+    from ..lower_body_release_v1.common import HUMAN
+    from ..lower_body_release_v1.control_math_v1 import stable_pd, rotation_error
+    spec_path = Path(config['hip_load_bias_spec'])
+    report_path = Path(config['hip_load_bias_report'])
+    spec, report = read(spec_path), read(report_path)
+    reference = Path(spec['query_reference_run'])
+    ref_initial = read(reference/'initial_values.json')
+    reference_rows = read(reference/'efforts240.json')['rows']
+    ref_config = read(read(reference/'attempt.json')['config'])
+    names = initial['joint_names']
+    low = np.asarray(initial['lower_indices'], dtype=int)
+    zero = np.asarray(initial['zero_range_indices'], dtype=int)
+    local_active = np.array([a for a, j in enumerate(low) if j not in zero])
+    active = low[local_active]
+    selected = [names.index('R_Hip_'+a) for a in 'xyz']
+    selected_local = [list(low).index(j) for j in selected]
+    source = [r for r in reference_rows if 960 <= r['physics_step_before'] <= 1199]
+    observed = np.array([[r['lower_stable_pd']['submitted_lower24_Nm'][a]-r['lower_stable_pd']['gravity_lower24_Nm'][a] for a in selected_local] for r in source])
+    mean = observed.mean(axis=0)
+    constant = np.zeros(16)
+    for j, v in zip(selected, spec['bias_Nm']):
+        constant[list(active).index(j)] = v
+    targets = read(run/'targets60.json')['rows']
+    target_by_step = {r['physics_step_before']: np.array(r['final105_rad']) for r in targets}
+    state_by_step = {r['physics_step']: r['state'] for r in states}
+    groups = []
+    for body in ET.parse(HUMAN).iter('body'):
+        joints = body.findall('joint')
+        ix = [names.index(j.get('name')) for j in joints if j.get('name') in names]
+        if ix and all(j in low for j in ix):
+            groups.append((ix, np.column_stack([np.fromstring(j.get('axis'), sep=' ') for j in joints])))
+    checks = dict(full2400=len(efforts) == 2400,
+        steps_contiguous=[r['physics_step_before'] for r in efforts] == list(range(len(efforts))),
+        mode=config.get('hip_load_bias_mode') == 'finite_constant_native_RHip_load_bias_v1',
+        certified_producer=bool(report['eligible_for_finite_hip_load_bias'] and report['inputs_unchanged'] and verify(read(report_path.parent/'inputs_before.json'))),
+        spec_SHA=sha(spec_path) == config['hip_load_bias_spec_sha256'] == report['spec_sha256'],
+        native12_reference=reference == BASE/'grounded_guitar_support_v1/native_static_v12',
+        reference_SHA=sha(reference/'efforts240.json') == spec['reference_efforts_sha256'],
+        original_baseline_config=bool(config['seconds'] == 10 and all(config[k] == v for k, v in ref_config.items() if k != 'seconds')),
+        exact_three_names_indices=spec['joint_names'] == ['R_Hip_x', 'R_Hip_y', 'R_Hip_z'] and spec['joint_indices105'] == selected,
+        bias_mean_240=bool(len(source) == 240 and [r['physics_step_before'] for r in source] == list(range(960,1200)) and np.max(abs(mean-spec['bias_Nm'])) <= 1e-12),
+        finite_bounded_spec=bool(np.isfinite(constant).all() and max(abs(constant)) <= 2 and np.linalg.norm(constant) <= 2
+            and spec['component_limit_Nm'] == 2 and spec['vector_norm_limit_Nm'] == 2),
+        contract=spec['schema'] == 'finite_native_RHip_load_bias_v1' and spec['ramp_s'] == [.15,.75] and spec['ramp'] == 'smoothstep'
+            and spec['apply_stage'] == 'lower_raw_before_original_native_cap' and spec['implicit_PD_RHS_unchanged'] is True,
+        same_initial_properties=all(initial[k] == ref_initial[k] for k in ('joint_names','lower_indices','zero_range_indices','PD_properties','control_K105_Nm_rad','control_D105_Nms_rad','q_ref105_rad','position_indices','effort_indices')),
+        original_candidate=spec['initial_candidate_sha256'] == config['candidate_sha256'] == sha(config['candidate']),
+        original16_and_zero8=len(active) == 16 and len(zero) == 8 and not set(selected) & set(zero),
+        records_present=bool(efforts), record_contract=True, finite=True, original_predictor_and_gains=True,
+        original_cap_zero8_upper_POS=True, original_coordinate_gates=True)
+    errors = {k: [] for k in ('bias_Nm','forcing_Nm','unbiased_raw_Nm','feedback_Nm','predicted_rad_s','raw_Nm','error_rad','velocity_rad_s','submitted_Nm','upper_Nm')}
+    measurements = []
+    expected_K = np.array(reference_rows[0]['lower_stable_pd']['K16_Nm_rad'])
+    expected_D = np.array(reference_rows[0]['lower_stable_pd']['D16_Nms_rad'])
+    caps = np.array(initial['PD_properties']['effort'])
+    upper = np.array([j for j in initial['effort_indices'] if j not in low])
+    position = np.array(initial['position_indices'])
+    held_target = None
+    for row in efforts:
+        k = row['physics_step_before']
+        if k in target_by_step:
+            held_target = target_by_step[k]
+        d = row['lower_stable_pd']
+        if 'observed_hip_load_bias' not in d or k not in state_by_step or held_target is None:
+            checks['records_present'] = False
+            continue
+        e = d['observed_hip_load_bias']
+        q = np.array([v['pos'] for v in state_by_step[k]['human_dof_states']])
+        qd = np.array([v['vel'] for v in state_by_step[k]['human_dof_states']])
+        error24 = np.zeros(24)
+        for ix, basis in groups:
+            error24[[list(low).index(j) for j in ix]] = rotation_error(q[ix], held_target[ix], basis)
+        error, velocity = error24[local_active], qd[active]
+        M = np.array(d['mass_native_lower24'])[np.ix_(local_active,local_active)]
+        K, D = np.array(d['K16_Nm_rad']), np.array(d['D16_Nms_rad'])
+        g = np.array(d['gravity_lower24_Nm'])[local_active]
+        u = float(np.clip((k/240-.15)/.6,0,1))
+        ramp = u*u*(3-2*u)
+        bias = ramp*constant
+        unbiased, predicted, feedback = stable_pd(M,error,velocity,K,D,g,1/240)
+        raw, predicted_b, feedback_b = stable_pd(M,error,velocity,K,D,g+bias,1/240)
+        submitted = np.zeros(24)
+        submitted[local_active] = np.clip(raw,-caps[active],caps[active]).astype(np.float32).astype(float)
+        def err(kind, value, expected):
+            value = np.array(value,dtype=float)
+            checks['finite'] &= bool(np.isfinite(value).all())
+            errors[kind].append(float(np.max(abs(value-expected))))
+        checks['record_contract'] &= (e['mode'] == config['hip_load_bias_mode'] and e['spec_sha256'] == config['hip_load_bias_spec_sha256']
+            and e['active_indices105'] == active.tolist() and e['active_joint_names'] == [names[j] for j in active]
+            and e['selected_joint_names'] == spec['joint_names'] and e['selected_indices105'] == selected
+            and e['ramp_s'] == [.15,.75] and abs(e['ramp_fraction']-ramp) <= 1e-15
+            and e['apply_stage'] == spec['apply_stage'] and e['implicit_PD_RHS_unchanged'] is True and e['original_function_restored'] is True)
+        checks['original_predictor_and_gains'] &= bool(np.array_equal(predicted,predicted_b) and np.array_equal(feedback,feedback_b)
+            and np.array_equal(K,expected_K) and np.array_equal(D,expected_D) and np.array_equal(e['caps16_Nm'],caps[active]))
+        for kind, value, expected in [('bias_Nm',e['observed_bias16_Nm'],bias),('bias_Nm',e['observed_constant_bias3_Nm'],spec['bias_Nm']),
+            ('forcing_Nm',e['human_gravity16_Nm'],g),('forcing_Nm',e['total_forcing16_Nm'],g+bias),
+            ('unbiased_raw_Nm',e['unbiased_raw_effort16_Nm'],unbiased),('feedback_Nm',e['feedback16_Nm'],feedback),
+            ('predicted_rad_s',e['predicted_velocity16_rad_s'],predicted),('raw_Nm',e['raw_effort16_Nm'],raw),
+            ('raw_Nm',d['raw_effort16_Nm'],raw),('feedback_Nm',d['feedback16_Nm'],feedback),('predicted_rad_s',d['predicted_velocity16'],predicted),
+            ('error_rad',e['error16_rad'],error),('error_rad',d['error_child_axes_rad'],error24),
+            ('velocity_rad_s',e['velocity16_rad_s'],velocity),('submitted_Nm',e['submitted_lower24_Nm'],submitted),
+            ('submitted_Nm',d['submitted_lower24_Nm'],submitted),('submitted_Nm',np.array(row['submitted105_Nm'])[low],submitted)]:
+            err(kind,value,expected)
+        upper_request = np.array(row['gravity105_Nm'])+np.array(row['scalar_PD105_Nm'])+np.array(row['support_task105_Nm'])
+        err('upper_Nm',np.array(row['raw_requested105_Nm'])[upper],upper_request[upper])
+        err('upper_Nm',np.array(row['submitted105_Nm'])[upper],np.clip(upper_request[upper],-caps[upper],caps[upper]).astype(np.float32).astype(float))
+        checks['original_cap_zero8_upper_POS'] &= bool(np.all(np.array(row['submitted105_Nm'])[zero] == 0)
+            and np.all(np.array(row['submitted105_Nm'])[position] == 0) and np.all(abs(np.array(row['submitted105_Nm'])) <= caps))
+        checks['original_coordinate_gates'] &= d['mass_matrix_max_error_kg_m2'] <= 2e-4 and d['relative_angular_velocity_max_error_rad_s'] <= .01 and d['mass_cross_upper_max_abs'] < 1e-8
+        measurements.append(dict(step=k,time_s=k/240,ramp_fraction=ramp,bias3_Nm=(ramp*mean).tolist()))
+    maxima = {k:max(v) if v else None for k,v in errors.items()}
+    checks['all2400_math_reconstructed'] = bool(measurements and all(v is not None and v <= 1e-9 for v in maxima.values()))
+    return dict(checks={k:bool(v) for k,v in checks.items()},passed=all(checks.values()),max_errors=maxima,
+        observed_reference_mean3_Nm=mean.tolist(),observed_reference_std3_Nm=observed.std(axis=0).tolist(),
+        samples=measurements,scope='Observed actuator-load compensation assumes external static load remains approximately minus bias. Original predictor and true human gravity preserved, bias only before original cap; no contact-force tensor, no world-axis interpretation of Hip suffixes. Source/actual geometry and physical success remain separate.')
+
+def chest_extra_evidence(initial, properties, states, efforts, config):
+    """Independent actual-pose source witness, inherited damping, JTF and clipping."""
+    from ..om_axilla_source_geometry_v3 import CapsuleBodyDistance
+    from ..lower_body_release_v1.common import A, HUMAN
+    from ..lower_body_release_v1.controller_horizontal_v4 import skew, vec
+    from ..strap import point_kinematics
+    distance=CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']),HUMAN)
+    ref=next(v for v in properties['support_references'] if v['body']=='Chest')
+    ix=np.array(ref['indices'],dtype=int)
+    lower=np.array(initial['lower_indices'],dtype=int)
+    zero=np.array(initial['zero_range_indices'],dtype=int)
+    upper=np.array([j for j in initial['effort_indices'] if j not in lower])
+    outside=np.array([j for j in range(105) if j not in ix])
+    caps=np.array(initial['PD_properties']['effort'])
+    hc=np.array(properties['human'][ref['index']]['COM_body_m'])
+    gc=np.array(properties['guitar']['applied'][0]['COM_body_m'])
+    checks=dict(full2400=len(efforts)==2400, configured_extra=config.get('chest_extra_goal_depth_m')==.00025,
+        legacy_schedule=config['chest_normal_goal_depth_m']==.009 and config['chest_initial_goal_depth_m']==.007 and config['chest_goal_ramp_s']==[.75,1.25],
+        records_present=bool(efforts),constants=True,finite=True,lower_other_branches_unchanged=True,
+        original_cap_zero8_POS=True,state_preserved=True)
+    errors={k:[] for k in ('depth_m','source_geometry_m','normal','velocity_m_s','force_N','jacobian','torque_Nm')}
+    state_by_step={v['physics_step']:v['state'] for v in states}
+    samples=[]
+    for row in efforts:
+        k=row['physics_step_before']
+        if 'chest_extra_depth' not in row or k not in state_by_step:
+            checks['records_present']=False
+            continue
+        e=row['chest_extra_depth'];old=e['previous_Chest']
+        new=next(v for v in row['support_points'] if v['body']=='Chest')
+        st=state_by_step[k];body=st['human_body_states'][ref['index']];guitar=st['guitar_body_states'][0]
+        p,r=pose(body);gp,gr=pose(guitar)
+        poses={n:pose(b) for n,b in zip(initial['human_body_names'],st['human_body_states'])}
+        witness=distance.measure(poses,'Chest',gp,gr)
+        axis=np.array(witness['capsule_axis_G_m']);surface=np.array(witness['guitar_surface_G_m'])
+        ng=axis-surface;ng/=np.linalg.norm(ng);normal=gr.apply(ng)
+        skin_G=axis-distance.capsules['Chest'][1]*ng
+        local=r.inv().apply(gp+gr.apply(skin_G)-p)
+        skin,vh=point_kinematics(p,r.as_quat(),vec(body,'linear'),vec(body,'angular'),local,hc)
+        # Preserve inherited damping's original3mm rigid-body material goal.
+        _,vg=point_kinematics(gp,gr.as_quat(),vec(guitar,'linear'),vec(guitar,'angular'),surface-.003*ng,gc)
+        u=float(np.clip((k/240-.75)/.5,0,1));ramp=u*u*(3-2*u)
+        base=.007+.002*ramp;extra=.00025*ramp;total=base+extra
+        base_raw=-2000*(witness['gap_m']+base)+30*np.dot(vg-vh,normal)
+        raw=base_raw-2000*extra
+        oldforce=normal*np.clip(base_raw,-20,0)
+        force=normal*np.clip(raw,-20,0)
+        block=np.array(e['Jacobian6x105'])
+        checks['finite'] &= block.shape==(6,105) and np.isfinite(block).all()
+        com=hc if e['jacobian_frame']=='COM' else np.zeros(3)
+        J=block[:3]-skew(r.apply(local-com))@block[3:]
+        delta=np.zeros(105);delta[ix]=(J.T@(force-oldforce))[ix]
+        oldrequest=np.array(e['previous_raw_requested105_Nm']);oldtask=np.array(e['previous_support_task105_Nm']);oldsubmitted=np.array(e['previous_submitted105_Nm'])
+        request=oldrequest+delta;task=oldtask+delta;submitted=oldsubmitted.copy()
+        submitted[upper]=np.clip(request[upper],-caps[upper],caps[upper]).astype(np.float32).astype(float);submitted[zero]=0
+        def err(kind,value,expected):
+            value=np.asarray(value,dtype=float);checks['finite'] &= bool(np.isfinite(value).all());errors[kind].append(float(np.max(abs(value-expected))))
+        checks['constants'] &= (e['final_extra_depth_m']==.00025 and e['legacy_final_depth_m']==.009 and e['final_total_depth_m']==.00925
+            and e['ramp_s']==[.75,1.25] and abs(e['ramp_fraction']-ramp)<=1e-15 and e['K_N_m']==2000 and e['D_Ns_m']==30 and e['cap_N']==20
+            and e['indices']==ix.tolist() and e['joint_names']==[initial['joint_names'][j] for j in ix]
+            and e['jacobian_frame'] in ('COM','origin') and old['depth_velocity_feedforward'] is False and new['depth_velocity_feedforward'] is False)
+        for value,expected in [(e['extra_depth_m'],extra),(e['base_depth_m'],base),(e['total_depth_m'],total),
+            (old['human_virtual_goal_depth_m'],base),(new['human_virtual_goal_depth_m'],total),
+            (new['legacy_human_virtual_goal_depth_m'],base),(new['extra_human_virtual_goal_depth_m'],extra),(new['extra_final_goal_depth_m'],.00025)]:err('depth_m',value,expected)
+        for value,expected in [(old['nearest_source_gap_m'],witness['gap_m']),(new['nearest_source_gap_m'],witness['gap_m']),
+            (old['point_W_m'],skin),(new['point_W_m'],skin),(e['point_local_m'],local),
+            (old['goal_W_m'],gp+gr.apply(surface-base*ng)),(new['goal_W_m'],gp+gr.apply(surface-total*ng))]:err('source_geometry_m',value,expected)
+        err('normal',old['normal_G'],ng);err('normal',new['normal_G'],ng);err('normal',e['normal_W'],normal)
+        err('force_N',old['raw_normal_request_N'],base_raw);err('force_N',new['raw_normal_request_N'],raw)
+        err('force_N',old['virtual_force_request_W_N'],oldforce);err('force_N',new['virtual_force_request_W_N'],force)
+        err('jacobian',e['point_J9'],J[:,ix]);err('torque_Nm',e['delta105_Nm'],delta)
+        err('torque_Nm',row['raw_requested105_Nm'],request);err('torque_Nm',row['support_task105_Nm'],task)
+        err('torque_Nm',oldrequest,np.array(row['gravity105_Nm'])+np.array(row['scalar_PD105_Nm'])+oldtask)
+        err('torque_Nm',row['submitted105_Nm'],submitted)
+        qd=np.array([v['vel'] for v in st['human_dof_states']])
+        err('velocity_m_s',new['point_velocity_error_m_s'],np.linalg.norm(J@qd-vh))
+        checks['constants'] &= bool(np.linalg.norm(J@qd-vh)<=.01 and len(ix)==9)
+        checks['lower_other_branches_unchanged'] &= bool(np.array_equal(np.array(row['submitted105_Nm'])[lower],oldsubmitted[lower])
+            and np.array_equal(np.array(row['raw_requested105_Nm'])[outside],oldrequest[outside])
+            and np.array_equal(np.array(row['support_task105_Nm'])[outside],oldtask[outside]) and abs(J[:,outside]).max()<1e-10)
+        checks['original_cap_zero8_POS'] &= bool(np.all(np.array(row['submitted105_Nm'])[zero]==0)
+            and np.all(np.array(row['submitted105_Nm'])[initial['position_indices']]==0) and np.all(abs(np.array(row['submitted105_Nm']))<=caps)
+            and np.linalg.norm(force)<=20+1e-12)
+        checks['state_preserved'] &= e['state_preserved'] is True and e['lower_unchanged'] is True
+        samples.append(dict(step=k,time_s=k/240,source_gap_m=witness['gap_m'],extra_depth_m=extra,total_depth_m=total,raw_normal_N=raw,base_raw_normal_N=base_raw))
+    maxima={k:max(v) if v else None for k,v in errors.items()}
+    checks['full_math_reconstruction']=bool(samples and all(maxima[k] is not None and maxima[k]<=limit for k,limit in
+        [('depth_m',1e-15),('source_geometry_m',1e-9),('normal',1e-8),('velocity_m_s',1e-8),('force_N',1e-6),('jacobian',1e-8),('torque_Nm',1e-6)]))
+    return dict(checks={k:bool(v) for k,v in checks.items()},passed=all(checks.values()),max_errors=maxima,samples=samples,
+        scope='Independent normalized actual-pose source Chest witness and original rigid-body damping;0.25mm spring preload only. Source gap is not cooked clearance, task N is human command; original Hip bias lower math separately checked.')
+
+def main(run, out):
+    assert (run/'report.json').is_file()
+    out.mkdir(exist_ok=False)
+    cfg = Path(read(run/'attempt.json')['config'])
+    paths = list(Path(__file__).resolve().parent.glob('*.py'))
+    paths += list((ROOT/'stability_adapter_2/seated_foot_support_v1').glob('*.py'))
+    paths += [run/n for n in RAW]+[run/'support_wrapper.json', cfg, LAYOUT_REFERENCE,
+        ROOT/'docs/plans/grounded_guitar_support_20261016.md', ROOT/'docs/plans/grounded_guitar_world_anchor_20261016.md', ROOT/'docs/plans/grounded_guitar_spine_clearance_20261016.md', ROOT/'docs/plans/grounded_guitar_arm_alignment_20261016.md', ROOT/'docs/plans/grounded_guitar_arm_audit_20261016.md', ROOT/'stability_adapter_2/AGENTS.md', ROOT/'docs/plans/grounded_guitar_chest_preload_20261016.md', ROOT/'docs/plans/grounded_guitar_aligned_preload_20261016.md', ROOT/'docs/plans/grounded_guitar_contact_margin_20261016.md', ROOT/'docs/plans/grounded_guitar_load_ramp_20261016.md', ROOT/'docs/plans/grounded_guitar_normal_cap_20261016.md', ROOT/'docs/plans/grounded_guitar_chest_orientation_20261016.md']
+    paths += [ROOT/'docs/plans/grounded_guitar_relative_translation_20261016.md', ROOT/'docs/plans/grounded_guitar_prepared_hold_20261016.md']
+    config = read(cfg)
+    paths += [Path(config[k]) for k in ('source_report', 'upper_target105')]
+    goal_path = Path(config['finite_right_goal_report'])
+    paths += [goal_path, goal_path.parent/'inputs_before.json', Path(config['finite_right_goal_spec']),
+              Path(read(config['candidate'])['support_candidate']), ROOT/'docs/plans/grounded_guitar_right_goal_20261016.md']
+    posture_path = Path(config['posture_target_report'])
+    paths += [posture_path, posture_path.parent/'inputs_before.json']
+    reference = BASE/'grounded_guitar_support_v1/native_static_v7'
+    paths += [reference/n for n in ('states240.json', 'contacts240.json', 'efforts240.json', 'targets60.json')]
+    bias_report = Path(config['hip_load_bias_report'])
+    bias_spec = read(config['hip_load_bias_spec'])
+    bias_reference = Path(bias_spec['query_reference_run'])
+    paths += [bias_report, bias_report.parent/'inputs_before.json', Path(config['hip_load_bias_spec']),
+        ROOT/'docs/plans/grounded_guitar_hip_load_bias_20261016.md', ROOT/'docs/plans/grounded_guitar_contact_margin_v2_20261016.md']
+    paths += [bias_reference/n for n in ('attempt.json', 'initial_values.json', 'efforts240.json', 'report.json', 'support_wrapper.json', 'states240.json', 'contacts240.json', 'targets60.json')]
+    paths += [Path(read(bias_reference/'attempt.json')['config'])]
+    original_run = BASE/'grounded_guitar_support_v1/native_static_v16'
+    paths += [original_run/n for n in ('states240.json','contacts240.json','efforts240.json','targets60.json','report.json')]
+    paths += [BASE/'grounded_guitar_support_v1/analysis_static_v16/summary.json']
+    assert config['validation_protocol'] == 'finite_prepare5_then_hold5_v1'
+    assert config['seconds'] == 10 and config['preparation_s'] == 5 and config['hold_interval_s'] == [5,10]
+    pins = pin(cfg, extra=paths)
+    save(out/'inputs_before.json', pins)
+    upright_native_audit_v3.main([run], out/'integrity')
+    rows, ground = measure(run)
+    # The original acceptance measured Torso/Chest. Keep those gates and
+    # add the actual Spine angle for this six-axis posture change.
+    spine_index = read(run/'initial_values.json')['human_body_names'].index('Spine')
+    states = read(run/'states240.json')['rows']
+    assert len(states) == len(rows)
+    for row, state in zip(rows, states):
+        assert row['step'] == state['physics_step']
+        q = state['state']['human_body_states'][spine_index]['pose']['r']
+        up = Rotation.from_quat([q[a] for a in ('x', 'y', 'z', 'w')]).apply([0., 0., 1.])
+        row['Spine_total_tilt_deg'] = float(np.rad2deg(np.arccos(np.clip(up[2], -1., 1.))))
+    with (out/'samples.csv').open('w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    save(out/'ground_contacts.json', dict(rows=ground))
+    whole = interval(rows)
+    whole['max_Spine_total_tilt_deg'] = max(r['Spine_total_tilt_deg'] for r in rows)
+    settled_rows = [r for r in rows if 1 <= r['time_s'] <= 10]
+    hold_rows = [r for r in rows if 5 <= r['time_s'] <= 10]
+    settled = interval(hold_rows) if hold_rows else None
+    soles = sole_summary(rows)
+    feet = contact_interval(settled_rows, ground)
+    hold_feet = contact_interval(hold_rows, ground)
+    report = read(run/'report.json')
+    wrapper = read(run/'support_wrapper.json')
+    integrity = read(out/'integrity/report.json')
+    posture_report = read(posture_path)
+    posture_checks = dict(passed=bool(posture_report['eligible_for_native_target'] and posture_report['inputs_unchanged']
+        and verify(read(posture_path.parent/'inputs_before.json'))
+        and sha(config['upper_target105']) == config['upper_target105_sha256'] == posture_report['target_sha256']
+        and sha(config['candidate']) == config['candidate_sha256'] == posture_report['source_candidate_sha256']
+        and Path(config['upper_target105']).resolve() == posture_path.parent/'upper_target105.json'
+        and Path(config['candidate']).resolve() == Path(posture_report['source_candidate']).resolve()),
+        prefix_only_diagnostic_different_initial_goal=True)
+    initial = read(run/'initial_values.json')
+    trunk = [j for j, name in enumerate(initial['joint_names']) if name.startswith(('Torso_', 'Spine_', 'Chest_'))]
+    efforts = read(run/'efforts240.json')['rows']
+    depth_errors = []
+    for row in efforts:
+        t = row['physics_step_before']/240
+        u = min(1., max(0., (t-.75)/.5))
+        expected = .007+.00225*u*u*(3-2*u)
+        point = next(p for p in row['support_points'] if p['body'] == 'Chest')
+        depth_errors.append(abs(point['human_virtual_goal_depth_m']-expected))
+    prefix = dict(
+        states_0to075_exact=read(run/'states240.json')['rows'][:181] == read(reference/'states240.json')['rows'][:181],
+        contacts_0to075_exact=read(run/'contacts240.json')['rows'][:181] == read(reference/'contacts240.json')['rows'][:181],
+        submitted_through075_exact=[r['submitted105_Nm'] for r in efforts[:181]] ==
+            [r['submitted105_Nm'] for r in read(reference/'efforts240.json')['rows'][:181]],
+        targets_through075_exact=[r['final105_rad'] for r in read(run/'targets60.json')['rows'][:46]] ==
+            [r['final105_rad'] for r in read(reference/'targets60.json')['rows'][:46]])
+    schedule = dict(max_depth_error_m=max(depth_errors), prefix=prefix, posture_target=posture_checks,
+        trunk_K150_D1_exact=all(initial['control_K105_Nm_rad'][j] == 150. and initial['control_D105_Nms_rad'][j] == 1. for j in trunk))
+    schedule['passed'] = bool(schedule['max_depth_error_m'] <= 1e-15 and len(trunk) == 9 and schedule['trunk_K150_D1_exact'] and posture_checks['passed'])
+    save(out/'schedule_evidence.json', schedule)
+    goal_evidence = right_goal_evidence(run, config, initial, efforts)
+    save(out/'right_goal_evidence.json', goal_evidence)
+    load_bias = load_bias_evidence(run, initial, states, efforts, config)
+    save(out/'load_bias_evidence.json', load_bias)
+    chest_extra = chest_extra_evidence(initial, read(run/'native_properties.json'), states, efforts, config)
+    save(out/'chest_extra_evidence.json', chest_extra)
+    prefix_exact = {name: read(run/name)['rows'][:len(read(original_run/name)['rows'])] == read(original_run/name)['rows'] for name in ('states240.json','contacts240.json','efforts240.json','targets60.json')}
+    original_summary = read(BASE/'grounded_guitar_support_v1/analysis_static_v16/summary.json')
+    save(out/'original5_prefix_evidence.json', dict(exact=prefix_exact, original_static5_passed=original_summary['passed'], original_gates=original_summary['gates']))
+    gates = dict(completed_preparation5_hold5=bool(report['completed'] and report['mode'] == 'static' and report['physics_steps'] == 2400),
+        prescribed_hold_window=bool(len(hold_rows)==1201 and hold_rows[0]['time_s']==5 and hold_rows[-1]['time_s']==10),
+        first5_native16_exact=all(prefix_exact.values()),
+        runtime_restrictions=bool(not report['failure'] and not report['cleanup_errors'] and not report['forbidden_calls']
+            and all(report['initial_checks'].values()) and report['root_fixed'] and report['guitar_free']
+            and not report['strap_enabled'] and report['training_updates'] == 0),
+        native_integrity=bool(integrity['runs'][0]['all_checks'] and integrity['inputs_unchanged']),
+        runner_inputs=bool(report['inputs_unchanged'] and verify(read(run/'attempt.json')['input_sha256'])),
+        wrapper_inputs=bool(wrapper['inputs_unchanged'] and isinstance(wrapper['input_sha256'], dict)
+            and wrapper['input_sha256'] and verify(wrapper['input_sha256'])
+            and wrapper['actual_scene_class'] == 'seated_foot_support_v1.runtime_v6.Scene'
+            and wrapper['controller'] == 'grounded_guitar_support_v1.runtime_v18.Controller'),
+        body_displacement30mm=whole['max_body_displacement_m'] <= .03,
+        rotation5deg=whole['max_rotation_deg'] <= 5,
+        neck3deg=whole['max_abs_neck_deg'] <= 3,
+        lateral20mm=whole['max_abs_lateral_m'] <= .02,
+        trunk_total5deg=whole['max_Torso_Chest_tilt_deg'] <= 5,
+        trunk_right3deg=whole['max_abs_Torso_Chest_right_deg'] <= 3,
+        prepared_Chest_upperarm95pct=bool(settled and settled['simultaneous_support_fraction'] >= .95),
+        both_feet95pct=bool(feet['both_feet_positive_fraction'] is not None and feet['both_feet_positive_fraction'] >= .95
+            and feet['all_contact_rows_present']),
+        prepared_both_feet95pct=bool(hold_feet['both_feet_positive_fraction'] is not None and hold_feet['both_feet_positive_fraction']>=.95 and hold_feet['all_contact_rows_present']),
+        four_soles_still=soles['all_four_parts_passed'], analysis_inputs=verify(pins), scheduled_depth_PD_and_posture_target=schedule['passed'],
+        Spine_total5deg=whole['max_Spine_total_tilt_deg'] <= 5., finite_human_right_goal=goal_evidence['passed'], finite_observed_hip_load_bias=load_bias['passed'], scheduled_Chest_extra_depth=chest_extra['passed'])
+    windows = {}
+    for name, lo, hi in [('startup_0to1',0,1),('original_1to5',1,5),('preparation_0to5',0,5),('prescribed_hold_5to10',5,10),('last_9to10',9,10)]:
+        subset = [r for r in rows if lo <= r['time_s'] <= hi]
+        windows[name] = interval(subset) if subset else None
+    save(out/'summary.json', dict(run=str(run), gates=gates, passed=all(gates.values()),
+         protocol='finite_prepare5_then_hold5_v1', original_static5_passed=original_summary['passed'], original_prefix_exact=prefix_exact,
+         whole=whole, windows=windows, feet_1to10=feet, feet_5to10=hold_feet, soles_last1=soles, inputs_unchanged=verify(pins),
+         scope='Prescribed finite preparation0..5 then full hold5..10. Original0..5 failure is retained. Full0..10 guitar/trunk/safety thresholds; Chest/upper-arm5..10, both-foot1..10 and5..10. Original source foot BOX vertices transformed by normalized native rotation, not cooked clearance. Raw lambda is not force N; fixed Root is not free-root weight balance.'))
+    print(dict(passed=all(gates.values()), gates=gates, whole=whole), flush=True)
+
+
+if __name__ == '__main__':
+    p = argparse.ArgumentParser()
+    p.add_argument('--run', type=Path, required=True)
+    p.add_argument('--out', type=Path, required=True)
+    a = p.parse_args()
+    main(a.run.resolve(), a.out.resolve())

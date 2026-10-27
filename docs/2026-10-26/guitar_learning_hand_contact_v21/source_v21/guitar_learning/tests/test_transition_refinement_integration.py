@@ -1,0 +1,152 @@
+"""Actual BC proof/migration and scoped runner integration, without native scenes."""
+import argparse
+import copy
+import json
+from pathlib import Path
+import subprocess
+import sys
+import types
+import unittest
+from unittest.mock import patch
+
+import torch
+
+from guitar_learning.tool.experiments.transition import learning, train, policy as old_policy
+from guitar_learning.tool.experiments.transition_refinement import evidence, run, capture
+from guitar_learning.tool.experiments.transition_refinement.policy import SpecialistPolicy
+from guitar_learning.tool.experiments.transition_refinement.settings import settings_document, SCHEMA
+
+ROOT = Path(__file__).resolve().parents[2]
+PHASE = ROOT/'docs/2026-10-12/stability_adapter_2/results/guitar_learning_transition_long_v1'
+
+
+def raw_settings():
+    value = json.loads((PHASE/'single_a_ppo_settings_v1.json').read_text())
+    value['initialization']['gate_evaluations'] = []
+    value['initial_std'] = .001
+    value['min_available_memory_gib'] = 4.
+    value['refinement'] = dict(schema=SCHEMA,
+        exploration=dict(min_std=1e-4, max_std=.05, initial_std=.001),
+        learning=dict(bc_weight=1., bc_batch_size=120, std_lr=1e-5),
+        evaluation_mode='deterministic')
+    return value
+
+
+class IntegrationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        torch.set_num_threads(1)
+        cls.settings = settings_document(raw_settings())
+        # Real old BC -> teacher capture -> old source24update proof, not a mock.
+        cls.proof = evidence.initialization_evidence(cls.settings)
+        cls.contract = cls.proof['target_contract']
+
+    def test_actual_small_std_parser_preserves_legacy_floor_and_memory_guard(self):
+        self.assertEqual(self.settings['initial_std'], .001)
+        self.assertEqual(self.settings['min_available_memory_gib'], 6.)
+        value = raw_settings(); value.pop('refinement')
+        with self.assertRaises(ValueError): train.settings_document(value)
+        value = raw_settings(); value['initial_std'] = .002
+        with self.assertRaises(ValueError): settings_document(value)
+
+    def test_real_actor_migration_only_new_std_fresh_critic(self):
+        model = SpecialistPolicy(500, size='medium', contract=self.contract,
+            exploration=self.settings['refinement']['exploration'])
+        before = {k:v.clone() for k,v in model.state_dict().items()}
+        with patch.object(evidence, 'initialization_evidence', return_value=self.proof):
+            result = evidence.initialize_actor(model, self.settings)
+        self.assertEqual(result['copied'], 'selected left Actor only')
+        for key,value in model.state_dict().items():
+            expected = self.proof['payload']['model'][key] if key.startswith(
+                ('actor_encoders.left.', 'actor_heads.left.')) else before[key]
+            self.assertTrue(torch.equal(value, expected), key)
+        self.assertAlmostEqual(float(model.log_std[0].exp()), .001, places=8)
+        wrong = copy.deepcopy(self.contract); wrong['termination']['time_limit_s'] = 5.
+        model = SpecialistPolicy(500, size='medium', contract=wrong)
+        with patch.object(evidence, 'initialization_evidence', return_value=self.proof):
+            with self.assertRaises(ValueError): evidence.initialize_actor(model, self.settings)
+
+    def test_old_native_gates_rejected_instead_of_inheriting_success(self):
+        with self.assertRaisesRegex(ValueError, 'new refinement reward contract'):
+            capture.audit_capture(PHASE/'single_a_bc_eval_v1/case_000')
+        settings = copy.deepcopy(self.settings)
+        settings['initialization']['gate_evaluations'] = [str(PHASE/f'single_a_bc_eval_v{i}'/'case_000') for i in (1,3,4,5)]
+        with patch.object(evidence, 'ORIGINAL_EVIDENCE', return_value=self.proof):
+            with self.assertRaisesRegex(ValueError, 'new refinement reward contract'):
+                evidence.initialization_evidence(settings, require_gate=True)
+
+    def test_stochastic_gate_rejected(self):
+        settings = copy.deepcopy(self.settings)
+        settings['initialization']['gate_evaluations'] = ['/tmp/gate%d'%i for i in range(4)]
+        actual = copy.deepcopy(self.settings); actual['refinement']['evaluation_mode'] = 'stochastic'
+        from guitar_learning.training.recording import digest
+        fake = dict(contract=self.contract, settings=actual, source_pins={},
+            report=dict(action_source='policy', teacher_intervention=False,
+                initialization_checkpoint_sha256=digest(settings['initialization']['checkpoint'])))
+        with patch.object(evidence, 'ORIGINAL_EVIDENCE', return_value=self.proof), \
+                patch.object(capture, 'audit_capture', return_value=fake):
+            with self.assertRaisesRegex(ValueError, 'deterministic exploration'):
+                evidence.initialization_evidence(settings, require_gate=True)
+
+    def test_scoped_eval_actual_migration_and_spawn_factory_binding(self):
+        from guitar_learning.tool.experiments.transition import probe, transfer, environment as old_env, worker as old_worker
+        from guitar_learning.tool.experiments.transition_refinement.environment import build_environment
+        from guitar_learning.tool.experiments.transition_refinement.worker import native_environment
+        original = old_policy.SpecialistPolicy
+        settings = copy.deepcopy(self.settings); settings['refinement']['evaluation_mode'] = 'stochastic'
+        args = argparse.Namespace(mode='eval', checkpoint=None, resume=None)
+        def evaluate(value, args):
+            self.assertIs(old_env.build_environment, build_environment)
+            self.assertIs(old_worker.native_environment, native_environment)
+            self.assertIs(learning.SpecialistPolicy, original)
+            model = old_policy.SpecialistPolicy(500, size='medium', contract=self.contract)
+            transfer.initialize_actor(model, value)
+            inputs = [torch.as_tensor(self.proof['data'][k][:2]) for k in
+                ('state','events','mask','priority_events','priority_mask')]
+            torch.manual_seed(8)
+            result = model.act(*inputs, deterministic=True)
+            self.assertTrue(torch.equal(result['action'][:,33:], torch.zeros(2,6)))
+            self.assertFalse(torch.equal(result['action'][:,:33], result['mean'][:,:33].tanh()))
+            return dict(completed=True)
+        with patch.dict(sys.modules, {'isaacgym':types.ModuleType('isaacgym')}), \
+                patch.object(evidence, 'initialization_evidence', return_value=self.proof), \
+                patch.object(probe, 'run', side_effect=evaluate):
+            self.assertTrue(run.run(settings,args)['completed'])
+        self.assertIs(old_policy.SpecialistPolicy, original)
+
+    def test_training_rehearsal_uses_new_gate_arrays_and_teacher_proof(self):
+        from guitar_learning.training import ppo
+        from guitar_learning.tool.experiments.transition import train_with_teacher_proof
+        proof = dict(self.proof, rehearsal_data={key:self.proof['data'][key] for key in learning.SHAPES})
+        args = argparse.Namespace(mode='train', checkpoint=None, resume=None)
+        def train_entry(settings,args):
+            model = old_policy.SpecialistPolicy(500,size='medium',contract=self.contract)
+            trainer = ppo.PPOTrainer(model,ppo.PPOConfig(**settings['ppo']))
+            identity = trainer._identity()
+            self.assertEqual(identity['refinement']['demonstration_rows'],240)
+            self.assertEqual(len(trainer.actor_optimizer.param_groups),2)
+            return dict(completed=True)
+        with patch.dict(sys.modules, {'isaacgym':types.ModuleType('isaacgym')}), \
+                patch.object(evidence,'initialization_evidence',return_value=proof), \
+                patch.object(train_with_teacher_proof,'run',side_effect=train_entry):
+            self.assertTrue(run.run(self.settings,args)['completed'])
+
+    def test_CLI_imports_Isaac_first(self):
+        script = '''import builtins,runpy,sys
+original=builtins.__import__
+def checked(name,*args,**kwargs):
+ if name=='isaacgym':raise RuntimeError('ISAAC_FIRST')
+ if name.split('.')[0] in ('torch','numpy'):raise AssertionError('scientific import before Isaac')
+ return original(name,*args,**kwargs)
+builtins.__import__=checked
+sys.argv=['run','eval','--settings','/tmp/unused.json','--out','/tmp/unused-out']
+try:runpy.run_module('guitar_learning.tool.experiments.transition_refinement.run',run_name='__main__')
+except RuntimeError as error:assert str(error)=='ISAAC_FIRST'
+else:raise AssertionError('Isaac never imported')
+'''
+        result=subprocess.run([sys.executable,'-c',script],cwd=ROOT,
+            capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+
+if __name__ == '__main__': unittest.main()

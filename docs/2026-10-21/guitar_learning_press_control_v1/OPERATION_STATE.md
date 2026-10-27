@@ -1,0 +1,13 @@
+작업진행중. 사용자접근/감속/정지/전환개선구현승인. 이전430Python+문서 archive/20261021_before_press_control_v1 보관. 신규press_surface.py+test5/SHA9d292f2c...·finger_reward.py+test10/SHA22ef7e... 동결·독립15CPU검수PASS. root environment통합reward4/obs2/ledger2 + curriculum_runtime v4 및 기존surface test수정. 관련46CPU retry01 PASS5.114s; 첫31test시도는새가장가까운surface점변화로기대값5개실패,knownsinglepoint fixture수정후재검증. comparison agent신규통합test_gpu_press_learning 작성중, backend agent새phase240Hz N4 zero전곡접촉probe도구검사중. 활성소스아직최종동결전. GPU실행없음. 최종435source예상(기존3수정+신규helper2/test3). 이후전체CPU/GDB→작은GPU접촉probe→large1024/H32fresh100→실제100→101재개/고정0/100→영상·분석·문서·최종봉인. 이전incremental phase850files/740722344bytes manifest1f743895... 봉인원자료읽기전용.
+
+최종435source동결/3기존수정5추가,독립통합검수PASS. 전체CPU GDBretry01은기존song_hand환경JSONload에서SIGFPE136(CW1f40)로실패,ptrace시작실패별도보존. source/FPmask수정없이파일별freshprocess전체검사65983진행중(cpu_isolated_driver/status). GPU아직미시작.
+
+CPU파일격리142완료:141파일856PASS·legacy transition_capture SIGFPE(-8)로9개미실행; 해당9개GDB재실행22156은정상exit0/47.579s PASS. cpu_tests.json은865unique coverage와최초격리/단일process실패를분리,FP근본해결아님. GPU N4 실제240Hz접촉probe34205실행시작 contact_probe_n4_gdb.log/lifecycle. source435무변경.
+
+N4 zero contact probe34205 정상종료:4환경각5음/전곡안전·240Hz원자료검산PASS. sourceplane9.3mm는접근참조이며실제candidate에서선택점planegap4.35mm 가능,1mm필수아님. 관련review_contact_probe닫힘. 학습10757 large1024/H32/fresh100 정상GDB exit0,100회3276800전이 완료. 수집safe785/physical437,달성safe1251/physical506(변동정책기록;fixed성과아님). 현재CPU verify_training 및실제GPU fixed0/100 평가시작. source435동결유지,별도rest보너스추가안함.
+
+smoke100 verify/analyze 완료:435Python/580pin/3331replayexact/raw3200CRC/3,276,800전이·nonfinite0/nativeclosePASS. 실제fixed0/1001024 session58707 정상exit0/GDBnormal. initial1024safe/mean3.8046875→final1021safe/mean0.0,성과향상실패/단계0. compare_evaluations60483 및compare_baseline53738 actualmainexit0. 이전v3최종safe311/mean.977539와분리(목표/보상달라near/reward직접향상delta없음). Root N4 closedloop policyablation26312 실제GPU진행중,그뒤실제100→101재개·영상QA·최종리뷰/문서/봉인. 성능0을구현통과로감추지않음,2000자동실행없음.
+
+N4policyablation26312 정상exit0/GDBnormal/4safe 결과full0/LH21zero5/arm12zero0/allzero5. 새계약실제100→10113598 정상exit0,CPUverify_resume1148exit0·nonmetadataexact/RNG/cur3331/left갱신/right보존/oldv3엄격거부PASS·review_resume동결. 전신87251/손50095 softwarerender 각각exit0,root처음/중간/끝6preview시각검사+독립ffprobe1969/60fps/1280x720/32.816667초PASS(video_qa.json). GPU/GL세션전부종료. final_policy_diagnosis2파일동결(독립review대기),backend policy_ablation_analysis2파일작성/검산중. root현행4docs/phaseREADME/plan반영,최종review·문서snapshot·result_manifest봉인만남음. active435SHA drift0.
+
+최종완료: 모든분석/검수작성자닫힘·N4독립검수PASS·review_final aa452814...동결. flow잔여v1/alpha설명수정확인. 최종435source+source_training/모든runtimepin·문서링크·snapshot확인완료,CPU865는재시도포함범위·최초단일검사SIGFPE미해결보존. 코드기능/실제100/재개/평가/영상완료·연주성능목표미달(3.8046875→0음)·2000미실행. result_manifest 자기자신만제외해전체봉인,이후수정금지.

@@ -1,0 +1,128 @@
+"""All26 actual gates plus raw audit of finite joint replay/hold/target return."""
+import isaacgym
+import argparse
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import read,save
+from ..horizontal_play_test_v1.analyze_v1 import physical_guitar_bodies
+from . import analyze_v2 as old
+from .motion_v1 import interpolate
+from .motion_v3 import MODE
+
+ORIGINAL_OWNERSHIP=old.ownership
+
+
+def intervention_prefix(run,reference,k):
+    checks={}
+    for name,count in [('states240.json',k+1),('contacts240.json',k+1),('efforts240.json',k)]:
+        a,b=read(run/name)['rows'],read(reference/name)['rows']
+        checks[name]=len(a)>=count and len(b)>=count and a[:count]==b[:count]
+    a,b=read(run/'targets60.json')['rows'],read(reference/'targets60.json')['rows']
+    keys=('joint_names','requested105_rad','final105_rad','native105_position_readback_rad')
+    checks['numeric105_targets_before_capture']=bool(len(a)>=k//4 and len(b)>=k//4 and
+        all(x['physics_step_before']==y['physics_step_before'] and all(x[key]==y[key] for key in keys) for x,y in zip(a[:k//4],b[:k//4])))
+    return dict(checks=checks,passed=all(checks.values()),capture_step=k,
+        scope='Press-only actual state/contact0..k inclusive,effort0..k-1,numeric105 target0..k-4. Capture targetk is the intervention and is excluded.')
+
+
+def ownership(run,initial,properties,targets):
+    legacy=ORIGINAL_OWNERSHIP(run,initial,properties,targets)
+    cfg=read(read(run/'attempt.json')['config']);spec=read(cfg['play_spec']);wrapper=read(run/'support_wrapper.json')
+    after=[row for row in targets if row['physics_step_before']>=2400]
+    samples=read(run/'states240.json')['rows'];states={r['physics_step']:r['state'] for r in samples}
+    contacts={r['physics_step']:r['contacts'] for r in read(run/'contacts240.json')['rows']}
+    checks=dict(original_ownership=legacy['passed'],full240_post_targets=len(after)==240,actual10=2400 in states,
+        explicit_motion_patch=wrapper.get('finger_motion_class')=='grounded_guitar_play_v1.motion_v3.Motion'
+            and wrapper.get('scene_command')=='grounded_guitar_play_v1.runtime_v2.command_with_final'
+            and wrapper.get('finger_control_mode')==cfg.get('finger_control_mode')==MODE,
+        replay_spec=spec.get('finger_control')==dict(mode=MODE,return_mode='capture13_to_reference2396_target13p5',
+            readiness_hz=60,required_dwell_s=.1,minimum_descent_m=.002,minimum_qchange_rad=.02,table_end_step=3120))
+    if not checks['actual10'] or not checks['full240_post_targets']:
+        return dict(checks=checks,passed=False,original_ownership=legacy,scope='Incomplete recorded finite press is rejected.')
+    names,bodies=initial['joint_names'],initial['human_body_names']
+    finger=[names.index(n) for n in ('LH:index1_x','LH:index1_z','LH:index2','LH:index3')]
+    trajectory=spec['finger_trajectory'];table={r['physics_step_before']:r for r in trajectory['rows']}
+    reference=Path(trajectory['reference_run']);reference_targets={r['physics_step_before']:r for r in read(reference/'targets60.json')['rows']}
+    checks['table_source_exact']=trajectory['joint_names']==[names[j] for j in finger] and trajectory['joint_indices105']==finger and list(table)==list(range(2400,3120,4)) and trajectory['rest_target_step']==2396
+    rest=np.array(trajectory['rest_final4_rad'])
+    checks['table_source_exact'] &= np.array_equal(rest,np.array(reference_targets[2396]['final105_rad'])[finger])
+    for k,r in table.items():
+        source=reference_targets[k]
+        checks['table_source_exact'] &= (np.array_equal(r['requested4_rad'],np.array(source['requested105_rad'])[finger])
+            and np.array_equal(r['final4_rad'],np.array(source['final105_rad'])[finger])
+            and r['reference_IK_error_m']==source['play']['press_IK_error_m'] and r['reference_IK_error_m']<=.003)
+    def marker_G(state):
+        gp,gr=pose(state['guitar_body_states'][0]);p,_=pose(state['human_body_states'][bodies.index('LH:index3')])
+        return gr.inv().apply(p-gp)
+    origin10=marker_G(states[2400]);q10=np.array([r['pos'] for r in states[2400]['human_dof_states']])[finger]
+    target=np.array(spec['press']['target_G_m']);physical=physical_guitar_bodies()
+    lower=np.array(initial['PD_properties']['lower'])[finger];upper=np.array(initial['PD_properties']['upper'])[finger]
+    before=[r for r in targets if r['physics_step_before']<2400][-1]
+    ready_since=None;capture=None;held=[];errors=[]
+    checks.update(observation_reconstruction=True,first_actual_capture=True,recorded_requested_final_exact=True,
+        constant_captured_target=True,return_target_math=True,original_rate_bounds=True,no_live_finger_IK=True)
+    def match(a,b):
+        error=float(np.max(abs(np.asarray(a,dtype=float)-np.asarray(b,dtype=float))));errors.append(error);return error<=1e-10
+    for row in after:
+        k=row['physics_step_before'];t=k/240;m=row.get('play',{});state=states[k]
+        q=np.array([r['pos'] for r in state['human_dof_states']])[finger];actual=marker_G(state);relative=actual-target
+        positive=[]
+        for c in contacts[k]:
+            a,b=c['body0_name'],c['body1_name']
+            if float(c['lambda'])>0 and ((a=='human/LH:index3' and b in physical) or (b=='human/LH:index3' and a in physical)):
+                positive.append(dict(body0=a,body1=b,raw_lambda=float(c['lambda'])))
+        ready=bool(positive and np.linalg.norm(relative[:2])<=spec['press']['geometry_xy_m'] and spec['press']['geometry_z_band_m'][0]<=relative[2]<=spec['press']['geometry_z_band_m'][1])
+        if not ready or t<10.8:ready_since=None
+        elif ready_since is None:ready_since=t
+        dwell=t-ready_since if ready_since is not None else 0.
+        descent=float(origin10[2]-actual[2]);change=float(np.max(abs(q-q10)));prior=np.array(before['final105_rad'])[finger]
+        if capture is None and 10.8<=t<13 and ready and dwell>=.1 and descent>=.002 and change>=.02:
+            capture=dict(step=k,source_target_step=k-4,final4_rad=prior.tolist(),observed_ready_duration_60Hz_s=dwell,actual_descent_m=descent,actual_qchange_rad=change)
+        held_now=capture is not None and t<13
+        checks['first_actual_capture'] &= m.get('finger_target_capture')==capture and m.get('contact_hold_active') is held_now
+        checks['observation_reconstruction'] &= (m.get('finger_control_mode')==MODE and m.get('readiness_observation_hz')==60
+            and m.get('actual_geometry_contact_ready') is ready and m.get('actual_index3_positive_contacts')==positive and m.get('ready_observation_start_s')==ready_since
+            and match(m['observed_ready_duration_s'],dwell) and match(m['actual_descent_from10_m'],descent) and match(m['actual_max_qchange_from10_rad'],change)
+            and match(m['actual_finger_G_m'],actual) and match(m['actual_q4_rad'],q) and match(m['previous_submitted4_rad'],prior)
+            and match(m['rest_reference_target4_rad'],rest) and match(m['actual_marker_G_displacement_from10_m'],np.linalg.norm(actual-origin10))
+            and match(m['actual_q4_distance_to_rest_target_rad'],np.linalg.norm(q-rest)))
+        requested=np.array(row['requested105_rad'])[finger];final=np.array(row['final105_rad'])[finger]
+        checks['original_rate_bounds'] &= bool(np.all(requested>=lower) and np.all(requested<=upper) and
+            np.array_equal(final,np.clip(requested,prior-1.5/60,prior+1.5/60).astype(np.float32).astype(float)))
+        checks['no_live_finger_IK'] &= m.get('press_IK_evaluated') is False and m.get('press_IK_error_m') is None
+        if t<13 and capture is None:
+            checks['recorded_requested_final_exact'] &= (np.array_equal(requested,table[k]['requested4_rad']) and np.array_equal(final,table[k]['final4_rad'])
+                and m.get('recorded_final4_exact') is True and m.get('recorded_reference_IK_error_m')==table[k]['reference_IK_error_m'] and m.get('finger_phase')=='recorded_approach')
+        elif held_now:
+            held.append(k)
+            checks['constant_captured_target'] &= (np.array_equal(requested,capture['final4_rad']) and np.array_equal(final,capture['final4_rad'])
+                and m.get('recorded_reference_IK_error_m') is None and m.get('recorded_final4_exact') is None and m.get('finger_phase')=='contact_target_hold')
+        else:
+            checks['return_target_math'] &= capture is not None
+            if capture is not None:
+                goal=interpolate(t,[13,13.5,14],np.array([capture['final4_rad'],rest,rest]))
+                checks['return_target_math'] &= (np.array_equal(requested,goal) and m.get('finger_phase')=='return_rest_target'
+                    and m.get('recorded_reference_IK_error_m') is None and m.get('recorded_final4_exact') is None)
+        checks['observation_reconstruction'] &= (match(m['final_target4_rad'],final) and match(m['requested_minus_actual4_norm_rad'],np.linalg.norm(requested-q)) and match(m['final_minus_actual4_norm_rad'],np.linalg.norm(final-q)))
+        before=row
+    checks['capture_and_full_hold']=bool(capture is not None and held==list(range(capture['step'],3120,4)))
+    prefix=intervention_prefix(run,reference,capture['step']) if capture is not None and cfg['play_case']=='press' else dict(passed=cfg['play_case']=='combined',scope='Press1 intervention-prefix equality is not required for combined, whose right-hand strike differs. Original first10 exact gate remains mandatory.')
+    checks['pre_intervention_press_exact_or_combined_scope']=prefix['passed']
+    checks={k:bool(v) for k,v in checks.items()}
+    return dict(checks=checks,passed=all(checks.values()),original_ownership=legacy,
+        finite_finger_evidence=dict(capture=capture,held_target_rows=len(held),max_reconstruction_error=max(errors,default=None),intervention_prefix=prefix),
+        scope='Recorded human joint requests through actual contact, finite prior-submitted target hold, and return to2396 rest targets. No live finger IK or state replay. Actual240Hz action/contact/dwell and all physical gates remain unchanged; target return is not exact actual-pose return.')
+
+
+def main(run,out,baseline=None):
+    with patch.object(old,'ownership',ownership):old.main(run,out,baseline)
+    assert old.ownership is ORIGINAL_OWNERSHIP
+    save(out/'analysis_revision_v4.json',dict(version='analyze_v4',physical_action_gates_unchanged=True,
+        additional_audit='Original26 target_ownership now audits recorded finite command table/actual capture/hold/return/prefix; live finger IK is not claimed.'))
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--run',type=Path,required=True);p.add_argument('--out',type=Path,required=True);p.add_argument('--baseline',type=Path)
+    a=p.parse_args();main(a.run.resolve(),a.out.resolve(),a.baseline.resolve() if a.baseline else None)

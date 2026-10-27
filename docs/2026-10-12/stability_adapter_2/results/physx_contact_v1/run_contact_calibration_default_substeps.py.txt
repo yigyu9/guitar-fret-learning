@@ -1,0 +1,79 @@
+"""Analytic box gaps versus first completed CPU PhysX contact records."""
+import argparse
+import json
+from pathlib import Path
+
+from .environment import gymapi, np, vector
+from .native_contacts import body_names, read_contacts
+
+
+def calibrate():
+    gym = gymapi.acquire_gym()
+    params = gymapi.SimParams()
+    params.dt = 1/240
+    params.gravity = gymapi.Vec3(0,0,0)
+    params.use_gpu_pipeline = params.physx.use_gpu = False
+    params.physx.solver_type = 1
+    params.physx.num_position_iterations = 4
+    params.physx.num_velocity_iterations = 2
+    params.physx.contact_collection = gymapi.ContactCollection.CC_LAST_SUBSTEP
+    params.physx.contact_offset,params.physx.rest_offset = .002,0
+    params.physx.max_depenetration_velocity = 10
+    sim = gym.create_sim(0,-1,gymapi.SIM_PHYSX,params)
+    if sim is None:
+        raise RuntimeError('CPU PhysX creation failed')
+    try:
+        options = gymapi.AssetOptions()
+        moving = gym.create_box(sim,.1,.1,.1,options)
+        options.fix_base_link = True
+        fixed = gym.create_box(sim,.1,.1,.1,options)
+        cases = []
+        for i,gap in enumerate((.01,.00005,0.,-.001)):
+            env = gym.create_env(sim,gymapi.Vec3(-1,-1,-1),gymapi.Vec3(1,1,1),2)
+            pose = gymapi.Transform()
+            static = gym.create_actor(env,fixed,pose,'fixed_box',i,0)
+            pose.p = gymapi.Vec3(.1+gap,0,0)
+            free = gym.create_actor(env,moving,pose,'free_box',i,0)
+            for actor in (static,free):
+                props = gym.get_actor_rigid_shape_properties(env,actor)
+                for shape in props:
+                    shape.contact_offset,shape.rest_offset = .0001,0
+                gym.set_actor_rigid_shape_properties(env,actor,props)
+            state = gym.get_actor_rigid_body_states(env,free,gymapi.STATE_ALL).copy()
+            state['vel']['linear'].fill(0)
+            state['vel']['angular'].fill(0)
+            cases.append((env,free,state,gap))
+        if not gym.prepare_sim(sim):
+            raise RuntimeError('prepare failed')
+        for env,free,state,gap in cases:
+            if not gym.set_actor_rigid_body_states(env,free,state,gymapi.STATE_ALL):
+                raise RuntimeError('initial box state restore failed')
+        gym.simulate(sim)
+        gym.fetch_results(sim,True)
+        result = []
+        for env,free,state,gap in cases:
+            after = gym.get_actor_rigid_body_states(env,free,gymapi.STATE_ALL)
+            result.append({'analytic_initial_gap_m':gap,'free_box_initial_position_m':vector(state[0]['pose']['p']).tolist(),
+                'free_box_after_position_m':vector(after[0]['pose']['p']).tolist(),
+                'contacts':read_contacts(gym,env,body_names(gym,env))})
+        return {'scope':'first completed step of four isolated analytic box pairs; no guitar',
+                'dt_s':params.dt,'contact_offset_m':.0001,'rest_offset_m':0,
+                'lambda_units':'raw native API field; no conversion or force/impulse calibration', 'cases':result}
+    finally:
+        gym.destroy_sim(sim)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--out',type=Path,required=True)
+    args = parser.parse_args()
+    args.out.parent.mkdir(parents=True,exist_ok=True)
+    if args.out.exists():
+        raise FileExistsError('preserve existing calibration; use new path')
+    result = calibrate()
+    args.out.write_text(json.dumps(result,indent=2,allow_nan=False)+'\n')
+    print(json.dumps(result,indent=2,allow_nan=False))
+
+
+if __name__ == '__main__':
+    main()

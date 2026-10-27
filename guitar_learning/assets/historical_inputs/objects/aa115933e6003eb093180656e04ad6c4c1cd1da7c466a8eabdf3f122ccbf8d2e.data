@@ -1,0 +1,71 @@
+"""Cold-start proposal from saved native q/G pose; source geometry is a proxy."""
+import copy
+from pathlib import Path
+import xml.etree.ElementTree as ET
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from .initial_pose_noise_v1 import read, save, sha, pose
+from .environment_contract_v1 import EnvironmentContract
+from .upper_arm_static_geometry_v1 import ROOT, ASSET, calibrated_upper_fk, state_from_fk
+from .realistic_guitar_geometry_v1 import source_scene, source_audit
+from .om_axilla_source_geometry_v3 import CapsuleBodyDistance
+from .elbow_wrist_strike_source_v1 import solve_pick
+
+A=ROOT/'stability_adapter_2'; D=ROOT/'docs/2026-10-19/stability_adapter_2'
+P=D/'results/initial_pose_qualification_v1'
+B=D/'results/contact_three_view_v1/native_v1'
+CFG=D/'results/chest_left_grip_cycle_v1/config_v1.json'
+
+
+def main():
+    out=P/'source_v3';out.mkdir(parents=True,exist_ok=False)
+    geometry=read(A/'assets/om_body_geometry_v3/manifest.json'); asset=Path(geometry['asset'])
+    c=EnvironmentContract(CFG); base=read(B/'initial_values.json'); state=base['native_initial_state']
+    paths=set(A.glob('*.py'))|{A/'INITIAL_POSE_QUALIFICATION_PLAN_V1.md',CFG,B/'trace.json',B/'initial_values.json',ASSET,A/'config.json',A/'assets/om_body_geometry_v3/manifest.json',asset}|set(map(Path,c.inputs))|set(map(Path,geometry['input_sha256']))|{Path(x['path']) for x in geometry['meshes']}
+    for file in (ASSET,asset):
+        xml=ET.parse(file).getroot(); md=(file.parent/xml.find('compiler').get('meshdir')).resolve(); paths|={(md/m.get('file')).resolve() for m in xml.findall('./asset/mesh')}
+    pins={str(p.resolve()):sha(p) for p in sorted(paths)};save(out/'inputs_before.json',pins)
+    row=next(r for r in read(B/'trace.json') if r['physics_step']==3360)
+    names=base['joint_names']; bodies=base['human_body_names']; qraw=np.array(row['q_rad']);q=np.clip(qraw,c.lower,c.upper).astype(np.float32).astype(float)
+    fk,parents=calibrated_upper_fk(names,bodies,state,np.array(base['q_ref_rad'])); gp0,gr0=pose(state['guitar_body_states'][0])
+    seed=np.array(row['position_W_m']);gr=Rotation.from_quat(row['quaternion_xyzw'])
+    def predicted(gp):
+        s=state_from_fk(state,bodies,q,fk)
+        for body,old in zip(s['guitar_body_states'],state['guitar_body_states']):
+            p,r=pose(old);p=gp+gr.apply(gr0.inv().apply(p-gp0));r=gr*gr0.inv()*r
+            body['pose']={'p':dict(zip('xyz',p.tolist())),'r':dict(zip('xyzw',r.as_quat().tolist()))}
+        return s
+    ps=fk(q);distance=CapsuleBodyDistance(asset,ASSET)
+    def gaps(gp):return {n:distance.measure(ps,n,gp,gr)['gap_m'] for n in ('Chest','R_Shoulder','R_Hip','L_Hip','R_Elbow','Torso','Spine')}
+    exact_audit=source_audit(source_scene(predicted(seed),bodies,asset),parents);save(out/'seed14_source_audit.json',exact_audit)
+    print('seed14 source clear',exact_audit['source_clear'],'gapsmm',{k:1000*v for k,v in gaps(seed).items()},flush=True)
+    gp=seed.copy()
+    if not exact_audit['source_clear']:
+        def residual(delta):
+            d=gaps(seed+delta)
+            return np.r_[[10000*min(v-.0002,0) for v in d.values()],10*delta]
+        fit=least_squares(residual,np.zeros(3),bounds=(-np.full(3,.005),np.full(3,.005)),max_nfev=80,diff_step=1e-4,ftol=1e-9,gtol=1e-9,xtol=1e-9)
+        gp=seed+fit.x
+    gp=gp.astype(np.float32).astype(float);s=predicted(gp);audit=source_audit(source_scene(s,bodies,asset),parents)
+    distal=np.array([names.index(n+'_'+a) for n in ('R_Elbow','R_Wrist') for a in 'xyz']);samples=[];previous=q[distal]
+    points=np.array(c.config['six_joint_strike_waypoints_G_m'])
+    for target in np.vstack([points,(points[1]+points[2])/2]):
+        trial,error,_=solve_pick(fk,q,distal,c.lower,c.upper,q,gp+gr.apply(target),previous);previous=trial[distal]
+        samples.append({'target_G_m':target.tolist(),'q6_rad':trial[distal].tolist(),'error_m':error,'forearm_gap_m':distance.measure(fk(trial),'R_Elbow',gp,gr)['gap_m'],'ball_max_deg':float(np.rad2deg(np.linalg.norm(trial[distal].reshape(2,3),axis=1)).max())})
+    accepted=bool(audit['source_clear'] and np.all(q>=c.lower) and np.all(q<=c.upper) and np.max(abs(gp-seed))<=.0050001)
+    strike_reachable=all(x['error_m']<.002 and x['forearm_gap_m']>.00005 and x['ball_max_deg']<160 for x in samples)
+    meta={'accepted_for_native':accepted,'source_audit':audit,'seed14_source_audit':str(out/'seed14_source_audit.json'),'seed_native_trace':str(B/'trace.json'),'seed_physics_step':3360,'source_gap_m':gaps(gp),'initial_zero_velocity':True,'joint_limit_corrections_rad':{n:float(v-u) for n,u,v in zip(names,qraw,q) if abs(v-u)>1e-8},'guitar_seed_correction_W_m':(gp-seed).tolist(),'six_joint_strike_samples':samples,'strike_reachable':strike_reachable,'scope':'cold creation using saved14s geometry, not simulator continuation or passive equilibrium certification'}
+    save(out/'proposal_audit.json',meta); print('candidate accepted',accepted,'strike_reachable',strike_reachable,'correctionmm',(1000*(gp-seed)).tolist(),flush=True)
+    if accepted:
+        old=copy.deepcopy(c.candidate);old.update(joint_angles_rad=q.tolist(),position_W_m=gp.tolist(),quaternion_xyzw=gr.as_quat().tolist(),predicted_human_poses={n:{'p':p.tolist(),'q':r.as_quat().tolist()} for n,(p,r) in ps.items()},predicted_guitar_body_states=s['guitar_body_states'],initial_pose_qualification=meta)
+        old['right_block_cradle']={**old['right_block_cradle'],'accepted_for_native':True,'source_audit':audit,'scope':'qualification cold-start geometry gate; not old placement measurement'}
+        save(out/'candidate.json',old)
+        cfg={**c.config,'initial_candidate':str(out/'candidate.json'),'initial_candidate_sha256':sha(out/'candidate.json'),'diagnostic_seconds':10.,'six_joint_strike_enabled':False}
+        for mode in ('static','repeat','strike','left_cycle','z_plus3mm'):
+            item=copy.deepcopy(cfg);item['qualification_mode']=mode;item['diagnostic_seconds']=16. if mode=='left_cycle' else 5. if mode=='strike' else 10.;item['six_joint_strike_enabled']=mode=='strike'
+            save(out/('config_'+mode+'.json'),item)
+        save(out/'config_baseline.json',{**c.config,'qualification_mode':'baseline','diagnostic_seconds':10.,'six_joint_strike_enabled':False})
+    assert all(sha(p)==h for p,h in pins.items());save(out/'report.json',{'input_sha256':pins,'inputs_unchanged':True,'accepted_for_native':accepted,'strike_reachable':strike_reachable,'native_runs':0})
+
+if __name__=='__main__':main()

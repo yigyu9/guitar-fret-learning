@@ -1,0 +1,21 @@
+# 전곡 보상 개선 V2
+
+이 문서는 기존 전곡 Actor 이전·전문 평가·PPO 경로다. 새 정책으로 손별 전곡을 학습하려면 [기본 실행](../../../README.md)을 사용한다. 공용 보상 구현은 `guitar_learning/song/`으로 승격했으며 이 전문 경로의 이전·gate·strict 계약은 유지한다.
+
+사용자 요청에 따라 전곡의 두 보상 충돌을 수정한 신규 경로다. 이전 `song/`, 손별·joint 코드와 실행 원자료는 그대로 보존하며 공용 기반으로 사용한다. 실제 실행·검증·성과는 [이번 결과 디렉토리](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_reward_v2)를 확인한다.
+
+- 공용 `guitar_learning/song/quality.py`: 오압현 비용은 해당 음의 실제 발음 구간 `onset_s..end_s`에서만 적분한다. 이전 음의 정당한 유지와 다음 음의 사전 준비가 충돌하던 비용을 제거한다. 접촉·기하 성공/미압현/유지/50·100ms 판정은 기존과 같다.
+- 공용 `guitar_learning/song/progress.py`, `reward_environment.py`: 오른손의 연속 거리 보상을 제거한다. 같은 미달성 목표의 고정 출발점에 대한 potential 차이 `.25*(.99*Phi_after-Phi_before)`를 60Hz에서 한 번 부여한다. Phi는 실제 기타 상대 거리의 Gaussian(`scale=.03m`)이다. 목표 진입·교체·이탈에는 보상을 주지 않고, 실패 tick의 양성 보상도 억제한다. 정지 상태의 보상 누적을 막지만 목표 경계를 별도로 처리하므로 전역 정책 불변성 정리를 주장하지 않는다.
+- `transfer.py`, `policy.py`, `settings.py`: 기존 전곡 8업데이트 모델의 **전체 500입력 Actor와 표준편차만** 이전한다. Critic·Adam·업데이트 수는 새로 시작한다. 관측500·미래4초·행동39·원67음·32.8167초·안전/종료/비용·gain은 유지한다. 새 보상은 모델 계약에 명시되며 이전 체크포인트의 strict resume는 허용하지 않는다.
+- `worker.py`, `train.py`: 기존 persistent 환경과 PPO/로그/메모리 보호를 재사용한다. rollout 경계에서 시뮬레이터나 곡 시계를 재시작하지 않는다.
+- `probe.py`: 같은 고정 Actor·행동·240Hz 물리 표본의 V1/V2 보상 회계 대조다. 학습 성능 비교가 아니다.
+- `evaluate.py`: 최종 새 체크포인트를 strict load한 뒤 정책을 고정해 전곡을 평가한다. 학습 도중 갱신되는 정책의 episode와 구분한다.
+
+실행은 프로젝트 루트에서 `rl38` 환경으로 수행한다. 결과 경로는 매번 새 디렉토리를 사용한다.
+
+```bash
+python -m guitar_learning.tool.experiments.song_reward_v2.train --settings docs/2026-10-12/stability_adapter_2/results/guitar_learning_reward_v2/training_settings_v1.json --out docs/2026-10-12/stability_adapter_2/results/guitar_learning_reward_v2/training_v1
+python -m guitar_learning.tool.experiments.song_reward_v2.evaluate --settings docs/2026-10-12/stability_adapter_2/results/guitar_learning_reward_v2/training_settings_v1.json --run docs/2026-10-12/stability_adapter_2/results/guitar_learning_reward_v2/training_v1 --out docs/2026-10-12/stability_adapter_2/results/guitar_learning_reward_v2/final_evaluation_v1
+```
+
+기타는 자유 강체·중력 ON·스트랩 OFF이며 Root 고정·하체 유한 제어와 기존 안전 종료를 보존한다. 이번 성공은 접촉 후보/기하 타현에 관한 것이며 실제 압력·진동·음향 성공을 뜻하지 않는다. 보상 정의가 달라졌으므로 이전 총 return이나 `wrong_press_s`를 같은 척도로 직접 비교하지 않는다.

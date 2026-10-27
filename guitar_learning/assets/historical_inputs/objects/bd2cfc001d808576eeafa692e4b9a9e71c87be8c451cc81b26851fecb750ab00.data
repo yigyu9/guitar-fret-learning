@@ -1,0 +1,48 @@
+"""Audible-only wrong-pressure cost; original score matching remains unchanged."""
+from guitar_learning.tool.experiments.song.metrics import SongLedger as OriginalSongLedger, HISTORY_FIELDS, HISTORY_SCALES, metadata as original_metadata
+
+SCHEMA = 'guitar_learning.song_metrics.v2'
+WRONG_PRESS_PHASE = 'audible onset_s..end_s; preparation is not sounding ownership'
+
+
+def metadata():
+    value = original_metadata()
+    value['schema'] = SCHEMA
+    value['wrong_press_phase'] = WRONG_PRESS_PHASE
+    value['rewards']['right_guide_second'] = 0.
+    value['right_progress'] = dict(beta=.25, gamma=.99, scale_m=.03,
+        goal='endpoint_departure', integration='signed discounted potential at 60Hz')
+    return value
+
+
+class SongLedger(OriginalSongLedger):
+    """Reuse score bookkeeping, replacing only two reward definitions.
+
+    Wrong fretting is integrated between the two native endpoints only during
+    audible ownership. The right distance dwell reward is disabled; the caller
+    supplies its separate control-rate progress term.
+    """
+    def update(self, measured, geometry_sample=None):
+        before, now = self.previous['task_time_s'], measured['task_time_s']
+        wrong = {}
+        for target in self.task.targets:
+            identity = target.target_id
+            _, previous_wrong = self._q(self.previous, identity)
+            _, current_wrong = self._q(measured, identity)
+            audible = max(0., min(now, target.end_s)-max(before, target.onset_s))
+            increment = audible*.5*(previous_wrong+current_wrong)
+            wrong[identity] = (self.notes[identity]['wrong_press_s'], increment)
+        # The original update retains clock validation, native crossing matching,
+        # contact dwell, strict metrics, guide validation and safety suppression.
+        terms = super().update(measured, geometry_sample)
+        for identity, (previous, increment) in wrong.items():
+            self.notes[identity]['wrong_press_s'] = previous+increment
+        terms['song_wrong_press'] = -sum(increment for _, increment in wrong.values())
+        terms['song_right_guide'] = 0.
+        return terms
+
+    def summary(self, completed=False):
+        value = super().summary(completed=completed)
+        value['schema'] = SCHEMA
+        value['wrong_press_phase'] = WRONG_PRESS_PHASE
+        return value

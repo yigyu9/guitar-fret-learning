@@ -1,0 +1,14 @@
+# 변경 파일 인덱스
+
+| 파일 | 위치 | 역할 |
+|---|---|---|
+| 다면 그립 artifact producer | [make_multi_face_grip_artifacts.py](/home/ajou/yigyu/3/stability_adapter_2/make_multi_face_grip_artifacts.py:1), [입력 목록·SHA 봉인](/home/ajou/yigyu/3/stability_adapter_2/make_multi_face_grip_artifacts.py:22), [frame pair·curve 검사](/home/ajou/yigyu/3/stability_adapter_2/make_multi_face_grip_artifacts.py:67), [곡선 생성](/home/ajou/yigyu/3/stability_adapter_2/make_multi_face_grip_artifacts.py:118), [camera sheet 생성](/home/ajou/yigyu/3/stability_adapter_2/make_multi_face_grip_artifacts.py:144), [CLI·manifest](/home/ajou/yigyu/3/stability_adapter_2/make_multi_face_grip_artifacts.py:168) | 저장된 분석과 저장 camera PNG의 후처리 |
+| 결과 설명 | [README.md](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/multi_face_grip_v3/README.md:1) | 조건, 결과표, 이미지, raw 한계 및 재생성 방법 |
+| 곡선 그림 | [multi_face_grip_curves.png](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/multi_face_grip_v3/artifacts/multi_face_grip_curves.png) | 세 조건의 5초 기타 위치·회전 오차 |
+| 손 카메라 그림 | [multi_face_grip_hands_camera.png](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/multi_face_grip_v3/artifacts/multi_face_grip_hands_camera.png) | 실제 Gym 손 카메라 t=0/t=5 프레임 비교 |
+| 분석·camera 원자료 | [analysis.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/multi_face_grip_v3/analysis.json:1), [baseline capture](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/multi_face_grip_v3/native/baseline/capture.json:1), [seed 1 capture](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/multi_face_grip_v3/native/seed_1/capture.json:1), [seed 2 capture](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/multi_face_grip_v3/native/seed_2/capture.json:1) | 7개 분석 검사 및 화면별 frame 해시·시각 |
+| 실행 provenance | [artifact_manifest.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/multi_face_grip_v3/artifacts/artifact_manifest.json:1), [artifact_execution.json](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/multi_face_grip_v3/artifact_execution.json:1), [artifact_execution.log](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/multi_face_grip_v3/artifact_execution.log:1) | 입력·producer·출력 SHA와 후처리 실행 정보 |
+| 실행·계획 근거 | [run_multi_face_grip.py](/home/ajou/yigyu/3/stability_adapter_2/run_multi_face_grip.py:18), [analyze_multi_face_grip.py](/home/ajou/yigyu/3/stability_adapter_2/analyze_multi_face_grip.py:23), [단계 계획](/home/ajou/yigyu/3/stability_adapter_2/MULTI_FACE_GRIP_PLAN.md:1), [구현 파일 인덱스](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/multi_face_grip_v3/IMPLEMENTATION_FILES.md:1) | root 담당 실행·분석·계획 기록 |
+| 보존된 이전 producer/artifacts | [artifacts_attempt_v1](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/multi_face_grip_v3/artifacts_attempt_v1/) | 전체 frame/font 입력 봉인 범위 보완 전 producer·화면·manifest·실행 기록 보존 |
+
+이번 산출물 단계에서 native 물리 실행은 추가하지 않았습니다. 기존 원자료·실험 설정은 수정하지 않았습니다.

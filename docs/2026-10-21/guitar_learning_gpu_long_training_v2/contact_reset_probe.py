@@ -1,0 +1,64 @@
+"""Functional contact/count/reset comparison, independent of PPO training."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import types
+
+parser=argparse.ArgumentParser()
+parser.add_argument('--variant',choices=['baseline','aggregate'],required=True)
+args=parser.parse_args()
+p=Path(__file__).resolve().parent
+root=p.parents[2]
+import isaacgym
+import torch
+from guitar_learning.gpu.control import BatchedController
+source=(root/'guitar_learning/gpu/scene.py' if args.variant=='aggregate' else
+        root/'docs/2026-10-21/guitar_learning_gpu_long_run_check_v1/source_final/guitar_learning/gpu/scene.py')
+module=types.ModuleType('scene_probe')
+module.__file__=str(source)
+exec(compile(source.read_text(),str(source),'exec'),module.__dict__)
+scene=module.GpuScene(4,'left')
+try:
+    counts=dict(actors=scene.gym.get_sim_actor_count(scene.sim),
+                bodies=scene.gym.get_sim_rigid_body_count(scene.sim),
+                dofs=scene.gym.get_sim_dof_count(scene.sim))
+    assert counts==dict(actors=12,bodies=272,dofs=420),counts
+    controller=BatchedController(scene)
+    sample=scene.snapshot()
+    controller.reset(torch.arange(4,device=scene.device),sample)
+    rows=[]
+    for tick in range(64):
+        target=controller.targets(torch.zeros(4,39,device=scene.device),sample)
+        for _ in range(4):
+            efforts=controller.efforts(sample)
+            assert bool(torch.isfinite(efforts).all())
+            sample=scene.step(target,efforts)
+        force=sample['contact_force'].norm(dim=-1)
+        h=len(scene.human_bodies)
+        rows.append(dict(tick=tick+1,guitar_load_n=force[:,h].tolist(),
+            human_load_n=force[:,:h].sum(-1).tolist(),chair_load_n=force[:,-1].tolist(),
+            guitar_position=sample['body_state'][:,h,:3].tolist()))
+    assert max(v for row in rows for v in row['guitar_load_n'])>1.
+    assert max(v for row in rows for v in row['human_load_n'])>1.
+    other=torch.tensor([0,2],device=scene.device)
+    before={k:getattr(scene,k)[other].clone() for k in ('_dof','_roots','target','episode_steps')}
+    reset=scene.reset(torch.tensor([1,3],device=scene.device))
+    assert all(torch.equal(value,getattr(scene,k)[other]) for k,value in before.items())
+    assert torch.equal(reset['body_state'][1],scene._prepared_bodies)
+    assert torch.equal(reset['body_state'][3],scene._prepared_bodies)
+    assert bool((scene.episode_steps[torch.tensor([1,3],device=scene.device)]==0).all())
+    shapes={kind:[dict(filter=int(s.filter),friction=float(s.friction),contact_offset=float(s.contact_offset))
+                  for s in scene.gym.get_actor_rigid_shape_properties(scene.envs[0],actor)]
+            for kind,actor in zip(('human','guitar','chair'),scene.actors[0])}
+    result=dict(completed=True,variant=args.variant,source=str(source),
+        source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),counts=counts,
+        diagnostics=scene.diagnostics,contact_rows=rows,shape_properties=shapes,
+        selected_reset_preserves_other_rows=True,
+        static_chair_load_note='Recorded only; a positive static-body GPU force is not required for this test.',
+        limitation='Net body loads prove contacts remain active; no individual partner/witness certification or bitwise trajectory parity.')
+finally:
+    scene.close()
+result['closed']=scene.closed
+(p/('contact_reset_'+args.variant+'.json')).write_text(json.dumps(result,indent=2)+'\n')
+print(json.dumps({k:v for k,v in result.items() if k not in ('contact_rows','shape_properties','diagnostics')},indent=2))
