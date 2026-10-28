@@ -1,10 +1,13 @@
-"""Compile reviewed song-bundle inputs into the shared G0 event timeline.
+"""검수된 곡 번들의 입력을 공통 G0 이벤트 시간표로 변환한다.
 
-The compiler is intentionally a strict, standard-library-only boundary.  It
-does not import Isaac Gym, Torch, or the dense per-frame Fret goal runtime.
-Canonical events are built from musical source notes selected by each strike
-plan event; the dense Fret frames are fingerprinted but never treated as the
-audible score.
+이 변환기는 표준 라이브러리만 사용하는 엄격한 입력 경계다. Isaac Gym,
+Torch, 촘촘한 프레임별 Fret 목표 실행기를 불러오지 않는다. 각 타격 계획
+이벤트가 선택한 원 음표로 표준 이벤트를 만든다. 촘촘한 Fret 프레임은
+해시만 기록하며 소리가 나는 악보로 간주하지 않는다.
+
+읽는 순서: 오류·자료형 → 직렬화·입력 검증 → 원 음표 대응 →
+compile_song_bundle_events → MusicTask의 관측·시간 변환 → load_music_task.
+마지막 구역의 단계별 과제 선택도 같은 표준 시간표를 사용한다.
 """
 from __future__ import annotations
 
@@ -31,9 +34,9 @@ STRIKE_TRAINING_SCHEMAS = {
     "tab2body.strike_training.v2",
     "tab2body.strike_training.v3",
 }
-# Strike's final timing tolerance is 50 ms.  At 60 Hz that corresponds to
-# three control frames; the per-transition slack calculation below may still
-# reduce an individual event's usable rescue window to 0, 1 or 2 frames.
+# 타격의 최종 시점 허용 오차는 50ms이며 60Hz에서는 제어 프레임 3개다.
+# 다만 아래의 전환별 여유 계산에 따라 개별 이벤트의 구제 가능한 시간창은
+# 0·1·2프레임으로 줄어들 수 있다.
 DEFAULT_MAX_DELAY_FRAMES = 3
 N_GUITAR_STRINGS = 6
 MAX_FRET = 22
@@ -47,11 +50,11 @@ EventId = Union[int, str]
 
 
 class SongBundleValidationError(ValueError):
-    """The reviewed song bundle cannot define an unambiguous G0 timeline."""
+    """검수된 곡 번들로 모호하지 않은 G0 시간표를 만들 수 없을 때의 오류다."""
 
 
 class UnsupportedCanonicalEventError(SongBundleValidationError):
-    """A structurally valid event requests a capability not supported in G0."""
+    """구조는 유효하지만 G0에서 지원하지 않는 동작을 요청한 이벤트의 오류다."""
 
 
 def _canonical_json(value: Any) -> str:
@@ -61,18 +64,14 @@ def _canonical_json(value: Any) -> str:
 
 
 def canonical_content_sha256(value: Any) -> str:
-    """Return the stable SHA-256 used by canonical timeline contracts."""
+    """표준 시간표 계약에 사용하는 일관된 SHA-256을 반환한다."""
     if hasattr(value, "content_document"):
         value = value.content_document()
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+# 파일 해시는 공용 스트리밍 구현으로 계산한다.
+from guitar_learning.training.training_log_io import digest as _file_sha256
 
 
 def _load_json(path: Path) -> Mapping[str, Any]:
@@ -184,11 +183,11 @@ class CanonicalSourceFile:
 
 @dataclass(frozen=True)
 class CanonicalStringTarget:
-    """One audible string/note selected by a canonical strike event.
-
-    ``string`` follows the Isaac convention (0=high-e, 5=low-E), while
-    ``source_string`` preserves the mapping convention (0=low-E, 5=high-e).
-    Traversed-but-muted strings never appear as targets.
+    """표준 타격 이벤트가 선택한 소리 나는 현·음표 한 개다.
+    
+    string은 Isaac 관례(0=높은 e현, 5=낮은 E현)를 따르고 source_string은
+    원 운지 관례(0=낮은 E현, 5=높은 e현)를 보존한다.
+    지나가지만 소리를 내지 않는 현은 목표에 포함하지 않는다.
     """
 
     source_event_id: EventId
@@ -541,7 +540,7 @@ class CanonicalEventTimeline:
         value["content_sha256"] = self.content_sha256
         return value
 
-    # ``as_document`` matches the existing strike-plan serialization idiom.
+    # as_document는 기존 타격 계획의 문서 직렬화 방식에 맞춘 이름이다.
     as_document = to_document
 
     def to_json(self, *, indent: Optional[int] = 2) -> str:
@@ -1004,11 +1003,11 @@ def _canonical_event(
 def compile_song_bundle_events(
         bundle_root: Union[str, Path], *,
         fail_on_unsupported: bool = True) -> CanonicalEventTimeline:
-    """Validate and compile one reviewed song bundle for fixed-guitar G0.
-
-    Source-policy dense Fret frames are not consulted when constructing musical
-    events.  Fret ``events`` only contribute their authoritative press/release
-    times after a source-note identity match.
+    """검수된 곡 번들 하나를 고정 기타 G0용으로 검증·변환한다.
+    
+    음악 이벤트를 만들 때 원 정책의 촘촘한 Fret 프레임은 참조하지 않는다.
+    Fret events는 원 음표 식별자가 일치한 뒤에만 압현·해제 시각의
+    기준값을 제공한다.
     """
     root = Path(bundle_root).resolve()
     if not root.is_dir():
@@ -1122,6 +1121,174 @@ def compile_song_bundle_events(
     )
 
 
-# Readable alias for callers that think in terms of the artifact rather than
-# the bundle operation.
+# 번들 처리 동작보다 결과 문서 중심으로 사용하는 호출 측을 위한
+# 읽기 쉬운 별칭이다.
 compile_canonical_play_events = compile_song_bundle_events
+
+
+# ── 표준 시간표에서 단계별 과제와 CPU 관측 구성 ──
+
+EVENTS_SCHEMA = 'fresh_music.events.v1'
+LOOKAHEAD = 4
+# 현재 현 6개 × (프렛/22, 손가락/4, 압현 여부, 발음 여부, 해제까지 시간),
+# 이어서 슬롯 4개 × (유효 여부, 시작까지 시간, 방향, 현 6개 ×
+# (발음 여부, 통과 여부, 프렛/22, 손가락/4, 타격까지 시간, 유지 시간)).
+OBSERVATION_DIM = 30 + LOOKAHEAD * 39
+
+
+def _event_finite(value, name, minimum=0.0):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < minimum:
+        raise ValueError(f'{name} must be finite and >= {minimum}')
+    return float(value)
+
+
+def validate_timeline(timeline):
+    """표준 시간표의 왕복 변환과 새 정책용 목표 의미에 대한 더 엄격한 조건을 확인한다."""
+    CanonicalEventTimeline.from_document(timeline.to_document())
+    for event in timeline.events:
+        for target in event.string_targets:
+            if target.source_string != 5 - target.string:
+                raise ValueError('source/simulator string conversion mismatch')
+            if not target.supported or not event.supported:
+                continue
+            crossing = event.score_time_s + target.traversal_offset_s
+            if target.sustain_until_s < crossing:
+                raise ValueError('sustain ends before string crossing')
+            if target.fret:
+                if target.finger not in (1, 2, 3, 4):
+                    raise ValueError('fretted note needs finger 1..4')
+                if target.press_start_s is None or target.release_s is None:
+                    raise ValueError('fretted note needs press and release')
+                if not target.press_start_s <= crossing <= target.release_s:
+                    raise ValueError('press/release does not cover string crossing')
+            elif target.finger not in (None, 0):
+                raise ValueError('open string has fretted finger')
+
+
+@dataclass(frozen=True)
+class MusicTask:
+    timeline: object
+    events: tuple
+    stage: str
+    tempo_scale: float
+    preroll_s: float
+    source_origin_s: float
+    provenance: tuple
+
+    def __post_init__(self):
+        # 같은 현에서 소리 나는 서로 다른 프렛·손가락을 이 계약으로 동시에
+        # 표현할 수 없다. 원래 공유된 준비 시간창은 겹칠 수 있지만
+        # 이미 소리 나는 음표를 밀어내지는 않는다.
+        targets = [(e, t) for e in self.events for t in e.string_targets]
+        for index, (event, target) in enumerate(targets):
+            start = event.score_time_s + target.traversal_offset_s
+            end = min(target.sustain_until_s, target.release_s if target.release_s is not None else target.sustain_until_s)
+            for other_event, other in targets[index + 1:]:
+                other_start = other_event.score_time_s + other.traversal_offset_s
+                other_end = min(other.sustain_until_s, other.release_s if other.release_s is not None else other.sustain_until_s)
+                if (target.string == other.string
+                        and (target.fret, target.finger) != (other.fret, other.finger)
+                        and max(start, other_start) < min(end, other_end)):
+                    raise ValueError(f'conflicting audible targets on string {target.string}: {event.event_id}, {other_event.event_id}')
+
+    @property
+    def timing_mode(self):
+        return 'tempo_scaled' if self.tempo_scale != 1.0 else 'easy_training'
+
+    def task_time(self, source_time_s):
+        return self.preroll_s + (source_time_s - self.source_origin_s) / self.tempo_scale
+
+    @property
+    def duration_s(self):
+        return max(self.task_time(t.sustain_until_s) for e in self.events for t in e.string_targets) + 0.5
+
+    def content_document(self):
+        return dict(schema=EVENTS_SCHEMA, song_id=self.timeline.song_id,
+                    timeline_sha256=self.timeline.content_sha256,
+                    event_ids=[e.event_id for e in self.events], stage=self.stage,
+                    unsupported_event_ids=[e.event_id for e in self.timeline.events if not e.supported],
+                    hold_mode='selected_note_sustain_capped_at_source_release',
+                    temporal_composition='sounding_targets_first_else_earliest_preparation; conflicting_audible_targets_rejected',
+                    timing_mode=self.timing_mode, tempo_scale=self.tempo_scale,
+                    preroll_s=self.preroll_s, source_origin_s=self.source_origin_s,
+                    string_numbering='1=high-e,6=low-E; simulator_index=number-1',
+                    observation_dim=OBSERVATION_DIM, lookahead=LOOKAHEAD,
+                    provenance=list(self.provenance))
+
+    def active_targets(self, score_time_s):
+        """현 번호 → (이벤트, 목표, 과제 해제 시각, 발음 여부)를 반환한다.
+        
+        현재 소리 나는 목표가 겹치는 준비 목표보다 우선한다.
+        발음 중인 목표가 없으면 가장 먼저 시작할 준비 목표를 선택한다.
+        """
+        now = _event_finite(score_time_s, 'score_time_s')
+        candidates = [[] for _ in range(6)]
+        for event in self.events:
+            for t in event.string_targets:
+                onset = self.task_time(event.score_time_s + t.traversal_offset_s)
+                press = self.task_time(t.press_start_s if t.press_start_s is not None else t.note_on_s)
+                release = self.task_time(min(t.sustain_until_s, t.release_s if t.release_s is not None else t.sustain_until_s))
+                if press <= now < release:
+                    candidates[t.string].append((onset, release, event, t))
+        active = {}
+        for string, entries in enumerate(candidates):
+            if not entries:
+                continue
+            sounding = [entry for entry in entries if entry[0] <= now]
+            if sounding:
+                onset, release, event, target = max(sounding, key=lambda entry: entry[1])
+            else:
+                onset, release, event, target = min(entries, key=lambda entry: entry[0])
+            active[string] = (event, target, release, bool(sounding))
+        return active
+
+    def encode(self, score_time_s):
+        now = _event_finite(score_time_s, 'score_time_s')
+        rows = [[0.0] * 5 for _ in range(6)]
+        for string, (_, target, release, sounding) in self.active_targets(now).items():
+            rows[string] = [target.fret / 22.0, (target.finger or 0) / 4.0,
+                            float(target.fret > 0), float(sounding), release - now]
+        result = [v for row in rows for v in row]
+        upcoming = [e for e in self.events if self.task_time(e.traversal_end_time_s) >= now][:LOOKAHEAD]
+        for event in upcoming:
+            result.extend([1.0, self.task_time(event.score_time_s) - now, 1.0 if event.strike.direction == 'down' else -1.0])
+            targets = {t.string: t for t in event.string_targets}
+            offsets = dict(zip(event.strike.traversal_strings, event.strike.traversal_offsets_s))
+            for string in range(6):
+                t = targets.get(string)
+                result.extend([float(t is not None), float(string in offsets),
+                               t.fret / 22.0 if t else 0.0, (t.finger or 0) / 4.0 if t else 0.0,
+                               self.task_time(event.score_time_s + offsets[string]) - now if string in offsets else 0.0,
+                               self.task_time(t.sustain_until_s) - now if t else 0.0])
+        result.extend([0.0] * (OBSERVATION_DIM - len(result)))
+        return tuple(result)
+
+
+def load_music_task(bundle_root, *, stage='B', tempo_scale=1.0, preroll_s=1.0, phrase_events=8):
+    if stage not in ('B', 'C', 'D'):
+        raise ValueError('music stage must be B, C, or D')
+    scale = _event_finite(tempo_scale, 'tempo_scale', 0.000001)
+    preroll = _event_finite(preroll_s, 'preroll_s')
+    if isinstance(phrase_events, bool) or not isinstance(phrase_events, int) or phrase_events < 1:
+        raise ValueError('phrase_events must be positive integer')
+    root = Path(bundle_root).resolve()
+    timeline = compile_song_bundle_events(root, fail_on_unsupported=False)
+    validate_timeline(timeline)
+    count = {'B': 1, 'C': 2, 'D': phrase_events}[stage]
+    events = None
+    for index in range(len(timeline.events) - count + 1):
+        candidate = timeline.events[index:index + count]
+        if all(e.supported and (stage != 'B' or len(e.string_targets) == 1 and e.string_targets[0].fret > 0) for e in candidate):
+            events = candidate
+            break
+    if events is None:
+        raise ValueError(f'no supported consecutive {count}-event curriculum segment')
+    files = {root / f.relative_path for f in timeline.source_files}
+    files.update((root / 'manifest.json', Path(__file__).resolve(),
+                  Path(__file__).resolve().with_name('strike_goal_compiler.py'),
+                  Path(__file__).resolve()))
+    # 오디오는 출처 근거로만 쓰며 encode()에서 읽지 않는다.
+    files.update(p for p in (root / 'source').rglob('*') if p.is_file())
+    provenance = tuple(dict(path=str(p), sha256=hashlib.sha256(p.read_bytes()).hexdigest(), bytes=p.stat().st_size) for p in sorted(files))
+    origin = min(t.press_start_s if t.press_start_s is not None else t.note_on_s for e in events for t in e.string_targets)
+    return MusicTask(timeline, tuple(events), stage, scale, preroll, origin, provenance)

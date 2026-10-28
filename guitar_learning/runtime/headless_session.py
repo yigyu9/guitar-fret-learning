@@ -11,7 +11,7 @@ import importlib
 import threading
 from contextlib import contextmanager
 from unittest.mock import patch
-from guitar_learning.runtime.prepared_reset_v1 import PreparedSession
+from guitar_learning.runtime.native_session import PreparedSession
 
 _CONSTRUCTION_LOCK = threading.RLock()
 

@@ -2,7 +2,7 @@
 import xml.etree.ElementTree as ET
 import numpy as np
 from ..initial_pose_noise_v1 import pose
-from ..lower_body_release_v1.common import HUMAN
+from guitar_learning.native.paths import HUMAN
 from ..grounded_guitar_support_v1.runtime_v18 import Controller as PreparedController
 from ..seated_foot_support_v1.runtime_v6 import Scene as FootScene
 from ..front_facing_pose_v1.runtime_v1 import HEADING_BODIES,horizontal_forward,heading_error_rad

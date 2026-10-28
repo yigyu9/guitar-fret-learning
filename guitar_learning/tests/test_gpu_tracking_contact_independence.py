@@ -14,8 +14,9 @@ import numpy as np
 import torch
 
 from guitar_learning.gpu.finger_reward import finger_tracking_reward, FINGER_REWARD_CONTRACT
-from guitar_learning.gpu.fingertip_pad import pad_tracking_reward, FINGERTIP_TRACKING_CONTRACT
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.gpu.contact import pad_tracking_reward
+from guitar_learning.gpu.contact import FINGERTIP_TRACKING_CONTRACT
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.song.curriculum_runtime import CurriculumCoordinator
 from guitar_learning.tests import test_gpu_environment as fixtures
 from guitar_learning.tests.test_gpu_surface_learning import task

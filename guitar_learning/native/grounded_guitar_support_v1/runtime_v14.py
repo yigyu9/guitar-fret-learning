@@ -1,7 +1,7 @@
 """Change finite human right-arm world goals; the free guitar is untouched."""
 import numpy as np
 from scipy.spatial.transform import Rotation
-from ..lower_body_release_v1.common import read, sha
+from guitar_learning.native.paths import read, sha
 from .runtime_v11 import Controller as PreviousController
 
 

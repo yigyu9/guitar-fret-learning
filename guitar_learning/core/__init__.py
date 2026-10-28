@@ -1,1 +1,1 @@
-"""Core components for free-guitar learning."""
+"""자유 기타 학습의 공통 제어·기하 구성요소."""

@@ -8,7 +8,7 @@ import torch
 
 from guitar_learning.gpu.control import BatchedController
 from guitar_learning.gpu.environment import TensorSongEnvironment
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.training.ppo import PPOConfig, PPOTrainer
 from guitar_learning.tool.training.train_legacy import settings_document
 from guitar_learning.tests.test_gpu_control import fake_scene

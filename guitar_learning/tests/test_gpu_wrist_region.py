@@ -10,8 +10,9 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import torch
 
-from guitar_learning.gpu.press_surface import load_press_surface
-from guitar_learning.gpu.wrist_region import load_wrist_region_track, measure_wrist_region
+from guitar_learning.gpu.contact import load_press_surface
+from guitar_learning.gpu.contact import load_wrist_region_track
+from guitar_learning.gpu.contact import measure_wrist_region
 
 
 ROOT = Path(__file__).resolve().parents[2]

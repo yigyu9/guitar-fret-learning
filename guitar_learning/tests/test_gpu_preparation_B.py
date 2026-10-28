@@ -16,8 +16,8 @@ from guitar_learning.gpu.finger_reward import (
     B_PREPARATION_INPUT_DEGREES, B_PREPARATION_SPREAD_DEGREES,
     B_PREPARATION_ANGLES_DEGREES, FINGER_COORDINATION_CONTRACT,
     FINGER_PREPARATION_CONTRACT, finger_preparation_reward)
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
-from guitar_learning.music_task import ScoreTask
+from guitar_learning.training.policy import SpecialistPolicy
+from guitar_learning.song.task import ScoreTask
 from guitar_learning.song.curriculum_runtime import CurriculumCoordinator
 from guitar_learning.tests import test_gpu_environment as fixtures
 from guitar_learning.tests import test_gpu_finger_reward as posture_fixtures

@@ -8,7 +8,7 @@ import torch
 
 from guitar_learning.core.control import ACTIVE_NAMES
 from guitar_learning.gpu.environment import TensorSongEnvironment
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.tests.test_gpu_environment import fixture, BUNDLE, SONG
 from guitar_learning.tests.test_specialist_policy import finger_inputs as legacy_finger_inputs
 from guitar_learning.training.ppo import PPOConfig, PPOTrainer, gaussian_kl

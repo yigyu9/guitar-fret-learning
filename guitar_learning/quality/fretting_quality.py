@@ -6,8 +6,8 @@ are diagnostics, not convicted wrong presses. No pressure or sound is inferred.
 from dataclasses import asdict
 import math
 import numpy as np
-from guitar_learning.core.fretting_v1 import FretContract
-from guitar_learning.music_task import ScoreTarget
+from guitar_learning.core.measurement import FretContract
+from guitar_learning.song.task import ScoreTarget
 
 FINGERS = {1: 'index', 2: 'middle', 3: 'ring', 4: 'pinky'}
 FRETTING_QUALITY_METADATA = dict(schema='guitar_learning.fretting_quality.v1',

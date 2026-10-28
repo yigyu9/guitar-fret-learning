@@ -1,4 +1,4 @@
-"""Evaluate a v24 checkpoint under its exact saved policy and physics contract."""
+"""현행 J 전용 저장본의 정책·물리 계약을 엄격히 검증하여 독립 평가한다."""
 import argparse
 from pathlib import Path
 

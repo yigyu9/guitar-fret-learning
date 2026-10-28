@@ -1,13 +1,9 @@
 """Missing or inconsistent lifecycle evidence must not produce a successful run."""
 import json
 from pathlib import Path
-import sys
 import tempfile
 import unittest
-from unittest.mock import patch
-from guitar_learning.training.persistent_audit import finalize_persistent_run
-from guitar_learning.tool.training import train_persistent
-from guitar_learning.training import runner as train_parallel
+from guitar_learning.training.parallel import finalize_persistent_run
 
 
 def write(path,value):
@@ -67,16 +63,6 @@ class PersistentAuditTests(unittest.TestCase):
             self.assertEqual(report['stopped'],'interrupted')
             self.assertEqual(report['failure']['type'],'KeyboardInterrupt')
             self.assertFalse(report['persistent_audit']['completed'])
-
-    def test_existing_output_is_never_reaudited_by_failed_new_launch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            out=Path(tmp);self.fixture(out);before=(out/'report.json').read_bytes()
-            with patch.object(sys,'argv',['train_persistent','--out',str(out)]), \
-                 patch.object(train_parallel,'main',side_effect=FileExistsError('existing run')), \
-                 patch('guitar_learning.training.persistent_audit.finalize_persistent_run') as audit:
-                with self.assertRaises(FileExistsError):train_persistent.main()
-                audit.assert_not_called()
-            self.assertEqual((out/'report.json').read_bytes(),before)
 
 
 if __name__=='__main__':unittest.main()

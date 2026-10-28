@@ -1,0 +1,14 @@
+{
+  "schema": "diagnostic.index_prefix_goal_codec.v1",
+  "selected_actions": [
+    17,
+    18,
+    19,
+    20
+  ],
+  "raw_output": "tanh(mean) normalized absolute goal; sign selects035-reference side of full native range",
+  "affine": "goal=reference+where(raw>=0,upper-reference,reference-lower)*raw",
+  "inverse": "original trajectory_actions goal,current_target,incremental max_speed4; physical request then original controller/guard",
+  "unchanged": "native incremental codec/rate4/range/PD/cap.25/physics/rewards; adapter other35 action columns exact; original DIP guard other104 target columns unchanged",
+  "exploration": "same numerical std is not equal physical exploration; deterministic evaluation only"
+}

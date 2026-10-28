@@ -5,9 +5,14 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from guitar_learning.training.gpu_log_records import (
-    EpisodeWriter, CheckpointRecorder, METRICS_SCHEMA, TRANSITION_SCHEMA,
-    episode_summary, iter_episode_rows, iter_learning_metrics, iter_gpu_transitions)
+from guitar_learning.training.training_log_io import EpisodeWriter
+from guitar_learning.training.training_log_io import CheckpointRecorder
+from guitar_learning.training.training_log_io import METRICS_SCHEMA
+from guitar_learning.training.training_log_io import TRANSITION_SCHEMA
+from guitar_learning.training.training_log_io import episode_summary
+from guitar_learning.training.training_log_io import iter_episode_rows
+from guitar_learning.training.training_log_io import iter_learning_metrics
+from guitar_learning.training.training_log_io import iter_gpu_transitions
 from guitar_learning.training.training_log_io import TransitionJournal, TransitionReadError
 from guitar_learning.tool.inspect_gpu_training_log import inspect
 
@@ -230,10 +235,12 @@ class RunnerDurabilityTests(unittest.TestCase):
         import io
         import torch
         from guitar_learning.tool.training import legacy_gpu_runner as gpu_runner
-        from guitar_learning.training import monitoring, gpu_pool, ppo
-        from guitar_learning.skills import specialist_policy
+        from guitar_learning.training import training_log_io as monitoring
+        from guitar_learning.training import rollout as gpu_pool
+        from guitar_learning.training import ppo
+        from guitar_learning.training import policy as specialist_policy
         from guitar_learning.runtime import prepared_reset_v1
-        from guitar_learning.native.lower_body_release_v1 import common
+        from guitar_learning.native import paths as common
         instances = {}
 
         class CheckedEpisodes(EpisodeWriter):

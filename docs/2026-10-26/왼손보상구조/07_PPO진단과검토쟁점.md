@@ -8,7 +8,7 @@
 
 현존 [구동 검증](/home/ajou/yigyu/3/docs/2026-10-26/guitar_learning_finger_skill_v24/support/final_native_data_verification.json)에서 F 1024환경2회는 원시전이65,536개, 재개1회는32,768개이며 두 실행 모두 종료곡0개다. 상관 탐색·F3 검사는 원시전이32,768개/결정12,389개, 종료곡46개·물리실패3개이며 할인 합과 원시 기록의 오차는 reward 약3.1e−7, cost 약9.2e−7이었다. R/J 단기 검사도 각각8,192전이·종료곡0개다. 이는 데이터·동결·수치 구동 범위이며 전곡 성능이나 장기 수렴 결과가 아니다. [엄격 재개 검증](/home/ajou/yigyu/3/docs/2026-10-26/guitar_learning_finger_skill_v24/support/final_resume_verification.json)은 같은 단계 모델/optimizer/RNG 복원을 확인하며 물리 상태의 중간 재개를 뜻하지 않는다.
 
-근거: [지속시간 GAE와 PPO](/home/ajou/yigyu/3/guitar_learning/training/decision_ppo.py), [v24 상세](11_v24학습구조와보상.md).
+근거: [지속시간 GAE와 PPO](/home/ajou/yigyu/3/guitar_learning/training/ppo.py), [v24 상세](11_v24학습구조와보상.md).
 
 아래 7.1~7.7은 기본 `song`의 전이 단위 PPO이며, 7.8은 최신 v22 결과, 7.9~7.10은 과거 실행이다.
 
@@ -65,7 +65,7 @@ H32의 마지막 전이가 정상 진행 중이면 terminated=False이며 다음
 
 다만 GAE를 한 번 계산할 때 표본으로 직접 쓰는 범위는 현재 수집 버퍼 안이다. 수집 길이를 늘리는 효과와 곡을 끊지 않는 효과를 같은 것으로 보지 않는다.
 
-근거: [수집과 reset 순서](/home/ajou/yigyu/3/guitar_learning/training/gpu_pool.py), [GAE](/home/ajou/yigyu/3/guitar_learning/training/ppo.py).
+근거: [수집과 reset 순서](/home/ajou/yigyu/3/guitar_learning/training/rollout.py), [GAE](/home/ajou/yigyu/3/guitar_learning/training/ppo.py).
 
 ## 7.4 접근 potential의 수학적 주의점
 

@@ -8,8 +8,8 @@ import unittest
 import torch
 
 from guitar_learning.gpu.environment import TensorSongEnvironment
-from guitar_learning.gpu.geometry import apply, multiply
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.gpu.control import apply, multiply
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.song.curriculum_runtime import CurriculumCoordinator
 from guitar_learning.song.left_environment import LEFT_FIELDS
 from guitar_learning.tests.test_gpu_environment import fixture, BUNDLE, SONG

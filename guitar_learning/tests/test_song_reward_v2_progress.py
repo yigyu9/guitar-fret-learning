@@ -2,7 +2,7 @@
 import copy
 import unittest
 import numpy as np
-from guitar_learning.music_task import ScoreTask
+from guitar_learning.song.task import ScoreTask
 from guitar_learning.song import progress
 from guitar_learning.tests.test_song_metrics import target
 from guitar_learning.tests.test_dense_environment import geometry

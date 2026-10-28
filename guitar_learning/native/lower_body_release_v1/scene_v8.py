@@ -6,7 +6,7 @@ from unittest.mock import patch
 from functools import reduce
 from operator import or_
 import numpy as np
-from .common import ROOT,A,HUMAN,LOWER,read,save
+from guitar_learning.native.paths import ROOT, A, HUMAN, LOWER, read, save
 from guitar_learning.native.environment import InitialEnvironment
 from guitar_learning.native.initial_pose_noise_v1 import pose
 

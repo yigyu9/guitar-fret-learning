@@ -6,7 +6,7 @@ from pathlib import Path
 import json
 
 from guitar_learning.core.control import ACTIVE_NAMES, LEFT_ARM_NAMES
-from guitar_learning.training.recording import digest
+from guitar_learning.training.training_log_io import digest
 from guitar_learning.song.finger_phrases import FingerPhrase, build_phrase_catalog
 
 SCHEMA = 'guitar_learning.short_finger_learning.v2'

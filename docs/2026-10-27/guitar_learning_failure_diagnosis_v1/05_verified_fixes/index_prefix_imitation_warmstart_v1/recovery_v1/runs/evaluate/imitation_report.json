@@ -1,0 +1,74 @@
+{
+  "completed": true,
+  "failure": null,
+  "stage": "evaluate",
+  "checks": {
+    "aliases_restored": true,
+    "observer_aliases_restored": true,
+    "original_native_closed": true,
+    "prefix_task_verified": true,
+    "NN_constructors_exact": true,
+    "selected4_request_not_replaced": true,
+    "model_RNG_updates_frozen": true,
+    "no_secondary_errors": true,
+    "reference_only_in_collection": true
+  },
+  "procedure": {
+    "schema": "diagnostic.index_prefix_imitation_initialization.recovery.v1",
+    "seed": 7,
+    "steps": 1000,
+    "batch_size": 192,
+    "per_phase": 32,
+    "learning_rate": 0.0003,
+    "gradient_norm": 0.5,
+    "loss": "mean square of original tanh(mean) selected4 minus requested reference action; no atanh/clipping",
+    "train_envs": [
+      0,
+      1,
+      2
+    ],
+    "heldout_envs": [
+      3
+    ],
+    "phases": [
+      "A_approach",
+      "A_hold",
+      "release",
+      "move",
+      "close",
+      "B_hold"
+    ],
+    "trainable_prefixes": [
+      "finger_encoder.",
+      "finger_heads.index."
+    ],
+    "unchanged": "original PrefixPolicy architecture/environment/currentgoal guard/std/reward; other parameter values exact",
+    "checkpoint": "new initialization metadata schema; new original PPO optimizers empty/updates0; no supervised optimizer inheritance",
+    "scope": "same-scene heldout observation check, not independent seeds/generalization/RL-only/free guitar",
+    "collection_recovery": {
+      "path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/collection_recovery.json",
+      "sha256": "bd4da169e3d7cf785e818d059ac43f5e4bafde87ba2374ea76d7976ab9b4dd1b",
+      "original_launcher_returncode": 1,
+      "original_imitation_completed": false,
+      "original_native_completed": true,
+      "reason": "Only missing NN constructor counter default in completed noNN collection; original artifacts unchanged"
+    }
+  },
+  "dataset_sha256": "cc5c30549141abebc0f3e0eca7da39549dfe466a6720ca6589ecc4be1419abd7",
+  "reference_calls": 0,
+  "reference_N_injected": false,
+  "policy_before": {
+    "model_sha256": "cbbd053dc259cd8bb81e2e4592f43f2431327a05fbeb5b7f34da5ce1ae9c8ffe",
+    "RNG_sha256": "1d95aa3408227af669305213b2093c65d43416dd9a64d33c7558852c72f8ed90",
+    "updates": 0,
+    "cost_weight": 1.0
+  },
+  "policy_after": {
+    "model_sha256": "cbbd053dc259cd8bb81e2e4592f43f2431327a05fbeb5b7f34da5ce1ae9c8ffe",
+    "RNG_sha256": "1d95aa3408227af669305213b2093c65d43416dd9a64d33c7558852c72f8ed90",
+    "updates": 0,
+    "cost_weight": 1.0
+  },
+  "settings_scope": "Original settings initialization text is source configuration only; fit checkpoint actual_initialization declares supervised provenance",
+  "scope": "Collection is noNN reference; evaluate is NN-only current-goal guard, no carry memory or N injection"
+}

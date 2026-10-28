@@ -1,0 +1,202 @@
+--- tests/test_dependency_inputs.py
++++ tests/test_dependency_inputs.py
+@@ -49,5 +49,5 @@
+         self.assertEqual(fingerprint_paths(expected), expected)
+         with self.assertRaisesRegex(RuntimeError, 'consumed inputs changed'):
+-            imitation_io.verify_inputs(expected)
++            imitation_io.verify_inputs({str(root / 'guitar_learning/song/task.py'): expected[str(source)]})
+ if __name__ == '__main__':
+     unittest.main()
+--- tests/test_gpu_left_curriculum.py
++++ tests/test_gpu_left_curriculum.py
+@@ -5,6 +5,6 @@
+ 
+     def test_fixed_contract_and_positive_weight_interpolation(self):
+-        self.assertEqual((gpu.WINDOW, gpu.STATE_SIZE), (256, 3331))
+-        state = gpu.CurriculumState((25, 18, 12, 12))
++        self.assertEqual((gpu.GPU_WINDOW, gpu.GPU_STATE_SIZE), (256, 3331))
++        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
+         expected = {0.0: (0.2, 0.5, 0.5), 0.5: (0.15, 0.75, 0.75), 1.0: (0.1, 1.0, 1.0), 1.5: (0.075, 1.0, 1.5), 2.0: (0.05, 1.0, 2.0)}
+         for progress, values in expected.items():
+@@ -13,5 +13,5 @@
+                 self.assertAlmostEqual(state.weights()[key], value)
+             self.assertEqual(state.weights()['approach'], 1.0)
+-        config = gpu.default_config()
++        config = gpu.gpu_default_config()
+         self.assertEqual(config['schema'], 'guitar_learning.gpu_left_surface_curriculum.v1')
+         self.assertEqual(config['min_episodes'], 256)
+@@ -19,13 +19,13 @@
+         self.assertEqual(config['near_required_s'], 0.1)
+         config['weights']['approach'][0] = 99
+-        self.assertEqual(gpu.default_config()['weights']['approach'], [1.0, 1.0, 1.0])
++        self.assertEqual(gpu.gpu_default_config()['weights']['approach'], [1.0, 1.0, 1.0])
+ 
+     def test_wrist_only_and_partial_window_cannot_advance(self):
+-        state = gpu.CurriculumState((25, 18, 12, 12))
++        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
+         wrist_only = episode(near=(0.0,) * 4)
+         wrist_only.update(reach_fraction=1.0, contact_fraction=1.0)
+         state.observe([wrist_only] * 256)
+         self.assertEqual(state.progress, 0.0)
+-        state = gpu.CurriculumState((25, 18, 12, 12))
++        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
+         state.observe([episode()] * 255)
+         self.assertEqual(state.progress, 0.0)
+@@ -35,5 +35,5 @@
+     def test_each_present_finger_is_required(self):
+         for i in range(4):
+-            state = gpu.CurriculumState((25, 18, 12, 12))
++            state = gpu.GPULeftCurriculum((25, 18, 12, 12))
+             near = [1.0] * 4
+             near[i] = 0.19
+@@ -43,5 +43,5 @@
+     def test_absent_fingers_excluded_and_extra_log_field_allowed(self):
+         counts = (1, 0, 2, 0)
+-        state = gpu.CurriculumState(counts)
++        state = gpu.GPULeftCurriculum(counts)
+         item = episode(counts, near=(0.2, 0.0, 0.2, 0.0))
+         for finger in item['finger_metrics']:
+@@ -54,10 +54,10 @@
+     def test_failures_are_zero_rows_and_safe_threshold_is_enforced(self):
+         for failed, expected in ((25, 0.1), (26, 0.0)):
+-            state = gpu.CurriculumState((25, 18, 12, 12))
++            state = gpu.GPULeftCurriculum((25, 18, 12, 12))
+             state.observe([episode()] * (256 - failed) + [episode(safe=False)] * failed)
+             self.assertEqual(state.progress, expected)
+             np.testing.assert_array_equal(state.window[-failed:], 0.0)
+             self.assertAlmostEqual(state.summary()['recent_safe_fraction'], (256 - failed) / 256)
+-        state = gpu.CurriculumState((25, 18, 12, 12))
++        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
+         state.observe([episode()] * 256)
+         state.observe([episode(safe=False)])
+@@ -67,5 +67,5 @@
+ 
+     def test_stage_gates_maximum_step_and_no_demotion(self):
+-        state = gpu.CurriculumState((25, 18, 12, 12))
++        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
+         state.observe([episode()] * 1024)
+         self.assertEqual(state.progress, 0.1)
+@@ -87,5 +87,5 @@
+ 
+     def test_contact_gate_requires_every_present_finger(self):
+-        state = gpu.CurriculumState((25, 18, 12, 12))
++        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
+         state.progress = 1.0
+         state.observe([episode(contact=(1.0, 1.0, 1.0, 0.19))] * 256)
+@@ -93,8 +93,8 @@
+ 
+     def test_checkpoint_restores_ring_and_continuation(self):
+-        state = gpu.CurriculumState((25, 18, 12, 12))
++        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
+         state.observe([episode()] * 260)
+         state.observe([episode(safe=False)] * 11)
+-        restored = gpu.CurriculumState((25, 18, 12, 12))
++        restored = gpu.GPULeftCurriculum((25, 18, 12, 12))
+         vector = state.state_vector()
+         restored.load_state(vector)
+@@ -109,6 +109,6 @@
+         for counts in (None, (), (1, 2, 3), (0, 0, 0, 0), (1, -1, 0, 0), (True, 0, 0, 0), (1.0, 0, 0, 0), (float('inf'), 0, 0, 0)):
+             with self.subTest(counts=counts), self.assertRaises(ValueError):
+-                gpu.CurriculumState(counts)
+-        state = gpu.CurriculumState((25, 18, 12, 12))
++                gpu.GPULeftCurriculum(counts)
++        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
+         bad = []
+         for field, value in (('full_safe', 1), ('finger_metrics', [])):
+@@ -130,5 +130,5 @@
+ 
+     def test_invalid_vectors_are_rejected_without_mutation(self):
+-        state = gpu.CurriculumState((25, 18, 12, 12))
++        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
+         state.observe([episode()])
+         before = state.state_vector()
+@@ -147,15 +147,15 @@
+ 
+     def test_cpu_27_value_state_is_unchanged_and_not_gpu_compatible(self):
+-        self.assertEqual((cpu.WINDOW, cpu.STATE_SIZE), (8, 27))
+-        state = cpu.CurriculumState()
++        self.assertEqual((cpu.CPU_WINDOW, cpu.CPU_STATE_SIZE), (8, 27))
++        state = cpu.CPULeftCurriculum()
+         state.observe([dict(full_safe=True, reach_fraction=1.0, contact_fraction=0.0)] * 4)
+         self.assertEqual(state.progress, 0.1)
+-        restored = cpu.CurriculumState()
++        restored = cpu.CPULeftCurriculum()
+         restored.load_state(state.state_vector())
+         np.testing.assert_array_equal(restored.state_vector(), state.state_vector())
+         with self.assertRaises(ValueError):
+-            gpu.CurriculumState((25, 18, 12, 12)).load_state(state.state_vector())
++            gpu.GPULeftCurriculum((25, 18, 12, 12)).load_state(state.state_vector())
+         with self.assertRaises(ValueError):
+-            restored.load_state(gpu.CurriculumState((25, 18, 12, 12)).state_vector())
++            restored.load_state(gpu.GPULeftCurriculum((25, 18, 12, 12)).state_vector())
+ if __name__ == '__main__':
+     unittest.main()
+--- tests/test_historical_inputs.py
++++ tests/test_historical_inputs.py
+@@ -47,5 +47,5 @@
+         source = str(ROOT / 'guitar_learning/music_task.py')
+         versions = historical._index()[source]['versions']
+-        current_sha = hashlib.sha256(Path(source).read_bytes()).hexdigest()
++        current_sha = hashlib.sha256((ROOT / 'guitar_learning/song/task.py').read_bytes()).hexdigest()
+         old_sha = next((sha for sha in versions if sha != current_sha))
+         self.assertNotEqual(current_sha, old_sha)
+
+--- tests/test_json_io.py
++++ tests/test_json_io.py
+@@ -100,5 +100,5 @@
+         json_io.dumps([0.1])
+         self.assertEqual(original, (json.dump, json.dumps, json.load, json.loads, json.JSONEncoder, json.JSONDecoder))
+-        result = subprocess.run([sys.executable, '-B', '-c', 'import sys; from guitar_learning.training import recording as json_io; assert not any(n in sys.modules for n in ("numpy", "torch", "isaacgym"))'], cwd=str(Path(__file__).resolve().parents[2]), capture_output=True, timeout=30)
++        result = subprocess.run([sys.executable, '-B', '-c', 'import sys; from guitar_learning.training import training_log_io as json_io; assert not any(n in sys.modules for n in ("numpy", "torch", "isaacgym"))'], cwd=str(Path(__file__).resolve().parents[2]), capture_output=True, timeout=30)
+         self.assertEqual(result.returncode, 0, result.stderr.decode())
+ if __name__ == '__main__':
+
+--- tests/test_tool_cleanup.py
++++ tests/test_tool_cleanup.py
+@@ -26,5 +26,5 @@
+             with self.assertRaisesRegex(InterruptedError, 'stop after pins'):
+                 audit.audit(output)
+-        self.assertEqual(set(inputs.files), {str(ROOT / 'guitar_learning/tool/audit_musical_quality_v2.py'), *(str(ROOT / 'guitar_learning' / name) for name in ('quality/fretting_quality.py', 'core/measurement.py', 'core/geometry.py', 'music_task.py', 'quality/strike_quality.py'))})
++        self.assertEqual(set(inputs.files), {str(ROOT / 'guitar_learning/tool/audit_musical_quality_v2.py'), *(str(ROOT / 'guitar_learning' / name) for name in ('quality/fretting_quality.py', 'core/measurement.py', 'core/geometry.py', 'song/task.py', 'quality/strike_quality.py'))})
+         self.assertEqual(inputs.verify(), [])
+ 
+
+--- tool/audit_musical_quality_v2.py
++++ tool/audit_musical_quality_v2.py
+@@ -168,5 +168,5 @@
+     inputs = Inputs()
+     inputs.pin(Path(__file__))
+-    for name in ('quality/fretting_quality.py', 'core/measurement.py', 'core/geometry.py', 'music_task.py', 'quality/strike_quality.py'):
++    for name in ('quality/fretting_quality.py', 'core/measurement.py', 'core/geometry.py', 'song/task.py', 'quality/strike_quality.py'):
+         inputs.pin(ROOT / 'guitar_learning' / name)
+     left = analyze_left(SOURCE / 'left_ppo_eval_v1', inputs)
+
+--- tool/experiments/contact_recovery/checkpoint_provenance.py
++++ tool/experiments/contact_recovery/checkpoint_provenance.py
+@@ -32,5 +32,5 @@
+     for row in new:
+         path = Path(row['path'])
+-        if path.resolve() != path or path.stat().st_size != row['bytes'] or digest(path) != row['sha256']:
++        if not path.is_file() or path.resolve() != path or path.stat().st_size != row['bytes'] or (digest(path) != row['sha256']):
+             raise ValueError('current live provenance SHA/bytes mismatch')
+ 
+
+--- tool/validation/hand_contact_probe.py
++++ tool/validation/hand_contact_probe.py
+@@ -3,5 +3,5 @@
+ 
+ def physics_source_paths(root):
+-    paths = [root / 'guitar_learning' / p for p in ('gpu/scene.py', 'gpu/control.py', 'gpu/geometry.py', 'core/control.py', 'core/geometry.py', 'runtime/prepared_reset_v1.py', 'runtime/native_session.py', 'native/paths.py', 'tool/validation/hand_contact_probe.py')]
++    paths = [root / 'guitar_learning' / p for p in ('gpu/scene.py', 'gpu/control.py', 'gpu/contact.py', 'core/control.py', 'core/geometry.py', 'runtime/prepared_reset_v1.py', 'runtime/native_session.py', 'native/paths.py', 'tool/validation/hand_contact_probe.py')]
+     return {p for p in paths if p.exists()} | set((root / 'guitar_learning/assets/gpu_rigid_guitar_v1').glob('*'))
+ 
+
+--- tool/validation/thumb_contact_probe.py
++++ tool/validation/thumb_contact_probe.py
+@@ -27,5 +27,5 @@
+     out.mkdir(parents=True, exist_ok=False)
+     paths = physics_source_paths(root) | set(prepared_input_paths())
+-    paths.update((Path(__file__).resolve(), root / 'guitar_learning/gpu/contact.py', root / 'guitar_learning/gpu/geometry.py', root / 'guitar_learning/gpu/geometry.py'))
++    paths.update((Path(__file__).resolve(), root / 'guitar_learning/gpu/contact.py', root / 'guitar_learning/gpu/control.py'))
+     patch = load_thumb_support()
+     paths.update((Path(p) for p in patch['contract']['source_sha256']))

@@ -22,7 +22,7 @@ def sha(path):
 
 
 def write(path, value):
-    from guitar_learning.training.recording import write as write_json
+    from guitar_learning.training.training_log_io import write as write_json
     write_json(path, value)
 
 
@@ -98,7 +98,7 @@ def diagnostic_streak(previous, current, streak, best, dt=1/240.):
 def pad_axis_flags(points, starts, ends, strings, low, high, plane):
     """Independent any-sample axes, on the same press plane as pad candidates."""
     import torch
-    from guitar_learning.gpu.press_surface import project_press_strings
+    from guitar_learning.gpu.contact import project_press_strings
     projected_starts, projected_ends = project_press_strings(starts, ends, plane)
     rows = torch.arange(points.shape[0], device=points.device)
     start = projected_starts[rows, strings]
@@ -143,8 +143,8 @@ def integral_tracking_offset(offset, nominal, actual, low, high, mask, *,
 
 def source_geometry(contract, goals):
     import numpy as np
-    from guitar_learning.gpu.press_surface import load_press_surface
-    from guitar_learning.gpu.rigid_guitar import _ASSET_DIR
+    from guitar_learning.gpu.contact import load_press_surface
+    from guitar_learning.gpu.scene import _ASSET_DIR
     surface = load_press_surface([r['string'] for r in goals], [r['fret'] for r in goals])
     manifest = json.loads((_ASSET_DIR/'manifest.json').read_text())
     markers = dict(zip(manifest['logical_body_names'], np.array(manifest['logical_position_root_m'])))
@@ -168,7 +168,7 @@ def search_geometry(bundle, out, max_nfev=160):
     from guitar_learning.runtime.prepared_reset_v1 import load_prepared_reset_contract
     from guitar_learning.native.lower_body_release_v1.controller_horizontal_v4 import full_fk
     from guitar_learning.core.control import ACTIVE_NAMES
-    from guitar_learning.gpu.fingertip_pad import load_fingertip_pad
+    from guitar_learning.gpu.contact import load_fingertip_pad
     from guitar_learning.song.task import make_task
     out.mkdir(parents=True, exist_ok=False)
     contract = load_prepared_reset_contract()
@@ -274,7 +274,7 @@ def replay_geometry(geometry, mode, out, device='cuda:0', ramp_s=6., hold_s=2., 
     from guitar_learning.gpu.control import BatchedController
     from guitar_learning.gpu.environment import TensorSongEnvironment, FAILURE_REASONS
     from guitar_learning.core.control import ACTIVE_NAMES
-    from guitar_learning.training.recording import project_source_paths
+    from guitar_learning.training.training_log_io import project_source_paths
     from guitar_learning.native.lower_body_release_v1.controller_horizontal_v4 import full_fk
     from scipy.spatial.transform import Rotation
     from types import SimpleNamespace
@@ -352,7 +352,7 @@ def replay_geometry(geometry, mode, out, device='cuda:0', ramp_s=6., hold_s=2., 
         initial_q = scene.q[0].cpu().numpy().copy()
         fk = full_fk(SimpleNamespace(names=scene.names, human_bodies=scene.human_bodies,
                                     q_ref=initial_q), scene.contract['state'])
-        from guitar_learning.gpu.geometry import apply, conjugate
+        from guitar_learning.gpu.control import apply, conjugate
 
         def pose_frame(tick, action):
             slow.append(dict(tick=tick, body_state=scene.body_state[trace_ids].cpu().numpy().copy(),

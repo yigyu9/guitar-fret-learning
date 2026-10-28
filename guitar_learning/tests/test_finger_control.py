@@ -10,9 +10,9 @@ import numpy as np
 from guitar_learning.core.control import (
     ACTIVE_NAMES, HELD_NAMES, LEFT_HAND_NAMES, JointTargetContract)
 from guitar_learning.core.environment_v4 import FreeGuitarEnvironment
-from guitar_learning.core.finger_control import (
+from guitar_learning.core.control import (
     default_profile, validate_profile, profile_control_settings)
-from guitar_learning.runtime.native_session import target_rates
+from guitar_learning.core.control import target_rates
 from guitar_learning.tests.test_environment_v4 import FakeSession
 
 

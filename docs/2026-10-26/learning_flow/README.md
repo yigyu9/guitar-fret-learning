@@ -24,13 +24,13 @@ python -m guitar_learning.train \
 | 순서 | 파일 | 역할 |
 | --- | --- | --- |
 | 1 | [train.py](/home/ajou/yigyu/3/guitar_learning/train.py) | 사용자 진입점 |
-| 2 | [training/start.py](/home/ajou/yigyu/3/guitar_learning/training/start.py) | 왼손 GPU v2 옵션 확인·직접 runner 호출 |
-| 3 | [training/launch_settings.py](/home/ajou/yigyu/3/guitar_learning/training/launch_settings.py) | 곡 입력·설정·계약 생성 |
+| 2 | [training/launch.py](/home/ajou/yigyu/3/guitar_learning/training/launch.py) | 왼손 GPU v2 옵션 확인·직접 runner 호출 |
+| 3 | [training/launch.py](/home/ajou/yigyu/3/guitar_learning/training/launch.py) | 곡 입력·설정·계약 생성 |
 | 4 | [training/finger_skill_runner.py](/home/ajou/yigyu/3/guitar_learning/training/finger_skill_runner.py) | 입력 봉인·새 모델 또는 엄격 재개·학습과 저장 |
-| 5 | [training/gpu_pool.py](/home/ajou/yigyu/3/guitar_learning/training/gpu_pool.py) | 하나의 GPU simulator에 여러 환경 생성 |
-| 6 | [gpu/simplified_finger_environment.py](/home/ajou/yigyu/3/guitar_learning/gpu/simplified_finger_environment.py) | 561상태·9개 보상·물리/손목 종료 |
-| 7 | [skills/finger_skill_policy.py](/home/ajou/yigyu/3/guitar_learning/skills/finger_skill_policy.py) | 지지17·손가락16을 함께 학습하는 J33 정책 |
-| 8 | [training/finger_decisions.py](/home/ajou/yigyu/3/guitar_learning/training/finger_decisions.py) · [decision_ppo.py](/home/ajou/yigyu/3/guitar_learning/training/decision_ppo.py) | K1 결정 수집·PPO 갱신 |
+| 5 | [training/rollout.py](/home/ajou/yigyu/3/guitar_learning/training/rollout.py) | 하나의 GPU simulator에 여러 환경 생성 |
+| 6 | [gpu/finger_skill_environment.py](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py) | 561상태·9개 보상·물리/손목 종료 |
+| 7 | [training/policy.py](/home/ajou/yigyu/3/guitar_learning/training/policy.py) | 지지17·손가락16을 함께 학습하는 J33 정책 |
+| 8 | [training/rollout.py](/home/ajou/yigyu/3/guitar_learning/training/rollout.py) · [ppo.py](/home/ajou/yigyu/3/guitar_learning/training/ppo.py) | K1 결정 수집·PPO 갱신 |
 
 각 환경은 합의한 035/v14 초기 상태에서 시작한다. native 대기 없이 첫 tick부터 정책 행동·물리·보상·종료를 계산한다. Root 고정·하체 유한 제어, 자유 기타·중력 ON·스트랩 OFF를 유지한다. 왼팔·손목·손가락 33축을 함께 학습하고 오른손 6축 행동은 0이다. 전문가·BC·R/F 단계 통과는 요구하지 않는다.
 

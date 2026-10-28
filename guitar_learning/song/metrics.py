@@ -5,20 +5,7 @@ import numpy as np
 from guitar_learning.core.dense_environment import DenseRewardConfig, pick_guide_evidence
 
 SCHEMA = 'guitar_learning.song_metrics.v1'
-HISTORY_FIELDS = (
-    'elapsed_fraction', 'remaining_fraction', 'target_count', 'expired_fraction',
-    'left_achieved_fraction', 'right_matched_fraction', 'coupled_fraction',
-    'left_missed_fraction', 'right_missed_fraction', 'mean_clean_fraction',
-    'wrong_crossings', 'repeat_crossings', 'duplicate_crossings', 'safety_invalidated',
-    'strict50_fraction', 'strict100_fraction',
-    'focus_present', 'focus_current', 'focus_preparing', 'focus_string', 'focus_fret',
-    'focus_finger', 'focus_direction', 'focus_onset_delta_s', 'focus_end_delta_s',
-    'focus_candidate', 'focus_wrong', 'focus_clean_fraction', 'focus_left_achieved',
-    'focus_right_matched', 'focus_coupled', 'focus_required_fraction')
-HISTORY_SCALES = tuple(100. if name in ('target_count', 'wrong_crossings', 'repeat_crossings',
-    'duplicate_crossings') else 6. if name == 'focus_string' else 22. if name == 'focus_fret'
-    else 4. if name == 'focus_finger' else 2. if name.endswith('_delta_s') else 1.
-    for name in HISTORY_FIELDS)
+from guitar_learning.core.geometry import HISTORY_FIELDS, HISTORY_SCALES
 
 
 def metadata():

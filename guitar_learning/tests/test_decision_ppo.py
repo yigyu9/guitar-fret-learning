@@ -8,8 +8,8 @@ import torch
 
 from guitar_learning.tests.test_finger_decisions import TinyDecisionPolicy, FakeDecisionPool
 from guitar_learning.tests.test_ppo import assert_tree
-from guitar_learning.training.finger_decisions import DecisionCollector
-from guitar_learning.training.decision_ppo import DecisionPPOTrainer, compute_decision_gae
+from guitar_learning.training.rollout import DecisionCollector
+from guitar_learning.training.ppo import DecisionPPOTrainer, compute_decision_gae
 from guitar_learning.training.ppo import PPOConfig, compute_gae, KLGuardError
 
 
@@ -38,6 +38,8 @@ class DecisionPPOTests(unittest.TestCase):
         model = TinyDecisionPolicy()
         trainer = DecisionPPOTrainer(model, PPOConfig(epochs=1, target_kl=.1))
         b, _ = DecisionCollector(model, FakeDecisionPool()).collect(5)
+        # K1 수집은 모든 칸이 유효하므로 끝에 명시적 padding 행을 붙인다.
+        b = {key: torch.cat((value, torch.zeros_like(value[:1])), dim=0) for key, value in b.items()}
         for value in b.values():
             if value.is_floating_point():
                 value[~b['valid']] = float('nan')
@@ -48,9 +50,9 @@ class DecisionPPOTests(unittest.TestCase):
         self.assertFalse(torch.equal(actor['bias'], model.actor.bias))
         self.assertFalse(torch.equal(reward, model.reward_critic.weight))
         self.assertFalse(torch.equal(cost, model.cost_critic.weight))
-        self.assertEqual(result['diagnostics']['valid_decisions'], 5)
+        self.assertEqual(result['diagnostics']['valid_decisions'], 10)
         self.assertEqual(result['diagnostics']['physical_transitions'], 10)
-        self.assertEqual(result['diagnostics']['advantages']['reward_raw']['count'], 5)
+        self.assertEqual(result['diagnostics']['advantages']['reward_raw']['count'], 10)
 
     def test_noncontiguous_mask_and_nonfinite_valid_rejected(self):
         b, _ = DecisionCollector(TinyDecisionPolicy(), FakeDecisionPool()).collect(5)
@@ -64,13 +66,13 @@ class DecisionPPOTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'nonfinite'):
             compute_decision_gae(*args, .99, .95)
 
-    def test_transaction_rollback_and_correlated_kl_dispatch(self):
+    def test_transaction_rollback_and_policy_kl_dispatch(self):
         trainer = DecisionPPOTrainer(TinyDecisionPolicy(), PPOConfig(epochs=1, target_kl=.01, kl_retries=0))
         b, _ = DecisionCollector(trainer.policy, FakeDecisionPool()).collect(5)
         before = copy.deepcopy(trainer.policy.state_dict())
         actor = copy.deepcopy(trainer.actor_optimizer.state_dict())
         rng = torch.get_rng_state()
-        with patch.object(trainer.policy, 'analytic_kl', return_value=torch.ones(5)) as kl:
+        with patch.object(trainer.policy, 'analytic_kl', return_value=torch.ones(10)) as kl:
             with self.assertRaises(KLGuardError):
                 trainer.update(b)
             self.assertTrue(kl.called)
@@ -105,16 +107,18 @@ class DecisionPPOTests(unittest.TestCase):
         self.assertAlmostEqual(trainer.cost_weight, 1.2)
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp)/'decision.pt'
-            trainer.save(path, dict(scope='F'))
+            trainer.save(path, dict(scope='J'))
             expected_rng = torch.get_rng_state()
             other = DecisionPPOTrainer(TinyDecisionPolicy(), config)
-            self.assertEqual(other.load(path), dict(scope='F'))
+            self.assertEqual(other.load(path), dict(scope='J'))
             assert_tree(self, trainer.policy.state_dict(), other.policy.state_dict())
             assert_tree(self, trainer.actor_optimizer.state_dict(), other.actor_optimizer.state_dict())
             assert_tree(self, trainer.value_optimizer.state_dict(), other.value_optimizer.state_dict())
             self.assertTrue(torch.equal(expected_rng, torch.get_rng_state()))
             self.assertEqual(other.updates, 1)
-            wrong = DecisionPPOTrainer(TinyDecisionPolicy('J'), config)
+            wrong_policy = TinyDecisionPolicy()
+            wrong_policy.architecture = dict(wrong_policy.architecture, schema='incompatible_test_contract')
+            wrong = DecisionPPOTrainer(wrong_policy, config)
             with self.assertRaises(ValueError):
                 wrong.load(path)
 

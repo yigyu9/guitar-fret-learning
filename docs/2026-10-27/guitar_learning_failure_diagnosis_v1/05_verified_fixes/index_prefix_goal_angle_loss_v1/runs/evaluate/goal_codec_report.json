@@ -1,0 +1,43 @@
+{
+  "completed": true,
+  "failure": null,
+  "checks": {
+    "aliases_restored": true,
+    "prefix_task_verified": true,
+    "native_closed": true,
+    "NN_count": true,
+    "reference_calls": true,
+    "model_RNG_frozen": true,
+    "no_secondary_errors": true
+  },
+  "stage": "evaluate",
+  "adapter": {
+    "schema": "diagnostic.index_prefix_goal_codec.v1",
+    "selected_actions": [
+      17,
+      18,
+      19,
+      20
+    ],
+    "raw_output": "tanh(mean) normalized absolute goal; sign selects035-reference side of full native range",
+    "affine": "goal=reference+where(raw>=0,upper-reference,reference-lower)*raw",
+    "inverse": "original trajectory_actions goal,current_target,incremental max_speed4; physical request then original controller/guard",
+    "unchanged": "native incremental codec/rate4/range/PD/cap.25/physics/rewards; adapter other35 action columns exact; original DIP guard other104 target columns unchanged",
+    "exploration": "same numerical std is not equal physical exploration; deterministic evaluation only"
+  },
+  "NN_constructors": 1,
+  "reference_calls": 0,
+  "policy_before": {
+    "model_sha256": "45099e20eb712a0b41d68077331c5092ea7aca81739abbba20220495510c8906",
+    "RNG_sha256": "1d95aa3408227af669305213b2093c65d43416dd9a64d33c7558852c72f8ed90",
+    "updates": 0,
+    "cost_weight": 1.0
+  },
+  "policy_after": {
+    "model_sha256": "45099e20eb712a0b41d68077331c5092ea7aca81739abbba20220495510c8906",
+    "RNG_sha256": "1d95aa3408227af669305213b2093c65d43416dd9a64d33c7558852c72f8ed90",
+    "updates": 0,
+    "cost_weight": 1.0
+  },
+  "scope": "source settings/environment remain incremental; layered policy output is normalized absolute goal; original trace policy_action/executed_action are physical requests; paired goal_codec_env0 holds raw goal/decoded goal/final target"
+}

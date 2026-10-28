@@ -1,0 +1,14 @@
+# Source 자세 일관성 독립 CPU 검수
+
+요약 판정: **문제없음(PASS)**. Critical/Warning/Suggestion finding 없음.
+
+- Read-only replay under original /home/ajou/miniconda3/bin/python (NumPy2.4.4/SciPy1.17.1), with comparison write intercepted, reproduced exact comparison bytes/SHA ae4a19535fa8c61ba934376f7778554e0b1878f2d6a187e8625ac10d2eb7953c. All44 input SHA, analysis selfSHA and57 frozen source_evidence edges verified. No source gate/recurrence re-audit or native execution performed.
+- Independent source timing: frozen indexrow1 observed5.916666666666667s maps teacher trace205 and nextcommand5.933333333333334s; middlerow8 observed5.45s maps trace177 and nextcommand5.466666666666667s. Already submitted native target and next corrected command remain separate.
+- Independent named joint grouping selected4/leftarm12/nonselectedfinger12/thumb5 matches stored groups. Whole3s point and audible11/index8/middle and postramp102/index99/middle window statistics all match. Reference selected4 and prepared035thumb targets match source/current exactly; target equality is not actual pose equality.
+- Independent native source alignment: indexrow1 is poses60 trace slot4 at tick355, valid, fullq and target exactly match source teacher snapshot. Source middle row8 has no saved native pose and remains unavailable; no MCP FK substitute is used.
+- Independent rotation-matrix palm-relative reconstruction confirms index1/2/3 3s displacement norms .0000882182/3.6128039/5.0195056mm and rotation differences4.7718667/4.5381495/4.4081941degree; full audible/postramp distributions and stored relative quaternion matrices match. These are body-origin poses, not skin/contact points.
+- Full native action-target contract and hand_collision readback match: inter-finger v1,90distinct finger pairs/1395other human pairs and matrixSHA57fc9b11d932f9a630ec320f24ac68d5a5e55782550cf6d3921e4370a7a92352. Critical6 source SHA identical source/current; shared626/index628/middle maps differ in6 explicit paths, so whole runtime-source identity is not asserted.
+- Scene differences are only environment_count/num_envs24to4, corresponding hand-readback environment count and physicssteps. PD evidence is identical scene/finger-profile source plus full native property readback assertion and exact prepared effort/drive arrays; separate saved stiffness/damping arrays are explicitly absent.
+- Source16-channel point/wrist finite teacher with2Nbody resultant guard/0.5s initialhold/2sramp/lateheld snapshot/1rad/s action cap is correctly distinguished from current4selected reference/arm-only fixedwrist feedback/3saudible/4rad/s path. Same targets/filter do not prove same actual pose, collision pair, force cause, impossibility or improvement.
+
+허용된 마지막 PLAN 체크만 완료 표시하고 새 review.json/REVIEW.md를 기록했다. 계산/수치/보고서/생산 소스/원자료/봉인은 변경하지 않았다. 최종4파일 SHA는 review.json에 있다. 이 판정은 CPU 근거 검수이며 생산 변경 채택을 승인하지 않는다.

@@ -7,8 +7,8 @@ import numpy as np
 import torch
 from guitar_learning.core.dense_environment import DenseTrainingEnvironment, pick_guide, pick_guide_evidence, shaping_sample
 from guitar_learning.core.training_environment import TrainingEnvironment
-from guitar_learning.music_task import ScoreTask, ScoreTarget
-from guitar_learning.core.strike import StrikeDetector
+from guitar_learning.song.task import ScoreTask, ScoreTarget
+from guitar_learning.core.measurement import StrikeDetector
 from guitar_learning.training.policy import Policy
 from guitar_learning.training.ppo import PPOTrainer
 from guitar_learning.tests.test_training_environment import RecordedSession

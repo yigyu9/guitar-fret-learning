@@ -14,9 +14,8 @@ B_NATIVE_DEGREES = ((25., -14., 35., 12.), (28., -3., 38., 14.),
 def physics_source_paths(root):
     """Pin physical execution inputs, independent of concurrent reward edits."""
     paths = [root/'guitar_learning'/p for p in (
-        'gpu/scene.py', 'gpu/control.py', 'gpu/geometry.py', 'gpu/rigid_guitar.py',
-        'gpu/hand_collision.py', 'core/control.py', 'core/finger_control.py',
-        'core/geometry_v1.py', 'runtime/prepared_reset_v1.py', 'runtime/native_session.py',
+        'gpu/scene.py', 'gpu/control.py', 'gpu/contact.py', 'core/control.py',
+        'core/geometry.py', 'runtime/prepared_reset_v1.py', 'runtime/native_session.py',
         'native/paths.py', 'tool/validation/hand_contact_probe.py')]
     return {p for p in paths if p.exists()} | set((root/'guitar_learning/assets/gpu_rigid_guitar_v1').glob('*'))
 
@@ -94,7 +93,7 @@ def main():
     from guitar_learning.core.control import ACTIVE_NAMES, LEFT_HAND_NAMES
     from guitar_learning.gpu.control import BatchedController
     from guitar_learning.gpu.scene import GpuScene
-    from guitar_learning.gpu.geometry import conjugate, multiply, rotvec
+    from guitar_learning.gpu.control import conjugate, multiply, rotvec
     from guitar_learning.runtime.prepared_reset_v1 import prepared_input_paths
     import subprocess
 
@@ -121,7 +120,7 @@ def main():
     started, failure, reset_check, max_codec_error = time.monotonic(), None, None, 0.
     tape_target_error, stopped_by_safety = 0., None
     original_acquire = gymapi.acquire_gym
-    from guitar_learning.gpu import hand_collision
+    from guitar_learning.gpu import scene as hand_collision
     original_filters = hand_collision.left_hand_collision_properties
     try:
         if args.video:

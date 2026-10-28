@@ -1,1 +1,1 @@
-"""Internal native guitar simulation implementation."""
+"""하체 유한 제어를 유지하는 내부 네이티브 장면 구현."""

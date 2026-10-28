@@ -7,7 +7,9 @@ from unittest.mock import patch, Mock
 import torch
 
 from guitar_learning.tool.training import train_legacy as start
-from guitar_learning.training.gpu_pool import FIELDS, TensorCollector, GpuPool
+from guitar_learning.training.rollout import FIELDS
+from guitar_learning.training.rollout import TensorCollector
+from guitar_learning.training.rollout import GpuPool
 
 
 class FakePolicy:

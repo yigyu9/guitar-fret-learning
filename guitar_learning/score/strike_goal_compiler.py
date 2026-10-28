@@ -1,6 +1,8 @@
-"""Reviewed strike-plan reader and transition validation for score compilation.
+"""악보 변환에 필요한 검수된 타격 계획 읽기와 동작 전환 검증을 제공한다.
 
-Retains the existing plan contract without the offline direction planner.
+오프라인 타격 방향 계획기는 포함하지 않으며 기존 계획 계약을 유지한다.
+
+읽는 순서: 진단·계획 자료형 → 전환 구간 계산 → 검수 예외 정규화 → 계획 문서 읽기.
 """
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Strict finger-skill checkpoint capture with native env0 hand/body cameras."""
+"""현행 J 전용 저장본을 엄격 검증하고 환경 0의 손·전신 영상을 기록한다."""
 import argparse
 import copy
 import json
@@ -86,13 +86,13 @@ def render(checkpoint, out, *, scope='full_song', num_envs=None):
     from isaacgym import gymapi
     import numpy as np
     import torch
-    from guitar_learning.training.gpu_pool import GpuPool
-    from guitar_learning.training.decision_ppo import DecisionPPOTrainer
-    from guitar_learning.training.finger_decisions import DecisionCollector
+    from guitar_learning.training.rollout import GpuPool
+    from guitar_learning.training.ppo import DecisionPPOTrainer
+    from guitar_learning.training.rollout import DecisionCollector
     from guitar_learning.training.finger_skill_runner import (
         resume_schema, _policy, _validate_pins, _pins, _DeterministicPolicy)
     from guitar_learning.training.ppo import PPOConfig
-    from guitar_learning.training.recording import digest, write
+    from guitar_learning.training.training_log_io import digest, write
     from guitar_learning.tool.validation.hand_contact_probe import GraphicsGym, finish_video
 
     checkpoint, out = Path(checkpoint), Path(out).resolve()
@@ -167,9 +167,9 @@ def render(checkpoint, out, *, scope='full_song', num_envs=None):
             video_duration_s=len(capture.frame_times_s)/30., captured_control_duration_s=len(capture.samples)/60.,
             first_physics_step=int(capture.samples[0]['physics_step']),
             last_physics_step=int(capture.samples[-1]['physics_step']),
-            held_finger_phase=policy.phase == 'F', maximum_finger_decision_ticks=settings['finger_skill']['hold_ticks'],
+            policy_decision_ticks=1,
             frame_mapping='frame n maps to control endpoint 2*(n+1); no t0 frame; odd final endpoint has no frame',
-            control='checkpoint DecisionCollector contract; deterministic means; frozen support recomputed each60Hz',
+            control='J-only checkpoint DecisionCollector contract; deterministic means recomputed each60Hz',
             no_reset_frames=True, training_updates=0,
             termination_observation=dict(
                 fields=[name for name in pool.contract['observation']['fields'] if name.startswith('wrist_termination.')],

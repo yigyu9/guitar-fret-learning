@@ -11,8 +11,8 @@ from scipy.spatial.transform import Rotation
 
 from guitar_learning.core.control import ACTIVE_NAMES
 from guitar_learning.gpu.environment import TensorSongEnvironment, CONTACT_CONTRACT, PAD_CONTACT_CONTRACT, TERMS
-from guitar_learning.gpu.geometry import apply, conjugate, multiply, rotvec
-from guitar_learning.music_task import ScoreTask, ScoreTarget
+from guitar_learning.gpu.control import apply, conjugate, multiply, rotvec
+from guitar_learning.song.task import ScoreTask, ScoreTarget
 from guitar_learning.runtime.prepared_reset_v1 import load_prepared_reset_contract
 
 

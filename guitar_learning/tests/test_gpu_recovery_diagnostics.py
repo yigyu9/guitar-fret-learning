@@ -6,7 +6,7 @@ import torch
 
 from guitar_learning.gpu.episode_diagnostics import FingerRecoveryWindows, LeftEpisodeDiagnostics
 from guitar_learning.gpu.finger_reward import finger_preparation_reward, finger_shape_reward
-from guitar_learning.gpu.thumb_support import thumb_support_geometry
+from guitar_learning.gpu.contact import thumb_support_geometry
 from guitar_learning.tests.test_gpu_finger_recovery import inputs, segments
 from guitar_learning.tests import test_gpu_episode_diagnostics as diagnostic_fixtures
 
@@ -493,7 +493,7 @@ class InitialQualityDeclineTests(unittest.TestCase):
         torch.testing.assert_close(torch.tensor(after['reference_quality'],dtype=torch.float64),p['quality'][0],rtol=0,atol=0)
 
     def test_environment_reset_captures_actual_quality_and_h32_window_preserves_reference(self):
-        from guitar_learning.gpu.geometry import multiply
+        from guitar_learning.gpu.control import multiply
         from guitar_learning.tests.test_gpu_surface_learning import task
         env,snapshot,_=diagnostic_fixtures.fixtures.TensorSongTests.environment(self,task=task(onset=4.,end=5.,press=3.))
         d=env.episode_diagnostics

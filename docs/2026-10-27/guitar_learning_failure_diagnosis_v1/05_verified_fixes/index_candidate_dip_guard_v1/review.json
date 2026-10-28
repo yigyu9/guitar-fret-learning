@@ -1,0 +1,44 @@
+{
+  "verdict": "PASS",
+  "findings": [],
+  "review_scope": "독립 CPU 준비 검수: named DIP 한 열 양의 target 증분 필터, first-attempt128 및 retry 제외, memory/scene/observation 정합, 원 B strict/nativecap128/pins 재사용 및 오류 복원",
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/PLAN.md": "e0e480c4dfd3441a7305fee306035db3db566fc79c2ff5eb17086ee25fabdde9",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/README.md": "09a709f7c521d0551465021f31e61efa35ec42e1b37333d244f652e29fb9a9ae",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/probe.py": "21b89cb106ee5553860bcece2a83fa9004984677e8519dc830b7c121883b7bee",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/cpu_checks.py": "0eba39d4bd9907dddec56e15e37ab88e470c23362cc5d74c3b444a27f5ebca5b",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/cpu_verification.json": "0148a7112a061a998bb093d2925b1c32c914dd481946f6227e9089fa4cb23746",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/fresh_process_gate.json": "a712dba2f9648f0330ccd2f70fff7a385814d114f20eb6a35f706b3e13c16a4f",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/cpu_inputs/commands.json": "224cfe3050db8dc457c455e634c55529fefd71b248c60a2e514050a8317e2fc5",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/cpu_inputs/execution_override.json": "9042358004ad5873f42e58bcee7f42e59445ca9ac994fa106b0408173d43440d",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/cpu_inputs/settings.json": "191235805d64be3b31139460d66929daadc9ee78abc02cf68fd732cde576631a"
+  },
+  "pending_preparation_seal_snapshot": {
+    "path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/preparation_seal.json",
+    "sha256": "0f8323b7087d7ed3f56a3cf85f6c1f9f1263db22d0177d500f0192053620fac7",
+    "independent_review": "pending",
+    "input_pin_count": 1418,
+    "canonical_input_pins_sha256": "d8be79eceb1820ff6799a89a2900bb12acc2fce5b17f6ae172647e1bf101cd8f",
+    "all_input_pins_current": true,
+    "scope": "검수 당시 pending 봉인 snapshot; 최종 status 및 review SHA 추가 후 whole-file SHA는 달라질 수 있음"
+  },
+  "independent_checks": [
+    "Python3.8 AST: probe.py/cpu_checks.py",
+    "rl38 CPU --self-test 실제 재실행 PASS",
+    "fresh process --gate-check PASS: 수치/native import 없음 및 pending 실행 거부",
+    "named LH:index3 및 action mapping 검사, 원 controller.targets 반환 alias와 DIP memory 갱신",
+    "양의 증분만 차단; 음/0 증분·다른104열·입력 불변 및 on/off/on 재누적 없음",
+    "실제 nested Pool.step CPU fixture: first failure endpoint 포함/retry 제외; scene target와 normalized observation 정합 및 변조 거부",
+    "constructor/close 이중 오류의 원 예외 보존, observer 및 outer alias 복원, 기존 출력/깨진 symlink 사전 거부",
+    "원 strict B300 fresh=False/evaluator 및 128native cap·두 _pins 경로 연결 읽기 검토"
+  ],
+  "GPU_executed": false,
+  "native_executed": false,
+  "runs_directory_present": false,
+  "limitations": [
+    "실제 GPU 메모리/scene/strict load 및 두 closed-loop 성과는 아직 검증하지 않음",
+    "같은 snapshot의 원 target 대비 다른104열 불변이며 두 run의 전체 궤적 동일성을 뜻하지 않음",
+    "원 policy action/action_change는 보존되므로 target 개입 이후 effective DIP 증분은 별도 sidecar로 해석",
+    "DIP 실제 즉시 펴짐·음악성과 유지·자연성·접촉쌍 압력·생산 채택을 보증하지 않음"
+  ]
+}

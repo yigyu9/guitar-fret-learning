@@ -5,8 +5,9 @@ from pathlib import Path
 import numpy as np
 from guitar_learning.core.control import ACTIVE_NAMES, EXPECTED_NAMES, JointTargetContract
 from guitar_learning.core.whole_body_control import EXPECTED_NAMES as FULL_EXPECTED_NAMES
-from guitar_learning.runtime.native_session import ZERO_RANGE_NAMES, target_rates
-from guitar_learning.core.finger_control import validate_profile, profile_control_settings
+from guitar_learning.core.control import ZERO_RANGE_NAMES
+from guitar_learning.core.control import target_rates
+from guitar_learning.core.control import validate_profile, profile_control_settings
 
 PREPARATION_SECONDS = 2.
 PREPARATION_STEPS = int(PREPARATION_SECONDS * 240)
@@ -41,7 +42,7 @@ class FreeGuitarEnvironment:
         self.preparation_seconds = float(preparation_seconds)
         self.preparation_steps = int(round(control_ticks)) * 4
         if session_factory is None:
-            from guitar_learning.runtime.prepared_reset_v1 import PreparedSession
+            from guitar_learning.runtime.native_session import PreparedSession
             session_factory = PreparedSession
         self.config = json.loads(Path(config).read_text()) if isinstance(config, (str, Path)) else dict(config)
         self.out = Path(out)
@@ -126,7 +127,7 @@ class FreeGuitarEnvironment:
         state = scene.native()
         geometry_fn = self.geometry_fn
         if geometry_fn is None:
-            from guitar_learning.core.geometry_v1 import geometry_snapshot
+            from guitar_learning.core.geometry import geometry_snapshot
             geometry_fn = geometry_snapshot
         geometry = geometry_fn(state, scene.human_bodies, scene.guitar_bodies)
         return {'native': state, 'geometry': geometry}

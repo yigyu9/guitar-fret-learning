@@ -6,17 +6,19 @@ from unittest.mock import patch
 import torch
 
 from guitar_learning.gpu.environment import TensorSongEnvironment
-from guitar_learning.gpu.simplified_finger_environment import (
-    SimplifiedFingerEnvironment, performance_settlement, remaining_negative_budget,
-    REWARD_TERMS, WRIST_FIELDS)
+from guitar_learning.gpu.finger_skill_environment import FingerSkillEnvironment
+from guitar_learning.gpu.finger_skill_environment import performance_settlement
+from guitar_learning.gpu.finger_skill_environment import remaining_negative_budget
+from guitar_learning.gpu.finger_skill_environment import REWARD_TERMS
+from guitar_learning.gpu.finger_skill_environment import WRIST_FIELDS
 from guitar_learning.tests.test_gpu_environment import fixture, SONG, BUNDLE
 
 
 def make(count=2):
     metadata, snapshot = fixture(count)
-    skill = dict(schema='guitar_learning.finger_skill.v2', phase='J', exploration='independent',
+    skill = dict(schema='guitar_learning.finger_skill.v3', phase='J', exploration='independent',
                  hold_ticks=1, scope='scheduled', planned_transitions=400, full_song_after=100)
-    env = SimplifiedFingerEnvironment(metadata, bundle=BUNDLE, song=SONG, skill=skill, device='cpu')
+    env = FingerSkillEnvironment(metadata, bundle=BUNDLE, song=SONG, skill=skill, device='cpu')
     return env, snapshot, env.reset(range(count), snapshot)
 
 
@@ -29,22 +31,21 @@ def advance(env, snapshot, *, physical=False, wrist=False):
     return env.end_control()
 
 
-class SimplifiedFingerEnvironmentTests(unittest.TestCase):
+class FingerSkillEnvironmentTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(1)
 
     def test_named_observation_and_k1_does_not_overwrite_wrist_timers(self):
         env, _, obs = make()
-        self.assertEqual(obs['state'].shape, (2, 561))
+        self.assertEqual(obs['state'].shape, (2, 557))
         self.assertEqual(env.contract['observation']['fields'][-4:], list(WRIST_FIELDS))
         self.assertEqual(env.contract['observation']['scales'][-4:], [1., 1.5, 3., .1])
         self.assertEqual(env.contract['termination']['wrist']['schema'], 'guitar_learning.wrist_termination.v2')
         torch.testing.assert_close(obs['state'][:, -2], torch.ones(2))
-        changed = env.decision_observation(torch.ones(2, dtype=torch.long), obs)
-        torch.testing.assert_close(changed['state'][:, -4:], obs['state'][:, -4:], rtol=0, atol=0)
-        torch.testing.assert_close(changed['state'][:, env.planned_ticks_index], torch.full((2,), 1/6))
-        with self.assertRaises(ValueError): env.decision_observation(torch.full((2,), 3, dtype=torch.long), obs)
+        self.assertNotIn('finger_skill.planned_ticks', env.contract['observation']['fields'])
+        self.assertFalse(hasattr(env, 'decision_observation'))
+        self.assertFalse(hasattr(env, 'plan_decisions'))
 
     def test_nine_effective_coefficients_no_group_or_double_balance(self):
         env, _, _ = make()

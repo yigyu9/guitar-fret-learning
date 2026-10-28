@@ -4,15 +4,11 @@ import copy
 import numpy as np
 
 from guitar_learning.song.hand_environment import HandSongEnvironment, SHARED_TERMS
-from guitar_learning.song.left_curriculum import CurriculumState, SCHEMA, default_config
-from guitar_learning.song.wrist_guide import WristGuide
+from guitar_learning.song.curriculum import CPULeftCurriculum as CurriculumState, CPU_SCHEMA as SCHEMA, cpu_default_config as default_config
+from guitar_learning.song.task import WristGuide
 
 
-LEFT_FIELDS = ('delta_x', 'delta_y', 'delta_z', 'rotation_x', 'rotation_y',
-               'rotation_z', 'focus_contact_fraction', 'focus_contact_achieved',
-               'contact_achieved_fraction', 'progress',
-               'contact_weight', 'timing_weight')
-LEFT_SCALES = (.05, .05, .05, .6, .6, .6, 1., 1., 1., 2., 1., 1.)
+from guitar_learning.core.geometry import LEFT_FIELDS, LEFT_SCALES
 _GROUPS = dict(song_wrist_position='wrist', song_left_contact='contact',
                song_wrong_press='contact', song_clean_hold='timing',
                song_left_success='timing', song_missing_press='timing',

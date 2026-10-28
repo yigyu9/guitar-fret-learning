@@ -1,0 +1,78 @@
+{
+  "verdict": "PASS",
+  "summary": "문제없음",
+  "findings": [],
+  "review_date": "2026-10-28",
+  "CPU_only": true,
+  "GPU_executed": false,
+  "fit_executed": false,
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/04_ablation/prefix_release_alignment_v1/exploration/PLAN.md": "6b91076b1e396e6e62fef7024319d1d17efc0211ca6e3154abbbfcb9b535f65e",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/04_ablation/prefix_release_alignment_v1/exploration/audit.py": "6d255f460de821d9d8e7447fd677af57b1a842bf2e0dec0e4c490afd320fa395",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/04_ablation/prefix_release_alignment_v1/exploration/results_v1/comparison.json": "186c67a76c569bb748cd7a5e0e841324ec416084b4bcfdc235b6f99bdad2714d",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/04_ablation/prefix_release_alignment_v1/exploration/results_v1/verification.json": "ca4696739ad8ca26f4d74b6560beba7a995813f9a00fe2c22cc53b57064a094b",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/04_ablation/prefix_release_alignment_v1/exploration/results_v1/distribution.csv": "ced491a82f87c3f174f63edb0be993bded041dc828d43f3ff852ffe3e1498983",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/04_ablation/prefix_release_alignment_v1/exploration/results_v1/exploration_units.png": "422d8961877fbdf8cf35268b853ce93e0f7055874552438388e2b6524d16d1ef",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/04_ablation/prefix_release_alignment_v1/exploration/results_v1/RESULTS.md": "f9f23a8eca7c4bdabcfc6948ef2af8904ea20ad1e5c47a57651266f293a3db7d"
+  },
+  "checks": {
+    "direct_15_input_SHA_current": true,
+    "memory_replay_JSON_CSV_REPORT_exact": true,
+    "plot_recomputed_pixel_exact": true,
+    "plot_direct_visual_review": true,
+    "Python38_AST_pass": true,
+    "model73_and_observations_unchanged": true,
+    "phase_middle_rows_and_startclock_exact": [
+      236,
+      616,
+      772,
+      836,
+      900,
+      1164
+    ],
+    "saved_log_std_clamp_float32_exp_confirmed": true,
+    "seed7_float64_100000x4_epsilon_hash_exact": true,
+    "independent_NumPy_64_distributions_RMS_bias_quantile_exceed_and_bounds_confirmed": true,
+    "pointwise_Lipschitz_and_finite_sample_bound_verified": true,
+    "population_and_finite_sample_bounds_distinguished": true
+  },
+  "numerical_summary": {
+    "original_effective_std": 0.17117105424404144,
+    "saved_log_std4": [
+      -1.765091896057129,
+      -1.765091896057129,
+      -1.765091896057129,
+      -1.765091896057129
+    ],
+    "config_minus_effective_std": 2.326599468638335e-10,
+    "nominal_rad": 0.01141140361626943,
+    "L_rad_per_raw4": [
+      1.405931830406189,
+      0.9576318264007568,
+      0.9057778716087341,
+      1.2086181938648224
+    ],
+    "candidate_sigma4": [
+      0.008116612320365882,
+      0.011916274398647547,
+      0.012598457054378976,
+      0.009441694386362791
+    ],
+    "raw_CPU_max_abs_residual": 3.228472789107428e-08,
+    "reused_CPU_tolerance": 2.384185791015625e-07,
+    "epsilon_RMS4": [
+      0.9980082511217322,
+      1.0009871657838603,
+      0.9983645185164443,
+      0.998999076361718
+    ],
+    "maximum_pointwise_bound_excess_rad": 3.323418471846973e-17
+  },
+  "proof": "decode는 035 기준 두 유한 span의 연속 piecewise affine 함수이며 기울기 절댓값 최대 L이다. tanh는1-Lipschitz이므로 |delta|<=L*sigma*|epsilon|, Gaussian 모집단 RMS<=L*sigma, 표본 RMS<=L*sigma*sqrt(mean(epsilon^2)).",
+  "limits": [
+    "후보 sigma는 계산만 했으며 원 정책·체크포인트·설정에 적용하지 않았다.",
+    "고정 float32 모델 평균을 읽은 뒤 float64로 목표각 분포를 계산했다. CUDA/float32 잡음의 bitexact 재현이나 실제 관절 움직임·힘·PPO 효과를 검증한 것이 아니다.",
+    "초과비율은 동일 평균의 deterministic goal 대비 rateclip 전 목표각 차이다. 실제 controller clip률이 아니며 후보 표본초과0은 모집단 꼬리0을 보장하지 않는다.",
+    "nominal은 기존 incremental neutral의1차 기준이며 정확한 유한잡음 RMS가 아니다. 직접15입력만 검증했고 상위 수천핀 재귀감사나 새시계·관측 수집은 없다."
+  ]
+}

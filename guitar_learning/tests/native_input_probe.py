@@ -10,7 +10,6 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 PHASE = Path(__file__).resolve().parent
-RESULTS = ROOT / 'docs/2026-10-12/stability_adapter_2/results'
 LEGACY = tuple(str(ROOT / name) + os.sep for name in ('tab2body', 'stability_adapter_2'))
 
 
@@ -52,7 +51,7 @@ def runtime_sources():
     return paths
 
 
-def run(*, gates=False, renderer=False):
+def run(*, renderer=False):
     if any(name.split('.')[0] in ('tab2body', 'stability_adapter_2') for name in sys.modules):
         raise RuntimeError('Isolation requires a fresh interpreter')
     sys.meta_path.insert(0, NoLegacyImports())
@@ -68,10 +67,9 @@ def run(*, gates=False, renderer=False):
 
     import numpy as np
     from guitar_learning.runtime.prepared_reset_v1 import BASELINE_CONFIG, load_prepared_reset_contract, prepared_input_paths
-    from guitar_learning.native.lower_body_release_v1 import common
+    from guitar_learning.native import paths as common
     from guitar_learning.native.paths import ASSETS, original_input_path, verify_provenance
     from guitar_learning.core.dependency_inputs import parity_errors
-    from guitar_learning.tool.experiments.transition import solver
     from guitar_learning.native.upper_arm_static_geometry_v1 import calibrated_upper_fk
     from guitar_learning.native.initial_pose_video60_v1 import static_visual_v7
 
@@ -92,9 +90,8 @@ def run(*, gates=False, renderer=False):
     errors = parity_errors(checked, expected)
     assert not errors, errors
 
-    paths = solver.input_paths()
-    assert all(ASSETS in Path(path).parents and Path(path).is_file() for path in paths)
-    solver._check_fk_axes(solver.DEFAULT_ASSET)
+    asset_paths = {path for path in prepared_paths if ASSETS in path.parents}
+    assert asset_paths and all(path.is_file() for path in asset_paths)
     initial, state = contract['initial'], contract['state']
     q = np.array([row['pos'] for row in state['human_dof_states']])
     fk, _ = calibrated_upper_fk(initial['joint_names'], initial['human_body_names'], state, q)
@@ -109,40 +106,18 @@ def run(*, gates=False, renderer=False):
         visual_paths.update(static_visual_v7.asset_paths(original_input_path(asset['path'])))
     assert all(ASSETS in path.parents for path in visual_paths)
     result = dict(legacy_open_and_import_guards=True, prepared_inputs=len(prepared_paths), pins=len(pins),
-                  baseline_parity_files=len(checked), solver_inputs=len(paths),
+                  baseline_parity_files=len(checked), prepared_asset_inputs=len(asset_paths),
                   fk_max_position_error_m=position_error, renderer_asset_inputs=len(visual_paths),
                   provenance=verify_provenance())
     if renderer:
         model, data, mapping, _ = static_visual_v7.build_model(initial)
         result['renderer'] = static_visual_v7.set_body_poses(model, data, mapping, state)
-    if gates:
-        import torch
-        torch.set_num_threads(1)
-        from guitar_learning.tool.experiments.local_skills.learning import settings_document as local_settings
-        from guitar_learning.tool.experiments.local_skills.train import validate_gate
-        from guitar_learning.tool.experiments.joint.proofs import validate_preflight
-        from guitar_learning.tool.experiments.song.transfer import validate_experts as song_experts
-        from guitar_learning.tool.experiments.song_reward_v2.transfer import validate_experts as reward_experts
-        from guitar_learning.tool.experiments.transition.transfer import validate_source
-        proof_counts = {}
-        for role in ('left', 'right'):
-            settings = local_settings(json.loads((RESULTS/f'guitar_learning_local_skills_v1/{role}_bc_ppo_ready_settings_v1.json').read_text()))
-            proof_counts['local_'+role] = len(validate_gate(settings))
-        settings = json.loads((RESULTS/'guitar_learning_joint_v1/joint_training_settings_v1.json').read_text())
-        proof_counts['joint_preflight'] = len(validate_preflight(settings)['pins'])
-        settings = json.loads((RESULTS/'guitar_learning_full_song_v1/training_settings_v1.json').read_text())
-        proof_counts['full_song'] = len(song_experts(settings)['source_pins'])
-        settings = json.loads((RESULTS/'guitar_learning_reward_v2/training_settings_v1.json').read_text())
-        proof_counts['reward_v2'] = len(reward_experts(settings)['source_pins'])
-        proof_counts['transition_source'] = len(validate_source(RESULTS/'guitar_learning_reward_v2/training_v1/final.pt')['source_pins'])
-        result['actual_evidence_preflight'] = proof_counts
     assert not any(name.split('.')[0] in ('tab2body', 'stability_adapter_2') for name in sys.modules)
     return result
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--gates', action='store_true')
     parser.add_argument('--renderer', action='store_true')
     args = parser.parse_args()
-    print(json.dumps(run(gates=args.gates, renderer=args.renderer), sort_keys=True))
+    print(json.dumps(run(renderer=args.renderer), sort_keys=True))

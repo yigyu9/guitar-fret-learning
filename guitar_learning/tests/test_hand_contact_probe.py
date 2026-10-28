@@ -37,13 +37,13 @@ class HandContactProbeTests(unittest.TestCase):
     def test_physics_pins_are_independent_of_reward_and_policy_edits(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            for name in ('gpu/scene.py', 'gpu/control.py', 'gpu/hand_collision.py',
+            for name in ('gpu/scene.py', 'gpu/control.py',
                          'gpu/finger_reward.py', 'gpu/environment.py', 'training/policy.py'):
                 path = root/'guitar_learning'/name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('')
             actual = {p.relative_to(root/'guitar_learning').as_posix() for p in physics_source_paths(root)}
-            self.assertEqual(actual, {'gpu/scene.py', 'gpu/control.py', 'gpu/hand_collision.py'})
+            self.assertEqual(actual, {'gpu/scene.py', 'gpu/control.py'})
 
     def test_broken_encoder_pipe_still_reaps_process(self):
         class Process:

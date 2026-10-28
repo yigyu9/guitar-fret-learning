@@ -1,6 +1,6 @@
 """Synthetic consecutive240Hz score boundaries; no native dynamics claim."""
 import unittest
-from guitar_learning.music_task import ScoreTarget, ScoreTask
+from guitar_learning.song.task import ScoreTarget, ScoreTask
 from guitar_learning.song.metrics import SongLedger, HISTORY_FIELDS, HISTORY_SCALES
 
 

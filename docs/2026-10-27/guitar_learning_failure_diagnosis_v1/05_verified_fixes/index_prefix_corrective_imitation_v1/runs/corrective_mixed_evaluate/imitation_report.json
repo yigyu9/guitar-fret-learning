@@ -1,0 +1,76 @@
+{
+  "completed": true,
+  "failure": null,
+  "stage": "evaluate",
+  "checks": {
+    "aliases_restored": true,
+    "observer_aliases_restored": true,
+    "original_native_closed": true,
+    "prefix_task_verified": true,
+    "NN_constructors_exact": true,
+    "selected4_request_not_replaced": true,
+    "model_RNG_updates_frozen": true,
+    "no_secondary_errors": true,
+    "reference_only_in_collection": true
+  },
+  "procedure": {
+    "schema": "diagnostic.index_prefix_corrective_initialization.v1",
+    "seed": 7,
+    "steps": 1000,
+    "batch_size": 192,
+    "per_phase": 32,
+    "learning_rate": 0.0003,
+    "gradient_norm": 0.5,
+    "loss": "mean square of original tanh(mean) selected4 minus requested reference action; no atanh/clipping",
+    "train_envs": [
+      0,
+      1,
+      2
+    ],
+    "heldout_envs": [
+      3
+    ],
+    "phases": [
+      "A_approach",
+      "A_hold",
+      "release",
+      "move",
+      "close",
+      "B_hold"
+    ],
+    "trainable_prefixes": [
+      "finger_encoder.",
+      "finger_heads.index."
+    ],
+    "unchanged": "original PrefixPolicy architecture/environment/currentgoal guard/std/reward; other parameter values exact",
+    "checkpoint": "new initialization metadata schema; new original PPO optimizers empty/updates0; no supervised optimizer inheritance",
+    "scope": "same-scene heldout observation check, not independent seeds/generalization/RL-only/free guitar",
+    "condition": "corrective_mixed",
+    "additional_steps": 1000,
+    "total_supervised_steps": 2000,
+    "starting_checkpoint": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/runs/fit/initial.pt",
+    "starting_checkpoint_sha256": "162c617a28e548757bea8b0721c13c740d452fc430ae1601f01ed8411e2e480a",
+    "source_mix": "16 native reference +16 saved NN observation counterfactual request per phase",
+    "sampling": "same seed7/6phases/two16-with-replacement draws; env0..2 only; env3 heldout same-scene",
+    "label_manifest_sha256": "a8ca3f3f3be7abd29b2fcd0c789f03d359231694831208821d0ce3ab1d14607c",
+    "label_arrays_sha256": "95d79f699ca7e54f2b0ae9dac78b93b77af5fd8e37843a7057cc0243356864a2",
+    "origin_scope": "NN actual/requested/executed remains original; shadow reference request is computed offline and never certified as executed"
+  },
+  "dataset_sha256": "70fd2a3fcf55bc3aa26835ef78c2ea07d235d77ca983f5e798a50859bd2401a5",
+  "reference_calls": 0,
+  "reference_N_injected": false,
+  "policy_before": {
+    "model_sha256": "8b062f0b74f641199fba1360749c6a63677c100d500c7fe0008ee694559f15ec",
+    "RNG_sha256": "1d95aa3408227af669305213b2093c65d43416dd9a64d33c7558852c72f8ed90",
+    "updates": 0,
+    "cost_weight": 1.0
+  },
+  "policy_after": {
+    "model_sha256": "8b062f0b74f641199fba1360749c6a63677c100d500c7fe0008ee694559f15ec",
+    "RNG_sha256": "1d95aa3408227af669305213b2093c65d43416dd9a64d33c7558852c72f8ed90",
+    "updates": 0,
+    "cost_weight": 1.0
+  },
+  "settings_scope": "Original settings initialization text is source configuration only; fit checkpoint actual_initialization declares supervised provenance",
+  "scope": "Collection is noNN reference; evaluate is NN-only current-goal guard, no carry memory or N injection"
+}

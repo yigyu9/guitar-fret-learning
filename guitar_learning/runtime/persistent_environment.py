@@ -5,8 +5,11 @@ all reset failure paths still destroy the owned native session.
 """
 import copy
 import threading
+from numbers import Real
 from unittest.mock import patch
+import numpy as np
 from guitar_learning.core import training_environment
+from guitar_learning.core.environment_v4 import FreeGuitarEnvironment
 from guitar_learning.core.training_environment import ContactEnvironment
 
 _CONSTRUCTION_LOCK = threading.RLock()
@@ -65,6 +68,33 @@ class PersistentContactEnvironment(ContactEnvironment):
         finally:
             self.session = None
             self._session_config = None
+
+
+class PreparedFreeGuitarEnvironment(FreeGuitarEnvironment):
+    """준비 상태 복원 직후 정책에 제어를 넘기는 0초 준비를 지원한다."""
+    def __init__(self, *args, preparation_seconds=2., **kwargs):
+        if (isinstance(preparation_seconds, bool) or not isinstance(preparation_seconds, Real)
+                or not np.isfinite(preparation_seconds)
+                or not (preparation_seconds == 0. or 1. <= preparation_seconds <= 2.)):
+            raise ValueError('preparation_seconds must be0 or within1..2 seconds')
+        # 기존 생성자의 나머지 검증은 유지하고 실제 reset 전 준비 시간만 바꾼다.
+        super().__init__(*args, preparation_seconds=preparation_seconds or 1., **kwargs)
+        self.preparation_seconds = float(preparation_seconds)
+        self.preparation_steps = int(round(self.preparation_seconds*60))*4
+
+    def reset(self):
+        observation, info = super().reset()
+        if self.preparation_seconds == 0.:
+            info['preparation_mode'] = 'prepared_state_then_immediate_policy_handoff'
+        return observation, info
+
+
+class PreparedContactEnvironment(PreparedFreeGuitarEnvironment, ContactEnvironment):
+    """기존 접촉 reset·snapshot과 물리 메서드의 협력 MRO를 유지한다."""
+
+
+class PreparedPersistentContactEnvironment(PreparedContactEnvironment, PersistentContactEnvironment):
+    """0초 준비와 기존 지속 세션 소유권·reset·실패 정리를 함께 유지한다."""
 
 
 def build_persistent_environment(config, out, **kwargs):

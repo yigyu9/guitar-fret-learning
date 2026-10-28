@@ -45,7 +45,7 @@ python -m guitar_learning.train \
 | [left_curriculum.py](/home/ajou/yigyu/3/guitar_learning/song/left_curriculum.py) | 최근 성능 창·진행도·보상 비중·상태 검증 |
 | [left_environment.py](/home/ajou/yigyu/3/guitar_learning/song/left_environment.py) | 실제240Hz 보상·도달/접촉 근거·512관측 |
 | [curriculum_runtime.py](/home/ajou/yigyu/3/guitar_learning/song/curriculum_runtime.py) | 부모 집계·27개float64 checkpoint buffer·worker 동기화 |
-| [start.py](/home/ajou/yigyu/3/guitar_learning/training/start.py)·[runner.py](/home/ajou/yigyu/3/guitar_learning/training/runner.py)·[parallel.py](/home/ajou/yigyu/3/guitar_learning/training/parallel.py) | 왼손 기본 연결·PPO 이후 기록/전환·장면 reset 없는 관측 갱신 |
+| [launch.py](/home/ajou/yigyu/3/guitar_learning/training/launch.py)·[runner.py](/home/ajou/yigyu/3/guitar_learning/training/runner.py)·[parallel.py](/home/ajou/yigyu/3/guitar_learning/training/parallel.py) | 왼손 기본 연결·PPO 이후 기록/전환·장면 reset 없는 관측 갱신 |
 
 왼손은 기존500개에 손목 오차6개·접촉 보너스 진행/달성/전체 비율3개·단계와 비중3개를 더한512상태다. 오른손과 전문 전곡500경로에는 새 보상을 적용하지 않는다. 이전500왼손·563단음 모델은 새 왼손 계약에 strict resume할 수 없다.
 

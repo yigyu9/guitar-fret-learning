@@ -6,7 +6,7 @@ import numpy as np
 from . import motion_v2 as previous_motion
 from .motion_v2 import Motion as PreviousMotion,arm_checks
 from .motion_v1 import stage_at
-from ..lower_body_release_v1.common import read,sha
+from guitar_learning.native.paths import read, sha
 
 BIAS_BOUNDS_MODE='finite_desired_actual_intersect_command_bounds_held_plus_e16_v1'
 DIAGNOSTIC_SHA='8e678b16e461cc97245322ca1497e95f757e16801b855687f68674b496b853c7'

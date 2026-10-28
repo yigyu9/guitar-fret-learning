@@ -2,8 +2,8 @@
 from dataclasses import replace
 import json
 import unittest
-from guitar_learning.music_task import ScoreTask
-from guitar_learning.core.task_measurement import TaskMeasurement
+from guitar_learning.song.task import ScoreTask
+from guitar_learning.core.measurement import TaskMeasurement
 from guitar_learning.song.measurement import SongMeasurement
 from guitar_learning.tests.test_task_measurement_v2 import sample
 from guitar_learning.tests.test_task_measurement import score

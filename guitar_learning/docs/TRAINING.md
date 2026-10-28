@@ -1,14 +1,37 @@
-# 자유 기타 학습 인터페이스
+# 기본 학습과 초기 학습 인터페이스 기록
+
+## 현재 기본 학습 — 2026-10-28 기준
+
+`python -m guitar_learning.train --out NEW`는 GPU 왼손 **finger-skill v3(J 전용)**를 실행한다. 기본값은 medium·128환경·H32·100업데이트·seed7·checkpoint 간격250이다. GPU 물리와 GPU 텐서를 사용하며 CPU 자동 대체는 없다. 실행 환경 설정·재개·평가 명령은 [README](../README.md), 코드 연결은 [CODE_STRUCTURE](CODE_STRUCTURE.md), 출력 해석은 [LOGGING](LOGGING.md)을 따른다.
+
+Isaac Gym을 사용할 수 있는 `rl38` 환경에서 프로젝트 루트를 기준으로 실행한다. 다음은 large·1024환경의 명시적 실행 예시이며 출력 경로는 새 디렉토리여야 한다.
+
+```bash
+python -m guitar_learning.train \
+  --size large --num-envs 1024 --horizon 32 --updates 3000 \
+  --checkpoint-every 250 --seed 7 \
+  --out /home/ajou/yigyu/3/runs/left_finger_skill_docs_01
+```
+
+저장한035/v14 초기 자세를 에피소드 경계에서 한 번 복원하고 native 대기0초로 시작한다. 물리240Hz·정책60Hz·K1이며 J33 공동 학습을 처음부터 실행한다. BC 초기화를 요구하지 않으며 R/F 단계·자동 단계 전환·단계별 이전 코드는 제거했다. H32는 PPO 수집 경계이며 장면·곡 시계·원장·종료 타이머를 초기화하지 않는다. 처음 계획한 전이 예산의25%를 PPO에 반영한 뒤 다음 reset부터 선택 구간에서67음 전곡으로 전환한다.
+
+상태557(기반552+남은시간1+손목종료4)·이벤트24·우선 토큰8, 출력39 중 왼손33축을 사용한다. 보상은9항목이며 손목·물리 실패는 별도 종료 및 단일 실패 비용으로 처리한다. 실제 모델·로그는 `--out/J/`에 저장한다. 기본 기타는 자유 강체·중력ON·스트랩OFF, Root 고정·하체 유한 제어다. 별도 진단에서 사용한 기타 고정 조건을 기본 설정으로 해석하지 않는다.
+
+기본 연결은 구현24개·초기화8개이며 활성 Python은281개다. CPU·오른손 song과 현행 진단·영상·로그 도구는 유지한다. 과거8실험·전문 환경·구형 CLI·매뉴얼은 [원문·SHA 보관 안내](../archive/20261028_before_legacy_retirement_v1/ARCHIVE_INDEX.md)를 따른다. 아래 명령은 보관한 과거 계약의 설명이며 현재 작업 공간의 실행 명령이 아니다.
+
+## 초기468상태 인터페이스 — 과거 계약
 
 2026-10-19 구조 정리: 이 문서는 초기468상태 학습 계약의 기록이다. 당시 단일환경 `guitar_learning.train` 실행기는 [보관 manifest](../archive/20261019_retired_experiments/manifest.json)에 원문으로 보존했다. 본문의 옛 명령은 원구조를 별도 작업 공간에 복원할 때의 재현 설명이며 현행 실행은 [README](../README.md)를 따른다.
 
-현재 손별 사전학습·전문가 결합은 [SPECIALIST_TRAINING.md](/home/ajou/yigyu/3/guitar_learning/docs/SPECIALIST_TRAINING.md)를 따른다. 아래 공유 Actor·통합 보상 구조는 기존 비교·재현 경로이며, 새 단독 단계의 보상과 성공 판정은 별도 문서에 정의했다.
+당시 손별 사전학습·전문가 결합 매뉴얼은 [보관 안내](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/ARCHIVE_INDEX.md)에서 확인한다. 아래 공유 Actor·통합 보상 구조는 과거 비교·재현 기록이다.
 
-## 현재 병렬·장기 학습 설정
+### 당시 병렬·장기 학습 설정
 
-현재 장기 실행은 [PARALLEL_TRAINING.md](/home/ajou/yigyu/3/guitar_learning/docs/PARALLEL_TRAINING.md)를 따른다. 메모리 중단 개선 후 권장 시작값은 N8/GPU/medium/H256/batch2048/actor_lr3e-5/initial_std exp(-3)이며, 새 정책은 별도 dense_v2 보상을 사용한다. RAM 감시·진행 출력·검증된 상태의 실패 복구 저장을 추가했다. 과거 N16 선정 근거인 [환경 수5종과 설정3종의 실제 비교](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_parallel_tuning_v1/README.md)는 음악 매칭0이며 수렴·전체 곡 성공을 뜻하지 않는다. 아래 단일 환경 인터페이스와 수식은 유지한다.
+당시 장기 실행은 [PARALLEL_TRAINING.md](/home/ajou/yigyu/3/guitar_learning/docs/PARALLEL_TRAINING.md)를 따른다. 메모리 중단 개선 후 권장 시작값은 N8/독립 CPU PhysX·GPU 정책/medium/H256/batch2048/actor_lr3e-5/initial_std exp(-3)이며, 새 정책은 별도 dense_v2 보상을 사용한다. RAM 감시·진행 출력·검증된 상태의 실패 복구 저장을 추가했다. 과거 N16 선정 근거인 [환경 수5종과 설정3종의 실제 비교](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_parallel_tuning_v1/README.md)는 음악 매칭0이며 수렴·전체 곡 성공을 뜻하지 않는다. 아래 단일 환경 인터페이스와 수식은 유지한다.
 
 단일 환경 실행 진입점은 [train.py](/home/ajou/yigyu/3/guitar_learning/archive/20261019_retired_experiments/guitar_learning/train.py), 환경 API는 [TrainingEnvironment](/home/ajou/yigyu/3/guitar_learning/core/training_environment.py)다. 정본 음악 목표 → 실제 관측 → 39개 행동 → 유한 관절 제어 → 240Hz 접촉·타현 측정 → 보상/비용 → PPO로 연결했다. 여기서 타현은 피크 마커의 기하 통과이며, 실제 현 압력·진동·음향의 성공 판정은 아니다.
+
+이하의 ‘현재’·‘기본’·옛 명령은 당시468상태 계약을 뜻한다. 현행 기본 실행의 관측·행동·보상·종료·CLI에 적용하지 않는다.
 
 ## 환경과 제어
 
@@ -123,4 +146,4 @@ PYTHONDONTWRITEBYTECODE=1 /home/ajou/miniconda3/envs/rl38/bin/python \
 
 ## 장기 학습 중단 이후 개정
 
-병렬 실행은 현재 N8/H256/batch2048, RAM 여유4GiB 보호,5초 자원 기록,10초 heartbeat,5업데이트 주기 저장과 오류·중단 시 failure_last_valid.pt를 사용한다. 새 dense_v2는 TrainingEnvironment를 상속한 별도환경이며 기존 접촉/음악 성공과 안정성 비용을 유지하고 조기 왼손 접근·움직이는 기타 상대 우손 타현 경로 보상을 더한다. 기존 고정목표 legacy 경로의 계약은 유지한다. 명시한 B단음 pool 선택 시 공통 후보 계약과 실제 episode 목표를 분리해 보존한다. 새 보상이나 pool은 새 정책으로 시작한다. 자세한 보상식·설정·실행·복구·로그 의미는 [PARALLEL_TRAINING.md](/home/ajou/yigyu/3/guitar_learning/docs/PARALLEL_TRAINING.md)에 있다.
+당시 병렬 실행은 N8/H256/batch2048, RAM 여유4GiB 보호,5초 자원 기록,10초 heartbeat,5업데이트 주기 저장과 오류·중단 시 failure_last_valid.pt를 사용한다. 새 dense_v2는 TrainingEnvironment를 상속한 별도환경이며 기존 접촉/음악 성공과 안정성 비용을 유지하고 조기 왼손 접근·움직이는 기타 상대 우손 타현 경로 보상을 더한다. 기존 고정목표 legacy 경로의 계약은 유지한다. 명시한 B단음 pool 선택 시 공통 후보 계약과 실제 episode 목표를 분리해 보존한다. 새 보상이나 pool은 새 정책으로 시작한다. 자세한 보상식·설정·실행·복구·로그 의미는 [PARALLEL_TRAINING.md](/home/ajou/yigyu/3/guitar_learning/docs/PARALLEL_TRAINING.md)에 있다.

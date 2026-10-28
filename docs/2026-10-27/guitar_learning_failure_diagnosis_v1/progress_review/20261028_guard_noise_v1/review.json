@@ -1,0 +1,101 @@
+{
+  "verdict": "PASS",
+  "summary_verdict": "문제없음",
+  "findings": [],
+  "scope": "현재 문서 delta만: README 최신 prefix, status 현재 세션/세 비교 상태, master 최신 요약과 std/K·해제 여유 다음 계획. 실행·생산 채택 승인이 아님.",
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/README.md": "049aa48d90084189daa2543bbc882f883a936e19b9629bb469788df68e2b4500",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/status.json": "c239faa8e04a7412cef0c42572842091e0dcc234a9ecdaa7844ea8f70422add8",
+    "/home/ajou/yigyu/3/docs/plans/guitar_learning_failure_diagnosis_20261027.md": "c6bbde8d91bae3510dbbf3d13bcc7adbbdb08c325cffbbc749dd1f4f20d090e9"
+  },
+  "request_sha256": "26ba6d996fafbb31c35918a8b46b18a5ce15b578cb0075315f09c493ef9c9049",
+  "evidence_review_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_exploration_precheck_v1/analysis/results_v1/review.json": "4794c608537e4520cedc335d93af65c7bc40becbb012674e02197ae969cb0a52",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_guard_off_v1/analysis/results_v1/review.json": "499e90712a58eb05dcfb9d02cd79cfec1a5be2e6717216922c0eb0f2b672fd2e",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_reference_noise_v1/analysis/results_v1/review.json": "6aa6233da40837435fbc30f498fe9d355219cd0da94f1819a3755c81994d030a"
+  },
+  "checks": {
+    "three_requested_SHA_exact": true,
+    "JSON_valid": true,
+    "current_prefix_local_links_checked": 55,
+    "missing_links": [],
+    "protected_README_tail_bytes": 16640,
+    "protected_README_tail_sha256": "2f2d37041ac189e7a4163e9cbad148f84c6f065507173757233bae8469135ec4",
+    "tail_exact_to_prior_snapshot": true,
+    "all_session_fields_null": 16,
+    "five_condition_acceptances_match_reviewed_comparison_JSON": true,
+    "separate_music_release_AND_and_failure_denominators": true,
+    "prior_failed_fit_and_recovery_preserved_in_summary": true,
+    "distal_patch_and_std_K_scope_source_checked": true,
+    "long_training_gate_failed_and_cleanup_paused_preserved": true
+  },
+  "source_scope_evidence": [
+    {
+      "path": "/home/ajou/yigyu/3/guitar_learning/gpu/fingertip_pad.py",
+      "lines": [
+        118,
+        174
+      ],
+      "sha256": "24786edf5098f833e1c6d62a465f927b22bd8a4aa312b2b6fbcbcaec7d61c2ad"
+    },
+    {
+      "path": "/home/ajou/yigyu/3/guitar_learning/gpu/environment.py",
+      "lines": [
+        335,
+        347
+      ],
+      "sha256": "854796448eb47f3fbb25ff1dfaa5f83c1fee5ff9fec431deef26c0ff8fb503a4"
+    },
+    {
+      "path": "/home/ajou/yigyu/3/guitar_learning/gpu/environment.py",
+      "lines": [
+        1011,
+        1014
+      ],
+      "sha256": "854796448eb47f3fbb25ff1dfaa5f83c1fee5ff9fec431deef26c0ff8fb503a4"
+    },
+    {
+      "path": "/home/ajou/yigyu/3/guitar_learning/skills/finger_skill_policy.py",
+      "lines": [
+        173,
+        173
+      ],
+      "sha256": "9ff0101f1779b0e5736164358edff235dab286c045b82d75e86bed4b89f4f247"
+    },
+    {
+      "path": "/home/ajou/yigyu/3/guitar_learning/training/finger_decisions.py",
+      "lines": [
+        42,
+        43
+      ],
+      "sha256": "89b4ee9f2e0e8d55328c31b7a739293387d9fc69f8397116d77ca025b9f667d5"
+    },
+    {
+      "path": "/home/ajou/yigyu/3/guitar_learning/skills/finger_skill_policy.py",
+      "lines": [
+        142,
+        153
+      ],
+      "sha256": "9ff0101f1779b0e5736164358edff235dab286c045b82d75e86bed4b89f4f247"
+    },
+    {
+      "path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/learning.py",
+      "lines": [
+        57,
+        57
+      ],
+      "sha256": "a1c2aad48ee62dee0d386a629b6089fca284a1e471aac170bce34785bc1fcffa"
+    }
+  ],
+  "observations": [
+    "NN 후보std on/off 확률 all3는 각각10/128, noNN noisy-reference는2/128. 해제 수118/124/117을 정상압현 뒤 해제 수로 확대하지 않는다. 128/384 및 달성×해제 교차표가 현재 status와 일치한다.",
+    "기존 load_fingertip_pad는 LH:index3 등 distal body만 128개 실제 삼각형 굽힘 안쪽 표본/법선과 valid mask로 만든다. body1/2 전체 피부나 같은 palmar mask를 제공하지 않는다. 일반 surface support 표본과 이 pad patch를 구분한다.",
+    "native released는 end..end+.1 구간의 candidate True→False latch다. 전체 피부 이격·무하중 증명이 아니며 finite128 표본도 실제 접촉점을 완전히 보장하지 않는다.",
+    "정책 logstd clamp[-5,2], 하한 exp(-5), 현재 J/independent/K1, 기존 K>1 F-only와 공간 상관의 설명이 source와 일치한다. 새 K/상관/std 검색 또는 해제 여유 수집은 아직 다음 계획이다."
+  ],
+  "limitations": [
+    "기존 실제 독립 PASS 근거를 재사용했다. 원시 실험·모델·전체 런타임 입력핀을 다시 감사하지 않았다.",
+    "GPU/native/모델 로드/새 학습·fit·PPO·생산 소스 수정 없음. 검토 3문서를 런타임 입력으로 편입하지 않았다.",
+    "이전 단계의 기록 및 master의 당시 pending 표현은 현재 새 주장으로 해석하지 않았다."
+  ]
+}

@@ -1,5 +1,5 @@
 """Prospective fixed validation schedule for the current initial-pose requirements."""
-from ..lower_body_release_v1.common import ROOT,A,BASE
+from guitar_learning.native.paths import ROOT, A, BASE
 PHASE=BASE/'front_facing_ready_v1'
 PLAN=ROOT/'docs/plans/front_facing_ready_20261016.md'
 PROTOCOL='front_initial_pose_ready_full_cycle_v1'

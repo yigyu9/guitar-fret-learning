@@ -7,9 +7,9 @@ import unittest
 import numpy as np
 import torch
 
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.song.curriculum_runtime import CurriculumCoordinator
-from guitar_learning.song.left_curriculum import STATE_SIZE
+from guitar_learning.song.curriculum import CPU_STATE_SIZE as STATE_SIZE
 from guitar_learning.tests.test_parallel import CONTRACT, observation
 from guitar_learning.tests.test_policy import policy
 from guitar_learning.tests.test_ppo import assert_tree, buffer

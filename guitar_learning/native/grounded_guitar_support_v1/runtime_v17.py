@@ -4,7 +4,7 @@ from unittest.mock import patch
 import numpy as np
 from ..lower_body_release_v1 import controller_horizontal_v4 as original_controller
 from ..lower_body_release_v1.control_math_v1 import stable_pd as original_stable_pd
-from ..lower_body_release_v1.common import read, sha, verify
+from guitar_learning.native.paths import read, sha, verify
 from .runtime_v14 import Controller as PreviousController
 
 

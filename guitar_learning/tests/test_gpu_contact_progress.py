@@ -7,7 +7,7 @@ import torch
 from guitar_learning.tests import test_gpu_continuous_contact as fixtures
 from guitar_learning.tests import test_gpu_environment as snapshots
 from guitar_learning.tests.test_gpu_surface_learning import task
-from guitar_learning.music_task import ScoreTask, ScoreTarget
+from guitar_learning.song.task import ScoreTask, ScoreTarget
 
 
 class ContactProgressTests(unittest.TestCase):

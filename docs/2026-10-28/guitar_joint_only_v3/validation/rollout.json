@@ -1,0 +1,136 @@
+{
+  "schema": "joint_rollout_v3_verification.v1",
+  "tests": {
+    "module": "guitar_learning.tests.test_finger_decisions",
+    "count": 7,
+    "passed": 7
+  },
+  "previous_source_sha256": "560c0d516522f97068c92400d681bf02fb1a8971965d1e2dcf35ab94d85576c7",
+  "current_source_sha256": "967d864d6339e72404d6d2906f0101d1034162f45df2806f23e74d663941ba00",
+  "removed": [
+    "R/F selection",
+    "held commands",
+    "planned decision observation",
+    "count padding",
+    "multi-tick discount accumulation"
+  ],
+  "preserved": [
+    "TensorCollector song path",
+    "pre-reset terminal bootstrap",
+    "partial reset",
+    "horizon clock continuation",
+    "raw and decision journals",
+    "detached independent buffers",
+    "invalidation on collection failure"
+  ],
+  "k1_equivalence": [
+    {
+      "failure": false,
+      "truncate": false,
+      "horizons": [
+        5,
+        2
+      ],
+      "compared_buffer_fields": [
+        "cost",
+        "cost_value",
+        "duration",
+        "episode_id",
+        "events",
+        "latent",
+        "logp",
+        "mask",
+        "next_cost_value",
+        "next_reward_value",
+        "old_log_std",
+        "old_mean",
+        "priority_events",
+        "priority_mask",
+        "reward",
+        "reward_value",
+        "start_control_tick",
+        "state",
+        "terminated",
+        "truncated",
+        "valid"
+      ],
+      "tensor_match": "bitwise",
+      "actions_match": "bitwise",
+      "journals_match": true,
+      "resets_match": true,
+      "final_rng_match": true
+    },
+    {
+      "failure": true,
+      "truncate": false,
+      "horizons": [
+        5,
+        2
+      ],
+      "compared_buffer_fields": [
+        "cost",
+        "cost_value",
+        "duration",
+        "episode_id",
+        "events",
+        "latent",
+        "logp",
+        "mask",
+        "next_cost_value",
+        "next_reward_value",
+        "old_log_std",
+        "old_mean",
+        "priority_events",
+        "priority_mask",
+        "reward",
+        "reward_value",
+        "start_control_tick",
+        "state",
+        "terminated",
+        "truncated",
+        "valid"
+      ],
+      "tensor_match": "bitwise",
+      "actions_match": "bitwise",
+      "journals_match": true,
+      "resets_match": true,
+      "final_rng_match": true
+    },
+    {
+      "failure": true,
+      "truncate": true,
+      "horizons": [
+        5,
+        2
+      ],
+      "compared_buffer_fields": [
+        "cost",
+        "cost_value",
+        "duration",
+        "episode_id",
+        "events",
+        "latent",
+        "logp",
+        "mask",
+        "next_cost_value",
+        "next_reward_value",
+        "old_log_std",
+        "old_mean",
+        "priority_events",
+        "priority_mask",
+        "reward",
+        "reward_value",
+        "start_control_tick",
+        "state",
+        "terminated",
+        "truncated",
+        "valid"
+      ],
+      "tensor_match": "bitwise",
+      "actions_match": "bitwise",
+      "journals_match": true,
+      "resets_match": true,
+      "final_rng_match": true
+    }
+  ]
+}

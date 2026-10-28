@@ -9,8 +9,8 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
-from guitar_learning.gpu.geometry import apply, multiply
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.gpu.control import apply, multiply
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.song.curriculum_runtime import CurriculumCoordinator
 from guitar_learning.tests import test_gpu_environment as fixtures
 from guitar_learning.tests.test_gpu_surface_learning import task

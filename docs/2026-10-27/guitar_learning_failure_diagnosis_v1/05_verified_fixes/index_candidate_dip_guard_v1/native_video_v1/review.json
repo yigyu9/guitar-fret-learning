@@ -1,0 +1,44 @@
+{
+  "verdict": "PASS",
+  "findings": [],
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/native_video_v1/PLAN.md": "ffb415b29c20f181bbcb5003ab7afebc8f6aba6b2ae2dfed14bcb35564ab2403",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/native_video_v1/README.md": "cf488d9e1c27049f4f98707f94c336563f7a1df0bda1cafda2633cb68a25c719",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/native_video_v1/render.py": "2cf51e3a4612655d16d866c69f0f8f11e68f91bf3761fed147f44a7af6f67cb4",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/native_video_v1/cpu_checks.py": "6a852edb76eca6705b9493c0dfda34c4edf0eeeba65e30d9072c18e3f54d791e",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/native_video_v1/cpu_verification.json": "97a757d14aa19ba93a8b73f41d6b13a1d49d99f5640e8c90a9714481ac4537e9",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/native_video_v1/fresh_process_gate.json": "0263de63ba349783636735e04740330f5056f8f423f34d8e35566a0add2820f8",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/native_video_v1/cpu_inputs/command.json": "72d0a6690ca5938b27f8b5baae936092578ba377951add112b7d27d38d6071a3",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/native_video_v1/cpu_inputs/reuse.json": "89ddb88ca55003c1a3928397b3340b4c8846b6111792eda65ee2bbb97d9da1c1",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/native_video_v1/cpu_inputs/settings.json": "191235805d64be3b31139460d66929daadc9ee78abc02cf68fd732cde576631a"
+  },
+  "scope": "guard 영상 thin wrapper CPU 준비 독립 검수",
+  "pending_preparation_seal_snapshot": {
+    "path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/native_video_v1/preparation_seal.json",
+    "sha256": "3af48d576fa0c4835977182dd74c8f938d5dca9907a7027cb6634e3e2f5deb7b",
+    "independent_review": "pending",
+    "input_pin_count": 1513,
+    "canonical_input_pins_sha256": "6c00b7b012aae27bb25af04bc50e393576d1b5114f65b9c87a2766289982977c",
+    "all_input_pins_current": true,
+    "scope": "최종 status/review SHA 추가 전 pending snapshot; 최종 whole-file SHA와 구분"
+  },
+  "independent_checks": [
+    "rl38 CPU --self-test 실제 재실행: render phase/output/checkpoint300, 기존 출력/깨진 symlink gate 전 거부",
+    "원 B.execution_scope(render freshFalse)와 base.launch(render), 동결 guard.observer_scope 연결 읽기 확인",
+    "runner/runtime 및 두 pins scope와 B initialization tag·예외 시 outer alias 복원",
+    "원 렌더러가 runtime ShortPool을 import해 같은 DIP hook을 사용하며 evaluator/trainer callback fingerprint는 실행하지 않음을 확인",
+    "부분 whole128 scalar sidecar/별도 aborted control 저장, 원 renderer 오류와 secondary cleanup 오류 구분 fixture 통과",
+    "원 renderer strict trainer.load/model unchanged/checkpoint SHA/updates300/scene 및 encoder 종료 검사 재사용 확인",
+    "fresh subprocess --gate-check stdlib-only와 pending 실행 거부 통과; Python3.8 AST2파일 통과",
+    "1513 입력 SHA 전체 current, runs 디렉터리 없음"
+  ],
+  "GPU_executed": false,
+  "native_executed": false,
+  "existing_files_modified": false,
+  "limits": [
+    "실제 영상/native scene/codec/픽셀·구도·221끝점/평가 재현은 후속 QA 대상",
+    "원 renderer는 env0 첫 episode 종료 때 멈추며 wrapper는 완료 시128 first-attempt sidecar 종료도 요구; 실제 종료/성과를 사전 인증하지 않음",
+    "원 evaluator의 RNG fingerprint 수행으로 해석하지 않으며 렌더러 strict/model/checkpoint 검사 범위로 한정",
+    "원 고정 B300 closed-loop guard env0 영상이며 무개입 정책성과·새학습·전체128 영상·해제/자연성/압력 인증이 아님"
+  ]
+}

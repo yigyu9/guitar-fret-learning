@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from guitar_learning.native import paths
-from guitar_learning.native.lower_body_release_v1 import common
+from guitar_learning.native import paths as common
 from guitar_learning.core.dependency_inputs import parity_errors
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +27,7 @@ class InternalNativeTests(unittest.TestCase):
         self.assertTrue(report['legacy_open_and_import_guards'])
         self.assertGreater(report['baseline_parity_files'], 100)
         self.assertLess(report['fk_max_position_error_m'], 1e-12)
-        self.assertGreater(report['solver_inputs'], 2)
+        self.assertGreater(report['prepared_asset_inputs'], 2)
 
     def test_known_models_resolve_internally_and_unknown_legacy_input_fails(self):
         original = ROOT/'tab2body/assets/smpl_mpl_hands_body.xml'

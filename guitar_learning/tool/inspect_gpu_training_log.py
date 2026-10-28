@@ -9,9 +9,11 @@ import json
 import math
 from pathlib import Path
 
-from guitar_learning.training.gpu_log_records import (
-    METRICS_SCHEMA, iter_learning_metrics, iter_gpu_transitions, episode_summary)
-from guitar_learning.training.recording import digest
+from guitar_learning.training.training_log_io import METRICS_SCHEMA
+from guitar_learning.training.training_log_io import iter_learning_metrics
+from guitar_learning.training.training_log_io import iter_gpu_transitions
+from guitar_learning.training.training_log_io import episode_summary
+from guitar_learning.training.training_log_io import digest
 
 
 def require(condition, message):
@@ -102,7 +104,7 @@ def inspect(run):
         require(manifest.is_file(), 'Missing checkpoint manifest for compact GPU run')
     checkpoint_count = checkpoint_bytes = 0
     if manifest.is_file():
-        from guitar_learning.training.gpu_log_records import iter_json_lines
+        from guitar_learning.training.training_log_io import iter_json_lines
         names = set()
         for entry in iter_json_lines(manifest):
             name = entry['path']

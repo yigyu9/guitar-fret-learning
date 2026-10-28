@@ -1,8 +1,20 @@
 # 병렬 학습과 장기 시작 설정
 
-손별 성공을 먼저 확보하는 현재 실행 경로는 [SPECIALIST_TRAINING.md](/home/ajou/yigyu/3/guitar_learning/docs/SPECIALIST_TRAINING.md)의 `train_specialists`다. 기존 persistent 병렬 수집·자원 보호·PPO 저장을 재사용하며 독립 Actor와 단계별 보상을 적용한다. 아래 공유 Actor 설정은 비교·재현용으로 보존한다.
+## 현재 기본 GPU 배치 학습 — 2026-10-28 기준
 
-현재 시작 권장은 **N8/GPU/medium/H256/batch2048/actor_lr3e-5/initial_std exp(-3)**다. 이전16환경 실행에서 host 메모리 부족과 worker timeout이 발생했다. 학습 worker가 직접 OOM kill됐거나 학습 자체가 무한 누수였다는 증거는 없다. [원실행 분석](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_long_B_16env_analysis_v1/README.md)은 그대로 보존한다.
+기본 `guitar_learning.train`은 finger-skill v3의 GPU 왼손 J33 전용 경로다. 상태557·정책v2·매60Hz K1 결정을 사용하며 R/F 단계·자동 전환·단계별 이전은 제거했다. **하나의 GPU 시뮬레이터 안에 여러 환경을 배치**하며 GPU 물리·GPU 텐서를 사용한다. 기본 medium·128환경·H32·100업데이트, 수집량은128×32=4096 제어 전이/업데이트다. large·1024환경을 명시하면32768 전이/업데이트다. H32에서도 진행 중인 장면과 음별 원장은 이어진다.
+
+명령·환경 준비·재개는 [README](../README.md), 현재 모델과 보상·종료 개요는 [TRAINING](TRAINING.md), `J/` 출력은 [LOGGING](LOGGING.md)을 따른다. 기본 checkpoint 간격은250이며 GPU가 없으면 오류로 종료한다. 아래 N8/H256·CPU 물리 메모리 기록을 현행 GPU의 환경 수 권장 근거로 사용하지 않는다.
+
+기본 연결은 구현24개·초기화8개이며 활성 Python은281개다. CPU·오른손 song과 공용 Pool/session은 유지하지만 옛 `train_persistent`·전문 실행기는 [원문·SHA 보관 안내](../archive/20261028_before_legacy_retirement_v1/ARCHIVE_INDEX.md)로 옮겼다. 아래 옛 CLI 명령은 현재 작업 공간에서 실행하는 안내가 아니다.
+
+## 이전 CPU 물리 병렬 학습 — 비교·재현용
+
+이하의 ‘현재’·‘권장’은 당시 persistent 경로 안의 선택을 뜻한다. 현행 finger-skill 학습의 선행조건은 아니다.
+
+당시 손별 사전학습 경로는 `train_specialists`였으며 매뉴얼은 [보관 안내](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/ARCHIVE_INDEX.md)에서 확인한다. 기존 persistent 병렬 수집·자원 보호·PPO 저장을 재사용하며 독립 Actor와 단계별 보상을 적용했다. 아래 공유 Actor 설정은 과거 비교·재현 기록으로 보존한다.
+
+당시 시작 권장은 **N8/독립 CPU PhysX·GPU 정책/medium/H256/batch2048/actor_lr3e-5/initial_std exp(-3)**였다. 이전16환경 실행에서 host 메모리 부족과 worker timeout이 발생했다. 학습 worker가 직접 OOM kill됐거나 학습 자체가 무한 누수였다는 증거는 없다. [원실행 분석](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_long_B_16env_analysis_v1/README.md)은 그대로 보존한다.
 
 실제8환경단기학습·중단복구·pool검증과최종127검사결과는 [이번 개선 기록](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_reliability_music_v1/README.md)에있다. 연주성능개선은확인되지않았다.
 
@@ -36,9 +48,9 @@ pool의 공통 task contract는 후보 전체와 provenance를 포함한다. `re
 
 ## 새 정책 시작
 
-권장 진입점은 `guitar_learning.tool.training.train_persistent`다. sim/env/asset을 매 episode 다시 만들던 경로를 분리하고, worker마다 같은 장면과 제어기를 유지한다. episode 경계에서 준비 상태·속도·목표와 제어/음악/안정성 이력만 초기화한 뒤 실제 준비 2초를 수행한다. 기타 상태 쓰기는 reset 경계에만 허용한다. Root 고정·유한 하체 제어·자유 기타 조건과 관측/행동/보상/PPO 계약은 유지한다. [구현·검증·한계](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_persistent_reset_v1/README.md).
+이 재현 경로의 진입점은 `guitar_learning.tool.training.train_persistent`다. sim/env/asset을 매 episode 다시 만들던 경로를 분리하고, worker마다 같은 장면과 제어기를 유지한다. episode 경계에서 준비 상태·속도·목표와 제어/음악/안정성 이력만 초기화한 뒤 실제 준비 2초를 수행한다. 기타 상태 쓰기는 reset 경계에만 허용한다. Root 고정·유한 하체 제어·자유 기타 조건과 관측/행동/보상/PPO 계약은 유지한다. [구현·검증·한계](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_persistent_reset_v1/README.md).
 
-이미 실행 중인 `train_parallel` 프로세스는 기존 소스와 동작을 그대로 유지한다. 다음 실행부터 아래 진입점을 사용한다. 이전 실행기는 장면 재생성 대조·재현용으로 보존한다.
+당시 `train_parallel`의 장면 재생성 방식과 아래 persistent 재사용 방식을 구분한다. 이전 실행기는 장면 재생성 대조·재현용으로 보존한다.
 
 프로젝트 루트에서 아직 없는 출력 경로를 지정한다.
 

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import unittest
 
-from guitar_learning.music_task import ScoreTarget, ScoreTask
+from guitar_learning.song.task import ScoreTarget, ScoreTask
 from guitar_learning.song.finger_phrases import (
     BalancedPhraseSampler, FingerPhraseCatalog, build_phrase_catalog)
 from guitar_learning.song.task import make_task

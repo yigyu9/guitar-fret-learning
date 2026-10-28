@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 from ..initial_pose_noise_v1 import pose
-from ..lower_body_release_v1.common import read,save,sha
+from guitar_learning.native.paths import read, save, sha
 from ..grounded_guitar_release_v1.motion_v1 import smoothstep
 from .motion_v1 import Motion as ParentMotion,solve_left
 

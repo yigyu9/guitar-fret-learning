@@ -4,9 +4,10 @@ import copy
 import numpy as np
 from guitar_learning.core.environment_v4 import FreeGuitarEnvironment
 from guitar_learning.core.control import ACTIVE_NAMES
-from guitar_learning.core.task_measurement import TaskMeasurement
-from guitar_learning.core.observations import ObservationBuilder
-from guitar_learning.core.safety import SafetyConfig, StabilityMonitor
+from guitar_learning.core.measurement import TaskMeasurement
+from guitar_learning.core.geometry import ObservationBuilder
+from guitar_learning.core.measurement import SafetyConfig
+from guitar_learning.core.measurement import StabilityMonitor
 
 
 @dataclass(frozen=True)

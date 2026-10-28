@@ -1,1 +1,1 @@
-"""Training components for free-guitar learning."""
+"""학습 실행·정책·PPO·수집·기록을 담당하는 구성요소."""

@@ -4,7 +4,7 @@ from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation
 from guitar_learning.native.initial_pose_noise_v1 import pose
 from guitar_learning.native.strap import point_kinematics
-from .common import HUMAN,A,read,save
+from guitar_learning.native.paths import HUMAN, A, read, save
 from guitar_learning.native.om_axilla_source_geometry_v3 import CapsuleBodyDistance
 from .control_math_v1 import rotation_error,stable_pd
 from pathlib import Path

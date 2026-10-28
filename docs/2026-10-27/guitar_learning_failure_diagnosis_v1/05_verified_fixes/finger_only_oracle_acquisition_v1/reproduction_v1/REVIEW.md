@@ -1,0 +1,14 @@
+# 선정 목표4첫시도 재현 준비 독립 검수
+
+요약 판정: **문제없음(PASS)**. Critical/Warning/Suggestion finding 없음.
+
+- Memory-only prepare() with existing-output guards scoped around immutable preparation outputs and all writes intercepted reproduced7JSON outputs exactly. All748input paths current, Python3.8syntax valid, no runs directory/native/CUDA initialized. Parent actual PASS evidence, selection/raw/settings/source and original source/reference files included in reviewed pins.
+- Selected goals remain exact parent index115[0,0,+5,0] andmiddle114[0,0,+5,−5] offsets applied to original4targets, inside original native bounds. document_for deepcopies four env rows, keeps selected grid ID, records originalreference/offset/final separately, creates4distinct attempt IDs and enables onlyenv0detail without modifying parent reference/grid.
+- Configuration differs from parent grid only num_envs and dependent finger_skill planned_transitions/full_song_after; short_learning and original control/reward/termination/ramp/onset/PD/range/rate/90pair/thumb/B contracts unchanged. Current ShortEnvironment clears workload exposure values in its diagnostic contract; actual native contract equality asserted before collection.
+- Original parent.collect used directly with no wrapper/mutation:4env first attempts including failures, originalmaximumtick/reset behavior, same20metric/6gate summaries for all4, detailedraw onlyenv0. identify checks unique complete env IDs and grid IDs then adds corresponding attempt IDs to episodes andstatistics. Trace filename retains grid+env0+first identity.
+- Independent pure tests for both fingers verify same targets/uniqueattempt/environment0 detail and originalreference/grid immutability; acceptance passes exact4achieved/mean clean.70/wrong.10 boundary and rejects achieved3, clean belowmean.70, wrong abovemean.10, eitherfailure, missing or duplicate env while retaining4denominator.
+- Fresh subprocess --execute with pending seal rejects before Torch/Isaac import and creates no runs. Original output/dangling symlink refusal precedes native import; newoutput/settings/pins/artifacts are exclusive.
+- Source review confirms no NN/trainer/checkpoint instantiation/load. Original pool/compact music ledger/summary/predicates reused. Nativepostchecks require4fixedGPU environments,90enabledfingerpairs/4native shape readbacks, closedscene and4physics/control relationship; source/unpinned/close failures cannot report success and original exceptions propagate with separateclose error.
+- Plan separates musical4attempt reproduction from fourseeds, learned policy, highproximal-load resolution/naturalness/release/free-guitar/full-song success. Native physical outcomes remain untested in this preparation review.
+
+새 review2파일 외 변경하지 않았다. 최종검수 파일 SHA 및748input_pins 내용의 canonicalSHA를 review.json에 기록했다. 실제 음악판정 재현·높은하중/자세 문제는 native실행과 별도 실제검수가 필요하다.

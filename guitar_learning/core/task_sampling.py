@@ -2,7 +2,7 @@
 import copy
 from dataclasses import asdict
 import random
-from guitar_learning.music_task import ScoreTask
+from guitar_learning.song.task import ScoreTask
 from guitar_learning.core.training_environment import TrainingEnvironment
 from guitar_learning.core.dense_environment import DenseTrainingEnvironment
 

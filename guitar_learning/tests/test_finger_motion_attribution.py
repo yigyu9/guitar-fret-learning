@@ -3,8 +3,8 @@ import unittest
 
 import torch
 
-from guitar_learning.gpu.finger_motion_attribution import decompose_pad_motion
-from guitar_learning.gpu.geometry import apply, multiply
+from guitar_learning.gpu.episode_diagnostics import decompose_pad_motion
+from guitar_learning.gpu.control import apply, multiply
 
 
 def pose(position=(0., 0., 0.), angle=0.):

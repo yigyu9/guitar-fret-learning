@@ -4,8 +4,7 @@ import unittest
 
 import numpy as np
 
-from guitar_learning.song.left_curriculum import (
-    CurriculumState, STATE_SIZE, default_config)
+from guitar_learning.song.curriculum import CPULeftCurriculum as CurriculumState, CPU_STATE_SIZE as STATE_SIZE, cpu_default_config as default_config
 
 
 def episode(reach=1., contact=1., safe=True):

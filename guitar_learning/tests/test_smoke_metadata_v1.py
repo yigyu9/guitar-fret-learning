@@ -2,7 +2,7 @@
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from guitar_learning.training.recording import project_source_paths, bridge_dependency
+from guitar_learning.training.training_log_io import project_source_paths, bridge_dependency
 
 
 class ModuleSourceMetadata(unittest.TestCase):

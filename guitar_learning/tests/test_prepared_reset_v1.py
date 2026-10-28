@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import numpy as np
 from guitar_learning.runtime import prepared_reset_v1 as reset
+from guitar_learning.runtime import native_session as session_runtime
 
 
 def body(x=0.):
@@ -153,8 +154,8 @@ class PreparedResetTests(unittest.TestCase):
         def initialize(session, config, out):
             session.scene = scene
             session.controller = SimpleNamespace(s=scene, targets=lambda: (_ for _ in ()).throw(AssertionError('forbidden original22s targets')))
-        with patch.object(reset, 'load_prepared_reset_contract', return_value=contract), patch.object(reset.NativeSession, '__init__', initialize), patch.object(reset, '_state_all', return_value=3):
-            session = reset.PreparedSession({}, Path('/tmp/unused_prepared_reset_test'))
+        with patch.object(session_runtime, 'load_prepared_reset_contract', return_value=contract), patch.object(session_runtime.NativeSession, '__init__', initialize), patch.object(session_runtime, '_state_all', return_value=3):
+            session = session_runtime.PreparedSession({}, Path('/tmp/unused_prepared_reset_test'))
         with patch.object(session, 'submit_policy_target', return_value={'submitted': True}) as submit:
             self.assertEqual(session.prepare_tick(), {'submitted': True})
             np.testing.assert_array_equal(submit.call_args[0][0], contract['target105'])

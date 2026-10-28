@@ -1,0 +1,65 @@
+{
+  "CPU_only": true,
+  "GPU_executed": false,
+  "current_wrist_control": {
+    "schema": "guitar_learning.fixed_wrist_teacher.v2",
+    "feedback": "fixed guitar-local wrist origin and xyzw orientation; arm12 only; no pad error",
+    "ramp_s": 2.0,
+    "policy_onset_s": 3.0,
+    "position_interpolation": "linear in guitar frame",
+    "orientation_interpolation": "shortest-hemisphere normalized quaternion linear interpolation",
+    "rotation_length_scale_m": 0.1,
+    "damping": 1e-05,
+    "correction_step_rad": 0.008726646259971648,
+    "correction_rate_bound_rad_s": 0.5235987755982988,
+    "target_bounds": "actual controller action bounds; accumulated correction clamped without windup",
+    "requested_target_rate": "existing per-axis controller rate, arm3rad/s; native alpha0.2 remains",
+    "jacobian_coordinates": "q-position differential: wrist-origin native J times ownjoint qpos-differential-to-native-velocity transform",
+    "jacobian_groups": [
+      "L_Thorax",
+      "L_Shoulder",
+      "L_Elbow",
+      "L_Wrist"
+    ],
+    "jacobian_basis": "S T = Rparent SO3left(Aq) A; S is ownbody native angular block; FK parent exp(Aq) bind has right-side bind",
+    "reset": "reset only affected teacher rows; no physics step; reset rows excluded from basis solve and zeroed before DLS solve",
+    "limitation": "finite feedback target request; actual pose or3s arrival not guaranteed"
+  },
+  "references": {
+    "middle": {
+      "path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/03_short_learning/reference_middle_row8_v2.json",
+      "sha256": "638c370bba6717c53df235bf57dd7fa0db70748767695925d6c07deeaf848825",
+      "target_id": "event-000052/string-3/note-53",
+      "finger": 2
+    },
+    "ring": {
+      "path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/03_short_learning/other_finger_precheck_v3/reference_ring_row16.json",
+      "sha256": "bc67a39498189e922782f7288a98db5644acea81accea3ed36ed3888636f4517",
+      "target_id": "event-000053/string-3/note-54",
+      "finger": 3
+    },
+    "pinky": {
+      "path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/03_short_learning/other_finger_precheck_v3/reference_pinky_row23.json",
+      "sha256": "b0d5f96df0b23f03d63ad90193755450bb008de3bf6df33e9efcd7c84079359b",
+      "target_id": "event-000021/string-3/note-21",
+      "finger": 4
+    }
+  },
+  "settings_exact_files": [
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/wrist_position_jacobian_v2/other_finger_regression/cpu_inputs/middle_settings.json",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/wrist_position_jacobian_v2/other_finger_regression/cpu_inputs/ring_settings.json",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/wrist_position_jacobian_v2/other_finger_regression/cpu_inputs/pinky_settings.json"
+  ],
+  "CPU_initial73_model_sha256": {
+    "middle": "9532d0aafe41df8f47e5aa78cbd08eec66ede369fac2d4c93c082ebb858b04d1",
+    "ring": "9532d0aafe41df8f47e5aa78cbd08eec66ede369fac2d4c93c082ebb858b04d1",
+    "pinky": "9532d0aafe41df8f47e5aa78cbd08eec66ede369fac2d4c93c082ebb858b04d1"
+  },
+  "state_dim": 561,
+  "selected_action_count": 4,
+  "output_existing_and_dangling_symlink_rejected": true,
+  "original_CLI_jobs": 12,
+  "original_source_tests": "38 CPU tests and independent source review passed upstream; not rerun here",
+  "CUDA_initialized": false,
+  "scope": "preparation only; no native outcome or learned performance"
+}

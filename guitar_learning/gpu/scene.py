@@ -1,8 +1,8 @@
-"""One GPU PhysX simulator with CUDA state and control tensors.
+"""하나의 GPU PhysX 시뮬레이터에서 CUDA 상태·제어 텐서와 배치 장면을 소유한다.
 
-Only episode reset writes state. Reset body poses are explicitly the pinned
-prepared snapshot until the first physics step reconstructs articulation FK.
-"""
+자산·충돌 필터 설정 → 물리 진행 → 선택 환경 reset 순서로 읽는다.
+상태 쓰기는 에피소드 reset에서만 허용한다. reset 직후 몸체 자세는 봉인된 준비
+스냅샷이며 첫 물리 스텝에서 관절 순기구학을 다시 구성한다."""
 from pathlib import Path
 import hashlib
 import json
@@ -30,14 +30,13 @@ def _apply_body_properties(properties, rows):
 
 class GpuScene:
     def __init__(self, num_envs, hand, device='cuda:0', out=None, *, diagnostic_guitar_mode=None):
-        # Isaac must be imported before Torch in the executable entry point.
+        # 실행 진입점에서 Torch보다 Isaac을 먼저 import해야 한다.
         import isaacgym
         from isaacgym import gymapi, gymtorch
         import torch
         from guitar_learning.runtime.prepared_reset_v1 import load_prepared_reset_contract
         from guitar_learning.native.paths import resolve_input_path
-        from guitar_learning.core.finger_control import default_profile
-        from guitar_learning.gpu.rigid_guitar import RigidGuitar
+        from guitar_learning.core.control import default_profile
 
         if type(num_envs) is not int or num_envs < 1 or hand not in ('left', 'right'):
             raise ValueError('Positive environment count and left/right hand required')
@@ -63,8 +62,6 @@ class GpuScene:
         self._hand_collision_readback_count = 0
         human_shapes = initial['actual_shape_properties']['human']
         if hand == 'left':
-            from guitar_learning.gpu.hand_collision import (
-                left_hand_collision_properties, verify_external_filter_preservation)
             human_shapes, self.hand_collision = left_hand_collision_properties(human_shapes)
             verify_external_filter_preservation(initial['actual_shape_properties']['human'],
                 human_shapes, [0] + [r['filter'] for r in self.rigid_guitar.shape_properties])
@@ -118,7 +115,7 @@ class GpuScene:
                 options.disable_gravity = record['gravity_disabled']
                 if is_guitar:
                     options.override_com = options.override_inertia = True
-                # Root mobility must never select a different collision asset.
+                # 루트 이동 가능 여부에 따라 다른 충돌 자산을 선택하면 안 된다.
                 path = self.rigid_guitar.asset_path if is_guitar else resolve_input_path(record['path'])
                 asset = self.gym.load_asset(self.sim, str(path.parent), path.name, options)
                 if asset is None:
@@ -151,8 +148,8 @@ class GpuScene:
                 origin = self.gym.get_env_origin(env)
                 self.origins.append([origin.x, origin.y, origin.z])
                 handles = []
-                # Keep the clustered actors in one broadphase aggregate.
-                # Per-shape filters below define selective self collisions.
+                # 모인 액터를 하나의 광역 충돌 검사 묶음에 둔다.
+                # 아래 형상별 필터가 선택적 자기 충돌을 정의한다.
                 if not self.gym.begin_aggregate(env, self.aggregate['max_bodies'],
                                                 self.aggregate['max_shapes'], True):
                     raise RuntimeError('GPU environment aggregate construction failed')
@@ -180,8 +177,8 @@ class GpuScene:
                                 getattr(getattr(prop.inertia, a), b) for a in 'xyz' for b in 'xyz']
                             expected = [record['mass_kg']] + record['COM_body_m'] + [
                                 v for row in record['inertia_COM_kg_m2'] for v in row]
-                            # PhysX diagonalizes inertia when properties are set;
-                            # reconstruction can differ by a few float32 ULPs.
+                            # PhysX가 속성 설정 시 관성 행렬을 대각화하므로
+                            # 복원 결과는 float32 최소 표현 단위 몇 개만큼 다를 수 있다.
                             error = float(np.max(np.abs(np.asarray(actual) - np.asarray(expected))))
                             self._rigid_readback_max_error = max(self._rigid_readback_max_error, error)
                             if not np.allclose(actual, expected, rtol=2e-6, atol=1e-7 if kind == 'guitar' else 1e-8):
@@ -334,8 +331,8 @@ class GpuScene:
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
         self.gym.refresh_jacobian_tensors(self.sim)
-        # Gym's CUDA stream is external to Torch's allocator/current stream.
-        # Native buffer copies must finish before Torch consumes these views.
+        # Gym CUDA 스트림은 Torch 할당기·현재 스트림과 별개다.
+        # Torch가 이 뷰를 읽기 전에 native 버퍼 복사를 끝내야 한다.
         torch.cuda.synchronize(self.device)
         h = len(self.human_bodies)
         self.contact_force.zero_()
@@ -395,7 +392,7 @@ class GpuScene:
         from isaacgym import gymtorch
         self.target.copy_(targets105)
         self.efforts.copy_(efforts105)
-        # Ensure Torch writes are visible to Gym's separate native CUDA stream.
+        # Gym의 별도 native CUDA 스트림에서 Torch가 쓴 값을 볼 수 있게 한다.
         torch.cuda.synchronize(self.device)
         if self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(self.target)) is False:
             raise RuntimeError('GPU POSITION target submission failed')
@@ -443,3 +440,158 @@ class GpuScene:
                 self.sim = None
             self.closed = True
             self._write_audit()
+
+
+# 봉인된 복합 기타 형상과 원래 논리 마커 상태.
+import hashlib
+import json
+from pathlib import Path
+
+
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_ASSET_DIR = Path(__file__).resolve().parents[1] / 'assets/gpu_rigid_guitar_v1'
+_MANIFEST_SHA256 = '8691885f712a687cb3e8d51001a2c9276ce7e9f3539a40ac5dc20afccd7f9ded'
+
+
+# 파일 해시는 공용 스트리밍 구현으로 계산한다.
+from guitar_learning.training.training_log_io import digest as _sha
+
+
+# 자세·속도 행의 직렬화 순서를 공통 구현과 맞춘다.
+_rigid_body_row = _body_row
+
+
+class RigidGuitar:
+    """하나의 물리 기타 몸체를 원래 질량중심 속도를 갖는 39개 논리 몸체로 확장한다."""
+    def __init__(self, contract, device):
+        import torch
+
+        manifest_path = _ASSET_DIR / 'manifest.json'
+        if _sha(manifest_path) != _MANIFEST_SHA256:
+            raise ValueError('Compound guitar manifest SHA mismatch')
+        self.manifest = json.loads(manifest_path.read_text())
+        self.manifest_sha256 = _MANIFEST_SHA256
+        self.asset_path = _ASSET_DIR / 'guitar_compound.xml'
+        if _sha(self.asset_path) != self.manifest['asset_sha256']:
+            raise ValueError('Compound guitar asset SHA mismatch')
+        for relative, expected in self.manifest['source_sha256'].items():
+            source = (_REPO_ROOT / relative).resolve()
+            if _sha(source) != expected or contract['source_sha256'].get(str(source)) != expected:
+                raise ValueError('Compound guitar source SHA mismatch: ' + relative)
+        initial, saved = contract['initial'], contract['state']
+        if (initial['guitar_body_names'] != self.manifest['logical_body_names'] or
+                initial['guitar_properties']['applied'] != self.manifest['source_body_properties'] or
+                _rigid_body_row(saved['guitar_body_states'][0]) != self.manifest['source_prepared_root']):
+            raise ValueError('Compound guitar requires the pinned logical guitar contract')
+        self.body_properties = self.manifest['body_properties']
+        self.shape_properties = self.manifest['shape_properties']
+        self.human_count = len(initial['human_body_names'])
+        self.logical_count = len(initial['guitar_body_names'])
+        self.device = torch.device(device)
+        def tensor(value):
+            return torch.tensor(value, dtype=torch.float32, device=self.device)
+        self.prepared_root = tensor(self.manifest['prepared_root'])
+        self._offsets = tensor(self.manifest['logical_position_root_m'])
+        self._rotations = tensor(self.manifest['logical_quaternion_root_xyzw'])
+        self._logical_com = tensor([r['COM_body_m'] for r in self.manifest['source_body_properties']])
+        self._compound_com = tensor(self.body_properties[0]['COM_body_m'])
+
+    def expand(self, native):
+        """호스트 전송이나 native 상태 쓰기 없이 [N,human+guitar1+chair,13]을 확장한다.
+        
+        native 선형속도는 질량중심 속도다. 따라서 가상 기타 링크마다 원점 대신
+        그 링크의 원래 질량중심 위치에서의 속도를 계산한다."""
+        import torch
+        from guitar_learning.gpu.control import apply, multiply
+
+        if (native.ndim != 3 or native.shape[1:] != (self.human_count + 2, 13) or
+                native.device != self.device or native.dtype != self.prepared_root.dtype):
+            raise ValueError('Aligned float32 native compound-body state required')
+        root = native[:, self.human_count:self.human_count + 1]
+        guitar = root.expand(-1, self.logical_count, -1).clone()
+        guitar[..., :3] = root[..., :3] + apply(root[..., 3:7], self._offsets[None])
+        guitar[..., 3:7] = multiply(root[..., 3:7], self._rotations[None])
+        original_com = guitar[..., :3] + apply(guitar[..., 3:7], self._logical_com[None])
+        compound_com = root[..., :3] + apply(root[..., 3:7], self._compound_com)
+        guitar[..., 7:10] = root[..., 7:10] + torch.cross(
+            root[..., 10:13].expand_as(original_com), original_com - compound_com, dim=-1)
+        return torch.cat((native[:, :self.human_count], guitar, native[:, -1:]), dim=1)
+
+
+# 나머지 모든 쌍을 보존하는 선택적 왼손 손가락 사이 충돌 마스크.
+import copy
+import hashlib
+import itertools
+import json
+
+
+FINGERS = ('thumb', 'index', 'middle', 'ring', 'pinky')
+FINGER_MASKS = {finger: 1 << (20 + i) for i, finger in enumerate(FINGERS)}
+SEGMENT_FINGER = {'LH:' + finger + str(segment): finger
+                  for finger in FINGERS for segment in (1, 2, 3)}
+NEW_BITS = sum(FINGER_MASKS.values())
+SCHEMA = 'guitar_learning.left_inter_finger_collision.v1'
+
+
+def _rows(shapes):
+    return [(name, index, row['filter']) for name, values in shapes.items()
+            for index, row in enumerate(values)]
+
+
+def left_hand_collision_properties(human_shapes):
+    """공통 왼손 비트를 손가락별로 겹치지 않는 다섯 비트로 바꾼다.
+    
+    같은 손가락의 마디와 이전에 제외한 손바닥·팔·대리 형상 쌍은 계속 제외한다.
+    서로 다른 손가락 마디의 90쌍만 바뀐다. 물리 형상·마찰·오프셋·원본 입력은 유지한다."""
+    before = _rows(human_shapes)
+    if any(type(mask) is not int or mask < 0 or mask >= (1 << 20)
+           for _, _, mask in before):
+        raise ValueError('Pinned low-20-bit human collision masks required')
+    if any(len(human_shapes.get(name, [])) != 1 or
+           human_shapes[name][0]['filter'] != 128 for name in SEGMENT_FINGER):
+        raise ValueError('Pinned 15 physical LH segments with common filter128 required')
+    result = copy.deepcopy(human_shapes)
+    for name, values in result.items():
+        for row in values:
+            if name in SEGMENT_FINGER:
+                row['filter'] = FINGER_MASKS[SEGMENT_FINGER[name]]
+            elif row['filter'] & 128:
+                row['filter'] |= NEW_BITS
+    after = _rows(result)
+    changed, matrix = [], []
+    for i, j in itertools.combinations(range(len(before)), 2):
+        a, b = before[i], before[j]
+        was_enabled = (a[2] & b[2]) == 0
+        enabled = (after[i][2] & after[j][2]) == 0
+        expected_change = (a[0] in SEGMENT_FINGER and b[0] in SEGMENT_FINGER and
+                           SEGMENT_FINGER[a[0]] != SEGMENT_FINGER[b[0]])
+        if enabled != (True if expected_change else was_enabled):
+            raise ValueError('Selective LH collision pair invariant failed')
+        matrix.append([a[0], a[1], b[0], b[1], enabled])
+        if was_enabled != enabled:
+            changed.append([a[0], b[0]])
+    if len(changed) != 90:
+        raise ValueError('Exactly 90 distinct-finger pairs must become enabled')
+    encoded = json.dumps(matrix, separators=(',', ':')).encode()
+    contract = dict(schema=SCHEMA, native_rule='enabled iff (filterA & filterB) == 0',
+        finger_masks=FINGER_MASKS.copy(), enabled_distinct_finger_pairs=len(changed),
+        preserved_other_human_shape_pairs=len(matrix)-len(changed),
+        human_pair_matrix_sha256=hashlib.sha256(encoded).hexdigest(),
+        changed_filters=[dict(body=a[0], shape=a[1], before=a[2], after=b[2])
+                         for a, b in zip(before, after) if a[2] != b[2]],
+        external_pair_preservation='Checked against actual compound-guitar and chair filters; '
+            'the two source guitar proxies have no physical shape in the GPU compound asset.')
+    return result, contract
+
+
+def verify_external_filter_preservation(before, after, external_filters):
+    """native에 전달하기 전에 실제 기타·의자 필터가 보존됐는지 확인한다."""
+    if any(type(mask) is not int or mask < 0 or mask >= (1 << 20)
+           for mask in external_filters):
+        raise ValueError('External filter overlaps reserved LH finger bits')
+    for old, new in zip(_rows(before), _rows(after)):
+        for mask in external_filters:
+            if ((old[2] & mask) == 0) != ((new[2] & mask) == 0):
+                raise ValueError('External collision pair changed')

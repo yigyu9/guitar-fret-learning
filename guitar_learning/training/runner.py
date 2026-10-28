@@ -9,69 +9,14 @@ import resource
 import sys
 import time
 import traceback
-from dataclasses import asdict
-from guitar_learning.training.recording import write, digest, project_source_paths, active_source_paths
-from guitar_learning.training.recording import bridge_dependency as training_dependency
+from guitar_learning.training.training_log_io import write, digest, project_source_paths, active_source_paths
+from guitar_learning.training.training_log_io import bridge_dependency as training_dependency
 from guitar_learning.core.dependency_inputs import parity_errors
-from guitar_learning.training.monitoring import Monitor, available_memory_bytes, stopped_reason, save_failure_checkpoint
+from guitar_learning.training.training_log_io import Monitor, available_memory_bytes, stopped_reason, save_failure_checkpoint
 from guitar_learning.training.training_log_io import TransitionJournal, publish_final_checkpoint
+from guitar_learning.training.launch import base_settings_document as settings_document
 
 
-def settings_document(value):
-    from guitar_learning.training.ppo import PPOConfig
-    settings=dict(num_envs=8,horizon=256,updates=1,device='cpu',seed=7,size='medium',
-                  initial_std=math.exp(-3),stage='B',checkpoint_every=5,max_wall_seconds=None,
-                  min_available_memory_gib=4.,heartbeat_seconds=10.,resource_interval_seconds=5.,worker_timeout_seconds=300.,
-                  music=dict(reward_mode='legacy',goal_event_indices=None),
-                  logging=dict(detail='standard',save_first_rollout=False),
-                  start_event_index=0,phrase_events=8,tempo_scale=1.,ppo=asdict(PPOConfig()))
-    settings['ppo'].pop('advantage_normalization')
-    unknown=set(value)-set(settings)
-    if unknown: raise ValueError('unknown run settings: '+str(sorted(unknown)))
-    settings.update(value)
-    for key in ('num_envs','horizon','updates','seed','checkpoint_every','start_event_index','phrase_events'):
-        if isinstance(settings[key],bool) or not isinstance(settings[key],int): raise ValueError('integer '+key+' required')
-    if settings['num_envs'] not in (1,2,4,8,16) or min(settings[k] for k in ('horizon','updates','checkpoint_every','phrase_events'))<1:
-        raise ValueError('supported worker count and positive budgets required')
-    if settings['horizon']*settings['num_envs']<2 or settings['start_event_index']<0:
-        raise ValueError('at least two samples and nonnegative event index required')
-    if settings['stage'] not in ('B','C','D') or settings['size'] not in ('small','medium','large'):
-        raise ValueError('explicit supported stage/size required')
-    if not isinstance(settings['device'],str) or settings['device'] not in ('cpu','cuda:0'):
-        raise ValueError('device must be cpu or cuda:0')
-    if not math.isfinite(settings['initial_std']) or not math.exp(-5)<=settings['initial_std']<=math.exp(2):
-        raise ValueError('initial_std must fit the policy log_std clamp')
-    if not math.isfinite(settings['tempo_scale']) or settings['tempo_scale']<=0:
-        raise ValueError('positive tempo_scale required')
-    wall=settings['max_wall_seconds']
-    if wall is not None and (not math.isfinite(wall) or wall<=0): raise ValueError('positive optional wall budget required')
-    for key in ('min_available_memory_gib','heartbeat_seconds','resource_interval_seconds','worker_timeout_seconds'):
-        value=settings[key]
-        if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value<=0:
-            raise ValueError('positive finite '+key+' required')
-    music=settings['music']
-    if not isinstance(music,dict) or set(music)-{'reward_mode','goal_event_indices'}:
-        raise ValueError('explicit supported music settings required')
-    music=dict(dict(reward_mode='legacy',goal_event_indices=None),**music)
-    if music['reward_mode'] not in ('legacy','dense_v2'):
-        raise ValueError('supported reward_mode required')
-    indices=music['goal_event_indices']
-    if indices is not None and (not isinstance(indices,list) or not indices or
-        any(isinstance(i,bool) or not isinstance(i,int) or i<0 for i in indices) or len(set(indices))!=len(indices)):
-        raise ValueError('unique nonnegative goal_event_indices required')
-    if indices is not None and settings['stage']!='B':raise ValueError('goal sampling currently requires stage B')
-    settings['music']=music
-    logging=settings['logging']
-    if not isinstance(logging,dict) or set(logging)-{'detail','save_first_rollout'}:
-        raise ValueError('supported logging settings required')
-    logging=dict(dict(detail='standard',save_first_rollout=False),**logging)
-    if logging['detail'] not in ('standard','diagnostic') or type(logging['save_first_rollout']) is not bool:
-        raise ValueError('standard/diagnostic detail and boolean save_first_rollout required')
-    settings['logging']=logging
-    settings['ppo']=asdict(PPOConfig(**settings['ppo']))
-    if settings['ppo']['advantage_normalization']=='joint':
-        settings['ppo'].pop('advantage_normalization')
-    return settings
 
 
 def main(*, settings=None):
@@ -93,10 +38,10 @@ def main(*, settings=None):
     from guitar_learning.training.policy import Policy
     from guitar_learning.training.ppo import PPOTrainer, PPOConfig
     from guitar_learning.training.training_metrics import LearningMetrics
-    from guitar_learning.training.training_log_format import contract as logging_contract
+    from guitar_learning.training.training_log_io import contract as logging_contract
     from guitar_learning.runtime import prepared_reset_v1
     from guitar_learning.native.paths import resolve_input_path, rebase_paths
-    from guitar_learning.native.lower_body_release_v1.common import pin
+    from guitar_learning.native.paths import pin
     supplied_settings = settings is not None
     settings = copy.deepcopy(settings) if supplied_settings else settings_document(json.loads(args.settings.read_text()))
     # Constructing the trainer validates the remaining numerical PPO settings.

@@ -8,9 +8,11 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import torch
 
-from guitar_learning.gpu.press_surface import (
-    load_press_surface, project_press_strings, _extract_plane, _validate_targets)
-from guitar_learning.gpu.geometry import surface_target_geometry
+from guitar_learning.gpu.contact import load_press_surface
+from guitar_learning.gpu.contact import project_press_strings
+from guitar_learning.gpu.contact import _extract_plane
+from guitar_learning.gpu.contact import _validate_targets
+from guitar_learning.gpu.contact import surface_target_geometry
 from guitar_learning.song.task import make_task
 
 

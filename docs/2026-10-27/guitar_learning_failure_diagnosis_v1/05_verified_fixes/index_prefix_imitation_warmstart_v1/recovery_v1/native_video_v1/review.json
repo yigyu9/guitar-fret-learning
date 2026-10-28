@@ -1,0 +1,46 @@
+{
+  "verdict": "PASS",
+  "summary": "문제없음",
+  "findings": [],
+  "scope": "회복된 지도 초기화 모델의 영상 CPU 준비 및 얇은 어댑터 변경 검수. GPU/native 실행 없음.",
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/native_video_v1/PLAN.md": "86d824842cd40451c804c5562bb6d5fb1dbf33ff0d094022f059c371d8dcc129",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/native_video_v1/README.md": "1fb46f55931f15005a60e0a45b0f5217b1419dcea30e126deee11adb2ab4ee28",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/native_video_v1/render.py": "3696b4d0be3ba0cbc072fbc8f7ad8ebed31d03fc5f93839440c4ed6e4e04d2db",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/native_video_v1/cpu_checks.py": "4f7adadb89fb3b94a7e12098b83a880d74614dd8dee9d8076c4ee6e43af86d4b",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/native_video_v1/cpu_verification.json": "725392fd97a96a93c779b0854eeaedeecd0fcb8b2d98479f8315c1f6d696fd25",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/native_video_v1/fresh_process_gate.json": "a9f93284d8563ff18da109c5c1aabd1880118d4021d19107b379eef5ab92ae26",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/native_video_v1/cpu_inputs/commands.json": "89437a4773adcea9175beae512e64a6796d91b495f0dd481443e166001a82544",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/native_video_v1/cpu_inputs/settings.json": "8fe711c963a542c4d19769982f601d8d794b537aacda3097b3e700b9834f237c"
+  },
+  "pending_seal_review_snapshot": {
+    "path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/native_video_v1/preparation_seal.json",
+    "sha256": "4b51c161566e7d6514ad7eb91b98d36ed811625762b5761e54dbe4e76c9cadff",
+    "status": "검수 당시 pending; 이후 review 두 파일 추가 및 상태 최종화 대상",
+    "input_pin_count": 1956,
+    "input_pins_canonical_sha256": "e5a46fb514e423ef02b7a4ec845a4308442444cb4b62bad316ae95a07f51d9e9"
+  },
+  "resolved_findings": [
+    {
+      "severity": "Warning",
+      "file": "render.py",
+      "issue": "메타데이터 쓰기 전에 성공 기록을 추가하던 오류 경로",
+      "resolution": "grid.write 성공 뒤에만 metadata_outputs를 추가한다. 독립 CPU 오류 재현에서 원 OSError, actual_metadata_recorded=False, 별칭 복원 및 부분 보고서 보존을 확인했다."
+    }
+  ],
+  "checks": [
+    "Python 3.8 구문 및 CPU 검사 근거 확인",
+    "원 렌더러 재사용, 원본 체크포인트 및 메타데이터 무변경, 전체 strict loader 실행 경로 확인",
+    "실제 모델 73개 및 빈 PPO 최적화 상태의 CPU 투영 검사 범위 확인",
+    "별칭과 reference_action 금지 범위의 finally 복원, 원 오류 및 부분 출력 보존 확인",
+    "기존 출력 및 깨진 심볼릭 링크의 native import 이전 거부 확인",
+    "수정 후 독립 메타데이터 쓰기 실패 회귀 검사 통과",
+    "1,956개 현재 입력 SHA 일치; 이전 준비본 대비 같은 키 집합이며 자체 변경 3개 핀만 갱신",
+    "새 프로세스 게이트 통과: stdlib_only=True, GPU_executed=False, PPO_updates=0; runs 없음"
+  ],
+  "limitations": [
+    "원본 CPU 전체 로드는 CUDA RNG topology 불일치를 거부한다. 임시 CPU 투영은 cuda_rng만 제외했으며 실제 native 경로는 원본 파일의 전체 strict load를 유지한다.",
+    "실제 CUDA 상태 복원, 영상 픽셀, 인코딩 및 카메라 구도는 이번 CPU 준비 검수에서 실행하지 않았다.",
+    "모델은 지도 초기화 1,000단계/PPO 0회이며 음악·해제 수용 기준 미달 상태다. best/latest 또는 학습 성공으로 확대하지 않는다."
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "status": "complete",
+  "changed_files": [
+    "guitar_learning/runtime/persistent_environment.py",
+    "guitar_learning/song/environment.py",
+    "guitar_learning/tool/demonstration/finger_motion.py",
+    "guitar_learning/tests/test_simple_start.py",
+    "guitar_learning/tests/test_dependency_inputs.py",
+    "guitar_learning/tests/test_role_layout.py",
+    "guitar_learning/tests/test_main_tools.py",
+    "guitar_learning/tests/test_actionable_preparation_environment.py",
+    "guitar_learning/tests/test_training_environment.py"
+  ],
+  "shared_classes": [
+    "PreparedFreeGuitarEnvironment",
+    "PreparedContactEnvironment",
+    "PreparedPersistentContactEnvironment"
+  ],
+  "calculation_ast_identical": true,
+  "preserved_existing_external_changes": true,
+  "native_assets_changed": false,
+  "default_training_rewards_changed": false,
+  "retired_test_cases": [
+    "guitar_learning/tests/test_simple_start.py:SimpleStartTests.test_selected_policy_keeps_other_hand_zero_on_actual_quality_contract",
+    "guitar_learning/tests/test_simple_start.py:SimpleStartTests.test_single_note_checkpoint_is_rejected_by_actual_hand_song_contract",
+    "guitar_learning/tests/test_main_tools.py:MainToolsTests.test_fresh_case_census_includes_main_sources_after_nested_move",
+    "guitar_learning/tests/test_actionable_preparation_environment.py:ActionablePreparationTests.test_all_stages_roles_have_unchanged_shape_zero_native_and_absolute_score",
+    "guitar_learning/tests/test_actionable_preparation_environment.py:ActionablePreparationTests.test_archived_originals_remain_exact",
+    "guitar_learning/tests/test_actionable_preparation_environment.py:ActionablePreparationTests.test_exact_two_second_boundary_and_persistent_fresh_reset",
+    "guitar_learning/tests/test_actionable_preparation_environment.py:ActionablePreparationTests.test_first_tick_all_measurements_costs_actions_and_lh_reward_accounted",
+    "guitar_learning/tests/test_actionable_preparation_environment.py:ActionablePreparationTests.test_invalid_clock_and_goal_rejected_without_leaking_constructor_patch",
+    "guitar_learning/tests/test_actionable_preparation_environment.py:ActionablePreparationTests.test_right_guide_starts_at_first_tick_without_left_shaping",
+    "guitar_learning/tests/test_actionable_preparation_environment.py:ActionablePreparationTests.test_transient_first_tick_failure_suppresses_whole_tick_bonus"
+  ],
+  "current_replacement_test_cases": [
+    "guitar_learning/tests/test_simple_start.py:SimpleStartTests.test_changed_song_contract_is_rejected_before_checkpoint_mutation",
+    "guitar_learning/tests/test_simple_start.py:SimpleStartTests.test_selected_policy_keeps_other_hand_zero_on_actual_song_contract",
+    "guitar_learning/tests/test_actionable_preparation_environment.py:PreparedPersistentTests.test_zero_contact_reset_failure_destroys_owned_session_once",
+    "guitar_learning/tests/test_actionable_preparation_environment.py:PreparedPersistentTests.test_zero_contact_reset_reuses_session_and_preserves_snapshot_order"
+  ],
+  "verification": {
+    "passed": true,
+    "test_count": 34,
+    "log": "/tmp/guitar_legacy_retirement_v1/runtime_tests.log",
+    "command": "rl38 python -m unittest guitar_learning.tests.test_actionable_preparation_environment guitar_learning.tests.test_persistent_environment guitar_learning.tests.test_simple_start guitar_learning.tests.test_role_layout guitar_learning.tests.test_dependency_inputs guitar_learning.tests.test_main_tools guitar_learning.tests.test_training_environment -v"
+  },
+  "notes": [
+    "LongRecordedSession moved from legacy test_skill_environment dependency chain into existing test_training_environment; identical static row/native/reset/cleanup behavior retained.",
+    "Timing-only ActionablePreparationTests archived; zero preparation and persistent contact lifecycle coverage retained.",
+    "Role CLI and pin tests now exercise current shared API directly; old imitation wrapper checks archived.",
+    "Source-census-only contact_recovery test archived; existing generic current source census and import checks retained."
+  ]
+}

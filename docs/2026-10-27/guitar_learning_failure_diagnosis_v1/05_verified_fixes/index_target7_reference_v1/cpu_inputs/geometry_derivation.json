@@ -1,0 +1,75 @@
+{
+  "schema": "diagnostic.target7_cell_translation.v1",
+  "cells": [
+    {
+      "physical_string": 3,
+      "canonical_string": 2,
+      "fret": 4,
+      "cell_y_bounds_m": [
+        0.08831299680267632,
+        0.11764001617130113
+      ],
+      "fraction": 0.18216224341962187,
+      "center_G_m": [
+        0.0038968968394714363,
+        0.10297650648698872,
+        0.0093
+      ]
+    },
+    {
+      "physical_string": 2,
+      "canonical_string": 1,
+      "fret": 5,
+      "cell_y_bounds_m": [
+        0.06063299107297519,
+        0.08831299680267632
+      ],
+      "fraction": 0.22852296022495627,
+      "center_G_m": [
+        0.011590029626966706,
+        0.07447299393782575,
+        0.0093
+      ]
+    }
+  ],
+  "delta_G_m": [
+    0.00769313278749527,
+    -0.028503512549162974,
+    0.0
+  ],
+  "delta_norm_m": 0.029523457110005355,
+  "coordinate_frame": "guitar root local meters; +Gx physical6to1 strings, +Gy bridge to nut; Gz-only original press-plane projection",
+  "definition": "Original project_press_strings then core.fret_target; independent NumPy midpoint/interpolation/plane calculation",
+  "helper_max_residual_tolerance_m": 1e-12,
+  "press_surface": {
+    "schema": "guitar_learning.source_neck_press_plane.v1",
+    "plane_G": [
+      -0.0,
+      0.0,
+      1.0,
+      -0.0093
+    ],
+    "normal_G": [
+      -0.0,
+      0.0,
+      1.0
+    ],
+    "inward_margin_m": 0.002,
+    "source_sha256": {
+      "/home/ajou/yigyu/3/guitar_learning/assets/gpu_rigid_guitar_v1/guitar_compound.xml": "c8a5cd81733e3883600caed84d9359277b48e1375f8703fa5d054a11cc7de064",
+      "/home/ajou/yigyu/3/guitar_learning/assets/tab2body/assets/mesh/guitar_neck1.obj": "5833f3d1b378e96b94aeea3b0ab3200b0ac5946bd46835b5c23b761d32a415fd",
+      "/home/ajou/yigyu/3/guitar_learning/assets/tab2body/assets/mesh/guitar_neck2.obj": "8e58eac493be09a8aa7d5b9e4c75a7d393a6225fc31f81f0b288c106c5bc6bec",
+      "/home/ajou/yigyu/3/guitar_learning/assets/gpu_rigid_guitar_v1/manifest.json": "8691885f712a687cb3e8d51001a2c9276ce7e9f3539a40ac5dc20afccd7f9ded"
+    },
+    "target_validation": {
+      "target_count": 2,
+      "endpoint_count": 4,
+      "covered_endpoint_count": 4,
+      "maximum_plane_residual_m": 0.0
+    },
+    "extraction": "two physical source neck mesh convex hulls; common most-upward facet plane; complete inward segments in a source hull",
+    "projection": "Gz only; preserve string x/y; existing surface geometry with negative inward margin",
+    "scope": "Approach observation/reward target only; no contact/success or physics changes. Source convex hull proof, not exact PhysX cooked geometry or pressure certification."
+  },
+  "scope": "Source finite-cell geometry; not native cooked-surface, reachability, contact, pressure or B actual pose"
+}

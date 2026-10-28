@@ -10,13 +10,13 @@ import numpy as np
 import torch
 from guitar_learning.training import runner as train_parallel
 from guitar_learning.training import parallel, policy, ppo
-from guitar_learning.training.recording import digest
+from guitar_learning.training.training_log_io import digest
 from guitar_learning.training.training_log_io import TransitionJournal
 
 
 class TrainingRunnerLoggingTests(unittest.TestCase):
     def run_core(self,out,fault=False,curriculum_fault=False):
-        from guitar_learning.native.lower_body_release_v1 import common
+        from guitar_learning.native import paths as common
         from guitar_learning.song import curriculum_runtime
         settings=out.parent/'settings.json'
         settings.write_text(json.dumps(dict(num_envs=1,horizon=2,updates=1,device='cpu')))

@@ -3,8 +3,8 @@ import unittest
 
 import numpy as np
 
-from guitar_learning.song import gpu_left_curriculum as gpu
-from guitar_learning.song import left_curriculum as cpu
+from guitar_learning.song import curriculum as gpu
+from guitar_learning.song import curriculum as cpu
 
 
 def episode(counts=(25, 18, 12, 12), near=(1., 1., 1., 1.),
@@ -16,8 +16,8 @@ def episode(counts=(25, 18, 12, 12), near=(1., 1., 1., 1.),
 
 class GpuLeftCurriculumTests(unittest.TestCase):
     def test_fixed_contract_and_positive_weight_interpolation(self):
-        self.assertEqual((gpu.WINDOW, gpu.STATE_SIZE), (256, 3331))
-        state = gpu.CurriculumState((25, 18, 12, 12))
+        self.assertEqual((gpu.GPU_WINDOW, gpu.GPU_STATE_SIZE), (256, 3331))
+        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
         expected = {0.: (.2, .5, .5), .5: (.15, .75, .75),
                     1.: (.1, 1., 1.), 1.5: (.075, 1., 1.5), 2.: (.05, 1., 2.)}
         for progress, values in expected.items():
@@ -25,21 +25,21 @@ class GpuLeftCurriculumTests(unittest.TestCase):
             for key, value in zip(('wrist', 'contact', 'timing'), values):
                 self.assertAlmostEqual(state.weights()[key], value)
             self.assertEqual(state.weights()['approach'], 1.)
-        config = gpu.default_config()
+        config = gpu.gpu_default_config()
         self.assertEqual(config['schema'], 'guitar_learning.gpu_left_surface_curriculum.v1')
         self.assertEqual(config['min_episodes'], 256)
         self.assertEqual(config['near_distance_m'], .01)
         self.assertEqual(config['near_required_s'], .1)
         config['weights']['approach'][0] = 99
-        self.assertEqual(gpu.default_config()['weights']['approach'], [1., 1., 1.])
+        self.assertEqual(gpu.gpu_default_config()['weights']['approach'], [1., 1., 1.])
 
     def test_wrist_only_and_partial_window_cannot_advance(self):
-        state = gpu.CurriculumState((25, 18, 12, 12))
+        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
         wrist_only = episode(near=(0.,) * 4)
         wrist_only.update(reach_fraction=1., contact_fraction=1.)
         state.observe([wrist_only] * 256)
         self.assertEqual(state.progress, 0.)
-        state = gpu.CurriculumState((25, 18, 12, 12))
+        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
         state.observe([episode()] * 255)
         self.assertEqual(state.progress, 0.)
         state.observe([episode()])
@@ -47,7 +47,7 @@ class GpuLeftCurriculumTests(unittest.TestCase):
 
     def test_each_present_finger_is_required(self):
         for i in range(4):
-            state = gpu.CurriculumState((25, 18, 12, 12))
+            state = gpu.GPULeftCurriculum((25, 18, 12, 12))
             near = [1.] * 4
             near[i] = .19
             state.observe([episode(near=near)] * 256)
@@ -55,7 +55,7 @@ class GpuLeftCurriculumTests(unittest.TestCase):
 
     def test_absent_fingers_excluded_and_extra_log_field_allowed(self):
         counts = (1, 0, 2, 0)
-        state = gpu.CurriculumState(counts)
+        state = gpu.GPULeftCurriculum(counts)
         item = episode(counts, near=(.2, 0., .2, 0.))
         for finger in item['finger_metrics']:
             finger['clean_fraction'] = 0.
@@ -66,12 +66,12 @@ class GpuLeftCurriculumTests(unittest.TestCase):
 
     def test_failures_are_zero_rows_and_safe_threshold_is_enforced(self):
         for failed, expected in ((25, .1), (26, 0.)):
-            state = gpu.CurriculumState((25, 18, 12, 12))
+            state = gpu.GPULeftCurriculum((25, 18, 12, 12))
             state.observe([episode()] * (256 - failed) + [episode(safe=False)] * failed)
             self.assertEqual(state.progress, expected)
             np.testing.assert_array_equal(state.window[-failed:], 0.)
             self.assertAlmostEqual(state.summary()['recent_safe_fraction'], (256 - failed) / 256)
-        state = gpu.CurriculumState((25, 18, 12, 12))
+        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
         state.observe([episode()] * 256)
         state.observe([episode(safe=False)])
         self.assertEqual(state.progress, .1)
@@ -79,7 +79,7 @@ class GpuLeftCurriculumTests(unittest.TestCase):
         self.assertEqual(state.progress, .1)
 
     def test_stage_gates_maximum_step_and_no_demotion(self):
-        state = gpu.CurriculumState((25, 18, 12, 12))
+        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
         state.observe([episode()] * 1024)
         self.assertEqual(state.progress, .1)
         for _ in range(9):
@@ -100,16 +100,16 @@ class GpuLeftCurriculumTests(unittest.TestCase):
         self.assertEqual(state.progress, 2.)
 
     def test_contact_gate_requires_every_present_finger(self):
-        state = gpu.CurriculumState((25, 18, 12, 12))
+        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
         state.progress = 1.
         state.observe([episode(contact=(1., 1., 1., .19))] * 256)
         self.assertEqual(state.progress, 1.)
 
     def test_checkpoint_restores_ring_and_continuation(self):
-        state = gpu.CurriculumState((25, 18, 12, 12))
+        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
         state.observe([episode()] * 260)
         state.observe([episode(safe=False)] * 11)
-        restored = gpu.CurriculumState((25, 18, 12, 12))
+        restored = gpu.GPULeftCurriculum((25, 18, 12, 12))
         vector = state.state_vector()
         restored.load_state(vector)
         vector[:] = 0
@@ -123,8 +123,8 @@ class GpuLeftCurriculumTests(unittest.TestCase):
         for counts in (None, (), (1, 2, 3), (0, 0, 0, 0), (1, -1, 0, 0),
                        (True, 0, 0, 0), (1., 0, 0, 0), (float('inf'), 0, 0, 0)):
             with self.subTest(counts=counts), self.assertRaises(ValueError):
-                gpu.CurriculumState(counts)
-        state = gpu.CurriculumState((25, 18, 12, 12))
+                gpu.GPULeftCurriculum(counts)
+        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
         bad = []
         for field, value in (('full_safe', 1), ('finger_metrics', [])):
             item = episode(); item[field] = value; bad.append(item)
@@ -141,7 +141,7 @@ class GpuLeftCurriculumTests(unittest.TestCase):
             np.testing.assert_array_equal(state.state_vector(), before)
 
     def test_invalid_vectors_are_rejected_without_mutation(self):
-        state = gpu.CurriculumState((25, 18, 12, 12))
+        state = gpu.GPULeftCurriculum((25, 18, 12, 12))
         state.observe([episode()])
         before = state.state_vector()
         bad = [np.zeros(27), before.reshape(1, -1)]
@@ -156,17 +156,17 @@ class GpuLeftCurriculumTests(unittest.TestCase):
             np.testing.assert_array_equal(state.state_vector(), before)
 
     def test_cpu_27_value_state_is_unchanged_and_not_gpu_compatible(self):
-        self.assertEqual((cpu.WINDOW, cpu.STATE_SIZE), (8, 27))
-        state = cpu.CurriculumState()
+        self.assertEqual((cpu.CPU_WINDOW, cpu.CPU_STATE_SIZE), (8, 27))
+        state = cpu.CPULeftCurriculum()
         state.observe([dict(full_safe=True, reach_fraction=1., contact_fraction=0.)] * 4)
         self.assertEqual(state.progress, .1)
-        restored = cpu.CurriculumState()
+        restored = cpu.CPULeftCurriculum()
         restored.load_state(state.state_vector())
         np.testing.assert_array_equal(restored.state_vector(), state.state_vector())
         with self.assertRaises(ValueError):
-            gpu.CurriculumState((25, 18, 12, 12)).load_state(state.state_vector())
+            gpu.GPULeftCurriculum((25, 18, 12, 12)).load_state(state.state_vector())
         with self.assertRaises(ValueError):
-            restored.load_state(gpu.CurriculumState((25, 18, 12, 12)).state_vector())
+            restored.load_state(gpu.GPULeftCurriculum((25, 18, 12, 12)).state_vector())
 
 
 if __name__ == '__main__':

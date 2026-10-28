@@ -4,10 +4,10 @@ import json
 from pathlib import Path
 import unittest
 import numpy as np
-from guitar_learning.core.geometry_v1 import geometry_snapshot
-from guitar_learning.music_task import ScoreTask,ScoreTarget
-from guitar_learning.core.task_measurement import TaskMeasurement
-from guitar_learning.core.task_measurement_v2 import TaskMeasurementV2
+from guitar_learning.core.geometry import geometry_snapshot
+from guitar_learning.song.task import ScoreTask, ScoreTarget
+from guitar_learning.core.measurement import TaskMeasurement
+from guitar_learning.core.measurement import TaskMeasurementV2
 from guitar_learning.tests import test_task_measurement as old
 from guitar_learning.tests.test_fretting_quality import add_contact
 from guitar_learning.tests.test_fretting_v1 import fixture
@@ -92,7 +92,7 @@ class QualityMeasurementTests(unittest.TestCase):
 
     def test_saved_native_boundary_feature_is_not_false_higher_fret_error(self):
         from guitar_learning.quality.fretting_quality import classify_fretting
-        from guitar_learning.core.fretting_v1 import FretContract
+        from guitar_learning.core.measurement import FretContract
         root=Path('docs/2026-10-12/stability_adapter_2/results')
         c=json.loads((root/'guitar_learning_pick_fret_audit_v1/correction_v2.json').read_text())['first_record']
         r=json.loads((root/'guitar_learning_actionable_preparation_v1/left_ppo_eval_v1/reset_00.json').read_text())

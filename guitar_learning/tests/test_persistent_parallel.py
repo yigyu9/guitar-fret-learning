@@ -6,9 +6,7 @@ import unittest
 import torch
 from unittest.mock import patch
 from guitar_learning.training import parallel
-from guitar_learning.training import runner as train_parallel
-from guitar_learning.tool.training import train_persistent
-from guitar_learning.training.persistent_parallel import PersistentPool, persistent_native_environment
+from guitar_learning.training.parallel import PersistentPool, persistent_native_environment
 
 
 class PersistentDispatchTests(unittest.TestCase):
@@ -20,15 +18,6 @@ class PersistentDispatchTests(unittest.TestCase):
                 self.assertIs(base.call_args.kwargs['worker_factory'],expected)
                 self.assertIs(base.call_args.kwargs['wait_callback'],fixture)
                 self.assertEqual(base.call_args.kwargs['timeout_s'],37.)
-
-    def test_entry_point_restores_dispatch_after_error(self):
-        original=parallel.Pool
-        def fail():
-            self.assertIs(parallel.Pool,PersistentPool)
-            raise KeyboardInterrupt()
-        with patch.object(train_parallel,'main',fail):
-            with self.assertRaises(KeyboardInterrupt):train_persistent.main()
-        self.assertIs(parallel.Pool,original)
 
     def test_native_factory_passes_base_seed_and_music_to_persistent_builder(self):
         from guitar_learning.runtime import persistent_environment

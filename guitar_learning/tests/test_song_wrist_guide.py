@@ -9,8 +9,9 @@ import unittest
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from guitar_learning.core.geometry_v1 import frame, geometry_snapshot
-from guitar_learning.song.wrist_guide import WristGuide, load_anchor_track
+from guitar_learning.core.geometry import frame
+from guitar_learning.core.geometry import geometry_snapshot
+from guitar_learning.song.task import WristGuide, load_anchor_track
 
 
 ROOT = Path(__file__).resolve().parents[2]

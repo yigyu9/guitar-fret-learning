@@ -1,34 +1,33 @@
-"""GPU tensor song measurements with an explicit new loaded-geometry contract.
+"""GPU 곡 환경의 관측·접촉·보상·종료를 텐서로 관리한다.
 
-Net body forces do not identify a contact partner or witness point. This backend
-therefore measures loaded source finger-mesh surface samples near finite
-string/fret geometry. Its candidates are neither the old pair-feature clean
-candidates nor calibrated string pressure or sound.
-"""
+초기화·reset → 물리 끝점 측정 → 제어 경계 보상·관측 순서로 읽는다.
+몸체 합력만으로는 접촉 상대나 접촉점을 알 수 없으므로, 유한한 현·프렛 근처의
+원본 손가락 메시 표본과 하중을 함께 측정한다. 이 후보는 이전 몸체쌍 특징 기반의
+정확 압현 후보와 다르며 보정된 현 압력이나 소리를 의미하지 않는다."""
 import copy
 
 import torch
 
 from guitar_learning.core.control import ACTIVE_NAMES, LEFT_HAND_NAMES
-from guitar_learning.core.observations import ObservationBuilder, PROXIES, EVENT_SCALES
-from guitar_learning.song.left_curriculum import CurriculumState as LegacyCurriculumState
-from guitar_learning.song.gpu_left_curriculum import CurriculumState, default_config
-from guitar_learning.song.left_environment import LEFT_FIELDS, LEFT_SCALES
-from guitar_learning.song.metrics import HISTORY_FIELDS, HISTORY_SCALES
+from guitar_learning.core.geometry import ObservationBuilder, PROXIES, EVENT_SCALES
+from guitar_learning.song.curriculum import CPULeftCurriculum as LegacyCurriculumState
+from guitar_learning.song.curriculum import GPULeftCurriculum as CurriculumState, gpu_default_config as default_config
+from guitar_learning.core.geometry import LEFT_FIELDS, LEFT_SCALES
+from guitar_learning.core.geometry import HISTORY_FIELDS, HISTORY_SCALES
 from guitar_learning.song.task import make_task
-from guitar_learning.gpu.geometry import (apply, conjugate, multiply, origin_velocity,
-    relative_point, rotvec, finger_mesh_surface_samples)
-from guitar_learning.gpu.press_surface import load_press_surface, project_press_strings
-from guitar_learning.gpu.wrist_region import load_wrist_region_track, measure_wrist_region
+from guitar_learning.gpu.control import apply, conjugate, multiply, origin_velocity, relative_point, rotvec
+from guitar_learning.gpu.contact import finger_mesh_surface_samples
+from guitar_learning.gpu.contact import load_press_surface, project_press_strings
+from guitar_learning.gpu.contact import load_wrist_region_track, measure_wrist_region
 from guitar_learning.gpu.episode_diagnostics import (LeftEpisodeDiagnostics,
     load_thumb_rear_surface, thumb_rear_distance)
-from guitar_learning.gpu.fingertip_pad import (load_fingertip_pad, pad_target_geometry,
+from guitar_learning.gpu.contact import (load_fingertip_pad, pad_target_geometry,
     pad_tracking_reward, FINGERTIP_TRACKING_CONTRACT)
 from guitar_learning.gpu.finger_reward import (FINGER_PREPARATION_CONTRACT,
     FINGER_TARGET_CONTRACT, finger_target_indices,
     finger_posture_reward, finger_preparation_reward, finger_shape_reward,
     finger_recovery_config, FINGER_SHAPE_CONTRACT, source_finger_frame_contract)
-from guitar_learning.gpu.thumb_support import load_thumb_support, thumb_support_geometry
+from guitar_learning.gpu.contact import load_thumb_support, thumb_support_geometry
 
 
 CONTACT_CONTRACT = dict(schema='guitar_learning.gpu_loaded_geometry.v1',
@@ -65,7 +64,7 @@ LEFT_TERMS = TERMS + ('song_finger_tracking', 'song_finger_coordination', 'song_
                       'song_thumb_support')
 FAILURE_REASONS = ('guitar_displacement', 'guitar_rotation', 'foot_displacement',
                    'support_lost', 'ground_contact_lost', 'joint_speed', 'support_control_invalid')
-LEFT_FAILURE_COST_RATE = 5.  # cost/s; rounded recent safe-song p99, an experimental calibration.
+LEFT_FAILURE_COST_RATE = 5.  # 초당 비용: 최근 안전 완주 표본의 99백분위수를 반올림한 실험적 보정값.
 FINGER_BASE_NAMES = ('index', 'middle', 'ring', 'pinky')
 WRONG_PRESS_DIAGNOSTIC_CONTRACT = dict(
     schema='guitar_learning.wrong_press_sources.v1',
@@ -97,12 +96,11 @@ FINGER_MOTION_CONTRACT = dict(schema='guitar_learning.gpu_left_finger_motion.v3'
 
 
 class TensorSongEnvironment:
-    """Collect four snapshots per control tick without copying batch state to CPU.
-
-    ``reset`` changes measurement state only. The owning scene restores physical
-    state before calling it. Completed episode dictionaries are the only normal
-    per-episode transfer to the host; all observations/rewards/costs stay tensors.
-    """
+    """제어 tick마다 네 표본을 수집하고 배치 상태를 CPU로 복사하지 않는다.
+    
+    reset은 측정 상태만 바꾼다. 소유 장면이 먼저 물리 상태를 복원한 뒤 호출한다.
+    통상적인 에피소드별 호스트 전송은 종료 에피소드 사전뿐이며 관측·보상·비용은
+    모두 텐서로 유지한다."""
     def __init__(self, metadata, *, bundle, song, hand, device='cuda:0'):
         if hand not in ('left', 'right'):
             raise ValueError('left/right tensor song hand required')
@@ -120,7 +118,10 @@ class TensorSongEnvironment:
         self.finger_action_mode = codec.get('mode', 'incremental')
         if hand == 'left' and self.finger_action_mode not in ('position', 'incremental'):
             raise ValueError('unknown left finger action codec')
-        if hand == 'left' and song.get('finger_action_mode', self.finger_action_mode) != self.finger_action_mode:
+        if hand == 'left' and song.get(
+            'finger_action_mode',
+            self.finger_action_mode,
+        ) != self.finger_action_mode:
             raise ValueError('song setting and actual finger action codec disagree')
         self.task = make_task(bundle, pre_roll_s=song['pre_roll_s'], tail_s=song['tail_s'])
         if any(not target.fret for target in self.task.targets):
@@ -187,7 +188,16 @@ class TensorSongEnvironment:
             observation['scales'] += [1.]*32
             observation['dimension'] += 32
             observation['fields'] += ['thumb_support.'+name for name in
-                ('delta_x', 'delta_y', 'delta_z', 'signed_gap', 'normal_cos', 'region_excess', 'valid', 'contact_candidate')]
+                (
+                    'delta_x',
+                    'delta_y',
+                    'delta_z',
+                    'signed_gap',
+                    'normal_cos',
+                    'region_excess',
+                    'valid',
+                    'contact_candidate',
+                )]
             observation['scales'] += [.03, .03, .03, .03, 1., .03, 1., 1.]
             observation['dimension'] += 8
             observation['priority_slots'] = 8
@@ -466,8 +476,19 @@ class TensorSongEnvironment:
         self.repeat_crossings = torch.zeros_like(self.clock)
         self.geometric_crossings = torch.zeros_like(self.clock)
         self.strict_wrong = torch.zeros_like(self.clock)
+        # 음 원장 [N,M]: 환경 N × 원래 악보 목표 M. 에피소드 reset에서만 초기화한다.
         self.note = {}
-        for name in ('clean', 'wrong', 'missing', 'held', 'dwell', 'release_s', 'reached', 'contact_time', 'error'):
+        for name in (
+            'clean',
+            'wrong',
+            'missing',
+            'held',
+            'dwell',
+            'release_s',
+            'reached',
+            'contact_time',
+            'error',
+        ):
             self.note[name] = torch.zeros(count, self.M, dtype=torch.float64, device=self.device)
         for name in ('left', 'right', 'coupled', 'left_missed', 'right_missed', 'match50',
                      'match100', 'strict_missed', 'released', 'ever', 'reach_done', 'contact_done'):
@@ -476,6 +497,8 @@ class TensorSongEnvironment:
             self.episode_diagnostics = LeftEpisodeDiagnostics(count, self.device,
                 finger=self.finger, press=self.press, end=self.end, duration_s=self.task.duration_s)
             self.preparation_gate = torch.zeros(count, 4, dtype=torch.float64, device=self.device)
+            # 현재 streak는 접촉이 끊기면 0, best는 에피소드 내 최장값을 보존한다.
+            # progress는 이미 소비한 최초접촉 예산 비율이다. 실패 tick의 지급 억제와도 별개다.
             for name in ('contact_streak', 'best_contact_streak', 'contact_progress',
                          'clean_streak', 'best_clean_streak', 'wrong_supported_time',
                          'wrong_ambiguous_time', 'wrong_next_preparation_time',
@@ -483,11 +506,19 @@ class TensorSongEnvironment:
                          'body_load_time', 'higher_time', 'lower_time', 'assignment_time',
                          'facing_time', 'middle_target_time', 'distal_target_time', 'rejected_target_time'):
                 self.note[name] = torch.zeros(count, self.M, dtype=torch.float64, device=self.device)
-            self.note['wrong_source_time'] = torch.zeros(count, self.M, 10, 3, dtype=torch.float64, device=self.device)
+            self.note['wrong_source_time'] = torch.zeros(
+                count,
+                self.M,
+                10,
+                3,
+                dtype=torch.float64,
+                device=self.device,
+            )
             for name in ('wrong_source_fret_min', 'wrong_source_fret_max'):
                 self.note[name] = torch.zeros(count, self.M, 10, dtype=torch.int16, device=self.device)
             self.note['near_done'] = torch.zeros(count, self.M, dtype=torch.bool, device=self.device)
             self.episode_reward_terms = {k: torch.zeros(count, device=self.device) for k in LEFT_TERMS}
+            # 수집창 H의 보상 통계만 따로 합산한다. H32 경계에서도 음 원장은 이어진다.
             self.reward_window = {k: torch.zeros((), dtype=torch.float64, device=self.device) for k in LEFT_TERMS}
             self.finger_motion = {key: torch.zeros(count, 21, dtype=torch.float64, device=self.device) for key in
                 ('actual_min', 'actual_max', 'target_min', 'target_max', 'action_sum', 'action_abs_sum',
@@ -518,10 +549,13 @@ class TensorSongEnvironment:
         self.pick = self.local_bodies[:, self.pick_index]
         torch._assert_async(((self.ends-self.starts)[..., 1].abs() > 1e-8).all(),
                             'finite GPU strings must span the fret direction')
-        self.loaded = torch.linalg.vector_norm(snapshot['contact_force'], dim=-1) >= CONTACT_CONTRACT['force_threshold_n']
+        self.loaded = torch.linalg.vector_norm(
+            snapshot['contact_force'],
+            dim=-1,
+        ) >= CONTACT_CONTRACT['force_threshold_n']
         self.flags = torch.stack([self.loaded[:, indices].any(-1) for indices in self.flag_indices], -1)
-        # Support flags need both load and a live nearby guitar. A net body force
-        # alone can also arise from the chair/other human bodies.
+        # 지지 여부에는 하중과 현재 가까이 있는 기타가 모두 필요하다. 몸체 합력만으로는
+        # 의자나 다른 인체 몸체에서 생긴 힘과 구분할 수 없다.
         support = self.local_bodies[:, self._indices(['human/Chest', 'human/R_Shoulder', 'human/R_Hip'])]
         self.flags[:, :3] &= torch.linalg.vector_norm(support, dim=-1) < .5
         line = self.ends[:, self.string]-self.starts[:, self.string]
@@ -542,9 +576,14 @@ class TensorSongEnvironment:
             center = .5*(self.guide['lower_G_m'][:, 1]+self.guide['upper_G_m'][:, 1])
             self.thumb_support = thumb_support_geometry(points, normals, self.thumb_support_valid,
                 center, self.thumb_support_rear, self.thumb_support_plane,
-                net_force_guitar=apply(conjugate(self.guitar_q), snapshot['contact_force'][:, self.thumb_support_index]))
+                net_force_guitar=apply(
+                    conjugate(self.guitar_q),
+                    snapshot['contact_force'][:, self.thumb_support_index],
+                ))
 
     def _contacts(self):
+        # 반환 후보/오압현은 [N,M]. 먼저 10개 마디의 전체 표면 [N,10*S,3]으로
+        # 현·프렛·담당 손가락의 관계를 측정한다. 아래의 끝마디 패드와 용도가 다르다.
         bodies = self.body[:, self.finger_indices]
         world = bodies[:, :, None, :3]+apply(bodies[:, :, None, 3:7], self.surface_local[None])
         points = apply(conjugate(self.guitar_q[:, None, None]),
@@ -578,8 +617,8 @@ class TensorSongEnvironment:
         same_finger = self.pad_fingers[:, None] == self.finger
         full_target = qualifies[..., None] & same_string & in_goal & same_finger[None]
         positive = full_target.any(1)
-        # An ambiguous wire can support the designated target within its margin,
-        # but does not establish a confirmed different fret.
+        # 경계가 불명확한 프렛 선도 허용 여유 안에서는 담당 목표를 지지할 수 있지만,
+        # 확정된 다른 프렛의 증거로 삼지는 않는다.
         higher = (qualifies[..., None] & same_string & (assigned[..., None] > self.fret)).any(1)
         lower = (qualifies[..., None] & same_string & (assigned[..., None] > 0) &
                  (assigned[..., None] < self.fret)).any(1)
@@ -589,13 +628,22 @@ class TensorSongEnvironment:
             self.contact_middle_target = (full_target & ~distal[None, :, None]).any(1)
             self.contact_distal_target = (full_target & distal[None, :, None]).any(1)
             self.contact_causes = (higher, lower, assignment)
+            # 담당 끝마디 패드 [N,4,P=128,3]: 검지→소지, 고정 표본, 기타 로컬 xyz.
+            # 접근 오차와 최종 positive는 이 패드에서 구하고, 전체 표면 진단은 보존한다.
             pad_bodies = self.body[:, self.pad_indices]
             pad_world = pad_bodies[:, :, None, :3]+apply(pad_bodies[:, :, None, 3:7], self.pad_local[None])
-            pad_points = apply(conjugate(self.guitar_q[:, None, None]), pad_world-self.guitar_body[:, None, None, :3])
+            pad_points = apply(
+                conjugate(self.guitar_q[:, None, None]),
+                pad_world-self.guitar_body[:, None, None, :3],
+            )
             pad_normals = apply(conjugate(self.guitar_q[:, None, None]),
                 apply(pad_bodies[:, :, None, 3:7], self.pad_normals[None]))
             origin_v = origin_velocity(pad_bodies, self.com[self.pad_indices])
-            world_v = origin_v[:, :, None] + torch.cross(pad_bodies[:, :, None, 10:13], pad_world-pad_bodies[:, :, None, :3], dim=-1)
+            world_v = origin_v[:, :, None] + torch.cross(
+                pad_bodies[:, :, None, 10:13],
+                pad_world-pad_bodies[:, :, None, :3],
+                dim=-1,
+            )
             guitar_v = origin_velocity(self.guitar_body, self.com[self.guitar_index])
             relative_v = world_v-guitar_v[:, None, None]-torch.cross(
                 self.guitar_body[:, None, None, 10:13], pad_world-self.guitar_body[:, None, None, :3], dim=-1)
@@ -623,13 +671,14 @@ class TensorSongEnvironment:
         return wrong
 
     def _wrong_sources(self, qualifies, assigned, nearest, same_string, in_goal, same_finger, positive, wrong):
-        """Bounded source provenance only; never alter contact verdicts."""
+        """크기가 제한된 오압현 출처만 계산하며 접촉 판정은 바꾸지 않는다."""
         now = self._score_time()
         future = (self.press-2 <= now[:, None]) & (now[:, None] < self.onset) & self._scope_mask()
-        # A small string/fret/finger grid avoids a target-by-target future-note
-        # cross product, including when many environments run in parallel.
+        # 작은 현·프렛·손가락 격자로 다수 환경에서도 목표별 미래 음 사이의
+        # 모든 조합을 생성하지 않도록 한다.
         fret_count = self.frets.shape[1]
         grid = self.starts.new_zeros(self.N, 6*fret_count*5)
+        # 펼친 격자 인덱스: (현 × fret_count + 프렛) × 5 + 손가락(0..4).
         key = (self.string*fret_count+self.fret)*5+self.finger
         grid.scatter_add_(1, key.expand(self.N, -1), future.to(grid.dtype))
         point_key = (nearest*fret_count+assigned)*5+self.pad_fingers
@@ -651,12 +700,13 @@ class TensorSongEnvironment:
                 ((assigned[..., None] == self.fret) if cause == 'assignment' else True)).any(1)
             next_preparation |= (points & preparing[..., None]).any(1)
             by_body = points.reshape(self.N, 10, self.surface_count, self.M)
-            # Fret ids0..22 need only int16; avoid an int64 N*sample*target
-            # temporary for each min/max reduction at1024 environments.
+            # 프렛 번호 0..22는 int16이면 충분하므로 1024환경의 각 최솟값·최댓값 계산에서
+            # int64 N*표본*목표 크기의 임시 텐서를 피한다.
             frets = assigned.to(torch.int16).reshape(self.N, 10, self.surface_count, 1)
             flags.append(by_body.any(2).transpose(1, 2))
             minima.append(torch.where(by_body, frets, fret_count).amin(2).transpose(1, 2))
             maxima.append(torch.where(by_body, frets, 0).amax(2).transpose(1, 2))
+        # [N,M,10,3]: 환경 × 목표 × 엄지2/3..소지2/3 × 원인.
         self.wrong_source_flags = torch.stack(flags, -1)
         self.wrong_source_fret_min = torch.stack(minima).amin(0).to(torch.int16)
         self.wrong_source_fret_max = torch.stack(maxima).amax(0).to(torch.int16)
@@ -685,7 +735,10 @@ class TensorSongEnvironment:
         target[:, 1] += y-self.frets[:, 5, 1]
         delta = target-wrist
         relative = multiply(conjugate(self.guitar_q), self.body[:, self.wrist_index, 3:7])
-        rotation = rotvec(multiply(conjugate(self.reference_wrist_q), relative)) if hasattr(self, 'reference_wrist_q') else torch.zeros_like(delta)
+        rotation = rotvec(multiply(conjugate(self.reference_wrist_q), relative)) if hasattr(
+            self,
+            'reference_wrist_q',
+        ) else torch.zeros_like(delta)
         distance, angle = torch.linalg.vector_norm(delta, dim=-1), torch.linalg.vector_norm(rotation, dim=-1)
         return dict(delta=delta, rotation=rotation, ready=(distance <= .04) & (angle <= .6),
             position=torch.exp(-(torch.relu(distance-.02)/.04)**2),
@@ -760,8 +813,8 @@ class TensorSongEnvironment:
         return self.observation()
 
     def _finger_preparation(self, now):
-        # Pure endpoint measurement; preserve the preceding contact evidence
-        # until the reward and the observation gate have both captured it.
+        # 순수 끝점 측정이며 보상과 관측 허용도가 모두 읽을 때까지
+        # 직전 접촉 증거를 보존한다.
         relevant = (now[:, None] >= self.press[None]-2.) & (now[:, None] <= self.end[None])
         contact = (((self.candidate | self.previous_candidate | self.wrong | self.previous_wrong) &
                     relevant)[:, None] & self.preparation_assignment[None]).any(-1)
@@ -794,6 +847,7 @@ class TensorSongEnvironment:
         return (valid*self._selected_finger_weights(selected)*torch.exp(-distance/.03)).sum(-1)
 
     def reset_reward_window(self):
+        # PPO 수집창 통계만 비운다. native 시계·장면·음별 streak/예산은 유지한다.
         if self.hand == 'left':
             for value in self.reward_window.values():
                 value.zero_()
@@ -814,6 +868,8 @@ class TensorSongEnvironment:
         if (inactive != 0).any():
             raise ValueError('inactive hand action must be zero residual')
         self.action = actions.detach().clone()
+        # 60Hz 제어 tick마다 원시 보상/비용을 새로 만들고, substep 네 번의
+        # 240Hz 관측을 여기에 합산한다. 음 원장과 에피소드 누계의 수명은 더 길다.
         self.terms = {key: torch.zeros(self.N, device=self.device) for key in TERMS}
         if self.hand == 'left':
             for key in LEFT_TERMS[len(TERMS):]:
@@ -833,7 +889,7 @@ class TensorSongEnvironment:
         self._substeps = 0
 
     def _record_finger_motion(self):
-        """Fixed-size GPU accumulators; one sample per completed control tick."""
+        """완료된 제어 tick마다 한 번, 고정 크기 GPU 누적기에 손가락 움직임을 기록한다."""
         stats = self.finger_motion
         q = self.snapshot['q'][:, self.finger_joint_indices].double()
         target = self.snapshot['target'][:, self.finger_joint_indices].double()
@@ -873,12 +929,11 @@ class TensorSongEnvironment:
             stats[maximum].copy_(torch.maximum(stats[maximum], value.abs()))
 
     def invalidate_control(self, mask):
-        """Latch invalid support normals as row-local physical failures.
-
-        The owner may use only its last valid bounded effort until this tick's
-        boundary. This measurement method never supplies or changes torques.
-        Nonfinite/uncertified controller results remain fatal in the owner.
-        """
+        """잘못된 지지 법선을 해당 행의 물리 실패로 고정한다.
+        
+        소유자는 이 tick의 경계까지 마지막으로 유효했던 제한된 힘만 사용할 수 있다.
+        이 측정 메서드는 토크를 제공하거나 변경하지 않는다. 비유한·미인증 제어기 결과는
+        소유자에서 계속 치명적 오류로 처리한다."""
         if self._substeps is None or self._substeps >= 4:
             raise RuntimeError('control invalidation requires an active control tick')
         if mask.shape != (self.N,) or mask.dtype != torch.bool or mask.device != self.device:
@@ -949,7 +1004,11 @@ class TensorSongEnvironment:
             success = hit & available.any(-1)
             self.note['right'][rows, chosen] |= success
             self.note['coupled'][rows, chosen] |= success & both[rows, chosen]
-            self.note['error'][rows, chosen] = torch.where(success, at-self.onset[chosen], self.note['error'][rows, chosen])
+            self.note['error'][rows, chosen] = torch.where(
+                success,
+                at-self.onset[chosen],
+                self.note['error'][rows, chosen],
+            )
             repeat = hit & ~success & matching.any(-1)
             wrong = hit & ~matching.any(-1)
             self.terms['song_right_success'] += success
@@ -982,6 +1041,7 @@ class TensorSongEnvironment:
             if self._global_step is not None and step != self._global_step+1:
                 raise ValueError('consecutive actual GPU physics snapshots required')
             self._global_step = step
+        # 실제 완료된 1/240초 구간의 겹침만 적분한다. 한 제어 tick에서 네 번 호출된다.
         before = self._score_time()
         self.clock += 1
         now = self._score_time()
@@ -1003,7 +1063,10 @@ class TensorSongEnvironment:
         if self.hand == 'left':
             self.note['clean_streak'] = torch.where(both & (audible > 0),
                 self.note['clean_streak']+audible, 0.)
-            self.note['best_clean_streak'] = torch.maximum(self.note['best_clean_streak'], self.note['clean_streak'])
+            self.note['best_clean_streak'] = torch.maximum(
+                self.note['best_clean_streak'],
+                self.note['clean_streak'],
+            )
             achievement_credit = self.note['clean_streak']
         else:
             achievement_credit = self.note['clean']
@@ -1046,7 +1109,10 @@ class TensorSongEnvironment:
         start = (self.press-2).clamp_min(0)
         reach = (torch.minimum(now[:, None], self.end)-torch.maximum(before[:, None], start)).clamp_min(0)*scope
         self.note['reached'] += reach*(self.previous_ready & self.guide['ready'])[:, None]
-        self.note['reach_done'] |= self.note['reached']+1e-12 >= torch.minimum(torch.full_like(start, .1), self.end-start)
+        self.note['reach_done'] |= self.note['reached']+1e-12 >= torch.minimum(
+            torch.full_like(start, .1),
+            self.end-start,
+        )
         self.note['contact_time'] += press*both
         if self.hand == 'left':
             self.note['contact_streak'] = torch.where(both & (press > 0),
@@ -1058,6 +1124,8 @@ class TensorSongEnvironment:
             torch.minimum(torch.full_like(self.press, .05), self.end-self.press)))
         self.note['contact_done'] |= first
         if self.hand == 'left':
+            # 최장 streak의 증가분만 원시 예산 .5*b로 변환한다. 실제 지급 억제는
+            # end_control에서 처리하므로, 억제된 tick도 progress는 되돌리지 않는다.
             best = torch.maximum(self.note['best_contact_streak'], contact_credit)
             threshold = torch.minimum(torch.full_like(self.press, .05), self.end-self.press)
             progress = (best/threshold).clamp(0, 1)
@@ -1107,7 +1175,7 @@ class TensorSongEnvironment:
         self._substeps += 1
 
     def _wrong_history(self, audible):
-        """Integrate audible provenance at the same endpoints as wrong time."""
+        """오압현 시간과 같은 끝점에서 실제 발음 구간의 원인별 출처를 적분한다."""
         old_time = self.note['wrong_source_time'].sum(-1)
         before = self.previous_wrong_source_flags
         after = self.wrong_source_flags
@@ -1115,7 +1183,7 @@ class TensorSongEnvironment:
         active_before = before.any(-1) & (audible[..., None] > 0)
         active_after = after.any(-1) & (audible[..., None] > 0)
         seen = active_before | active_after
-        # Ignore missing endpoints when combining min/max source fret ranges.
+        # 출처 프렛의 최솟값·최댓값 범위를 합칠 때 누락된 끝점은 제외한다.
         sentinel = self.frets.shape[1]
         low = torch.minimum(torch.where(active_before, self.previous_wrong_source_fret_min, sentinel),
                             torch.where(active_after, self.wrong_source_fret_min, sentinel))
@@ -1135,10 +1203,16 @@ class TensorSongEnvironment:
         near = (self.surface_distance <= .01) & (self.previous_surface_distance <= .01)
         self.note['surface_min'] = torch.where(exposure > 0,
             torch.where(self.note['exposure_time'] == 0, self.surface_distance,
-                        torch.minimum(self.note['surface_min'], self.surface_distance)), self.note['surface_min'])
+                        torch.minimum(
+                            self.note['surface_min'],
+                            self.surface_distance,
+                        )), self.note['surface_min'])
         self.note['exposure_time'] += exposure
         self.note['near_time'] += exposure*near
-        self.note['near_done'] |= self.note['near_time']+1e-12 >= torch.minimum(torch.full_like(start, .1), self.end-start)
+        self.note['near_done'] |= self.note['near_time']+1e-12 >= torch.minimum(
+            torch.full_like(start, .1),
+            self.end-start,
+        )
         for key, flag in zip(('geometry_time', 'loaded_target_time', 'body_load_time', 'higher_time', 'lower_time', 'assignment_time',
                              'facing_time', 'middle_target_time', 'distal_target_time', 'rejected_target_time'),
                              (self.contact_geometry, self.contact_loaded_target, self.surface_body_loaded, *self.contact_causes,
@@ -1173,6 +1247,7 @@ class TensorSongEnvironment:
         self.terms['song_right_progress'] = torch.where(same,
             .25*(.99*after[2]-self.before_progress[2]), 0.)
         failed = self._control_failures()
+        # J 자식은 먼저 수행 부족을 정산한다. 뒤의 실패 잔여예산 계산이 이 원장을 읽는다.
         self._prepare_control_end(failed)
         self.invalid |= failed
         self.failure |= self.tick_failure
@@ -1192,6 +1267,7 @@ class TensorSongEnvironment:
         else:
             self.terms['action_change'] = -.01*action_change.square().mean(-1)/60.
         self.terms['terminal_failure'] = -2.*failed
+        # J 자식은 정산 후 남은 음 예산과 남은 시간을 통합 실패 비용으로 청구한다.
         self._apply_failure_cost(failed)
         if self.hand == 'left':
             self._record_finger_motion()
@@ -1215,7 +1291,12 @@ class TensorSongEnvironment:
             penalties = ('song_wrong_press', 'song_missing_press', 'song_left_missed')
             components = {key: self.terms[key]*(penalty_weights if key in penalties else weights)[group]
                           for key, group in groups.items()}
-            components.update(action_change=self.terms['action_change'], terminal_failure=self.terms['terminal_failure'])
+            components.update(
+                action_change=self.terms['action_change'],
+                terminal_failure=self.terms['terminal_failure'],
+            )
+            # 위는 공용 song의 legacy 그룹 가중치다. J 자식은 이 결과 대신
+            # self.terms의 원시값과 수행 부족 정산으로 최종 9개 항을 다시 구성한다.
             components = self._reward_components(components)
             reward = sum(components.values())
             for key, value in components.items():
@@ -1251,20 +1332,36 @@ class TensorSongEnvironment:
         now = self._score_time()
         local, duration = self._local_time(), self._episode_duration()
         fraction = (self.note['clean']/(self.end-self.onset)).clamp_max(1)
-        values = [local/duration, (duration-local).clamp_min(0)/duration,
-            self._target_count(now), self._target_mean((self.end < now[:, None]).double())]
+        values = [
+            local/duration,
+            (duration-local).clamp_min(0)/duration,
+            self._target_count(now),
+            self._target_mean((self.end < now[:, None]).double()),
+        ]
         values += [self._target_mean(self.note[key].double()) for key in ('left', 'right', 'coupled', 'left_missed', 'right_missed')]
         values += [self._target_mean(fraction), self.wrong_crossings, self.repeat_crossings,
                    torch.zeros_like(now), self.invalid, self._target_mean(self.note['match50'].double()),
                    self._target_mean(self.note['match100'].double())]
         index, present = self._focus()
         rows = torch.arange(self.N, device=self.device)
-        focus = [torch.ones_like(now), (self.onset[index] <= now) & (now < self.end[index]),
-            (self.press[index] <= now) & (now < self.onset[index]), self.string[index]+1,
-            self.fret[index], self.finger[index], self.direction[index],
-            self.onset[index]-now, self.end[index]-now, self.candidate[rows, index], self.wrong[rows, index],
-            fraction[rows, index], self.note['left'][rows, index], self.note['right'][rows, index],
-            self.note['coupled'][rows, index], self.required[index]/(self.end[index]-self.onset[index])]
+        focus = [
+            torch.ones_like(now),
+            (self.onset[index] <= now) & (now < self.end[index]),
+            (self.press[index] <= now) & (now < self.onset[index]),
+            self.string[index]+1,
+            self.fret[index],
+            self.finger[index],
+            self.direction[index],
+            self.onset[index]-now,
+            self.end[index]-now,
+            self.candidate[rows, index],
+            self.wrong[rows, index],
+            fraction[rows, index],
+            self.note['left'][rows, index],
+            self.note['right'][rows, index],
+            self.note['coupled'][rows, index],
+            self.required[index]/(self.end[index]-self.onset[index]),
+        ]
         return torch.cat((torch.stack(values, -1), torch.stack(focus, -1)*present[:, None]), -1).float()
 
     def _events(self):
@@ -1280,16 +1377,30 @@ class TensorSongEnvironment:
                             if self.hand == 'left' else self.note['held'])
         progress = (self.note['contact_progress'] if self.hand == 'left' else
                     self.note['held']/(self.end-self.onset))
-        features = torch.stack((self.onset-now[:, None], self.end-now[:, None], self.press-now[:, None],
-            expand(self.string+1), expand(self.fret), expand(self.finger), expand(self.direction),
+        # 목표마다 고정 순서의 24필드 [N,M,24]를 먼저 만든다.
+        features = torch.stack((
+            self.onset-now[:, None],
+            self.end-now[:, None],
+            self.press-now[:, None],
+            expand(self.string+1),
+            expand(self.fret),
+            expand(self.finger),
+            expand(self.direction),
             (self.onset <= now[:, None]) & (now[:, None] < self.end),
-            (self.press <= now[:, None]) & (now[:, None] < self.onset), first_flag,
-            second_flag, self.note['clean_streak'] if self.hand == 'left' else self.note['dwell'], contact_fraction,
-            progress, self.note['released'],
+            (self.press <= now[:, None]) & (now[:, None] < self.onset),
+            first_flag,
+            second_flag,
+            self.note['clean_streak'] if self.hand == 'left' else self.note['dwell'],
+            contact_fraction,
+            progress,
+            self.note['released'],
             torch.where(self.note['released'], self.note['release_s']-now[:, None], 0.),
-            *delta.unbind(-1), *velocity.unbind(-1),
+            *delta.unbind(-1),
+            *velocity.unbind(-1),
             self.surface_alignment if self.hand == 'left' else self.onset+.05-now[:, None],
-            self.surface_height if self.hand == 'left' else self.onset+.1-now[:, None]), -1).float()
+            self.surface_height if self.hand == 'left' else self.onset+.1-now[:, None],
+        ), -1).float()
+        # 일반 lookahead 슬롯: 원래 목표 인덱스 순서로 capacity개를 모으고 나머지는 0.
         valid = (self.onset <= now[:, None]+self.task.lookahead_s) & (now[:, None] <= self.end+.1) & self._scope_mask()
         indices = torch.arange(self.M, device=self.device).expand(self.N, -1)
         selected = indices.masked_fill(~valid, self.M).sort(-1).values[:, :self.task.capacity]
@@ -1298,9 +1409,14 @@ class TensorSongEnvironment:
         if selected.shape[1] < self.task.capacity:
             padding = self.task.capacity-selected.shape[1]
             gathered = torch.cat((gathered, torch.zeros(self.N, padding, 24, device=self.device)), 1)
-            selected_mask = torch.cat((selected_mask, torch.zeros(self.N, padding, dtype=torch.bool, device=self.device)), 1)
+            selected_mask = torch.cat(
+                (selected_mask, torch.zeros(self.N, padding, dtype=torch.bool, device=self.device)),
+                1,
+            )
         gathered = torch.where(selected_mask[..., None], (gathered/self.event_scales).clamp(-10, 10), 0.)
         if self.hand == 'left':
+            # 손가락 선택기 [N,4,2]를 펼친 8슬롯: 검지 tracking/next부터
+            # 중지·약지·소지 tracking/next까지. 일반 lookahead와 별도 출력이다.
             selection = self._finger_targets(now)
             priority_indices = selection['indices'].flatten(1)
             priority_mask = selection['valid'].flatten(1)
@@ -1339,27 +1455,59 @@ class TensorSongEnvironment:
                 self._scope_mask(), device=self.device), torch.inf).amin(-1)
         deadlines = torch.where(torch.isfinite(deadlines), deadlines, 0.)
         local = self._local_time()
-        music = torch.stack(((self._episode_duration()-local).clamp_min(0),
-            self.note['match50'].sum(-1), self.note['match100'].sum(-1), self._target_count(now),
-            self.note['held'].sum(-1), self.note['released'].sum(-1), deadlines, local), -1).float()
+        music = torch.stack((
+            (self._episode_duration()-local).clamp_min(0),
+            self.note['match50'].sum(-1),
+            self.note['match100'].sum(-1),
+            self._target_count(now),
+            self.note['held'].sum(-1),
+            self.note['released'].sum(-1),
+            deadlines,
+            local,
+        ), -1).float()
         line = self.ends-self.starts
         normal = torch.stack((-line[..., 1], line[..., 0]), -1)
         normal = torch.where(normal[..., :1] < 0, -normal, normal)
         side = ((self.pick[:, None, :2]-self.starts[..., :2])*normal).sum(-1).sign()
         cooldown = (2-(self.clock[:, None]-self.last_hit)).clamp_min(0)
-        state = [self.snapshot['q']-self.reference, self.snapshot['qd'],
-            self.snapshot['target']-self.snapshot['q'], self.previous_action,
-            relative, x, y, relative_v, omega, proxy, self.flags, gd, gr, feet.flatten(1),
-            music, self.armed, side, cooldown, self.loss, self._history()]
+        # 상태 출력 순서: 관절 q/qd/target/action → 기타·지지·발 → 음악·곡 이력.
+        state = [
+            self.snapshot['q']-self.reference,
+            self.snapshot['qd'],
+            self.snapshot['target']-self.snapshot['q'],
+            self.previous_action,
+            relative,
+            x,
+            y,
+            relative_v,
+            omega,
+            proxy,
+            self.flags,
+            gd,
+            gr,
+            feet.flatten(1),
+            music,
+            self.armed,
+            side,
+            cooldown,
+            self.loss,
+            self._history(),
+        ]
         if self.hand == 'left':
             index, present = self._focus(prepare=True)
             rows = torch.arange(self.N, device=self.device)
             fraction = (self.note['contact_streak'][rows, index]/torch.minimum(
                 torch.full_like(self.press[index], .05), self.end[index]-self.press[index])).clamp_max(1)
             weights = self._weights()
-            extra = torch.stack((fraction*present, self.note['contact_done'][rows, index]*present,
-                self._target_mean(self.note['contact_done'].float()), torch.full_like(fraction, self.progress),
-                torch.full_like(fraction, weights['contact']), torch.full_like(fraction, weights['timing'])), -1)
+            extra = torch.stack((
+                fraction*present,
+                self.note['contact_done'][rows, index]*present,
+                self._target_mean(self.note['contact_done'].float()),
+                torch.full_like( fraction, self.progress, ),
+                torch.full_like( fraction, weights['contact'], ),
+                torch.full_like(fraction, weights['timing']),
+            ), -1)
+            # 왼손 추가 순서: 손목·접촉 진행 → 실제 손가락 각도·대기 gate → 엄지 기하.
             state += [self.guide['delta'], self.guide['rotation'], extra]
             posture = finger_posture_reward(now, self.onset, self.end, self.press, self.finger,
                 self.body[:, self.finger_palm_index, 3:7],
@@ -1373,6 +1521,7 @@ class TensorSongEnvironment:
             state += [thumb['delta'], torch.stack([thumb[k] for k in
                 ('signed_gap', 'normal_cos', 'region_excess', 'valid', 'contact_candidate')], -1)]
         state = torch.cat([value.float() for value in state], -1)
+        # J 자식이 남은 로컬 시간과 손목 종료 timer를 마지막에 붙인다.
         state = self._observation_state(state)
         if state.shape != (self.N, self.contract['observation']['dimension']):
             raise ValueError('tensor song observation dimension mismatch')
@@ -1483,7 +1632,11 @@ class TensorSongEnvironment:
         for finger, count in enumerate(self.finger_counts, 1):
             mask = self.finger == finger
             row = dict(target_count=count)
-            for name, key in (('near_fraction', 'near_done'), ('contact_fraction', 'contact_done'), ('success_fraction', 'left')):
+            for name, key in (
+                ('near_fraction', 'near_done'),
+                ('contact_fraction', 'contact_done'),
+                ('success_fraction', 'left'),
+            ):
                 row[name] = float(self.note[key][index, mask].float().mean().item()) if count else 0.
             row['clean_fraction'] = float((self.note['clean'][index, mask]/(self.end-self.onset)[mask]).clamp_max(1).mean().item()) if count else 0.
             metrics.append(row)

@@ -1,4 +1,12 @@
-# 프로젝트 현재 상태 — 2026-10-24
+# 프로젝트 현재 상태 — 2026-10-28
+
+현행 기본은 `python -m guitar_learning.train --out NEW`의 GPU 왼손 **finger-skill v3(J 전용)**다. 상태557(기반552+남은시간1+손목종료4), J33 공동 학습·독립 K1, medium·128환경·H32·100업데이트를 사용한다. 기본 연결32개는 구현24개와 초기화8개이며 활성 Python은281개다. 실행·재개 계약과9개 보상·종료는 [현행 안내](/home/ajou/yigyu/3/guitar_learning/README.md)를 따른다. 기존 버전의 학습 성과를 현행 v3의 성과로 상속하지 않는다.
+
+CPU·오른손 song, 공용 native·자산·접촉 측정, 현행 short 진단·영상·로그 도구는 유지한다. 과거8실험·전문 skills/imitation/timing/quality 환경·구형 학습/평가/시연 CLI와 timing 영상 도구220파일(193 Python)은 [원문·SHA 보관 안내](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/ARCHIVE_INDEX.md)로 옮겼다. 보관본은 현행 실행에서 import하지 않는다.
+
+## 2026-10-24까지의 상태 기록
+
+아래의 ‘현재’·‘최신’·버전별 실행 설명과 수치는 각 기록 당시의 계약을 뜻한다. 날짜별 결과·성능·검증 범위는 당시 원문으로 유지하며, 현행 실행 명령은 위 안내를 우선한다.
 
 **손가락별 B 대기 보상 v17 구현·CPU 검증 완료(2026-10-24).** GPU 왼손은 B 권고의 준비·접촉·근접 제외를 검지~소지별로 계산한다. 본인의 press−2~end 준비창, 본인 finger1/2/3 netload≥.01N 또는 배정 목표의 이전/현재 candidate·wrong, 본인에게 배정된 전체 곡 목표와 패드의 거리4cm 이내·비유한 거리에서 그 손가락만0이다. 다른 손가락의 준비·접촉·근접은 이 게이트를 끄지 않는다. 각 손가락 최대.0025/초·고정4분모·손 전체 최대.01/초와 기존 B±15도 평탄대역·바깥30도 감쇠를 유지한다. 상시coordination0·엄지/벌림 보상 없음·LH21 움직임 비용0·v16행동변화식·v15음감점·관측544/24/8·3331단계·물리/제어/PPO/성공은 유지한다. v16 이하 checkpoint는 거부하고 새v17 또는 동일v17 전체 계약의 strict resume만 허용한다. 이번 v17 GPU/native·새 학습은 미실행이며 CPU 28모듈 279개 검사를 통과했다. 독립 검수 기록은 별도 보고서를 참조한다. [구현·검증 현황](/home/ajou/yigyu/3/docs/2026-10-24/guitar_learning_per_finger_standby_v1/README.md).
 

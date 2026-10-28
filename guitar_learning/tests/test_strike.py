@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from guitar_learning.core.strike import StrikeDetector
+from guitar_learning.core.measurement import StrikeDetector
 
 
 def geometry(step,pick):

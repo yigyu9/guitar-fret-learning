@@ -16,14 +16,14 @@ import torch
 from scipy.spatial.transform import Rotation
 
 from guitar_learning.core.control import LEFT_HAND_NAMES
-from guitar_learning.core.finger_control import default_profile
-from guitar_learning.core.observations import EVENT_SCALES
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.core.control import default_profile
+from guitar_learning.core.geometry import EVENT_SCALES
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.song.curriculum_runtime import CurriculumCoordinator
 from guitar_learning.tests import test_gpu_environment as fixtures
 from guitar_learning.tests import test_gpu_surface_learning as surface_fixtures
 from guitar_learning.training.ppo import PPOTrainer
-from guitar_learning.music_task import ScoreTask, ScoreTarget
+from guitar_learning.song.task import ScoreTask, ScoreTarget
 
 
 class PressLearningTests(unittest.TestCase):

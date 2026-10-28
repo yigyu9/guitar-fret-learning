@@ -4,7 +4,7 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation
 from ..initial_pose_noise_v1 import pose
-from ..lower_body_release_v1.common import save
+from guitar_learning.native.paths import save
 from .motion_v1 import Motion as PreviousMotion, pick_goal, command_gate
 
 

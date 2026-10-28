@@ -1,0 +1,51 @@
+{
+  "verdict": "PASS",
+  "findings": [],
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/PLAN.md": "0756aa8fa30262a70819f4f11e166e3fd08e4820746f21c0d3423a277fe2ee4f",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/README.md": "815cb4ade170d070bedb9726bfe6cfe4f1a3a7ced78600410af49b912dcf9e45",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/probe.py": "2efeef22dce12f3af7862bf4a533e7d5485886d706a0a2c9a262d6e5950eaf17",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/learning.py": "a1c2aad48ee62dee0d386a629b6089fca284a1e471aac170bce34785bc1fcffa",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/cpu_checks.py": "35ad832c0391c9c4edbca4c0e8cbf10a0d967056abfde327ae84fc6a2ca33ebc",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/cpu_verification.json": "379056e916cbd1be328c15cefe66b42e3e22141babaf1349a2b19221c20f76e0",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/fresh_process_gate.json": "92ef56d959ccb70ca1282acb0715f8f89bf82e40f376b68bc6076896e8d8a5a5",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/cpu_inputs/commands.json": "a9e82f0a56e4b828a88648c1fc63e02602aec8a5f4e912ee74fc7138f47df1d0",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/cpu_inputs/effort_declaration128.json": "b3c728887368c4939e541e7227bbfaa839003bd15cde4c85b4580b1d212afca4",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/cpu_inputs/expected_environment.json": "697032719672c75ce2b5df346fd2794cfd011c7608fd45938c2e176f2f72c5c0",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/cpu_inputs/settings.json": "8fe711c963a542c4d19769982f601d8d794b537aacda3097b3e700b9834f237c",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/cpu_inputs/source_task.json": "b95da0b99a93c57bde1bb1d527e97e17ff3a9d10d8644b33a77fbebcda175c60"
+  },
+  "review_scope": "새 prefix policy/환경 schema 및 F4·current-goal guard·원 runner/cap128 연결의 독립 CPU 준비/source 검수",
+  "pending_preparation_seal_snapshot": {
+    "path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/low_effort_index_prefix_learning_v1/preparation_seal.json",
+    "sha256": "07d41b55c04e6b7b24930275fdbcab9569136dfa958732819ed9567e75fd0550",
+    "independent_review": "pending",
+    "input_pin_count": 1600,
+    "canonical_input_pins_sha256": "b7b346dbcd79de7d361a5a26a754f25e30ff88efcaa8851484bf043680c2e2ed",
+    "all_input_pins_current": true,
+    "scope": "review2 추가와 status 최종화 이전 pending snapshot"
+  },
+  "independent_checks": [
+    "실제 새 PrefixLearningEnvironment128 생성/fixture reset 및 cpu_checks.check 직접 재실행; cpu_verification.json 결과와 exact",
+    "새 short schema/정책 schema와 action guard 계약을 ctor 전 선언; 원 old schema 치환/완화 없이 같은계약 strictload 및 old B 교차load 거부",
+    "CPU float32 초기73개 중 기본71개 exact/2cost head0·CPU RNG 동일; 기존 B initial과 model-only73개 exact 및 fresh=False nonzero head save/load 보존",
+    "원 ShortPool.step의 실제 CPU seam에서 첫 tick NN 선택17..20 네 축과 last_policy_action exact; N 호출은 reference 평가 branch에만 존재",
+    "각env precontrol score<원end의 earliest4/7/8/none 경계, 부분reset 및 achieved/released와 독립인 goal 선택 확인",
+    "target_filter live=ones로 첫 감사 quota 종료/새episode에서도 guard 유지; none candidate mask·음/0 증분과 같은 snapshot 다른104열 보존",
+    "실제 virtual ctor reset/부분reset·constructor+close 원예외 보존, compact single-helper 재귀 방지와 finally alias 복원",
+    "원 native128×105/private16effort.25/나머지89·controller cap·90pair helper 및 기존12 negative CPU fixture 재사용; 두 _pins superset/runner/runtime/schema/policy alias 복원",
+    "music_passed/release_passed/stage_ready 분리, own384 actual review PASS와 reference stage_ready 전 train/evaluate stdlib gate 거부",
+    "fresh process --gate-check 및 Python3.8 AST3파일 통과, 수치/native 선행 import 없음/1600핀 current/runs·train 없음"
+  ],
+  "GPU_executed": false,
+  "native_executed": false,
+  "training_started": false,
+  "existing_files_modified": false,
+  "limitations": [
+    "새 native128 property/readback·strict CUDA fullload·reference128/music/release 성과와 학습은 아직 미검증",
+    "초기73/71+2 및 RNG 동일성은 CPU float32/model-only 비교이며 CUDA 난수열/실제 native 초기 model 동일성 증명이 아님",
+    "current_goal=-1 행의 wrong은 safe-gather A값일 수 있으므로 현재목표 wrong 통계에서 제외; present가 candidate/eligibility를 끄므로 guard 동작 영향 없음",
+    "guard_counts는 현재 episode 제어 전체를 센다; 평가의 첫시도 분석은 별도 first_attempt mask를 사용해 retry를 제외",
+    "prefix+staged wrist+currentgoal guard+cost0 결합 조건이며 cost-only 인과·자연성·자유기타/J33·전곡·생산기본 채택을 인증하지 않음"
+  ]
+}

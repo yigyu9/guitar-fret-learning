@@ -9,14 +9,14 @@ import time
 import numpy as np
 import torch
 
-from guitar_learning.training import json_io
-from guitar_learning.training.recording import write, project_source_paths, digest
+from guitar_learning.training import training_log_io as json_io
+from guitar_learning.training.training_log_io import write, project_source_paths, digest
 from guitar_learning.training.finger_skill_runner import _pins, _validate_pins
-from guitar_learning.training.launch_settings import settings_document
-from guitar_learning.training.finger_decisions import DecisionCollector
-from guitar_learning.training.decision_ppo import DecisionPPOTrainer
+from guitar_learning.training.launch import build_settings as settings_document
+from guitar_learning.training.rollout import DecisionCollector
+from guitar_learning.training.ppo import DecisionPPOTrainer
 from guitar_learning.training.ppo import PPOConfig
-from guitar_learning.training.gpu_pool import FIELDS
+from guitar_learning.training.rollout import FIELDS
 from guitar_learning.song.task import make_task
 from .spec import SCHEMA, read_teacher, diagnostic_spec, read_reference
 from .runtime import ShortPool, ShortPolicy
@@ -218,6 +218,7 @@ def _evaluate(pool, policy, spec, args, out):
                 wrist_pose_error_world=pool.last_wrist_feedback['pose_error_world'][0].cpu().numpy().copy(),
                 wrist_requested_delta_rad=pool.last_wrist_feedback['requested_delta_rad'][0].cpu().numpy().copy(),
                 wrist_requested_arm_rad=pool.last_wrist_feedback['requested_arm_rad'][0].cpu().numpy().copy(),
+                wrist_candidate_arm_rad=pool.last_wrist_feedback['candidate_arm_rad'][0].cpu().numpy().copy(),
                 wrist_goal_G_m=pool.last_wrist_feedback['position_goal_G_m'][0].cpu().numpy().copy(),
                 wrist_goal_G_xyzw=pool.last_wrist_feedback['quaternion_goal_G_xyzw'][0].cpu().numpy().copy()))
         for row in finished:
@@ -239,4 +240,5 @@ def _evaluate(pool, policy, spec, args, out):
             joint_names=pool.scene.names, body_names=pool.scene.metadata['body_names'],
             learned_action_indices=spec['learned_action_indices'], wrist_control=spec['wrist_control'],
             wrist_pose_error_scope='pre-control actual wrist versus next target pose; world xyz meters then0.1*world rotation-vector radians',
-            wrist_requested_delta_scope='bounded DLS correction before combined requested-target rate/bound clipping'))
+            wrist_requested_delta_scope=spec['wrist_control']['requested_delta_scope'],
+            wrist_candidate_arm_scope=spec['wrist_control']['candidate_arm_scope']))

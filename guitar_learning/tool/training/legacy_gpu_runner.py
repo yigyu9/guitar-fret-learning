@@ -9,26 +9,31 @@ import sys
 import time
 import traceback
 
-from guitar_learning.training.recording import write, digest, project_source_paths, active_source_paths
-from guitar_learning.training import json_io
-from guitar_learning.training.gpu_log_records import (EpisodeWriter, CheckpointRecorder,
-    episode_summary, METRICS_SCHEMA, TRANSITION_SCHEMA)
+from guitar_learning.training.training_log_io import write, digest, project_source_paths, active_source_paths
+from guitar_learning.training import training_log_io as json_io
+from guitar_learning.training.training_log_io import EpisodeWriter
+from guitar_learning.training.training_log_io import CheckpointRecorder
+from guitar_learning.training.training_log_io import episode_summary
+from guitar_learning.training.training_log_io import METRICS_SCHEMA
+from guitar_learning.training.training_log_io import TRANSITION_SCHEMA
 
 
 def run(settings, args):
     if 'finger_skill' in settings:
-        from guitar_learning.training.finger_skill_runner import run as run_finger_skill
-        return run_finger_skill(settings, args)
+        raise ValueError('This runner accepts song settings only')
     import isaacgym
     import numpy as np
     import torch
-    from guitar_learning.training.gpu_pool import GpuPool, TensorCollector
-    from guitar_learning.skills.specialist_policy import SpecialistPolicy
+    from guitar_learning.training.rollout import GpuPool
+    from guitar_learning.training.rollout import TensorCollector
+    from guitar_learning.training.policy import SpecialistPolicy
     from guitar_learning.training.ppo import PPOTrainer, PPOConfig
-    from guitar_learning.training.monitoring import Monitor, available_memory_bytes, save_failure_checkpoint
+    from guitar_learning.training.training_log_io import Monitor
+    from guitar_learning.training.training_log_io import available_memory_bytes
+    from guitar_learning.training.training_log_io import save_failure_checkpoint
     from guitar_learning.training.training_log_io import TransitionJournal
     from guitar_learning.runtime.prepared_reset_v1 import prepared_input_paths, BASELINE_CONFIG
-    from guitar_learning.native.lower_body_release_v1.common import pin
+    from guitar_learning.native.paths import pin
 
     if settings['device'] != 'cuda:0' or not torch.cuda.is_available():
         raise RuntimeError('GPU physics training requires CUDA; CPU fallback is not permitted')

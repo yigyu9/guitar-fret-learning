@@ -6,17 +6,17 @@ import torch
 from guitar_learning.core.control import ACTIVE_NAMES
 from guitar_learning.gpu.finger_reward import B_PREPARATION_INPUT_DEGREES, B_PREPARATION_SPREAD_DEGREES
 from guitar_learning.gpu.finger_skill_environment import FingerSkillEnvironment
-from guitar_learning.gpu.simplified_finger_environment import SimplifiedFingerEnvironment
-from guitar_learning.skills.finger_skill_policy import FingerSkillPolicy, FINGERS
+from guitar_learning.training.policy import FingerSkillPolicy
+from guitar_learning.training.policy import FINGERS
 from guitar_learning.song.finger_phrases import BalancedPhraseSampler
-from guitar_learning.training.gpu_pool import GpuPool
+from guitar_learning.training.rollout import GpuPool
 from guitar_learning.tool.validation.press_acquisition import trajectory_actions
 from .spec import SCHEMA, selected_actions, subset
-from .wrist import WRIST_CONTROL, interpolated_pose, wrist_error_and_jacobian, bounded_wrist_target
-from guitar_learning.gpu.geometry import apply, conjugate, multiply
+from .wrist import WRIST_CONTROL, interpolated_pose, wrist_error_and_jacobian, bounded_wrist_target, _wrist_position_groups
+from guitar_learning.gpu.control import apply, conjugate, multiply
 
 
-class ShortEnvironment(SimplifiedFingerEnvironment):
+class ShortEnvironment(FingerSkillEnvironment):
     allowed_finger_action_modes = ('incremental', 'position')
 
     def __init__(self, metadata, *, bundle, song, skill, device='cuda:0', hand='left'):
@@ -36,10 +36,13 @@ class ShortEnvironment(SimplifiedFingerEnvironment):
             scope='teacher-supported fixed guitar; original predicates/rewards; no success inheritance')
 
     def _reset_scope(self, indices):
-        self.training_scope = 'phrases'
+        # 이 진단은 노출 일정과 관계없이 원곡의 지정 음 하나만 선택한다.
+        evaluation, full_song = self.evaluation, self.evaluation_full_song
+        self.evaluation, self.evaluation_full_song = True, False
         try:
-            FingerSkillEnvironment._reset_scope(self, indices)
+            super()._reset_scope(indices)
         finally:
+            self.evaluation, self.evaluation_full_song = evaluation, full_song
             self.training_scope = 'fixed_source_subset'
         for value in (self.wrist_active, self.wrist_elapsed, self.wrist_severe_elapsed,
                       self.wrist_failure, self.wrist_severe_failure, self.failure_paid,
@@ -65,7 +68,7 @@ class ShortPolicy(FingerSkillPolicy):
         spec = contract['task']['short_learning']
         if spec.get('schema') != SCHEMA or spec['learned_action_indices'] != list(selected_actions(spec['finger'])):
             raise ValueError('Fixed named four-axis policy mask required')
-        super().__init__(561, size=size, contract=contract, phase='J', exploration='independent')
+        super().__init__(557, size=size, contract=contract)
         self.finger = spec['finger']
         self.architecture['learned_action_indices'] = spec['learned_action_indices']
         self.architecture['likelihood'] = 'selected_four_physical_tanh_latents_only'
@@ -102,6 +105,12 @@ class ShortPool(GpuPool):
             raise ValueError('Exact wrist feedback contract required')
         self.initial_wrist_position = None
         super().__init__(settings, out)
+        try:
+            self.wrist_position_groups = _wrist_position_groups(
+                self.controller, self.scene.metadata['body_names'], self.controller.active[:12])
+        except ValueError:
+            self.close()
+            raise
         self.learn_mask = torch.zeros(39, dtype=torch.bool, device=self.scene.device)
         self.learn_mask[self.spec['learned_action_indices']] = True
         self.teacher_reference = self.controller.reference[self.controller.active]
@@ -139,16 +148,16 @@ class ShortPool(GpuPool):
         position, quaternion = interpolated_pose(self.initial_wrist_position, self.initial_wrist_quaternion,
                                                  target_G, rotation_G, fraction)
         error, jacobian = wrist_error_and_jacobian(snapshot, env.wrist_index, env.guitar_index,
-            self.scene.com[env.wrist_index], self.controller.active[:12], position, quaternion)
+            self.scene.com[env.wrist_index], self.wrist_position_groups, position, quaternion)
         active = ~snapshot['reset_body_snapshot']
-        arm, correction, delta = bounded_wrist_target(desired[:,:12], self.wrist_correction,
-            self.previous_arm_request, jacobian, error, active, self.controller.action_low[:12],
+        arm, correction, delta, candidate = bounded_wrist_target(desired[:,:12], self.wrist_correction,
+            self.previous_arm_request, snapshot['q'][:,self.controller.active[:12]], jacobian, error, active, self.controller.action_low[:12],
             self.controller.action_high[:12], self.controller.rate[self.controller.active[:12]])
         self.wrist_correction.copy_(correction)
         self.previous_arm_request.copy_(arm)
         desired[:,:12] = arm
         self.last_wrist_feedback = dict(active=active.clone(), pose_error_world=error.clone(),
-            requested_delta_rad=delta.clone(), requested_arm_rad=arm.clone(),
+            requested_delta_rad=delta.clone(), requested_arm_rad=arm.clone(), candidate_arm_rad=candidate.clone(),
             position_goal_G_m=position.clone(), quaternion_goal_G_xyzw=quaternion.clone())
         return desired
 

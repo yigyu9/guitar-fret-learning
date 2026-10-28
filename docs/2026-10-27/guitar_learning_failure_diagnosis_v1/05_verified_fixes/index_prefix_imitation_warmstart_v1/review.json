@@ -1,0 +1,49 @@
+{
+  "verdict": "PASS",
+  "summary_verdict": "문제없음",
+  "findings": [],
+  "reviewer": "/root/live_release_probe/review_policy_load",
+  "scope": "모방 초기화 collect/fit/evaluate 최소 CPU준비 검수; 실제 수집/GPU fit/NN성공 검증 전",
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/PLAN.md": "8ab1b2519d138ef7867fb7668b0cdb36ab1b6b242215b0df894f78cf77a18888",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/README.md": "8c413d38144c0f8f83f61189dc5e0a4933c6de046519a80250b0747886bfcd08",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/probe.py": "ecf6c078c29a8ac0bb5b76fd8984e4a57c8d1a89023e77b92dbf6a4e0e596414",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/imitation.py": "9bd1aae30d0fe4c28b8d939e44502fe0c4231e6b16ec4a068faaa4e8b1318333",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/cpu_checks.py": "6160b723adab7980a5000532c6ec0eed80edc2e56788d0b10fb0dbdf1fae9057",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/cpu_verification.json": "0d55afb62571bff145bf68a83d58c7cfae442422f4ff917bf190eb4454096066",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/fresh_process_gate.json": "1a4ac2ca95a423051b56f1efa184d7dedd15075ade5f54a9e20d2fd01c98904b",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/preparation_seal_pending.json": "adb29dfdd710929eb0e3764122a5fe3031c7d91784607baf64ea0ca13659d416",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/cpu_inputs/commands.json": "3215c101f2dfbcdc421d1de0a89a147f84b9e32492991f0c8fcec81c4922c882",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/cpu_inputs/procedure.json": "fde124600cae2a66b1c2b807343016ba3f940061563312c475834d2d2e35e780",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/cpu_inputs/settings.json": "8fe711c963a542c4d19769982f601d8d794b537aacda3097b3e700b9834f237c"
+  },
+  "checked_input_pins": 1879,
+  "pending_pin_canonical_sha256": "b77d97891488ffd872530286d704778705a8ba1ede53f8779a454d1aac17ad07",
+  "resolved_findings": [
+    {
+      "severity": "Warning",
+      "file": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/imitation.py",
+      "issue": "fit finally의 후처리 쓰기 오류가 원 오류를 덮을 수 있음",
+      "resolution": "기존 primary보존/secondary stderr 패턴으로 finally 보호; 독립 ValueError+OSError 이중오류 CPUfixture PASS",
+      "before_snapshot": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/before_review_fix_01/manifest.json"
+    }
+  ],
+  "checks": [
+    "Python3.8 AST3·전체 CPU self-test·fresh stdlib gate·1879현재핀·runs없음",
+    "제어전5관측 복사/clock4/firstmask·즉시실패label·요청4열과guard목표 구분·NN자료fit거부",
+    "원6구간119/71/6/26/7/125·192각32복원추출·env0..2학습/env3검산",
+    "원fresh73exact·native fit의 fullstrictload경로·fingerencoder/indexhead만 학습·critics/std/기타state/buffer exact·cost2zero",
+    "원 requires_grad복원·새PPOempty0/save-load·원architecture/environment identity와 새procedure metadata구분·old/newmetadata runner거부",
+    "NNfreshFalse·첫tick선택4NN·현재goalguard·reference/N호출거부·scopedalias/lifecycle보존",
+    "원설정초기화 설명은 source_settings_initialization/settings_scope로한정·새actual_initialization선언",
+    "root진행문서 정확3allowlist 제외·원보상감사4/19입력·나머지evidence검증유지",
+    "독립 이중오류 fixture에서 원 ValueError 유지·secondary OSError출력; 수정전3핀 이외1876키/hash unchanged"
+  ],
+  "limits": [
+    "CPU1step/합성검사만; 실제128수집·1000stepGPUfit·NN물리성공·CUDA RNG 전체복원 미검증",
+    "공유encoder로 다른head출력까지exact아님·실제비선택손가락은 원B제어",
+    "heldoutenv3는동일장면자료이며독립seed/일반화 증거아님",
+    "원std유지의 deterministic평가와 stochasticPPO유지 구분;100PPO 미구현",
+    "bodyresultant는pair압력/피부전체분리 인증아님·free/J33/전곡/자연성 확대0"
+  ]
+}

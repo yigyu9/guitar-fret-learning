@@ -8,8 +8,8 @@ matching events rejected by this wrapper are removed from the returned events.
 """
 import copy
 import numpy as np
-from guitar_learning.music_task import ScoreTarget
-from guitar_learning.core.strike import StrikeDetector
+from guitar_learning.song.task import ScoreTarget
+from guitar_learning.core.measurement import StrikeDetector
 
 
 STRIKE_QUALITY_METADATA = dict(schema='guitar_learning.strike_quality.v1',

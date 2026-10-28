@@ -8,10 +8,10 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.song import progress
 from guitar_learning.song.hand_environment import build_environment, HAND_TERMS, SHARED_TERMS, SCHEMA
-from guitar_learning.tests.test_skill_environment import LongRecordedSession
+from guitar_learning.tests.test_training_environment import LongRecordedSession
 from guitar_learning.tests.test_song_environment import BUNDLE, SONG
 from guitar_learning.tool.validation.rollout import RolloutCollector
 

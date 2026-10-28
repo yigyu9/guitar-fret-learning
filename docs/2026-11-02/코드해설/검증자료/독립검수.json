@@ -1,0 +1,34 @@
+{
+  "schema": "guitar_learning.readability_review.v1",
+  "verdict": "문제없음",
+  "phase": "complete",
+  "critical": [],
+  "warning": [],
+  "suggestion": [],
+  "scope": "snapshot 20261028_before_readability_v1 대비 training 6 / gpu 6 Python 파일 변경",
+  "validation": {
+    "independent_ast": "review_ast_validation.json: 12/12 canonical AST equal after exact scoped reverse renames and leading docstring removal; policy explicit loop independently inlined and collapsed to original comprehension",
+    "source_archive": "all archived manifest SHA-256 checked",
+    "cpu": "cpu_comparison.json: 117 modules, 923 tests; 100 modules pass, 17 pre-existing failing modules with identical signatures; 0 new failures",
+    "numeric": "numeric_equivalence.json: policies 9, collectors 3, PPO 3, KL rollback bitwise equal",
+    "documentation": "review_docs_validation.json: source metadata 32 SHA/line counts + 533 AST declaration locations + 281 source freeze; 20 Markdown files, 1127 local links / 879 source line links; 0 errors",
+    "gpu_fresh_resume": "direct report inspection: fresh 2 updates / 32 transitions and resume 1 update / 16 transitions, optimizer 2 to 3; lifecycle verified; changed_inputs/missing_import_pins/cleanup_errors empty",
+    "gpu_evaluation": "direct report inspection and checkpoint SHA verified: full_song 2 episodes / timeline_complete 2; physical_failure 0; wrist_failure 0; stage_success 0; mean_left_success_count 1 of 67; 3952 actual / 3938 selected transitions; lifecycle verified; changed_inputs/missing_import_pins/cleanup_errors empty. Smoke model only, no learning-performance equivalence claimed."
+  },
+  "resolved_findings": [
+    {
+      "file": "guitar_learning/gpu/control.py",
+      "line": 505,
+      "issue": "right_support_indices includes torso/spine/chest/right thorax/shoulder, so right-arm-only comment was inaccurate",
+      "resolution": "specified torso and right shoulder support axes"
+    },
+    {
+      "file": "guitar_learning/gpu/finger_skill_environment.py",
+      "line": 343,
+      "issue": "raw terms include 60 Hz end_control computations as well as 240 Hz accumulations",
+      "resolution": "end_control-prepared raw terms"
+    }
+  ],
+  "reviewer_edits": "Only /tmp review artifacts; no source changes",
+  "status": "complete"
+}

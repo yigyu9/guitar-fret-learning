@@ -1,0 +1,64 @@
+{
+  "verdict": "PASS",
+  "summary": "문제없음",
+  "findings": [],
+  "review_date": "2026-10-28",
+  "CPU_only": true,
+  "GPU_executed": false,
+  "native_executed": false,
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_guard_off_v1/PLAN.md": "d7000885871d55356405418dff046d3d2d50258efc7fb4890d1ad308536ddf4e",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_guard_off_v1/README.md": "ce24c0d75e68921e9c1ec5ffb2aaf93602ad22aecf9378a7a88f63eb3d552dc6",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_guard_off_v1/probe.py": "e21d8e4c5831ad72d7ce7481751e958c4ed0d3d0b5d243c3a8581a8975d1c881",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_guard_off_v1/cpu_checks.py": "e352893dae377e0f6ad4101ef7ec8df82369c6d692c793173b5b909670acda43",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_guard_off_v1/cpu_verification.json": "1022cfe49c0b627ac5ec6f969ec8ae11b87e2392183ad55dce388f9396448ad2",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_guard_off_v1/fresh_process_gate.json": "d3d6330fa9babd637de8b0cec8cf5e94554b83444e97a2caaf9f7779af2892c7",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_guard_off_v1/cpu_inputs/commands.json": "9e9ceec913c33089636e10cda5ac624fa50e3044d468fead66b7c5e95281aba0",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_guard_off_v1/cpu_inputs/settings.json": "8fe711c963a542c4d19769982f601d8d794b537aacda3097b3e700b9834f237c",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_guard_off_v1/cpu_inputs/execution_override.json": "bf8c6a600375f61efb6e7ca3758132985c1967c533a76ba892fa1862deb0ca8f"
+  },
+  "pre_review_pending_seal": {
+    "sha256": "d9c3016b9c8dde982bfa08a314dedceb6bfa2a830964dbbeba1f4acd06c646e8",
+    "input_count": 2169,
+    "canonical_input_pins_sha256": "e0105f246fd9ef5f817f62c2d70f61505f73987fc6fce28c2284c2d997e2beb0",
+    "scope": "검수 전 pending snapshot 식별값이며 최종 review/status 추가 뒤 whole-file SHA와 순환하지 않게 reviewed_sha256에서 제외했다."
+  },
+  "resolved_issues": [
+    {
+      "issue": "outer execution_scope의 parent.support 조회가 원 on.launch의 Isaac import보다 먼저 Torch를 불러올 수 있음",
+      "resolution": "support/filter 조회를 원 adapter 진입 뒤로 이동했다. 독립 fresh process에서 support 호출을 금지한 scope 진입·원예외·alias 복원 회귀로 support0 및 Torch/NumPy/Isaac import0을 확인했다.",
+      "previous_five_files_preserved": "before_review_fix_01/manifest.json",
+      "independent_retest_passed": true
+    }
+  ],
+  "checks": {
+    "Python38_AST2_pass": true,
+    "independent_CPU_self_test_saved_result_exact": true,
+    "passthrough_original_target_filter_guard_false": true,
+    "blocked_actual_blocked_false_would_block_distinct": true,
+    "would_block_matches_guard_on_same_snapshot": true,
+    "raw_final_DIP_target_exact": true,
+    "other104_negative_zero_unchanged": true,
+    "controller_memory_alias_and_original_rate_bounds_preserved": true,
+    "outer_and_filter_aliases_restore_on_exception": true,
+    "original_error_preserved_when_report_also_fails": true,
+    "existing_and_dangling_symlink_rejected_before_gate": true,
+    "fresh_scope_setup_imports_Torch_NumPy_Isaac_zero": true,
+    "fresh_scope_support_calls_zero": true,
+    "stdlib_gate_independent_exit0": true,
+    "owner_postfix_stdlib_gate_exit0_confirmed": true,
+    "original_std_mode_strict_callback_path_reused": true,
+    "metadata_checkpoint_guard_on_contract_preserved_with_separate_off_execution_report": true,
+    "own9_pin_SHA_current": true,
+    "pending2169_keys_unchanged_only_three_own_pins_updated": true,
+    "previous_manifest_bytes_SHA_verified": true,
+    "mutable_progress_and_future_own_analysis_excluded_from_runtime_pins": true,
+    "runs_absent": true
+  },
+  "limits": [
+    "원 on의 full strict load/std4/seed7/mode/RNG/GoalPool/128 native cap 경로와 기존 PASS를 재사용했으며 과거 모델·물리·전체 입력을 전면 재감사하지 않았다.",
+    "새 off native128 closed-loop 성과와 CUDA 전체 복원·실제105 readback/scene 종료는 아직 실행하지 않았다. 준비 CPU PASS가 실제 성과를 뜻하지 않는다.",
+    "would_block은 같은 off 상태·원 raw 목표에 원 on 조건을 적용한 control별 지표다. 전체 on trajectory와 동일하거나 미래 접촉·압력을 예측하는 값이 아니다.",
+    "모델의 원 guard-on 계약을 바꾸지 않고 별도 guard_execution_override에 off 개입을 명시한다. 새로운 학습계약·기본보호 삭제 채택·PPO·새 모델저장은 없다."
+  ]
+}

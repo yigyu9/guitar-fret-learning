@@ -5,7 +5,7 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 from guitar_learning.runtime.headless_session import HeadlessPreparedSession, _headless_construction, _headless_guard_type, _headless_scene_type, _physics_signature, headless_session_factory
-from guitar_learning.runtime.prepared_reset_v1 import PreparedSession
+from guitar_learning.runtime.native_session import PreparedSession
 
 
 def parameters():

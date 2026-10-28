@@ -1,0 +1,56 @@
+{
+  "completed": false,
+  "failure": null,
+  "stage": "collect",
+  "checks": {
+    "aliases_restored": true,
+    "observer_aliases_restored": true,
+    "original_native_closed": true,
+    "prefix_task_verified": true,
+    "NN_constructors_exact": false,
+    "selected4_request_not_replaced": true,
+    "model_RNG_updates_frozen": true,
+    "no_secondary_errors": true,
+    "reference_only_in_collection": true
+  },
+  "procedure": {
+    "schema": "diagnostic.index_prefix_imitation_initialization.v1",
+    "seed": 7,
+    "steps": 1000,
+    "batch_size": 192,
+    "per_phase": 32,
+    "learning_rate": 0.0003,
+    "gradient_norm": 0.5,
+    "loss": "mean square of original tanh(mean) selected4 minus requested reference action; no atanh/clipping",
+    "train_envs": [
+      0,
+      1,
+      2
+    ],
+    "heldout_envs": [
+      3
+    ],
+    "phases": [
+      "A_approach",
+      "A_hold",
+      "release",
+      "move",
+      "close",
+      "B_hold"
+    ],
+    "trainable_prefixes": [
+      "finger_encoder.",
+      "finger_heads.index."
+    ],
+    "unchanged": "original PrefixPolicy architecture/environment/currentgoal guard/std/reward; other parameter values exact",
+    "checkpoint": "new initialization metadata schema; new original PPO optimizers empty/updates0; no supervised optimizer inheritance",
+    "scope": "same-scene heldout observation check, not independent seeds/generalization/RL-only/free guitar"
+  },
+  "dataset_sha256": "00bfe7dc68acaddb9a783e55b36db1155249b0b63fa45daa19339185131f4954",
+  "reference_calls": 354,
+  "reference_N_injected": true,
+  "policy_before": null,
+  "policy_after": null,
+  "settings_scope": "Original settings initialization text is source configuration only; fit checkpoint actual_initialization declares supervised provenance",
+  "scope": "Collection is noNN reference; evaluate is NN-only current-goal guard, no carry memory or N injection"
+}

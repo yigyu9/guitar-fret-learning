@@ -6,7 +6,8 @@ import unittest
 import numpy as np
 from .test_environment_v4 import FakeSession
 from .test_geometry_v1 import fixture, body
-from guitar_learning.core.fretting_v1 import FretTarget, FretContract
+from guitar_learning.core.measurement import FretTarget
+from guitar_learning.core.measurement import FretContract
 from guitar_learning.tool.validation.fretting_environment import FrettingEnvironment
 
 

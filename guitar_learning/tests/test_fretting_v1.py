@@ -4,7 +4,10 @@ import json
 import unittest
 import numpy as np
 from scipy.spatial.transform import Rotation
-from guitar_learning.core.fretting_v1 import FretTarget, FretContract, FrettingTracker, measure_sample
+from guitar_learning.core.measurement import FretTarget
+from guitar_learning.core.measurement import FretContract
+from guitar_learning.core.measurement import FrettingTracker
+from guitar_learning.core.measurement import measure_sample
 
 
 TARGET = FretTarget(1, 5, 'index')

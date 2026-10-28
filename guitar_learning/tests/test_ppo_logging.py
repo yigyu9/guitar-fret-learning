@@ -10,7 +10,7 @@ from unittest.mock import patch
 import torch
 
 from guitar_learning.training.ppo import PPOConfig, PPOTrainer, compute_gae, gaussian_kl
-from guitar_learning.training.ppo_diagnostics import MinibatchSummary, post_update_diagnostics, rollout_evaluation
+from guitar_learning.training.ppo import MinibatchSummary, post_update_diagnostics, rollout_evaluation
 from guitar_learning.tests.test_policy import policy
 from guitar_learning.tests.test_ppo import buffer,assert_tree
 from guitar_learning.tests.test_specialist_policy import specialist
@@ -66,7 +66,7 @@ class PPOLoggingTests(unittest.TestCase):
         args=(model,inputs,data['latent'].flatten(0,1),data['logp'].flatten(),
               torch.arange(8).float(),torch.ones(8),.2)
         expected=post_update_diagnostics(*args)
-        with patch('guitar_learning.training.ppo_diagnostics.rollout_evaluation',
+        with patch('guitar_learning.training.ppo.rollout_evaluation',
                    side_effect=lambda policy,inputs: rollout_evaluation(policy,inputs,3)):
             actual=post_update_diagnostics(*args)
         def close(left,right):

@@ -11,7 +11,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from guitar_learning.training import json_io
+from guitar_learning.training import training_log_io as json_io
 
 
 def bits(value):
@@ -104,8 +104,7 @@ class JsonWriterTests(unittest.TestCase):
         json_io.dumps([.1])
         self.assertEqual(original, (json.dump, json.dumps, json.load, json.loads, json.JSONEncoder, json.JSONDecoder))
         result = subprocess.run([sys.executable, '-B', '-c',
-            'import sys; from guitar_learning.training import json_io; '
-            'assert not any(n in sys.modules for n in ("numpy", "torch", "isaacgym"))'],
+            'import sys; from guitar_learning.training import training_log_io as json_io; assert not any(n in sys.modules for n in ("numpy", "torch", "isaacgym"))'],
             cwd=str(Path(__file__).resolve().parents[2]), capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 

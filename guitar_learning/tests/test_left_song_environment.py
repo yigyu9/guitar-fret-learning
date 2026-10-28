@@ -10,7 +10,7 @@ import numpy as np
 from guitar_learning.song import environment as original
 from guitar_learning.song.left_environment import LeftSongEnvironment, LEFT_FIELDS, LEFT_SCALES
 from guitar_learning.song.task import make_task
-from guitar_learning.tests.test_skill_environment import LongRecordedSession
+from guitar_learning.tests.test_training_environment import LongRecordedSession
 from guitar_learning.tests.test_song_environment import BUNDLE, SONG
 
 

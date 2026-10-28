@@ -7,19 +7,15 @@ import unittest
 import numpy as np
 import torch
 
-from guitar_learning.skills.finger_skill_policy import FingerSkillPolicy, WRIST_TERMINATION_FIELDS
+from guitar_learning.training.policy import FingerSkillPolicy
+from guitar_learning.training.policy import WRIST_TERMINATION_FIELDS
 from guitar_learning.tests.test_finger_skill_policy import contract, inputs
-from guitar_learning.training.gpu_log_records import episode_summary
+from guitar_learning.training.training_log_io import episode_summary
 from guitar_learning.training.ppo import policy_advantages
 
 
 def simplified_contract():
-    value = contract('J')
-    value['task']['finger_skill']['schema'] = 'guitar_learning.finger_skill.v2'
-    value['observation']['fields'] += list(WRIST_TERMINATION_FIELDS)
-    value['observation']['scales'] += [1., 1.5, 3., .1]
-    value['observation']['dimension'] = 561
-    return value
+    return contract()
 
 
 class SimplifiedPolicyTests(unittest.TestCase):
@@ -29,13 +25,13 @@ class SimplifiedPolicyTests(unittest.TestCase):
 
     def test_both_actors_active_and_all_termination_state_observed(self):
         spec = simplified_contract()
-        model = FingerSkillPolicy(561, size='small', phase='J', contract=spec)
+        model = FingerSkillPolicy(557, size='small', contract=spec)
         self.assertEqual(int(model._active_mask().sum()), 33)
         self.assertTrue(all(p.requires_grad for p in model.actor_parameters()))
         for name in WRIST_TERMINATION_FIELDS:
             self.assertIn(name, model.architecture['support_fields'])
         batch = list(inputs())
-        batch[0] = torch.randn(4, 561)
+        batch[0] = torch.randn(4, 557)
         sample = model.act(*batch)
         self.assertTrue(torch.equal(sample['action'][:, 33:], torch.zeros(4, 6)))
         self.assertGreater(float(sample['action'][:, :17].abs().sum()), 0)
@@ -47,11 +43,11 @@ class SimplifiedPolicyTests(unittest.TestCase):
             self.assertGreater(float(head[-1].bias.grad.abs().sum()), 0)
 
     def test_timer_state_reaches_support_actor_and_critic(self):
-        model = FingerSkillPolicy(561, size='small', phase='J', contract=simplified_contract())
+        model = FingerSkillPolicy(557, size='small', contract=simplified_contract())
         with torch.no_grad():
             model.support_head.weight.normal_(0, .01)
         batch = list(inputs())
-        batch[0] = torch.zeros(4, 561)
+        batch[0] = torch.zeros(4, 557)
         first = model(*batch)
         batch[0][:, -4:] = torch.tensor([1., .9, .5, .8])
         second = model(*batch)
@@ -62,17 +58,19 @@ class SimplifiedPolicyTests(unittest.TestCase):
         value = simplified_contract()
         for phase, exploration in [('R', 'independent'), ('F', 'independent'), ('J', 'correlated')]:
             with self.assertRaises(ValueError):
-                FingerSkillPolicy(561, size='small', phase=phase, exploration=exploration, contract=value)
+                changed = copy.deepcopy(value)
+                changed['task']['finger_skill'].update(phase=phase, exploration=exploration)
+                FingerSkillPolicy(557, size='small', contract=changed)
         bad = copy.deepcopy(value)
         bad['observation']['fields'][-1] = 'hidden_timer'
         with self.assertRaises(ValueError):
-            FingerSkillPolicy(561, size='small', phase='J', contract=bad)
+            FingerSkillPolicy(557, size='small', contract=bad)
         with self.assertRaises(ValueError):
-            FingerSkillPolicy(557, size='small', phase='J', contract=value)
+            FingerSkillPolicy(561, size='small', contract=value)
 
     def test_previous_wrist_rule_checkpoint_is_rejected_without_model_mutation(self):
         from guitar_learning.tests.test_simplified_finger_environment import make
-        from guitar_learning.training.decision_ppo import DecisionPPOTrainer
+        from guitar_learning.training.ppo import DecisionPPOTrainer
         env, _, _ = make()
         current = env.contract
         previous = copy.deepcopy(current)
@@ -83,9 +81,9 @@ class SimplifiedPolicyTests(unittest.TestCase):
             previous['termination']['wrist'].pop(key)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'previous.pt'
-            old = DecisionPPOTrainer(FingerSkillPolicy(561, size='small', phase='J', contract=previous))
+            old = DecisionPPOTrainer(FingerSkillPolicy(557, size='small', contract=previous))
             old.save(path)
-            trainer = DecisionPPOTrainer(FingerSkillPolicy(561, size='small', phase='J', contract=current))
+            trainer = DecisionPPOTrainer(FingerSkillPolicy(557, size='small', contract=current))
             before = {k:v.clone() for k,v in trainer.policy.state_dict().items()}
             with self.assertRaises(ValueError):
                 trainer.load(path)

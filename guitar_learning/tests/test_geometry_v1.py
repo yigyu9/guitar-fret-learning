@@ -3,7 +3,14 @@ import copy
 import unittest
 import numpy as np
 from scipy.spatial.transform import Rotation
-from guitar_learning.core.geometry_v1 import frame, world_to_guitar, guitar_to_world, body_point_motion, relative_point_motion, geometry_snapshot, fret_target, relative_sweep_inputs
+from guitar_learning.core.geometry import frame
+from guitar_learning.core.geometry import world_to_guitar
+from guitar_learning.core.geometry import guitar_to_world
+from guitar_learning.core.geometry import body_point_motion
+from guitar_learning.core.geometry import relative_point_motion
+from guitar_learning.core.geometry import geometry_snapshot
+from guitar_learning.core.geometry import fret_target
+from guitar_learning.core.geometry import relative_sweep_inputs
 
 
 def body(p, q=(0, 0, 0, 1), linear=(0, 0, 0), angular=(0, 0, 0)):

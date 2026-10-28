@@ -46,7 +46,7 @@
 
 ## 구현·보존
 
-- [고정 프로필](/home/ajou/yigyu/3/guitar_learning/core/finger_control.py), [목표 변환](/home/ajou/yigyu/3/guitar_learning/core/control.py), [native 세션](/home/ajou/yigyu/3/guitar_learning/runtime/finger_session.py)
+- [고정 프로필](/home/ajou/yigyu/3/guitar_learning/core/control.py), [목표 변환](/home/ajou/yigyu/3/guitar_learning/core/control.py), [native 세션](/home/ajou/yigyu/3/guitar_learning/runtime/finger_session.py)
 - [실제 동작 기록·재생 도구](/home/ajou/yigyu/3/guitar_learning/tool/demonstration/finger_motion.py), [도구 실행법](/home/ajou/yigyu/3/guitar_learning/tool/README.md)
 - [전체 학습 흐름](../README.md), [작업 계획](/home/ajou/yigyu/3/docs/plans/guitar_learning_flexible_fingers_20261020.md)
 - 변경 전458개 파일을 [보관 manifest](/home/ajou/yigyu/3/guitar_learning/archive/20261020_before_flexible_fingers/manifest.json)에 기록했다. 과거2778개 CAS 버전과 보호 대상 원문을 보존하고 현재 소스410개를 [source_manifest.json](source_manifest.json)에 봉인했다. [보존 검사](preservation_verified.json) 참조.

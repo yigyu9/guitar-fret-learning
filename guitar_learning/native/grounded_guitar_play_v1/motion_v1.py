@@ -3,7 +3,7 @@ import numpy as np
 from scipy.optimize import least_squares
 from ..initial_pose_noise_v1 import pose
 from ..elbow_wrist_strike_source_v1 import solve_pick
-from ..lower_body_release_v1.common import read, save
+from guitar_learning.native.paths import read, save
 from pathlib import Path
 
 

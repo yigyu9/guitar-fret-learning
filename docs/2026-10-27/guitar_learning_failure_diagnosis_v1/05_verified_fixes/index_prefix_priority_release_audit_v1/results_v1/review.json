@@ -1,0 +1,98 @@
+{
+  "verdict": "PASS",
+  "summary": "문제없음",
+  "findings": [],
+  "review_date": "2026-10-28",
+  "CPU_only": true,
+  "GPU_executed": false,
+  "fit_executed": false,
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_priority_release_audit_v1/PLAN.md": "c114d8057157ec678a265ea26559c0a1fd5db00577783d948694e08116e061d2",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_priority_release_audit_v1/audit.py": "b928915ac7ae3b4f00111a8035897efde00156dc9e60519bcdd93b51db9cb1f2",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_priority_release_audit_v1/results_v1/comparison.json": "9f5c07041a7ebfa130240885caa1dd4c20514d3c2759a7ed1143a78be6e24a82",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_priority_release_audit_v1/results_v1/verification.json": "9743c6648aa5a92e8125b2887a249297df4010dcc2820b7608c24b887b019b20",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_priority_release_audit_v1/results_v1/rows.csv": "6ab7f538488a198788e48034010b865ab1114bfada8fb6b0d1ec30b2e0e1931d",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_priority_release_audit_v1/results_v1/priority_sensitivity.png": "2ce8c3d42b5afcfc905f791f9f8a82fb1873fc918123e066d47e073e64301519",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_priority_release_audit_v1/results_v1/RESULTS.md": "ff0767fd5415f7a64f8be4cfbaed0d7bb58d26ee6c10089a6aeb5372c43e11fd"
+  },
+  "checks": {
+    "direct_18_input_SHA_current": true,
+    "memory_replay_comparison_and_verification_JSON_exact": true,
+    "rows24_CSV_exact": true,
+    "plot_recomputed_pixel_exact": true,
+    "plot_direct_visual_review": true,
+    "Python38_AST_pass": true,
+    "noop4_exact": true,
+    "replaced20_only_priority_slots_0_1": true,
+    "other_observations_and_priority6_unchanged": true,
+    "model73_exact_unchanged": true,
+    "source_token_unique_valid_main_slot_checked": true,
+    "raw_CPU_max_abs_residual": 1.4901161193847656e-07,
+    "reused_CPU_tolerance": 2.384185791015625e-07,
+    "independent_RMS_and_maxchange_reduction_exact": true
+  },
+  "numerical_summary": {
+    "rows": 24,
+    "observed_envs": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "noop_rows": 4,
+    "replaced_rows": 20,
+    "raw_CPU_max_abs_residual": 1.4901161193847656e-07,
+    "reused_CPU_tolerance": 2.384185791015625e-07,
+    "maximum_abs_goal_change_deg4": [
+      0.42928314208984375,
+      0.97967529296875,
+      0.8931503295898438,
+      1.127960205078125
+    ],
+    "RMS_to_full_N_deg4": {
+      "original": [
+        0.9375852207860534,
+        2.1518479928550014,
+        1.9302983663986892,
+        2.4893733453728752
+      ],
+      "counterfactual": [
+        1.2323446270938083,
+        2.820709907641756,
+        2.5429352790714908,
+        3.260546257360034
+      ]
+    },
+    "RMS_to_scheduled_desired_deg4": {
+      "original": [
+        0.4705968405474537,
+        1.0722170633858898,
+        0.9643346107078045,
+        1.2510692776825492
+      ],
+      "counterfactual": [
+        0.7748500083502007,
+        1.7622329596349064,
+        1.5958204981515658,
+        2.046847310775027
+      ]
+    },
+    "checks": {
+      "state_other_observations_unchanged": true,
+      "other_six_priority_slots_unchanged": true,
+      "model73_exact_unchanged": true,
+      "noop_input_and_first_four_outputs_exact": true,
+      "main_copy_no_rescaling": true,
+      "no_clock_reconstruction": true,
+      "no_physical_rollout": true
+    },
+    "scope": "Fixed24 saved states only; both shared finger encoder and index head see priority replacement; not training causality/information absence/release success/128generalization",
+    "reference_anchor_source": "Reviewed release_window saved decoded-minus-N and decoded-minus-scheduled-desired plus change from original saved decoded angle; no clock reconstruction"
+  },
+  "limits": [
+    "4관측환경의 고정24행 입력 민감도이며 새로운 물리 후상태·시계·해제 성공·학습 인과·다른124환경을 추정하지 않는다.",
+    "공통 finger encoder와 index head의 우선순위 입력을 함께 바꿔 경로별 기여는 분리하지 않는다.",
+    "원 genuine GoalPolicy의 model state와 identity를 CPU에서 strict 확인했으며 CUDA 전체 상태 복원이나 native 실행을 재수행한 것이 아니다.",
+    "검수된 release_window의 같은행 기준각 차이를 재사용했으며 상위2000개 입력을 재귀 재감사하지 않았다."
+  ]
+}

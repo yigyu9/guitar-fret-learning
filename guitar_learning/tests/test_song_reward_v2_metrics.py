@@ -1,7 +1,7 @@
 """CPU score boundaries and reward isolation; no dynamics or sound claim."""
 import unittest
 import numpy as np
-from guitar_learning.music_task import ScoreTask, ScoreTarget
+from guitar_learning.song.task import ScoreTask, ScoreTarget
 from guitar_learning.song.metrics import SongLedger as OriginalSongLedger
 from guitar_learning.song.quality import SongLedger, HISTORY_FIELDS, HISTORY_SCALES, metadata
 from guitar_learning.tests.test_song_metrics import sample, crossing, target

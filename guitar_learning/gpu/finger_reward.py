@@ -1,8 +1,11 @@
-"""Bounded left-finger surface/posture reward rates; never change control."""
+"""왼손 목표 추종·실제 자세·대기 권고의 유한한 보상률을 계산한다.
+
+손가락별 목표 선택 → 표면 추종 → 실제 각도 → B 대기 허용 구간 순서로 읽는다.
+보상 계산은 제어 명령이나 물리 상태를 변경하지 않는다."""
 import math
 import torch
 
-from guitar_learning.gpu.geometry import apply, conjugate, multiply
+from guitar_learning.gpu.control import apply, conjugate, multiply
 
 
 FINGER_TARGET_CONTRACT = dict(
@@ -18,7 +21,7 @@ FINGER_TARGET_CONTRACT = dict(
 
 
 def finger_target_indices(now, onset, end, press, finger, target_mask=None):
-    """Return dict(indices long[N,4,2], valid bool[N,4,2]); invalid=-1."""
+    """indices long[N,4,2]와 valid bool[N,4,2] 사전을 반환하며 무효 인덱스는 -1이다."""
     n, m = now.numel(), onset.numel()
     if (now.shape != (n,) or any(t.shape != (m,) for t in (onset, end, press, finger)) or
             finger.dtype != torch.long):
@@ -26,6 +29,7 @@ def finger_target_indices(now, onset, end, press, finger, target_mask=None):
     if not m:
         return dict(indices=torch.full((n, 4, 2), -1, device=now.device, dtype=torch.long),
                     valid=torch.zeros(n, 4, 2, device=now.device, dtype=torch.bool))
+    # 목표 M축을 손가락 4축에 배정한다. 선택 결과는 [N,4,2]의 tracking/next 순서다.
     assigned = finger[None] == torch.arange(1, 5, device=finger.device)[:, None]
     if target_mask is not None:
         if target_mask.shape != (n, m) or target_mask.dtype != torch.bool:
@@ -64,13 +68,11 @@ FINGER_REWARD_CONTRACT = dict(
 
 def finger_tracking_reward(now, onset, end, press, finger, delta, velocity,
                            candidate, actions, target_mask=None):
-    """Return rate[N], indices/valid/quality[N,4]; invalid indices are -1.
-
-    ``velocity`` and ``actions`` retain the existing aligned calling interface,
-    but never affect reward. No action, joint target or input tensor is changed.
-    The denominator includes song-present fingers even when they have no target
-    in the current window.
-    """
+    """rate[N]와 손가락별 indices/valid/quality[N,4]를 반환한다. 무효 인덱스는 -1이다.
+    
+    velocity와 actions는 기존 호출 인터페이스를 유지하지만 보상에는 영향을 주지 않는다.
+    행동·관절 목표·입력 텐서를 변경하지 않는다. 현재 시간창에 목표가 없어도
+    곡에 등장하는 손가락은 분모에 포함한다."""
     n, m = now.numel(), onset.numel()
     if (now.shape != (n,) or any(t.shape != (m,) for t in (onset, end, press, finger)) or
             delta.shape != (n, m, 3) or velocity.shape != delta.shape or
@@ -119,12 +121,11 @@ FINGER_COORDINATION_CONTRACT = dict(
 
 def finger_posture_reward(now, onset, end, press, finger, palm_quaternion,
                           segment_quaternion):
-    """Measure actual flexion and return two bounded rates, without mutation.
-
-    Segment order is index/middle/ring/pinky x finger1/2/3. Angles are a source
-    body-frame geometric definition, not native spherical DOF coordinates.
-    Source frames must first pass ``source_finger_frame_contract()`` at setup.
-    """
+    """실제 굽힘을 측정하고 입력 변경 없이 두 개의 유한한 보상률을 반환한다.
+    
+    마디 순서는 검지·중지·약지·소지 × finger1/2/3이다. 각도는 원본 몸체 좌표계의
+    기하 정의이며 native 구면 관절 자유도 좌표가 아니다. 설정 단계에서 원본 좌표계가
+    source_finger_frame_contract() 검사를 먼저 통과해야 한다."""
     n, m = now.numel(), onset.numel()
     if (now.shape != (n,) or any(t.shape != (m,) for t in (onset, end, press, finger)) or
             finger.dtype != torch.long or palm_quaternion.shape != (n, 4) or
@@ -167,8 +168,8 @@ def finger_posture_reward(now, onset, end, press, finger, palm_quaternion,
 B_PREPARATION_INPUT_DEGREES = [[25., 35., 12.], [28., 38., 14.],
                                [31., 41., 16.], [34., 44., 18.]]
 B_PREPARATION_SPREAD_DEGREES = [-14., -3., 3., 10.]
-# Measure the same forward-vector projection as finger_posture_reward;
-# MCP Exp([x,0,z]) does not give geometric flexion exactly equal to input x.
+# finger_posture_reward와 같은 전방 벡터 투영으로 측정한다.
+# MCP Exp([x,0,z])의 기하 굽힘각은 입력 x와 정확히 같지 않다.
 B_PREPARATION_ANGLES_DEGREES = [
     [math.degrees(math.atan2(x/math.hypot(x, z)*math.sin(math.radians(math.hypot(x, z))),
                             math.cos(math.radians(math.hypot(x, z))))), pip, dip]
@@ -178,7 +179,7 @@ FINGER_RECOVERY_SCHEMA = 'guitar_learning.left_finger_recovery.v1'
 
 
 def finger_recovery_config(value=None):
-    """Normalize the finite, explicitly tested recovery experiment options."""
+    """명시적으로 검증한 유한한 회복 실험 옵션을 정규화한다."""
     default = dict(schema=FINGER_RECOVERY_SCHEMA, standby_rate_per_s=.02,
                    shape_rate_per_s=0.)
     if value is None:
@@ -235,7 +236,7 @@ FINGER_SHAPE_CONTRACT = dict(
 
 
 def finger_preparation_gate(now, onset, end, press, finger, contact, distance, target_mask=None):
-    """Pure endpoint B eligibility shared by observation and reward callers."""
+    """관측과 보상이 공유하는 끝점 기준의 순수 B 대기 허용도를 구한다."""
     n, m = now.numel(), onset.numel()
     if (now.shape != (n,) or any(t.shape != (m,) for t in (onset, end, press, finger)) or
             finger.dtype != torch.long or contact.shape != (n, 4) or
@@ -263,7 +264,7 @@ def finger_preparation_gate(now, onset, end, press, finger, contact, distance, t
         previous_end = end.expand(n, 4, m).masked_fill(~past, -torch.inf).amax(-1)
         next_press = press.expand(n, 4, m).masked_fill(~future, torch.inf).amin(-1)
         gap = next_press-previous_end
-        # Infinite initial/final gaps use the normal lead, without inf-inf.
+        # 처음·마지막의 무한 간격은 inf-inf 없이 통상적인 준비 시간을 사용한다.
         finite_gap = torch.isfinite(gap)
         amount = torch.where(finite_gap, ((gap-.25)/.35).clamp(0, 1), 1.)
         lead = torch.where(finite_gap & (gap < .6), .4*gap, .35)
@@ -281,7 +282,7 @@ def finger_preparation_gate(now, onset, end, press, finger, contact, distance, t
 def finger_preparation_reward(now, onset, end, press, finger, palm_quaternion,
                               segment_quaternion, contact, distance, rate_per_s=.02,
                               target_mask=None):
-    """Independent B preference, with no mutation of control or note state."""
+    """제어·음 상태를 바꾸지 않고 손가락별 B 자세 선호 보상을 계산한다."""
     config = finger_recovery_config(dict(schema=FINGER_RECOVERY_SCHEMA,
         standby_rate_per_s=rate_per_s, shape_rate_per_s=0.))
     measured = finger_posture_reward(now, onset, end, press, finger,
@@ -302,7 +303,7 @@ def finger_preparation_reward(now, onset, end, press, finger, palm_quaternion,
 
 def finger_shape_reward(now, onset, end, press, finger, angles, valid, rate_per_s=0.,
                         target_mask=None):
-    """Optional tracking-time DIP/PIP preference; retain the existing selector."""
+    """기존 목표 선택기를 유지하며 선택적 추종 구간 DIP/PIP 자세 선호를 계산한다."""
     config = finger_recovery_config(dict(schema=FINGER_RECOVERY_SCHEMA,
         standby_rate_per_s=.02, shape_rate_per_s=rate_per_s))
     if angles.shape != (now.numel(), 4, 3) or valid.shape != angles.shape or valid.dtype != torch.bool:
@@ -321,7 +322,7 @@ def finger_shape_reward(now, onset, end, press, finger, angles, valid, rate_per_
 
 
 def _verify_source_frames(xml):
-    """Reject source changes that invalidate this specific four-finger frame."""
+    """이 네 손가락에만 적용되는 원본 좌표계 정의를 무효화하는 자산 변경을 거부한다."""
     bodies = {body.get('name'): body for body in xml.findall('.//body')}
     parents = {child.get('name'): body.get('name') for body in bodies.values() for child in body.findall('body')}
     for finger in FINGER_COORDINATION_CONTRACT['fingers']:
@@ -349,7 +350,7 @@ def _verify_source_frames(xml):
 
 
 def source_finger_frame_contract():
-    """Verify the pinned prepared human XML once at caller setup; no simulator."""
+    """호출자 설정 시 봉인된 준비 인체 XML을 한 번 검증하며 시뮬레이터는 사용하지 않는다."""
     import hashlib
     import xml.etree.ElementTree as ET
     from guitar_learning.runtime.prepared_reset_v1 import load_prepared_reset_contract

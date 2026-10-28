@@ -8,8 +8,11 @@ import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
 
-from guitar_learning.gpu.fingertip_pad import (load_fingertip_pad, _sample_patch,
-    pad_target_geometry, pad_tracking_reward, FINGERTIP_TRACKING_CONTRACT)
+from guitar_learning.gpu.contact import load_fingertip_pad
+from guitar_learning.gpu.contact import _sample_patch
+from guitar_learning.gpu.contact import pad_target_geometry
+from guitar_learning.gpu.contact import pad_tracking_reward
+from guitar_learning.gpu.contact import FINGERTIP_TRACKING_CONTRACT
 from guitar_learning.gpu.finger_reward import finger_tracking_reward
 
 

@@ -1,0 +1,87 @@
+{
+  "verdict": "PASS",
+  "summary": "문제없음",
+  "findings": [],
+  "review_date": "2026-10-28",
+  "CPU_only": true,
+  "GPU_executed": false,
+  "native_executed": false,
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_exploration_precheck_v1/probe.py": "9cb837c82c6e8b80d06f113465e595f3b26aba074c0ddeec0f4c4e2c8f08d040",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_exploration_precheck_v1/cpu_checks.py": "4276d78d429d80eab93bf2b4dca55985292a11d7267b008bd7fd17e975e9fc60",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_exploration_precheck_v1/PLAN.md": "8e856ea5627be5c7dc798c32526df90f11b3186390580d292f79e1ff2edfce17",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_exploration_precheck_v1/README.md": "de172a9efde26a1a5214e72295e7e9d505114be64570f5e9941feeb60ce5449b",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_exploration_precheck_v1/cpu_verification.json": "836788b66718ba6bbb9555005824c73ef1ab2f49bfa72f6a8c5c4f7a98c3fd01",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_exploration_precheck_v1/fresh_process_gate.json": "d3d6330fa9babd637de8b0cec8cf5e94554b83444e97a2caaf9f7779af2892c7",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_exploration_precheck_v1/cpu_inputs/commands.json": "dd21dd9928c946964eb4eddef0f32aff14628327163e1255fa6027665c53b504",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_exploration_precheck_v1/cpu_inputs/settings.json": "8fe711c963a542c4d19769982f601d8d794b537aacda3097b3e700b9834f237c",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_exploration_precheck_v1/cpu_inputs/execution_override.json": "699af1a5128050ae4cb48459fc102a7a5a02148ece669e5fdf11f88cce1af4ab"
+  },
+  "pre_review_pending_seal": {
+    "sha256": "6fd0de9a5e87e3d1a1ac93d39908f6e61034a267c03ffeb43716bd01bd9d42c4",
+    "input_count": 2115,
+    "canonical_input_pins_sha256": "3e640abf024a68868f3e8e6604298a553223924e05a52dd72c7e51040af8044a",
+    "scope": "검수 전 pending 본체 snapshot 식별값. 최종 seal의 review/status 추가와 whole-file SHA 순환을 만들지 않도록 reviewed_sha256에서 제외했다."
+  },
+  "resolved_issues": [
+    {
+      "issue": "GoalPool의 원 imitation.after가 호출하는 facade.phase delegate 누락",
+      "resolution": "phase=source.phase 추가. 원 imitation.before/after를 facade로 실제 호출하는 CPU 회귀로 확인했다. 이전5파일 byte/SHA는 before_review_fix_02/manifest.json에 보존됐다.",
+      "independent_retest_passed": true
+    }
+  ],
+  "checks": {
+    "Python38_AST2_pass": true,
+    "CPU_self_test_reproduces_saved_verification_exact": true,
+    "original_before_after_phase_callback_exact": true,
+    "original_strict_runner_load_precedes_override_hook_source_confirmed": true,
+    "only_finger_log_std_first4_changed": true,
+    "other72_state_other12_finger_std_other35_effective_std_mean_critics_exact": true,
+    "float32_log_exp_pipeline_exact": true,
+    "formula_effective_std_max_abs_residual": 2.0042655469315607e-09,
+    "requested_actual_sampling_flags_and_actor_RNG_separate": true,
+    "actual_modes": {
+      "deterministic": {
+        "calls": 2,
+        "requested_deterministic_true": 2,
+        "actual_deterministic_true": 2,
+        "actor_RNG_advances": 0
+      },
+      "stochastic": {
+        "calls": 2,
+        "requested_deterministic_true": 2,
+        "actual_deterministic_true": 0,
+        "actor_RNG_advances": 2
+      }
+    },
+    "goal_conversion_once_other35_action_columns_exact": true,
+    "model_after_override_frozen": true,
+    "original_primary_alias_cleanup_and_typedraw_secondary_error_fixtures_pass": true,
+    "existing_and_dangling_symlink_rejected_before_gate": true,
+    "metadata_contract_checkpoint_original_unchanged": true,
+    "old_model_RNG_frozen_callback_not_used_declared": true,
+    "checkpoint_writes": 0,
+    "runs_absent": true,
+    "progress_documents_excluded_from_runtime_pins": true,
+    "pending_keyset2115_unchanged_only_three_own_pins_changed": true
+  },
+  "fresh_gate_evidence": {
+    "reviewer_independent_pre_delta_process_exit0": true,
+    "delta_changes_gate_import_or_hash_logic": false,
+    "owner_post_delta_process_exit0_confirmed": true,
+    "stored_result": {
+      "stdlib_only": true,
+      "GPU_executed": false,
+      "modes": [
+        "deterministic",
+        "stochastic"
+      ]
+    }
+  },
+  "limits": [
+    "준비 검수는 native128 실제성과·105readback/scene 종료의 새 실측 또는 CUDA 전체 RNG 복원 성공을 뜻하지 않는다. 실제 실행은 원 runner의 original full strict load와 native verifier를 유지한다.",
+    "CPU 원본 load는 CUDA RNG topology mismatch를 그대로 거부했다. CPU 검증은 원 model state/identity 및 sampling/codec/error fixture 범위이며 새checkpoint를 저장하지 않았다.",
+    "원 schema/metadata/계약은 원 모델의 것으로 유지하고 선택4 std 및 실제 stochastic sampling은 execution_override.json에 명시한다. 원 모델·분포와 동일하다는 주장이 아니다.",
+    "수학적 sigma와 float32 log-exp effective sigma 및 Lsigma−nominal 잔차는 분리 기록한다. 표본상한·실제clip률·모션·학습 개선이나 최적sigma를 보장하지 않는다."
+  ]
+}

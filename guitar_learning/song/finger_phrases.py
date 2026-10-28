@@ -1,4 +1,7 @@
-"""Immutable views of the original song; no timing or target is rewritten."""
+"""원곡의 시각과 목표를 바꾸지 않는 불변 부분곡 보기를 구성한다.
+
+읽는 순서: 구절·목록 자료형 → 겹침 그룹과 구절 목록 생성 → 손가락별 균형 표본 선택.
+"""
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -22,7 +25,7 @@ class FingerPhrase:
     next_press_s: object
     duration_ticks: int
     score_offset_s: float
-    opportunities: tuple  # index, middle, ring, pinky counts
+    opportunities: tuple  # 검지·중지·약지·소지의 음 개수
 
     @property
     def fingers(self):
@@ -56,7 +59,7 @@ class FingerPhraseCatalog:
 
     @property
     def recovery_gaps(self):
-        """Original positive per-finger gaps, excluding synthetic preparation."""
+        """인위적으로 더한 준비 구간을 제외하고 원곡의 손가락별 양수 간격을 구한다."""
         targets = [dict(row) for row in self.source_targets]
         result = []
         for finger in range(1, 5):
@@ -84,7 +87,7 @@ class FingerPhraseCatalog:
 
     @classmethod
     def from_document(cls, document):
-        """Restore only an intact catalogue, not a newly interpreted schedule."""
+        """손상되지 않은 원래 목록만 복원하며 일정을 새로 해석하지 않는다."""
         expected = dict(document)
         fingerprint = expected.pop('fingerprint', None)
         if expected.get('schema') != SCHEMA or _sha(expected) != fingerprint:
@@ -98,20 +101,20 @@ class FingerPhraseCatalog:
                       json.dumps(expected['source_provenance'], sort_keys=True, allow_nan=False),
                       expected['preparation_s'], expected['tail_s'], expected['control_hz'])
         if catalog.document() != document:
-            # JSON arrays and Python tuples compare differently; compare the
-            # canonical representation used by the checkpoint contract.
+            # JSON 배열과 파이썬 튜플은 비교 결과가 다르므로 체크포인트 계약이 쓰는
+            # 표준 표현으로 비교한다.
             if _sha(catalog.document()) != _sha(document):
                 raise ValueError('phrase catalogue is not canonical')
         return catalog
 
 
 def build_phrase_catalog(task, *, preparation_s=3., tail_s=.5, control_hz=60):
-    """Keep overlap-closed groups and add short adjacent-group views.
-
-    Singleton groups are combined with a neighbour. Large overlap groups are
-    retained intact. A view is extended if its last end and the next press have
-    no valid local control boundary between them. Views can overlap; their ID
-    union, rather than their summed lengths, covers the original song once.
+    """겹침이 더 이어지지 않는 그룹을 유지하고 인접 그룹의 짧은 보기를 추가한다.
+    
+    음 하나뿐인 그룹은 이웃 그룹과 결합하고 큰 겹침 그룹은 나누지 않는다.
+    마지막 종료와 다음 압현 사이에 유효한 로컬 제어 경계가 없으면 보기를
+    늘린다. 보기끼리 겹칠 수 있으므로 길이의 합이 아닌 원 음표 ID의 합집합이
+    원곡을 한 번씩 포함한다.
     """
     if (isinstance(preparation_s, bool) or not math.isfinite(preparation_s) or
             preparation_s < 0 or isinstance(tail_s, bool) or
@@ -139,8 +142,8 @@ def build_phrase_catalog(task, *, preparation_s=3., tail_s=.5, control_hz=60):
         end = max(targets[i].end_s for i in indices)
         offset = start - preparation_s
         next_press = targets[groups[last + 1][0]].press_s if last + 1 < len(groups) else None
-        # An end exactly on a boundary requires the following boundary: the
-        # final note must finish before natural termination.
+        # 음 끝이 경계와 정확히 같으면 그다음 경계를 사용한다.
+        # 마지막 음은 자연 종료 전에 끝나야 한다.
         minimum = math.floor((end - offset) * control_hz + 1e-9) + 1
         maximum = (math.floor((next_press - offset) * control_hz + 1e-9)
                    if next_press is not None else None)
@@ -161,7 +164,7 @@ def build_phrase_catalog(task, *, preparation_s=3., tail_s=.5, control_hz=60):
                 break
             last += 1
         ranges.add((first, last))
-        # Additional continuous 2..6-note contexts; never split a closed group.
+        # 연속된 2~6음 문맥을 추가하되 겹침이 닫힌 그룹을 나누지 않는다.
         while last + 1 < len(groups):
             candidate = last + 1
             if sum(len(group) for group in groups[first:candidate + 1]) > 6:
@@ -190,7 +193,7 @@ def build_phrase_catalog(task, *, preparation_s=3., tail_s=.5, control_hz=60):
 
 
 class BalancedPhraseSampler:
-    """Round-robin finger buckets with explicit, checkpointable reset state."""
+    """다음 선택 상태를 체크포인트로 복원할 수 있는 손가락 묶음 순환 선택기다."""
     def __init__(self, catalog):
         self.catalog = catalog
         self.buckets = tuple(tuple(sorted(

@@ -9,7 +9,7 @@ from guitar_learning.song.reward_environment import build_environment
 from guitar_learning.song import progress
 from guitar_learning.song.quality import SongLedger
 from guitar_learning.tests import test_song_environment as baseline
-from guitar_learning.tests.test_skill_environment import LongRecordedSession
+from guitar_learning.tests.test_training_environment import LongRecordedSession
 
 
 class SongRewardV2EnvironmentTests(unittest.TestCase):

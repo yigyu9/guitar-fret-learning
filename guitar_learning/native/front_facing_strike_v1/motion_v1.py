@@ -2,7 +2,7 @@
 from pathlib import Path
 import numpy as np
 from ..initial_pose_noise_v1 import pose
-from ..lower_body_release_v1.common import read, save
+from guitar_learning.native.paths import read, save
 from ..elbow_wrist_strike_source_v1 import solve_pick
 from ..grounded_guitar_play_v1.motion_v1 import interpolate
 

@@ -16,11 +16,34 @@ import torch
 from guitar_learning.training import runner as train_parallel
 from guitar_learning.training import parallel, policy
 from guitar_learning.tool.training import train_legacy as start
-from guitar_learning.training.recording import digest
-from guitar_learning.tests.quality_fixtures import fixed_note_contract
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.training.training_log_io import digest
+from guitar_learning.tests.test_training_environment import LongRecordedSession
+from guitar_learning.training.policy import SpecialistPolicy
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def song_contract(folder, hand='left'):
+    from guitar_learning.core.control import default_profile
+    from guitar_learning.song.hand_environment import build_environment
+    sessions = []
+    def factory(config, out):
+        session = LongRecordedSession(config, out)
+        session.finger_control_description = dict(profile=default_profile(), applied=True,
+            scope='recorded interface fixture; not native PD evidence')
+        sessions.append(session)
+        return session
+    def contacts(scene):
+        return copy.deepcopy(sessions[-1].row()['native_contacts']['contacts'])
+    settings = start.settings_document(hand, device='cpu')
+    env = build_environment({}, Path(folder)/hand, role=hand,
+        bundle=settings['song_training']['bundle'], song=settings['song'],
+        session_factory=factory, contact_reader=contacts)
+    try:
+        env.reset()
+        return copy.deepcopy(env.contract)
+    finally:
+        env.close()
 
 
 class SimpleStartTests(unittest.TestCase):
@@ -71,24 +94,24 @@ runpy.run_module('guitar_learning.tool.training.train_legacy', run_name='__main_
         self.assertIn('--song', result.stdout)
         self.assertNotIn('--settings', result.stdout)
 
-    def test_selected_policy_keeps_other_hand_zero_on_actual_quality_contract(self):
+    def test_selected_policy_keeps_other_hand_zero_on_actual_song_contract(self):
         with tempfile.TemporaryDirectory() as folder:
             for hand, inactive in (('left', slice(33, 39)), ('right', slice(0, 33))):
-                contract = fixed_note_contract(folder, hand)
-                model = SpecialistPolicy(563, size='small', contract=contract,
+                contract = song_contract(folder, hand)
+                dimension = contract['observation']['dimension']
+                model = SpecialistPolicy(dimension, size='small', contract=contract,
                                          role=hand, frozen_partner=False)
-                inputs = (torch.zeros(2, 563), torch.zeros(2, 8, 24),
+                inputs = (torch.zeros(2, dimension), torch.zeros(2, 8, 24),
                           torch.zeros(2, 8, dtype=torch.bool), torch.zeros(2, 2, 24),
                           torch.zeros(2, 2, dtype=torch.bool))
                 action = model.act(*inputs)['action'].detach().numpy()
                 np.testing.assert_array_equal(action[:, inactive], 0.)
                 self.assertEqual(contract['termination']['preparation_seconds'], 0.)
-                self.assertEqual(contract['task']['duration_s'], 7.)
+                self.assertGreater(contract['task']['duration_s'], 30.)
 
     def test_dispatch_uses_current_worker_and_restores_bindings_on_interrupt(self):
         from guitar_learning.song import runtime as song_runtime
-        from guitar_learning.tool.training import train_musical_quality as quality
-        from guitar_learning.training import persistent_audit
+        from guitar_learning.training import parallel as persistent_audit
         settings = start.settings_document('right', num_envs=1, device='cpu')
         original_pool, original_policy = parallel.Pool, policy.Policy
         original_argv = sys.argv
@@ -110,7 +133,6 @@ runpy.run_module('guitar_learning.tool.training.train_legacy', run_name='__main_
                 patch.dict(sys.modules, {'isaacgym': SimpleNamespace()}), \
                 patch.object(original_pool, '__init__', capture_pool), \
                 patch.object(train_parallel, 'main', interrupt), \
-                patch.object(quality, 'run', side_effect=AssertionError('old transfer required')), \
                 patch.object(persistent_audit, 'finalize_persistent_run', side_effect=RuntimeError('cleanup fault')):
             args = SimpleNamespace(out=Path(folder)/'run', resume=None)
             before = copy.deepcopy(settings)
@@ -142,7 +164,7 @@ runpy.run_module('guitar_learning.tool.training.train_legacy', run_name='__main_
             self.assertEqual(json.loads(path.read_text()), settings)
             pins = json.loads((out/'inputs_before.json').read_text())
             self.assertEqual(pins[str(path)], digest(path))
-            self.assertIn(str(ROOT/'guitar_learning/training/start.py'), pins)
+            self.assertIn(str(ROOT/'guitar_learning/training/launch.py'), pins)
             self.assertTrue(all(Path(name).is_file() for name in pins))
             bundle = ROOT/'data/song_bundles/02_Jazz1-200-B_solo'
             self.assertEqual(seen[0]['bundle'], str(bundle))
@@ -184,37 +206,21 @@ runpy.run_module('guitar_learning.tool.training.train_legacy', run_name='__main_
         terminal = dict(notes, episode=dict(song=copy.deepcopy(notes['song'])))
         self.assertIn('per_note', runtime.compact(None, terminal, np.zeros(39))['episode']['song'])
 
-    def test_single_note_checkpoint_is_rejected_by_actual_hand_song_contract(self):
-        from guitar_learning.song.hand_environment import build_environment
-        from guitar_learning.tests.test_skill_environment import LongRecordedSession
+    def test_changed_song_contract_is_rejected_before_checkpoint_mutation(self):
         from guitar_learning.training.ppo import PPOTrainer
         with tempfile.TemporaryDirectory() as folder:
-            old = SpecialistPolicy(563, size='small', contract=fixed_note_contract(folder), role='left')
-            checkpoint = Path(folder)/'single.pt'
-            PPOTrainer(old).save(checkpoint, metadata=dict(scope='single_note'))
-            sessions = []
-            def factory(config, out):
-                from guitar_learning.core.finger_control import default_profile
-                session = LongRecordedSession(config, out)
-                session.finger_control_description = dict(profile=default_profile(), applied=True,
-                    scope='recorded interface fixture; not native PD evidence')
-                sessions.append(session)
-                return session
-            def contacts(scene):
-                return copy.deepcopy(sessions[-1].row()['native_contacts']['contacts'])
-            settings = start.settings_document('left', device='cpu')
-            env = build_environment({}, Path(folder)/'song', role='left',
-                bundle=settings['song_training']['bundle'], song=settings['song'],
-                session_factory=factory, contact_reader=contacts)
-            try:
-                env.reset()
-                policy = SpecialistPolicy(500, size='small', contract=env.contract, role='left')
-                before = {key: value.clone() for key, value in policy.state_dict().items()}
-                with self.assertRaisesRegex(ValueError, 'schema/architecture/input/control/config mismatch'):
-                    PPOTrainer(policy).load(checkpoint)
-                self.assertTrue(all(torch.equal(value, policy.state_dict()[key]) for key, value in before.items()))
-            finally:
-                env.close()
+            contract = song_contract(folder)
+            dimension = contract['observation']['dimension']
+            source = SpecialistPolicy(dimension, size='small', contract=contract, role='left')
+            checkpoint = Path(folder)/'song.pt'
+            PPOTrainer(source).save(checkpoint, metadata=dict(scope='complete_score'))
+            changed = copy.deepcopy(contract)
+            changed['task']['duration_s'] += 1.
+            model = SpecialistPolicy(dimension, size='small', contract=changed, role='left')
+            before = {key: value.clone() for key, value in model.state_dict().items()}
+            with self.assertRaisesRegex(ValueError, 'schema/architecture/input/control/config mismatch'):
+                PPOTrainer(model).load(checkpoint)
+            self.assertTrue(all(torch.equal(value, model.state_dict()[key]) for key, value in before.items()))
 
 
 if __name__ == '__main__':

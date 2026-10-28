@@ -31,7 +31,7 @@ def native_environment(spec, worker_id):
     kwargs = dict(spec.get('env_kwargs', {}))
     kwargs['session_factory'] = PersistentHeadlessPreparedSession
     if 'finger_control' in spec['song']:
-        from guitar_learning.core.finger_control import validate_profile
+        from guitar_learning.core.control import validate_profile
         from guitar_learning.runtime.finger_session import FlexibleLeftFingerSession
         if spec['specialist']['role'] != 'left':
             raise ValueError('flexible finger workers require the left hand')
@@ -42,8 +42,8 @@ def native_environment(spec, worker_id):
 
 
 def summarize_run(out):
-    from guitar_learning.training.recording import write
-    from guitar_learning.training.training_reports import run_evidence
+    from guitar_learning.training.training_log_io import write
+    from guitar_learning.training.training_log_io import run_evidence
     out = Path(out)
     report = json.loads((out/'report.json').read_text())
     data = run_evidence(out); stats = data['episode_stats']

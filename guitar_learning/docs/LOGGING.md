@@ -2,21 +2,66 @@
 
 ## 현재 기본 GPU 실행
 
-2026-10-24 저장 형식을 유지한다. 2026-10-26 현재 GPU왼손은 보상v22·552상태·선별 손가락 충돌·B복귀/추종 동기화·엄지 안내를 사용한다. 최초접촉 원장v7·이벤트v5와 아래 정본/체크포인트 구조는 유지한다. 기존 CPU·전문 경로의 파일 목록과 계약을 GPU에 그대로 적용하지 않는다. [현행 결과](/home/ajou/yigyu/3/docs/2026-10-26/guitar_learning_hand_contact_v22/README.md)를 따른다.
+2026-10-28 코드 기준. 기본 실행은 GPU 왼손 `finger-skill` v3(J 전용), 상태557·J33 공동 학습·매 tick K1 결정이다. 단계 구분3열과 계획 결정 길이1열을 제거해 상태는 기반552+남은시간1+손목종료4다. 실행은 `finger_skill_run.v2`, 정책은 `finger_skill_policy.v2`, 재개는 `finger_skill_resume.v3` 계약을 사용하며 이전 v1/v2 저장본은 받지 않는다. 보상 계약은 `guitar_learning.simplified_finger_reward.v2`, 음별 원장은 `guitar_learning.surface_note_ledger.v8`이다. 실행법은 [README](../README.md), 흐름은 [CODE_STRUCTURE](CODE_STRUCTURE.md)를 따른다. 아래 기본 로그와 뒤의 구형 GPU·CPU·전문 경로 기록을 구분한다.
+
+기본 연결32개(구현24개·초기화8개), 활성 Python281개다. 공용 로그·복구 도구와 CPU·오른손 song은 유지한다. 과거8실험·전문 환경·CLI·timing 영상 도구·매뉴얼은 [원문·SHA 보관 안내](../archive/20261028_before_legacy_retirement_v1/ARCHIVE_INDEX.md)로 옮겼으며, 아래 전문 경로 명령은 당시 로그 형식의 기록이다.
+
+최상위 `--out/settings.json`과 `--out/report.json`은 전체 실행을 설명한다. 실제 학습 로그·모델·계약은 **`--out/J/`**에 저장되며, 다음 표의 경로는 `J/` 기준이다.
 
 | 파일 | 저장 내용 |
 | --- | --- |
 | `initial.pt`, `checkpoint_*.pt`, `final.pt` | 모델·두 optimizer·난수·curriculum. 기본 추가 저장 간격250회. 초기·최종은 별도 저장하므로2,000회 실행은9개다. 명시한 `--checkpoint-every`가 우선한다. |
-| `checkpoint_manifest.jsonl` | 초기·중간·최종·생성된 복구 파일의 이름·학습 횟수·크기·SHA·저장 시간. `report.checkpoints`와 `timers.checkpoint_s`는 전체 성공 저장을 집계한다. 해시·manifest 쓰기 시간은 모델 저장 시간과 구분한다. |
+| `checkpoint_manifest.jsonl` | 초기·중간·최종·생성된 복구 파일의 이름·학습 횟수·크기·SHA·저장 시간. `report.checkpoints`는 전체 성공 저장을 집계하며 `save_s`는 모델 저장·fsync 시간이다. 해시·manifest 쓰기 시간은 포함하지 않는다. |
 | `learning_metrics.jsonl` | 업데이트당 한 줄의 PPO·보상 성분·단계·처리시간·에피소드 요약과 정본 ID. 중복 `update_*.json`은 생성하지 않는다. |
 | `episodes.jsonl` | 종료 에피소드의 상세 원장·동작·진단 정본. 다른 로그는 이 정본의 ID를 참조한다. |
-| `episode_metadata.json` | 첫 에피소드 발생 때 한 번 저장하는 공통 schema·계약·설명·목표/관절 이름 등. 실행 중 값이 바뀌면 오류로 처리한다. |
+| `episode_metadata.json` | 첫 에피소드 발생 때 한 번 저장하는 공통 schema·계약·설명·이름 등. 에피소드마다 달라지는 구간/전곡 scope는 각 에피소드에 유지한다. |
 | `transitions.jsonl.gz` | 원래 reward/cost/terminated/truncated 배열·에피소드 참조. gzip CRC와 sampled/logged/durable/committed/discarded 회계를 유지한다. |
+| `decisions.jsonl.gz` | 정책 결정과 실제 결정 길이·정책 버전·학습 반영 회계. 제어 전이 원장과 분리한다. |
 | `settings.json`, `training_contract.json`, `inputs_before.json` | 설정·학습 계약·입력 해시. |
-| `report.json`, `song_report.json`, `status.json`, `events.jsonl`, `resources.jsonl` | 완료·오류·원곡 종료 집계·진행·자원 감시. |
+| `report.json`, `status.json`, `events.jsonl`, `resources.jsonl` | 단계 완료·오류·진행·자원 감시. 최상위 report는 최종 모델과 단계 report를 연결한다. 기본 경로는 `song_report.json`을 생성하지 않는다. |
+| `gpu_scene_initial.json`, `gpu_scene_final.json` | GPU 장면 생성·종료 감사. |
 
 기본100회처럼 저장 간격보다 짧은 실행은 초기·최종만 남는다. 실패 복구 파일은 기존 유효 optimizer 경계에서만 생성한다. 평가 결과의 최고 모델은 이미 저장된 파일 경로로 지정하며 같은 모델을 별도로 복사할 필요가 없다. 최고 모델은 학습 보상만으로 정하지 않는다.
 
+### 9개 보상과 실패 비용 읽기
+
+| 보상항 | 로그 키 |
+| --- | --- |
+| 목표 패드 접근 | `song_left_approach` |
+| 최초 접촉 | `song_left_contact` |
+| 압현 유지 | `song_clean_hold` |
+| 압현 달성 | `song_left_success` |
+| 오압현 | `song_wrong_press` |
+| 음 수행 부족 | `song_performance_deficit` |
+| 대기 자세 | `song_finger_standby` |
+| 엄지 안내 | `song_thumb_support` |
+| 행동 변화 | `action_change` |
+
+`learning_metrics.jsonl`의 `reward_component_means`는 해당 수집 구간의 **환경×제어 전이당 항목 평균**이다. `episodes.jsonl`의 `reward_components`는 해당 종료 에피소드의 항목별 누적 보상이다. 전이는 H32 경계 이후에도 이어지므로, 한 업데이트에 종료된 에피소드 합과 그 업데이트의 평균이 직접 일치하지 않는다. 압축 전이 로그에는 전체 reward/cost만 남고 매 시점의 9개 항목 분해나 전체 관절 자세는 저장하지 않는다.
+
+`mean_reward`·`mean_cost`는 할인된 **정책 결정 구간 합의 평균**이며 `mean_reward_cost_scope`에 의미를 명시한다. 현재 K1에서는 결정 길이가1이지만, 제어 전이당 평균과 결정당 평균의 정의를 섞지 않는다. `update_index`와 갱신 후의 `optimizer_updates`도 구분한다.
+
+손목 안내와 물리 실패는 9개 보상항에 포함되지 않는다. 실패 시 비용을 한 번만 `5 + 2 × 남은 로컬 시간(초) + 남은 미관측 음 감점 예산`으로 부과한다. 에피소드의 `cost_components`는 `termination_base`, `termination_remaining_time`, `termination_remaining_negative_note_budget`로 분해하며 `running_physics`는0이다. `termination.physical_failure`·`termination.wrist_failure`를 함께 확인한다. 둘이 겹쳐도 비용은 중복 부과하지 않는다.
+
+음별 최초 접촉 예산은0.25b, 압현 유지 예산은1b, 압현 달성은0.25b다. b는 선택 음을 손가락별로 균형화한 가중치다. 접촉 진행률은 실제 지급액과 다르며 지급은 위 보상 로그에서 확인한다. 음 수행 부족은 누락과 연속 유지 부족 중 큰 부족률로 계산하는 하나의 항목이다. 자세한 식·종료 문턱은 [보상·종료 문서](/home/ajou/yigyu/3/docs/2026-10-26/왼손보상구조/12_v25보상단순화와종료.md)를 따른다.
+
+손목 종료v2는 안내 영역 밖 추가3cm 초과 시간을 누적해1.5초에 종료한다. 초기3초 유예가 있고, 활성 상태에서2~3cm로 돌아오면 누적 시간을 초당1초씩 줄이며2cm 이내면 초기화한다. 심각 이탈10cm 이상·0.10초는 유예 중에도 적용한다. 물리240Hz에서 측정하고60Hz 제어 경계에서 종료한다. 엄지 안내v3는 실제 face가 참조하는 연주용 neck1의 유한 뒷면만 사용하며 최대0.02/초다. 두 계약의 실제 값은 `training_contract.json`에 남는다.
+
+### 구간/전곡과 완료 판정
+
+`exposure_transitions`는 해당 업데이트, `cumulative_exposure_transitions`는 누적 반영 전이를 `phrases`와 `full_song`으로 나눈다. 처음 계획한 전이 예산의25% 반영 뒤 **다음 reset부터** 전곡으로 바뀌므로 실제 노출이 정확히25/75는 아니다. 성공률·달성 음 수는 에피소드의 scope와 선택 음 분모를 함께 비교한다.
+
+`completed_episode_ids`와 `episode_summary`는 종료 에피소드의 정본을 참조·요약한다. `report.completed`와 `lifecycle_verified`는 실행 절차·입력·장면 종료 검사를 뜻하며 연주 성공이 아니다. 접촉 후보도 실제 현 압력·음향의 인증이 아니다. 최고 모델은 별도의 동일 scope 평가에서 고르고 체크포인트 SHA·평가 분모·물리/손목 종료를 함께 보고한다.
+
+### 읽기와 검증 범위
+
+`guitar_learning.training.gpu_log_records`의 `iter_episode_rows`, `iter_learning_metrics`, `iter_gpu_transitions`로 `J/`의 정본과 메타데이터·참조를 스트리밍으로 읽는다. 원시 전이와 결정 journal의 sampled/logged/durable/committed/discarded를 따로 확인한다. 로그 존재만으로 PPO 반영을 추정하지 않는다. 재개는 동일 소스·자산·전체 계약을 엄격히 검사하며 PhysX solver 중간 상태를 복원하지 않는다.
+
+현재 `tool.inspect_gpu_training_log`는 구형 song GPU 형식의 `completed_episodes`·`report.updates` 등을 요구한다. 기본 finger-skill runner의 `completed_episode_ids`·단계 report 구조와 달라 **현재 기본 로그의 검증 명령으로 사용할 수 없다**. 아래 명령과 v19/v22·CPU 항목은 각각의 과거 형식에 한정한다. 이 문서 갱신에서 검사 도구나 학습 코드는 변경하지 않았다.
+
+## 이전 song GPU 로그: v19/v22 재현 기록
+
+이 절은 상태552·보상v22와 이전 최초접촉 원장v7에 관한 기록이다. [당시 결과](/home/ajou/yigyu/3/docs/2026-10-26/guitar_learning_hand_contact_v22/README.md)의 수치·파일 구조를 보존한다. 아래0.5b 예산·19개 공용 보상키는 현행 기본의0.25b·9개 보상키와 다르다.
 
 ### v19 최초접촉 원장과 진단
 
@@ -24,7 +69,7 @@ GPU왼손 `surface_note_ledger.v7`에 현재 `contact_streak`, 최장 `best_cont
 
 관측 events.v5는 GPU왼손 토큰12/13을 현재 접촉 진행률/소진 예산 진행률로 사용한다. 토큰에서 누적held 관측을 교체했지만 원장과 보고서의 누적held는 보존한다. 진단 도구의 정적목표·고정/자유 대조는 일반 학습 episodes와 구분하며, 240Hz 원시와60Hz 자세는 사전 지정 대표환경만 저장한다. [구현·검증 범위](/home/ajou/yigyu/3/docs/2026-10-25/guitar_learning_press_acquisition_v1/README.md)를 따른다.
 
-### 새 로그 읽기와 검증
+### 구형 song GPU 로그 읽기와 검증
 
 ```bash
 python -m guitar_learning.tool.inspect_gpu_training_log --run /absolute/path/to/run
@@ -51,12 +96,12 @@ reset준비상태자체는물리표본이아니다. H32에서원장·누적목�
 
 사용자 요청으로 이전 버전의 큰 원시 로그 일부를 삭제했다. [삭제 목록·크기·SHA](/home/ajou/yigyu/3/docs/2026-10-24/guitar_learning_compact_logging_v1/cleanup_manifest.json)에 정확한 범위를 남겼다. 체크포인트·영상·분석 보고서·계약과 당시 최신이던 v17 실행은 보존했다. 과거 보고서는 당시 검증 결과이며 삭제된 원시 로그를 재검사했다는 뜻이 아니다.
 
-## 기존 CPU·전문 음악 품질 경로
+## 과거 CPU·전문 음악 품질 로그 기록
 
 
-2026-10-19. `guitar_learning.tool.training.train_musical_quality` 명령과 기존 학습 설정을 사용하면 기록이 적용된다. 정책·관측563·행동39·보상·성공식·물리 조건·strict resume 계약은 바꾸지 않았다. 앞2초 정책 준비와 전체7초도 유지한다.
+2026-10-19 당시 `guitar_learning.tool.training.train_musical_quality` 명령과 학습 설정의 로그 형식이다. 이 전문 CLI는 보관했으며 현행 song·CPU 진입점은 [도구 안내](../tool/README.md)를 따른다. 아래563상태·행동39·성공식·앞2초 정책 준비와 전체7초는 당시 계약의 기록이다.
 
-## 먼저 볼 파일
+### 먼저 볼 파일
 
 | 파일 | 용도 |
 | --- | --- |
@@ -70,7 +115,7 @@ reset준비상태자체는물리표본이아니다. H32에서원장·누적목�
 
 기본 standard 종료 보고서의 `episodes` 배열은 비워 두고 `episode_records`로 원자료를 참조한다. 완료 수·성공 수는 누적 counter에서 가져온다. 진단 모드/과거 로그 호환 경로는 상세 배열을 제공할 수 있다. `timing_report`의 단계 성공은 현행 품질 gate를 포함하며 `timing_only_successful_episodes`와 구분한다.
 
-## 지표 의미
+### 지표 의미
 
 - 역할·stage·시간창·목표별 분모를 분리한다. 평가 에피소드 0회이면 성공률은 `null`이다. 비활성 손의 품질 요약은 `null`이다.
 - 보상 항목과 cost는 전이 증분을 합한다. wrong/missing/late 시간 및 타현 횟수는 종료 시 누적값을 한 번만 집계한다.
@@ -80,7 +125,7 @@ reset준비상태자체는물리표본이아니다. H32에서원장·누적목�
 - `actor_loss` 등 기존 최상위 loss와 norm은 호환을 위한 마지막 미니배치 값이다. `*_last`로 의미를 명시하고 `diagnostics.minibatches`에 표본 가중 평균·최대를 제공한다. KL 거부 시도는 별도다.
 - `diagnostics.advantages`는 reward/cost 및 cost weight 적용 후 규모를, `post_update`는 전체 rollout ratio/clip fraction, 활성 손33/6채널의 std·latent Gaussian entropy·포화율, critic MSE/EV를 제공한다. entropy는 tanh 행동의 entropy가 아니다. target 분산0의 EV는 `null`이다.
 
-## 저장 경계와 중단
+### 저장 경계와 중단
 
 `transitions.jsonl.gz`는 표준 gzip으로 읽을 수 있는 연결된 gzip member다. 60개 제어 tick(시뮬레이션1초), 에피소드 종료, 수집 끝, 정상/처리된 예외 종료에서 member를 닫고 file flush/fsync한다. `logging_contract.json`과 gzip metadata sidecar에 형식을 기록한다.
 
@@ -103,7 +148,7 @@ worker 내부에서 죽어 부모에게 반환되지 않은 일부 물리 표본
 
 완결 member의 CRC를 통과한 prefix만 사용하고 오류 원인을 남긴다. 단일 member였던 과거 gzip이 잘리면 검증된 prefix가 0일 수 있다. 복구 요약은 PPO commit 수나 체크포인트 유효성을 추정하지 않는다. 원 로그·모델을 변경하거나 학습을 자동 재개하지 않는다.
 
-## 상세도와 모델 보관
+### 상세도와 모델 보관
 
 설정 JSON에 다음 선택 항목을 추가할 수 있다. 생략 시 아래 값이 기본이다.
 
@@ -115,14 +160,14 @@ worker 내부에서 죽어 부모에게 반환되지 않은 일부 물리 표본
 
 최종 업데이트에는 `final.pt`만 새로 저장한다. 중간 주기 checkpoint와 최종 상태가 model·optimizer·RNG·계약까지 정확히 같으면 같은 실제 파일을 hardlink로 참조한다. `final_checkpoint.json`에 정본 출처와 최종 metadata를 남긴다. hardlink에는 주기 checkpoint의 payload metadata가 유지되며 최종 metadata는 manifest가 정본이다. 모델·optimizer·RNG를 유지하므로 기존 strict resume가 가능하다. 과거 모델 파일은 삭제하지 않는다.
 
-## 평가와 성능 해석
+### 평가와 성능 해석
 
 `evaluate_musical_quality`는 `evaluation_metrics.json`도 남겨 결정적 평가, 체크포인트 SHA·업데이트 수·역할·완료 분모를 기록한다. actor 이전 초기화의 과거 optimizer 업데이트를 새 정책의 학습량으로 상속하지 않는다. `configured_seed`는 설정 출처이고 evaluator가 이를 명시적으로 reseed했다는 뜻은 아니다. strict 평가에는 checkpoint RNG 복원이 적용된다. 평가를 매 학습 업데이트마다 자동 실행하지는 않는다.
 
 기록 encode/gzip write/fsync 시간과 모델 저장 시간은 별도로 남긴다. 장치 수준 IO 시간이나 worker 전체 물리 계산만의 시간은 아니다. 새 기록이 빨라졌다고 단정하지 않는다.
 
-## 구현·보관·검증
+### 구현·보관·검증
 
-- 생산: `guitar_learning/training/training_metrics.py`, `guitar_learning/training/training_log_io.py`, `guitar_learning/training/training_log_format.py`, `guitar_learning/training/training_reports.py`, `guitar_learning/training/ppo_diagnostics.py`와 기존 실행기 연결.
+- 생산: `guitar_learning/training/training_metrics.py`, `guitar_learning/training/training_log_io.py`, `guitar_learning/training/ppo.py`와 기존 실행기 연결.
 - 이전 코드157파일: `archive/20261019_before_logging_improvements/manifest.json`의 경로/SHA로 확인한다.
 - 실제 검증 결과: [로그 개선 결과](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_logging_improvements_v1/README.md).

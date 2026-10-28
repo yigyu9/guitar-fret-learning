@@ -18,14 +18,15 @@ def main():
     from isaacgym import gymapi
     import numpy as np
     import torch
-    from guitar_learning.training.gpu_pool import GpuPool,FIELDS
+    from guitar_learning.training.rollout import GpuPool
+    from guitar_learning.training.rollout import FIELDS
     from guitar_learning.training.ppo import PPOTrainer,PPOConfig
-    from guitar_learning.skills.specialist_policy import SpecialistPolicy
+    from guitar_learning.training.policy import SpecialistPolicy
     from guitar_learning.song.curriculum_runtime import CurriculumCoordinator
     from guitar_learning.tool.validation.hand_contact_comparison import install_ablation
     from guitar_learning.tool.validation.hand_contact_probe import GraphicsGym
-    from guitar_learning.training.recording import digest
-    from guitar_learning.training import json_io
+    from guitar_learning.training.training_log_io import digest
+    from guitar_learning.training import training_log_io as json_io
 
     out=args.out.resolve();out.mkdir(parents=True,exist_ok=False)
     run=args.run.resolve();settings=json.loads((run/'settings.json').read_text())

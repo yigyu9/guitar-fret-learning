@@ -11,8 +11,8 @@ import torch
 from guitar_learning.tool.validation.rollout import RolloutCollector
 from guitar_learning.song.environment import build_environment
 from guitar_learning.song.measurement import SongMeasurement
-from guitar_learning.tool.experiments.song.policy import SongPolicy
-from guitar_learning.tests.test_skill_environment import LongRecordedSession
+from guitar_learning.training.policy import Policy
+from guitar_learning.tests.test_training_environment import LongRecordedSession
 
 
 SONG = dict(schema='guitar_learning.song.v1', pre_roll_s=3., tail_s=.5,
@@ -129,7 +129,7 @@ class SongEnvironmentTests(unittest.TestCase):
     def test_rollout_boundaries_do_not_reset_continuous_score(self):
         env, sessions = self.make_environment()
         env.reset()
-        collector = RolloutCollector(SongPolicy(500, size='small', contract=env.contract), env)
+        collector = RolloutCollector(Policy(500, size='small', contract=env.contract), env)
         first, completed_first = collector.collect(2)
         session = sessions[0]
         second, completed_second = collector.collect(2)

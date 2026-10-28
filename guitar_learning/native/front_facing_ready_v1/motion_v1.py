@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 from ..initial_pose_noise_v1 import pose
-from ..lower_body_release_v1.common import read, save
+from guitar_learning.native.paths import read, save
 from ..grounded_guitar_release_v1.motion_v1 import WEIGHTS, smoothstep, solve_wrist
 from ..front_facing_strike_v1.motion_v1 import pick_goal, command_gate
 from ..front_facing_strike_v1.motion_v2 import solve_pick_oriented

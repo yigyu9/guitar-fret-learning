@@ -4,9 +4,10 @@ import unittest
 
 import torch
 
-from guitar_learning.gpu.finger_skill_diagnostics import PHASES, SkillEpisodeDiagnostics
-from guitar_learning.gpu.geometry import apply
-from guitar_learning.music_task import ScoreTarget
+from guitar_learning.gpu.episode_diagnostics import PHASES
+from guitar_learning.gpu.episode_diagnostics import SkillEpisodeDiagnostics
+from guitar_learning.gpu.control import apply
+from guitar_learning.song.task import ScoreTarget
 from guitar_learning.song.task import SongTask
 
 

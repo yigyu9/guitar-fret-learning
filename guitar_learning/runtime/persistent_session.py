@@ -10,7 +10,7 @@ import numpy as np
 from guitar_learning.runtime import headless_session
 from guitar_learning.runtime.headless_session import HeadlessPreparedSession, _physics_signature
 from guitar_learning.runtime.prepared_reset_v1 import _restore_once, _state_all, load_prepared_reset_contract
-from guitar_learning.training.recording import write
+from guitar_learning.training.training_log_io import write
 
 
 _COUNTED_APIS = ('create_sim', 'create_env', 'load_asset', 'destroy_sim')

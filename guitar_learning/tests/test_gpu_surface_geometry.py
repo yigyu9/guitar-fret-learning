@@ -3,7 +3,7 @@ import unittest
 
 import torch
 
-from guitar_learning.gpu.geometry import surface_target_geometry
+from guitar_learning.gpu.contact import surface_target_geometry
 
 
 class SurfaceTargetGeometryTests(unittest.TestCase):

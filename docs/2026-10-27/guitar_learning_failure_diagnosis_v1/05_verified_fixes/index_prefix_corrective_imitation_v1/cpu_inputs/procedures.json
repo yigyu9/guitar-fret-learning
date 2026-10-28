@@ -1,0 +1,88 @@
+[
+  {
+    "schema": "diagnostic.index_prefix_corrective_initialization.v1",
+    "seed": 7,
+    "steps": 1000,
+    "batch_size": 192,
+    "per_phase": 32,
+    "learning_rate": 0.0003,
+    "gradient_norm": 0.5,
+    "loss": "mean square of original tanh(mean) selected4 minus requested reference action; no atanh/clipping",
+    "train_envs": [
+      0,
+      1,
+      2
+    ],
+    "heldout_envs": [
+      3
+    ],
+    "phases": [
+      "A_approach",
+      "A_hold",
+      "release",
+      "move",
+      "close",
+      "B_hold"
+    ],
+    "trainable_prefixes": [
+      "finger_encoder.",
+      "finger_heads.index."
+    ],
+    "unchanged": "original PrefixPolicy architecture/environment/currentgoal guard/std/reward; other parameter values exact",
+    "checkpoint": "new initialization metadata schema; new original PPO optimizers empty/updates0; no supervised optimizer inheritance",
+    "scope": "same-scene heldout observation check, not independent seeds/generalization/RL-only/free guitar",
+    "condition": "reference_only",
+    "additional_steps": 1000,
+    "total_supervised_steps": 2000,
+    "starting_checkpoint": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/runs/fit/initial.pt",
+    "starting_checkpoint_sha256": "162c617a28e548757bea8b0721c13c740d452fc430ae1601f01ed8411e2e480a",
+    "source_mix": "16 native reference +16 native reference per phase",
+    "sampling": "same seed7/6phases/two16-with-replacement draws; env0..2 only; env3 heldout same-scene",
+    "label_manifest_sha256": "a8ca3f3f3be7abd29b2fcd0c789f03d359231694831208821d0ce3ab1d14607c",
+    "label_arrays_sha256": "95d79f699ca7e54f2b0ae9dac78b93b77af5fd8e37843a7057cc0243356864a2",
+    "origin_scope": "NN actual/requested/executed remains original; shadow reference request is computed offline and never certified as executed"
+  },
+  {
+    "schema": "diagnostic.index_prefix_corrective_initialization.v1",
+    "seed": 7,
+    "steps": 1000,
+    "batch_size": 192,
+    "per_phase": 32,
+    "learning_rate": 0.0003,
+    "gradient_norm": 0.5,
+    "loss": "mean square of original tanh(mean) selected4 minus requested reference action; no atanh/clipping",
+    "train_envs": [
+      0,
+      1,
+      2
+    ],
+    "heldout_envs": [
+      3
+    ],
+    "phases": [
+      "A_approach",
+      "A_hold",
+      "release",
+      "move",
+      "close",
+      "B_hold"
+    ],
+    "trainable_prefixes": [
+      "finger_encoder.",
+      "finger_heads.index."
+    ],
+    "unchanged": "original PrefixPolicy architecture/environment/currentgoal guard/std/reward; other parameter values exact",
+    "checkpoint": "new initialization metadata schema; new original PPO optimizers empty/updates0; no supervised optimizer inheritance",
+    "scope": "same-scene heldout observation check, not independent seeds/generalization/RL-only/free guitar",
+    "condition": "corrective_mixed",
+    "additional_steps": 1000,
+    "total_supervised_steps": 2000,
+    "starting_checkpoint": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_imitation_warmstart_v1/recovery_v1/runs/fit/initial.pt",
+    "starting_checkpoint_sha256": "162c617a28e548757bea8b0721c13c740d452fc430ae1601f01ed8411e2e480a",
+    "source_mix": "16 native reference +16 saved NN observation counterfactual request per phase",
+    "sampling": "same seed7/6phases/two16-with-replacement draws; env0..2 only; env3 heldout same-scene",
+    "label_manifest_sha256": "a8ca3f3f3be7abd29b2fcd0c789f03d359231694831208821d0ce3ab1d14607c",
+    "label_arrays_sha256": "95d79f699ca7e54f2b0ae9dac78b93b77af5fd8e37843a7057cc0243356864a2",
+    "origin_scope": "NN actual/requested/executed remains original; shadow reference request is computed offline and never certified as executed"
+  }
+]

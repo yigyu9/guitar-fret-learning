@@ -1,4 +1,4 @@
-"""Explicit legacy song/CPU/right-hand and v24 R/F/J training."""
+"""기존 song 곡 학습의 CPU·GPU·오른손 실행 진입점."""
 import argparse
 import copy
 from functools import partial
@@ -8,11 +8,12 @@ import sys
 from unittest.mock import patch
 
 
-from guitar_learning.training.launch_settings import DEFAULT_SONG, settings_document as build_settings
+from guitar_learning.training.launch import DEFAULT_SONG
+from guitar_learning.training.launch import build_settings as build_settings
 
 
 def settings_document(hand, *, learning_family='song', **options):
-    if learning_family not in ('song', 'finger-skill-v24'):
+    if learning_family != 'song':
         raise ValueError('Current finger-skill training uses python -m guitar_learning.train')
     return build_settings(hand, learning_family=learning_family, **options)
 
@@ -26,8 +27,8 @@ def run(settings, args):
         return run_gpu(settings, args)
     from guitar_learning.training import runner as train_parallel
     from guitar_learning.training import parallel, policy
-    from guitar_learning.training.persistent_audit import finalize_persistent_run
-    from guitar_learning.skills.specialist_policy import SpecialistPolicy
+    from guitar_learning.training.parallel import finalize_persistent_run
+    from guitar_learning.training.policy import SpecialistPolicy
     from guitar_learning.song.runtime import native_environment, summarize_run
     hand = settings['specialist']['role']
     if hand not in ('left', 'right') or any(
@@ -95,15 +96,6 @@ def main():
                         help='GPU left: enable separate experimental0.004/s DIP-PIP shape preference')
     parser.add_argument('--finger-action-mode', choices=('position', 'incremental'),
                         help='GPU left: incremental targets (default); position is an experimental comparison arm')
-    parser.add_argument('--learning-family', choices=('song', 'finger-skill-v24'), default='song',
-                        help='legacy song (default) or split R/F/J v24; current training uses guitar_learning.train')
-    parser.add_argument('--skill-phase', choices=('auto', 'R', 'F', 'J'), default='auto',
-                        help='new family: automatic R/F/J or one explicit diagnostic phase')
-    parser.add_argument('--skill-exploration', choices=('independent', 'correlated'), default='independent')
-    parser.add_argument('--skill-hold-ticks', type=int, choices=(1, 3, 6), default=1,
-                        help='new family F only: maximum decision ticks, shortened at score boundaries')
-    parser.add_argument('--skill-scope', choices=('phrases', 'full_song'),
-                        help='explicit single-phase comparison scope; automatic stages choose their own')
     args = parser.parse_args()
     for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
         os.environ[name] = '1'
@@ -112,9 +104,7 @@ def main():
         device=args.device, seed=args.seed, horizon=args.horizon, size=args.size, physics=args.physics,
         checkpoint_every=args.checkpoint_every, finger_standby_rate=args.finger_standby_rate,
         finger_shape=args.finger_shape, finger_action_mode=args.finger_action_mode,
-        learning_family=args.learning_family, skill_phase=args.skill_phase,
-        skill_exploration=args.skill_exploration, skill_hold_ticks=args.skill_hold_ticks,
-        skill_scope=args.skill_scope)
+        learning_family='song')
     return run(settings, args)
 
 

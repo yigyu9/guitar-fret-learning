@@ -1,1 +1,1 @@
-"""Internal native guitar simulation implementation."""
+"""프로젝트 내부의 네이티브 기타 시뮬레이션 구현."""

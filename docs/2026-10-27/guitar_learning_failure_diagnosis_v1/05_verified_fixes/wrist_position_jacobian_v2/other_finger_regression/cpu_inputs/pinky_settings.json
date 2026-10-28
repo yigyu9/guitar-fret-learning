@@ -1,0 +1,321 @@
+{
+  "num_envs": 4,
+  "horizon": 32,
+  "updates": 1,
+  "device": "cuda:0",
+  "seed": 7,
+  "size": "large",
+  "initial_std": 0.1711710544767014,
+  "stage": "D",
+  "checkpoint_every": 50,
+  "max_wall_seconds": null,
+  "min_available_memory_gib": 4.0,
+  "heartbeat_seconds": 10.0,
+  "resource_interval_seconds": 5.0,
+  "worker_timeout_seconds": 300.0,
+  "music": {
+    "reward_mode": "legacy",
+    "goal_event_indices": null
+  },
+  "logging": {
+    "detail": "standard",
+    "save_first_rollout": false
+  },
+  "start_event_index": 0,
+  "phrase_events": 66,
+  "tempo_scale": 1.0,
+  "ppo": {
+    "actor_lr": 3e-05,
+    "value_lr": 0.0003,
+    "gamma": 0.99,
+    "cost_gamma": 1.0,
+    "gae_lambda": 0.98,
+    "clip_ratio": 0.2,
+    "cost_weight": 1.0,
+    "epochs": 2,
+    "minibatch_size": 4096,
+    "max_grad_norm": 0.5,
+    "target_kl": 0.02,
+    "kl_retries": 3,
+    "retry_lr_factor": 0.25,
+    "episode_cost_budget": null,
+    "lambda_lr": 0.0,
+    "advantage_normalization": "joint"
+  },
+  "physics_backend": {
+    "schema": "guitar_learning.gpu_batch.v3",
+    "engine": "GPU PhysX",
+    "tensor_pipeline": "cuda",
+    "control": "batched_tensor",
+    "measurement": "gpu_surface_loaded.v1",
+    "cpu_checkpoint_compatible": false
+  },
+  "specialist": {
+    "role": "left",
+    "left_checkpoint": null,
+    "right_checkpoint": null
+  },
+  "song": {
+    "schema": "guitar_learning.song.v1",
+    "pre_roll_s": 3.0,
+    "tail_s": 0.5,
+    "window_s": 0.5,
+    "left_fraction": 0.4,
+    "finger_action_mode": "incremental",
+    "surface_approach_gamma": 0.99,
+    "finger_recovery": {
+      "schema": "guitar_learning.left_finger_recovery.v1",
+      "standby_rate_per_s": 0.02,
+      "shape_rate_per_s": 0.0
+    },
+    "left_curriculum": {
+      "schema": "guitar_learning.gpu_left_surface_curriculum.v1",
+      "window": 256,
+      "min_episodes": 256,
+      "step": 0.1,
+      "safe_threshold": 0.9,
+      "near_threshold": 0.2,
+      "contact_threshold": 0.2,
+      "near_distance_m": 0.01,
+      "near_required_s": 0.1,
+      "weights": {
+        "wrist": [
+          0.2,
+          0.1,
+          0.05
+        ],
+        "contact": [
+          0.5,
+          1.0,
+          1.0
+        ],
+        "timing": [
+          0.5,
+          1.0,
+          2.0
+        ],
+        "approach": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "weights_scope": "positive_terms_and_wrist_region_penalty",
+      "interpolation": "linear_surface_approach_contact_hold_transition",
+      "failed_episode_metrics": "zeros",
+      "finger_gate": "all_present_fingers"
+    },
+    "finger_control": {
+      "schema": "guitar_learning.flexible_left_fingers.v1",
+      "finger_rate_rad_s": 4.0,
+      "finger_smoothing_alpha": 0.45,
+      "finger_stiffness": 12.0,
+      "finger_damping": 1.5,
+      "thumb_stiffness": 8.0,
+      "thumb_damping": 1.25,
+      "scope": "left21_native_joint_limits"
+    },
+    "short_learning": {
+      "schema": "guitar_learning.short_finger_learning.v2",
+      "finger": 4,
+      "mode": "incremental",
+      "guitar_mode": "fixed",
+      "learned_action_indices": [
+        29,
+        30,
+        31,
+        32
+      ],
+      "learned_action_names": [
+        "LH:pinky1_x",
+        "LH:pinky1_z",
+        "LH:pinky2",
+        "LH:pinky3"
+      ],
+      "teacher": {
+        "schema": "short_finger_teacher.v2",
+        "condition": "fixed_wrist_pose",
+        "source_target_id": "event-000021/string-3/note-21",
+        "finger": 4,
+        "finger_name": "pinky",
+        "arm_targets_rad": {
+          "L_Thorax_x": 0.08670151978731155,
+          "L_Thorax_y": 0.09586234390735626,
+          "L_Thorax_z": 0.16894418001174927,
+          "L_Shoulder_x": 0.3912215530872345,
+          "L_Shoulder_y": -0.1458062380552292,
+          "L_Shoulder_z": 1.5432333946228027,
+          "L_Elbow_x": -2.0012898445129395,
+          "L_Elbow_y": -1.1610645055770874,
+          "L_Elbow_z": 1.0686495304107666,
+          "L_Wrist_x": 0.006083689164370298,
+          "L_Wrist_y": -0.7630900740623474,
+          "L_Wrist_z": 0.3074469566345215
+        },
+        "ramp_s": 2.0,
+        "wrist_position_G_m": [
+          0.0707861086516648,
+          -0.07391831384606738,
+          -0.07729123865415158
+        ],
+        "wrist_quaternion_G_xyzw": [
+          0.7848625472424335,
+          0.2902728605212476,
+          0.4714898993637371,
+          0.2782619686175324
+        ],
+        "source_evidence": {
+          "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/02_contact_reward/teacher_fixed_B_export/inputs_before.json": "3d237f39c8f4b99ecb7faf87985bded462d89148d6d1378fe2b1d8375b6a73ca",
+          "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/02_contact_reward/teacher_fixed_B_export/report.json": "8ce8b36e09736fe5b048c74d2b95def1d062d288adc4cb6adef0bfb654dd488c",
+          "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/02_contact_reward/teacher_fixed_B_export/teacher_trace60.npz": "c29f6341e34d42267a44680b5a674273c5a68c43b58bdac3e838a205ce746462",
+          "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/02_contact_reward/teacher_fixed_B_export/metadata.json": "9fdb4d92dbb7a156c549a44d7f4b3a447136d79d252e9beed74ed59b0495815e",
+          "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/02_contact_reward/teacher_fixed_B_export/poses60.npz": "5ff454dae77bd84551057df7016268729d61f33d2ae8519fba4d155ea6b53241",
+          "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/03_short_learning/other_finger_precheck_v3/build_candidates.py": "98c54c81ac2464bf61fd121974954e27afa53df53c72f496ed1a573a81c05853",
+          "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/03_short_learning/other_finger_precheck_v3/run_prechecks.py": "358f14f9a881ae52780138bd0aa951c66e27d1b5d70d1cfa1e41e024cddeb000",
+          "/home/ajou/yigyu/3/guitar_learning/assets/tab2body/assets/smpl_mpl_hands_body.xml": "62d3483c19d04624168c834ebfe12d029a91579553b6d6f621162c1030549778",
+          "/home/ajou/yigyu/3/guitar_learning/native/lower_body_release_v1/controller_horizontal_v4.py": "c52b9628f71700275d56ddbf064760c3ce37400dd96332c895bcef964383754d",
+          "/home/ajou/yigyu/3/guitar_learning/native/lower_body_release_v1/common.py": "7d7138feae1e232cc7b11979936b7422dc1ebc80527c8ae3eccefb784f4761bc",
+          "/home/ajou/yigyu/3/guitar_learning/runtime/prepared_reset_v1.py": "7734c9e6f4951013f854c14a88c16a449c379be5d73d2672dadb3cd8295a2a7e",
+          "/home/ajou/yigyu/3/guitar_learning/assets/runtime_inputs/paper/initial_pose/archive/experiment_records/lower_body_release_v1/front_facing_ready_v1/inputs_spine_margin035_v1/baseline_v1.json": "58d5b0946b4352abb76aebb15499269530f4f9c68a8fa9e784b5dee4c1bed26b",
+          "/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/free_guitar_fretting_v1/native_probe_v1/prepared.json": "49631241132d303e36ae02cc40a3a6e035f68d3dd54982f8a4a2c3b50e0970db",
+          "/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/free_guitar_fretting_v1/native_probe_v1/initial_values.json": "5b84e68b085ef63133bb1834c65d25c5413584d36a7998b31c9253beaac75e1b",
+          "/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/free_guitar_fretting_v1/native_probe_v1/inputs_before.json": "4cc689037ec0a8bd67b4e2cdca005aee1d479d82f3b957e889bae6e5a40f1588"
+        },
+        "source_row": 23,
+        "source_time_s": 6.233333333333333,
+        "source_next_command_time_s": 6.25,
+        "arm_only_contact_verified": false,
+        "scope": "Unverified candidate only; fixed source wrist pose reconstructed from actual q; current onset3s arm-only condition not tested",
+        "source_selection": "observed>=5s; four consecutive60Hz active candidate/wrong0, no cumulative shadow failure, excess<=20mm; minimum distal resultant",
+        "source_condition": "fixed guitar; other fingers B; pad+wrist DLS arm12+selected4; static original-note midpoint",
+        "diagnostic_metadata": {
+          "source_note_index": 21,
+          "body_resultant_n": 7.767871379852295,
+          "qualifying_endpoints": 90,
+          "four_consecutive_candidates": 87,
+          "FK_native_crosscheck": {
+            "samples": 84,
+            "maximum_position_error_m": 2.1030943644650902e-06,
+            "maximum_rotation_error_rad": 9.602530074483685e-07
+          },
+          "wrist_pose_source": "prepared-calibrated FK of actual q105; not native direct readback for rows without stored body_state",
+          "guitar_pose_source": "prepared fixed guitar root, same conversion as middle v2; per-row native pose unavailable except saved representative rows",
+          "source_max_guitar_displacement_m": 5.075152671452088e-07,
+          "source_max_guitar_rotation_rad": 1.2660241566209152e-07,
+          "native_direct_readback": null,
+          "actual_arm_rad": {
+            "L_Thorax_x": 0.06744168698787689,
+            "L_Thorax_y": 0.13176123797893524,
+            "L_Thorax_z": 0.09159936010837555,
+            "L_Shoulder_x": 0.3553738296031952,
+            "L_Shoulder_y": -0.14112542569637299,
+            "L_Shoulder_z": 1.4953176975250244,
+            "L_Elbow_x": -2.007892608642578,
+            "L_Elbow_y": -1.2036936283111572,
+            "L_Elbow_z": 1.0775680541992188,
+            "L_Wrist_x": 0.009055187925696373,
+            "L_Wrist_y": -0.7853896617889404,
+            "L_Wrist_z": 0.27169227600097656
+          },
+          "selected_finger_actual_rad": {
+            "LH:pinky1_x": 1.518707036972046,
+            "LH:pinky1_z": -0.15842385590076447,
+            "LH:pinky2": 0.43913522362709045,
+            "LH:pinky3": -0.04597947373986244
+          },
+          "selected_finger_contact_target_rad": {
+            "LH:pinky1_x": 1.5348926782608032,
+            "LH:pinky1_z": -0.18091706931591034,
+            "LH:pinky2": 0.4417811632156372,
+            "LH:pinky3": -0.04629621282219887
+          },
+          "selected_finger_original_geometry_goal_rad": {
+            "LH:pinky1_x": 1.570701454371262,
+            "LH:pinky1_z": -0.19887471706329296,
+            "LH:pinky2": 0.40163395972977134,
+            "LH:pinky3": -0.05273033848667419
+          },
+          "feedforward_warning": "Controller targets are not actual contact angles or a proven equilibrium"
+        },
+        "input_path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/03_short_learning/other_finger_precheck_v3/teacher_pinky_row23.json",
+        "input_sha256": "db5ffdac970faf62f78f08819d037c18db8f7cce19f709216e22ca3bc2e10449"
+      },
+      "wrist_control": {
+        "schema": "guitar_learning.fixed_wrist_teacher.v2",
+        "feedback": "fixed guitar-local wrist origin and xyzw orientation; arm12 only; no pad error",
+        "ramp_s": 2.0,
+        "policy_onset_s": 3.0,
+        "position_interpolation": "linear in guitar frame",
+        "orientation_interpolation": "shortest-hemisphere normalized quaternion linear interpolation",
+        "rotation_length_scale_m": 0.1,
+        "damping": 1e-05,
+        "correction_step_rad": 0.008726646259971648,
+        "correction_rate_bound_rad_s": 0.5235987755982988,
+        "target_bounds": "actual controller action bounds; accumulated correction clamped without windup",
+        "requested_target_rate": "existing per-axis controller rate, arm3rad/s; native alpha0.2 remains",
+        "jacobian_coordinates": "q-position differential: wrist-origin native J times ownjoint qpos-differential-to-native-velocity transform",
+        "jacobian_groups": [
+          "L_Thorax",
+          "L_Shoulder",
+          "L_Elbow",
+          "L_Wrist"
+        ],
+        "jacobian_basis": "S T = Rparent SO3left(Aq) A; S is ownbody native angular block; FK parent exp(Aq) bind has right-side bind",
+        "reset": "reset only affected teacher rows; no physics step; reset rows excluded from basis solve and zeroed before DLS solve",
+        "limitation": "finite feedback target request; actual pose or3s arrival not guaranteed"
+      },
+      "view": {
+        "source_index": 21,
+        "source_target": {
+          "target_id": "event-000021/string-3/note-21",
+          "event_id": "event-000021",
+          "string": 2,
+          "fret": 10,
+          "finger": 4,
+          "direction": 1,
+          "onset_s": 12.4505,
+          "end_s": 12.7176,
+          "press_s": 12.3305,
+          "source_onset_s": 9.4505,
+          "source_end_s": 9.7176
+        },
+        "score_offset_s": 9.4505,
+        "duration_ticks": 227,
+        "local_press_s": 2.880000000000001,
+        "local_onset_s": 3.0,
+        "local_end_s": 3.2670999999999992,
+        "catalog_sha256": "3bee155ca2d52670cbc5ce0913f21fa74fcc4dc6ff2173066cbaa2c4c5322dd1",
+        "source_sha256": "390febfc7a06aecc9d1192fadd04c9f52120f923c1af6df22f515107f0a7e17f"
+      },
+      "initial_std": 0.1711710544767014,
+      "schedule": "fixed_source_subset_no_full_song_switch",
+      "policy_scope": "selected four joints from first tick; finite arm-only wrist-pose teacher and other-finger B",
+      "preparation": "teacher arm ramp2s plus1s finite settling; audible onset3s; original press/onset/end intervals unchanged; no discarded steps",
+      "result_scope": "conditional fixed-guitar teacher-supported task, not free-guitar J33 performance"
+    }
+  },
+  "song_training": {
+    "schema": "guitar_learning.song_training.v1",
+    "song_id": "05_BN2-131-B_solo",
+    "bundle": "/home/ajou/yigyu/3/data/song_bundles/05_BN2-131-B_solo",
+    "target_count": 67,
+    "control_ticks": 1969,
+    "episode_duration_s": 32.81666666666667,
+    "score_clock": "original_audio_plus_policy_pre_roll",
+    "observation_dimension": 561
+  },
+  "simple_start": {
+    "schema": "guitar_learning.song_start.v1",
+    "initial_pose": "agreed035_v14",
+    "initialization": "diagnostic fresh only; no resume or actor transfer"
+  },
+  "finger_skill": {
+    "schema": "guitar_learning.finger_skill.v2",
+    "phase": "J",
+    "exploration": "independent",
+    "hold_ticks": 1,
+    "scope": "scheduled",
+    "planned_transitions": 128,
+    "full_song_after": 32
+  }
+}

@@ -1,5 +1,5 @@
 import unittest
-from guitar_learning.music_task import ScoreTask, ScoreTarget, MusicLedger
+from guitar_learning.song.task import ScoreTask, ScoreTarget, MusicLedger
 
 
 def target(identity='a',onset=.1,end=.2,fret=5,finger=1,string=0):

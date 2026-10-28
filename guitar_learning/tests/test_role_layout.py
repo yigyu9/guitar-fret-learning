@@ -9,7 +9,6 @@ import unittest
 from unittest.mock import patch
 
 from guitar_learning import historical_inputs
-from guitar_learning.imitation import imitation_io
 from guitar_learning.runtime import prepared_reset_v1
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,11 +16,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class RoleLayoutTests(unittest.TestCase):
     def test_nested_input_resolvers_keep_real_project_and_asset_roots(self):
-        self.assertEqual(imitation_io.ROOT, ROOT)
         self.assertEqual(prepared_reset_v1.ROOT, ROOT)
-        self.assertTrue(imitation_io.BUNDLE.is_dir())
-        self.assertEqual(imitation_io.CONFIG, prepared_reset_v1.BASELINE_CONFIG)
-        self.assertTrue(imitation_io.CONFIG.is_file())
+        self.assertTrue(prepared_reset_v1.BASELINE_CONFIG.is_file())
         paths = prepared_reset_v1.prepared_input_paths()
         self.assertTrue(paths)
         self.assertTrue(all(p.is_file() for p in paths))
@@ -41,18 +37,17 @@ class RoleLayoutTests(unittest.TestCase):
 
         with patch.object(Path, 'open', deny_original):
             self.assertEqual(historical_inputs.fingerprint_paths(expected), expected)
-        current = Path(imitation_io.__file__).resolve()
+        current = Path(prepared_reset_v1.__file__).resolve()
         sha = hashlib.sha256(current.read_bytes()).hexdigest()
         self.assertEqual(historical_inputs.fingerprint_paths([current]), {str(current): sha})
         self.assertFalse((ROOT/'guitar_learning/imitation_io.py').exists())
 
     def test_role_cli_modules_work_outside_project_working_directory(self):
         environment = dict(os.environ, PYTHONPATH=str(ROOT), PYTHONDONTWRITEBYTECODE='1')
-        for module in ('guitar_learning.tool.demonstration.capture_imitation',
-                       'guitar_learning.tool.training.train_imitation_ppo_v2',
-                       'guitar_learning.tool.training.train_timing',
-                       'guitar_learning.tool.training.train_specialists',
-                       'guitar_learning.tool.evaluation.evaluate_musical_quality'):
+        for module in ('guitar_learning.train',
+                       'guitar_learning.tool.training.train_legacy',
+                       'guitar_learning.tool.evaluation.evaluate_finger_skill',
+                       'guitar_learning.tool.demonstration.finger_motion'):
             with self.subTest(module=module):
                 result = subprocess.run([sys.executable, '-B', '-m', module, '--help'],
                                         cwd='/tmp', env=environment, capture_output=True, text=True)

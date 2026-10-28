@@ -3,9 +3,9 @@ import copy
 import unittest
 import numpy as np
 from scipy.spatial.transform import Rotation
-from guitar_learning.core.geometry_v1 import world_to_guitar
-from guitar_learning.music_task import ScoreTarget
-from guitar_learning.core.strike import StrikeDetector
+from guitar_learning.core.geometry import world_to_guitar
+from guitar_learning.song.task import ScoreTarget
+from guitar_learning.core.measurement import StrikeDetector
 from guitar_learning.quality.strike_quality import StrikeQualityDetector, STRIKE_QUALITY_METADATA
 from guitar_learning.tests.test_strike import geometry
 

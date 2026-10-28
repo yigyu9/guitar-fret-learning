@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 from guitar_learning.native.paths import PROVENANCE, original_input_path, resolve_input_path, verify_provenance
-from guitar_learning.training.recording import digest
+from guitar_learning.training.training_log_io import digest
 
 
 def parity_errors(paths, expected):

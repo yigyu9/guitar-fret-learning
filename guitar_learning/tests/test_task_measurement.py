@@ -3,9 +3,9 @@ import json
 import unittest
 import numpy as np
 from .test_fretting_v1 import fixture
-from guitar_learning.core.geometry_v1 import geometry_snapshot
-from guitar_learning.music_task import ScoreTarget, ScoreTask
-from guitar_learning.core.task_measurement import TaskMeasurement
+from guitar_learning.core.geometry import geometry_snapshot
+from guitar_learning.song.task import ScoreTarget, ScoreTask
+from guitar_learning.core.measurement import TaskMeasurement
 
 
 def score(*,fret=5,finger=1,onset=1/240,end=3/240):

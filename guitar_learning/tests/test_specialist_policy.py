@@ -10,7 +10,7 @@ import torch
 from torch.distributions import Normal
 
 from guitar_learning.training.ppo import PPOConfig, PPOTrainer, gaussian_kl
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.training.policy import Policy
 from guitar_learning.tests.test_policy import policy as shared_policy
 from guitar_learning.tests.test_ppo import buffer, assert_tree

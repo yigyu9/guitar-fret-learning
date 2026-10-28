@@ -1,13 +1,14 @@
-"""One-time prepared-pose initialization, followed by real short finite control."""
-import hashlib
+"""준비 자세를 한 번 복원한 뒤 실제 물리에서 짧고 유한한 제어를 수행한다.
+
+읽는 순서: 입력 경로·해시 검증 → 복원 계약 로드 → 제어 시계 보기 → 상태 1회 복원.
+"""
 import copy
 import json
 from functools import lru_cache
 from pathlib import Path
 import xml.etree.ElementTree as ET
 import numpy as np
-from guitar_learning.runtime.native_session import NativeSession
-from guitar_learning.core.geometry_v1 import frame
+from guitar_learning.core.geometry import frame
 from guitar_learning.native.paths import resolve_input_path, original_input_path, rebase_paths, verify_provenance
 
 
@@ -25,8 +26,8 @@ SOURCE_SHA256 = {
     PROBE_INPUTS: '4cc689037ec0a8bd67b4e2cdca005aee1d479d82f3b957e889bae6e5a40f1588'}
 
 
-def _sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+# 파일 해시는 공용 스트리밍 구현으로 계산한다.
+from guitar_learning.training.training_log_io import digest as _sha
 
 
 def _verified_json(path):
@@ -37,7 +38,7 @@ def _verified_json(path):
 
 @lru_cache(maxsize=1)
 def _prepared_input_paths():
-    """Discover the exact pinned snapshot/config plus every declared model mesh."""
+    """정확히 봉인된 상태·설정과 모델이 선언한 모든 메시의 입력 경로를 찾는다."""
     initial = _verified_json(INITIAL_VALUES)
     paths = set(SOURCE_SHA256)
     for asset in initial['loaded_assets']:
@@ -75,12 +76,12 @@ def _load_prepared_reset_contract():
 
 
 def load_prepared_reset_contract():
-    """Audit once per process; each reset gets private mutable state/target copies."""
+    """프로세스마다 한 번 검증하고 리셋마다 상태·목표의 수정 가능한 독립 사본을 제공한다."""
     return copy.deepcopy(_load_prepared_reset_contract())
 
 
 class ControlPhaseView:
-    """Only controller schedule age is offset; bound native methods keep real time."""
+    """제어 일정의 경과 틱만 보정하며 연결된 네이티브 메서드는 실제 시계를 유지한다."""
     def __init__(self, scene):
         object.__setattr__(self, '_scene', scene)
 
@@ -143,7 +144,7 @@ def _restore_once(scene, contract, state_all):
             _assign(record, value)
         if scene.gym.set_actor_dof_states(scene.env, scene.human, dofs, state_all) is False:
             raise RuntimeError('Prepared human DOF reset failed')
-        # Never call the human articulated rigid-body setter: it corrupts q.
+        # 인체 관절체의 강체 상태 설정 함수는 q를 손상시키므로 절대 호출하지 않는다.
         if scene.gym.set_actor_rigid_body_states(scene.env, scene.guitar, guitar, state_all) is False:
             raise RuntimeError('Prepared guitar rigid-body reset failed')
         scene.target = target.astype(np.float32)
@@ -168,34 +169,3 @@ def _restore_once(scene, contract, state_all):
     return dict(actual_initial_state=actual, human_DOF_pos_vel_max_error=dof_error, guitar_velocity_max_scalar_error=guitar_velocity_error, body_pose_readback=errors,
                 human_body_exact_checkpoint_claim=False, source_velocities='Saved human DOF velocities and guitar rigid-body velocities preserved; human link velocities reconstructed by native articulation',
                 state_set_calls=dict(human_DOF=1, guitar_rigid_body=1, human_rigid_body=0, native_POSITION_target=1))
-
-
-class PreparedSession(NativeSession):
-    def __init__(self, config, out):
-        contract = load_prepared_reset_contract()
-        config = rebase_paths(dict(config))
-        if dict(config) != contract['config']:
-            raise ValueError('Prepared reset requires the exact original035 baseline config')
-        super().__init__(config, out)
-        try:
-            # Original constructor references/FK are established before restoring q.
-            description = _restore_once(self.scene, contract, _state_all())
-            self.seed_target105 = contract['target105'].copy()
-            self.controller.s = ControlPhaseView(self.scene)
-            self.prepared_reset_description = dict(description, source_sha256=contract['source_sha256'], source_snapshot_step=CONTROL_PHASE_OFFSET_STEPS,
-                actual_initial_physics_step=self.scene.steps, control_phase_offset_steps=CONTROL_PHASE_OFFSET_STEPS,
-                control_phase_scope='Explicit mature support-control phase only; no22s physics replay or advancement of actual scene time',
-                initialization_scope='One reset-only DOF/guitar/target submission; fixed root/chair unchanged; no per-step state injection')
-        except BaseException:
-            self.close()
-            raise
-
-    def prepare_tick(self):
-        return self.submit_policy_target(self.seed_target105)
-
-    def integrate(self):
-        diagnostic = super().integrate()
-        diagnostic['control_phase_step_before'] = self.scene.steps - 1 + CONTROL_PHASE_OFFSET_STEPS
-        diagnostic['physics_step_before'] = self.scene.steps - 1
-        diagnostic['legacy_nested_step_fields_scope'] = 'Original controller metadata nested step fields use mature control-phase coordinates; actual physics_step_before above uses real reset time'
-        return diagnostic

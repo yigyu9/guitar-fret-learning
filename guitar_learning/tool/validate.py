@@ -11,8 +11,8 @@ import json
 import math
 import random
 import traceback
-from guitar_learning.training.recording import write, digest, project_source_paths
-from guitar_learning.training.recording import bridge_dependency as training_dependency
+from guitar_learning.training.training_log_io import write, digest, project_source_paths
+from guitar_learning.training.training_log_io import bridge_dependency as training_dependency
 from guitar_learning.core.dependency_inputs import parity_errors
 
 MODES = ('zero','right','left_arm','fingers','all','policy')
@@ -101,7 +101,7 @@ def main():
     import isaacgym
     import numpy as np
     import torch
-    from guitar_learning.music_task import ScoreTask
+    from guitar_learning.song.task import ScoreTask
     from guitar_learning.core.training_environment import TrainingEnvironment
     from guitar_learning.training.policy import Policy
     from guitar_learning.training.ppo import PPOTrainer, PPOConfig
@@ -110,7 +110,7 @@ def main():
     from guitar_learning.native.front_facing_ready_v1.runtime_v15 import Scene
     from guitar_learning.native.front_facing_ready_v1.runtime_v12 import Controller
     from guitar_learning.native.native_contacts import body_names,read_contacts
-    from guitar_learning.native.lower_body_release_v1.common import pin
+    from guitar_learning.native.paths import pin
     from guitar_learning.native.gym_trial_recording import GymTrialRecording
     torch.set_num_threads(1)
     random.seed(args.seed)

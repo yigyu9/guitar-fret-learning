@@ -4,8 +4,8 @@ import unittest
 
 import torch
 
-from guitar_learning.gpu.geometry import apply
-from guitar_learning.music_task import ScoreTask
+from guitar_learning.gpu.control import apply
+from guitar_learning.song.task import ScoreTask
 from guitar_learning.tests import test_gpu_environment as fixtures
 from guitar_learning.tests.test_gpu_surface_learning import task
 

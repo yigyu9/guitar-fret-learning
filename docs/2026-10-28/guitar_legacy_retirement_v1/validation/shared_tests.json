@@ -1,0 +1,141 @@
+{
+  "schema": "guitar_learning.legacy_retirement_shared_tests.v1",
+  "owned_files": [
+    "guitar_learning/tests/native_input_probe.py",
+    "guitar_learning/tests/test_internal_native.py",
+    "guitar_learning/tests/test_training_logging_integration.py",
+    "guitar_learning/tests/test_persistent_parallel.py",
+    "guitar_learning/tests/test_persistent_audit.py",
+    "guitar_learning/tests/test_song_environment.py",
+    "guitar_learning/tests/test_tool_cleanup.py"
+  ],
+  "retained_testcases": {
+    "native_input_probe.py": [],
+    "test_internal_native.py": [
+      "test_current_cpu_inputs_work_with_legacy_open_and_import_forbidden",
+      "test_known_models_resolve_internally_and_unknown_legacy_input_fails",
+      "test_extra_historical_source_keeps_original_key_and_original_sha",
+      "test_provenance_rehashes_current_bytes_and_rejects_tampering",
+      "test_original_model_sha_remains_required_after_path_migration"
+    ],
+    "test_training_logging_integration.py": [
+      "test_standard_reduction_preserves_environment_and_terminal_quality",
+      "test_stream_reports_filter_incomplete_and_do_not_scan_transition_gzip",
+      "test_standard_stream_reports_use_counters_without_loading_episode_file",
+      "test_right_raw_selection_tracks_active_strike_changes",
+      "test_secondary_summary_error_does_not_replace_primary_exception",
+      "test_recovery_writes_new_prefix_summary_and_never_infers_ppo_commit"
+    ],
+    "test_persistent_parallel.py": [
+      "test_default_and_explicit_cpu_factory_dispatch",
+      "test_native_factory_passes_base_seed_and_music_to_persistent_builder"
+    ],
+    "test_persistent_audit.py": [
+      "test_complete_lifecycle_preserves_original_report",
+      "test_missing_or_reconstructed_lifecycle_fails_combined_report",
+      "test_secondary_audit_failure_preserves_original_interruption"
+    ],
+    "test_song_environment.py": [
+      "test_full_task_500_observation_no_native_wait_and_persistent_reset",
+      "test_both_actions_share_four_actual_samples_and_exact_episode_totals",
+      "test_failure_tick_suppresses_earlier_positive_samples_and_pays_cost_once",
+      "test_rollout_boundaries_do_not_reset_continuous_score",
+      "test_ledger_exception_blocks_further_physical_integration"
+    ],
+    "test_tool_cleanup.py": [
+      "test_module_and_direct_cli_help",
+      "test_project_paths_and_shared_replay_helpers",
+      "test_audit_pins_current_tool_and_classifier_sources",
+      "test_fixed_rate_encoder_and_probe"
+    ]
+  },
+  "retained_testcase_count": 25,
+  "removed_legacy_only_testcases": {
+    "test_training_logging_integration.py": [
+      "test_quality_prefix_summary_exists_after_interrupt_without_completed_episode",
+      "test_preparation_prefix_summary_exists_after_interrupt"
+    ],
+    "test_persistent_parallel.py": [
+      "test_entry_point_restores_dispatch_after_error"
+    ],
+    "test_persistent_audit.py": [
+      "test_existing_output_is_never_reaudited_by_failed_new_launch"
+    ]
+  },
+  "removed_legacy_only_probe_checks": [
+    "transition.solver.input_paths/_check_fk_axes",
+    "--gates: local_skills/joint/song/song_reward_v2/transition expert evidence"
+  ],
+  "maintained_behavior": [
+    "native legacy open/import guards, prepared source/asset SHA, baseline parity, FK and renderer pose readback",
+    "generic logging format, summary streaming, interrupted summary exception and journal recovery",
+    "persistent Pool factory/seed/music and lifecycle finalization audit",
+    "all five CPU full-song environment tests, including continuous score across rollout boundaries",
+    "shared rendering, pick-grip input path, fixed-rate encoding, audit source pins and operational CLI help"
+  ],
+  "substitutions": [
+    "native solver_inputs count replaced by actual prepared_asset_inputs count",
+    "SongPolicy replaced by public Policy(500, size=small, contract=env.contract)",
+    "LongRecordedSession imported from test_training_environment",
+    "retired timing-render CLI help replaced by current demonstration/render_finger_skill help"
+  ],
+  "runs": [
+    {
+      "modules": [
+        "test_internal_native",
+        "test_training_logging_integration",
+        "test_persistent_parallel",
+        "test_persistent_audit",
+        "test_song_environment",
+        "test_tool_cleanup"
+      ],
+      "tests": 25,
+      "seconds": 8.735,
+      "status": "passed"
+    },
+    {
+      "modules": [
+        "test_tool_cleanup",
+        "test_finger_skill_render"
+      ],
+      "tests": 10,
+      "seconds": 0.595,
+      "status": "passed_after_timing_renderer_removal"
+    },
+    {
+      "command": "python guitar_learning/tests/native_input_probe.py --renderer",
+      "status": "environment_error_with_default_EGL",
+      "detail": "OpenGL.EGL has no attribute EGLDeviceEXT"
+    },
+    {
+      "command": "MUJOCO_GL=disable python guitar_learning/tests/native_input_probe.py --renderer",
+      "status": "passed",
+      "result": {
+        "baseline_parity_files": 160,
+        "prepared_asset_inputs": 107,
+        "prepared_inputs": 110,
+        "fk_max_position_error_m": 1.5612511283791264e-16,
+        "provenance_verified_files": 190,
+        "renderer_asset_inputs": 106,
+        "renderer": {
+          "body_count": 106,
+          "max_position_error_m": 0.0,
+          "max_rotation_error_rad": 5.0895734351719815e-16
+        }
+      }
+    }
+  ],
+  "environment": {
+    "python": "/home/ajou/miniconda3/envs/rl38/bin/python",
+    "PYTHONPATH": "/home/ajou/yigyu/3/isaacgym/python:/home/ajou/yigyu/3",
+    "LD_LIBRARY_PATH": "/home/ajou/miniconda3/envs/rl38/lib",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1"
+  },
+  "static_validation": {
+    "retired_references_absent": true,
+    "diff_check": "passed"
+  },
+  "archive": "archive/20261028_before_legacy_retirement_v1"
+}

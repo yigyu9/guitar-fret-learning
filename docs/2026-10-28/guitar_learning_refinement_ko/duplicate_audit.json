@@ -1,0 +1,60 @@
+{
+  "removed_duplicate_definitions": 10,
+  "new_python_files": 0,
+  "groups": [
+    {
+      "files": [
+        "gpu/geometry.py::_sha",
+        "gpu/geometry.py::_wrist_sha",
+        "gpu/scene.py::_sha",
+        "historical_inputs.py::_digest",
+        "score/canonical.py::_file_sha256",
+        "runtime/prepared_reset_v1.py::_sha",
+        "training/training_log_io.py::_digest"
+      ],
+      "shared": "training/recording.py::digest",
+      "removed_definitions": 7,
+      "reason": "동일 파일 바이트의 SHA-256을 1MiB 스트리밍으로 계산하고 기존 별칭을 유지"
+    },
+    {
+      "files": [
+        "training/policy.py::SpecialistPolicy.value_parameters",
+        "training/policy.py::FingerSkillPolicy.value_parameters"
+      ],
+      "shared": "training/policy.py::Policy.value_parameters",
+      "removed_definitions": 2,
+      "reason": "동일 가치 인코더·reward critic·cost critic 매개변수를 동일 순서로 반환"
+    },
+    {
+      "files": [
+        "gpu/scene.py::_rigid_body_row"
+      ],
+      "shared": "gpu/scene.py::_body_row",
+      "removed_definitions": 1,
+      "reason": "position xyz, rotation xyzw, linear xyz, angular xyz 순서를 공유"
+    }
+  ],
+  "kept_separate": [
+    {
+      "files": [
+        "song/left_curriculum.py",
+        "song/gpu_left_curriculum.py"
+      ],
+      "reason": "단계별 가중치·상태 차원·기준이 다름"
+    },
+    {
+      "files": [
+        "song/finger_phrases.py::_sha",
+        "native/lower_body_release_v1/common.py::sha",
+        "score/canonical.py::canonical_content_sha256"
+      ],
+      "reason": "JSON 정규화 또는 과거 경로 해석 등 파일 SHA와 입력 의미가 다름"
+    },
+    {
+      "files": [
+        "gpu/episode_diagnostics.py"
+      ],
+      "reason": "지역 zeros 두 곳은 각 생성자의 count/device를 캡처하는 두 줄 함수로, 별도 추상화를 늘려 합치지 않음"
+    }
+  ]
+}

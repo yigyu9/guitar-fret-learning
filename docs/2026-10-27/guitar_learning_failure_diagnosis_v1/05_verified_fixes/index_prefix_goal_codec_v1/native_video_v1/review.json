@@ -1,0 +1,66 @@
+{
+  "verdict": "PASS",
+  "summary": "문제없음",
+  "findings": [],
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_codec_v1/native_video_v1/PLAN.md": "694c55ebe5511dddea4b92ae5a09ad89b4f300ce8f143c39ad90926087d2e72a",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_codec_v1/native_video_v1/README.md": "7f79e6284fd42291dad6765fce21cb677b112d12ac1dca146b8c995c99bd3c95",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_codec_v1/native_video_v1/render.py": "6eaf70589b195ee4d2fcf4fce58e4ba8661289f6e1296cdbc4e3ffbc32d9a9b5",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_codec_v1/native_video_v1/cpu_checks.py": "97ecffe75824baa3586b4c406dac4477c93a6c75adb506d59146f56b2b29d24c",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_codec_v1/native_video_v1/cpu_verification.json": "345bb354e058ce33bf4ee398cb1b863baac7d8c3a18a58f6af74e0b058839dd3",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_codec_v1/native_video_v1/fresh_process_gate.json": "a9f93284d8563ff18da109c5c1aabd1880118d4021d19107b379eef5ab92ae26",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_codec_v1/native_video_v1/cpu_inputs/commands.json": "60bb77ced0e909892f6fc1a181049c142c82648f8fd51018b852b31605a6cb11",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_codec_v1/native_video_v1/cpu_inputs/settings.json": "8fe711c963a542c4d19769982f601d8d794b537aacda3097b3e700b9834f237c"
+  },
+  "pending_seal_review_snapshot": {
+    "path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_goal_codec_v1/native_video_v1/preparation_seal.json",
+    "whole_file_sha256_at_review": "2892a9bed6eb47e525aac0243bc97ba0b8f484ecaeb3769ec6c85bc132aff133",
+    "input_pin_count": 2107,
+    "input_pins_canonical_sha256": "69a7485104398cd1467f4133b5d18a0205ef7017671fd0de349ba64636ea26b8",
+    "scope": "검수 당시 pending. review2/status 최종화로 변경할 current seal은 reviewed_sha256에서 제외한다."
+  },
+  "resolved_findings": [
+    {
+      "severity": "Warning",
+      "file": "render.py",
+      "issue": "원 helper가 성공한 뒤 typed raw 저장과 감사 보고서 쓰기가 모두 실패하면 후속 보고서 오류가 첫 raw 오류를 덮었다.",
+      "resolution": "먼저 잡힌 typed raw 예외를 전파하고 후속 감사 쓰기 오류는 stderr로 기록한다. 동일 이중 오류를 독립 CPU 재현해 첫 ValueError 전파·후속 OSError 기록·네 별칭 복원을 확인했다. 변경 전 초안은 before_review_fix_01에 보존됐다."
+    }
+  ],
+  "checks": {
+    "independent_fixed_CPU_self_test_reexecution": true,
+    "independent_exact_typed_raw_plus_audit_double_error_regression": true,
+    "Python38_AST2": true,
+    "narrow_symtable_unresolved_globals_new2files": [],
+    "all2107_input_pins_current": true,
+    "same2107_pin_keys_only_render_checks_CPUverification_changed": true,
+    "runs_absent_at_review": true,
+    "original_renderer_capture_camera_encoder_reused_without_source_change": true,
+    "original_GoalPolicy_freshFalse_layered_contract_full_loader_path": true,
+    "original_checkpoint_metadata_schema_updates_unmodified": true,
+    "checkpoint_sha256": "70e40d1cb80a90a2636fd7d1babb4870bd82333d900c667fa136bac233ef9327",
+    "CPU_model73_identity_and_emptyPPO0": true,
+    "wrong_schema_policy_layer_update_procedure_rejected": true,
+    "convert_delegates_once_CPU_fixture": true,
+    "native_conversion_counter_equals_episode_steps_required_at_runtime": true,
+    "physical_pose_action_and_typed_goal_records_distinguished": true,
+    "typed_raw_partial_save_and_metadata_success_recording_truthful": true,
+    "NN_reference_calls_forbidden_and_aliases_restore": true,
+    "existing_and_broken_symlink_output_rejected_before_evidence": true,
+    "original_CPU_CUDA_topology_rejection_preserved": true,
+    "temporary_CPU_projection_only_cuda_rng_excluded": true,
+    "fresh_gate_pinned_CPU_record": {
+      "stdlib_only": true,
+      "GPU_executed": false,
+      "PPO_updates": 0
+    },
+    "author_reported_post_fix_fresh_gate_exit0_same_record_no_pin_change": true
+  },
+  "limitations": [
+    "GPU/native rendering,원본 full CUDA RNG 복원,실제 픽셀·codec·구도·전tick 변환카운터는 실행하지 않았다. 실제 렌더 후 QA에서 확인할 항목이다.",
+    "CPU 투영은 /tmp 복사본의 cuda_rng만 제외한 identity/model/optimizer 검사다. 실제 native는 변경 없는 원 checkpoint의 full trainer.load를 유지한다.",
+    "evaluator/trainer fingerprint callback은 renderer에서 사용하지 않는다. 기존 renderer의 model/checkpoint/scene/encoder/close 근거와 새 adapter 검사를 구분한다.",
+    "원 fit exit1·누락2보고서·명시회복과 NN 음악통과/A해제미달을 보존한다. env0 첫시도 한 번의 진단이며 자연스러움·압력·자유기타/J33·RL-only 성과 인증이 아니다.",
+    "원 helper와 선행 actual/QA는 SHA로 연결한 검수 근거를 재사용했다. 기존 원자료·모델·source·보호 봉인을 수정하거나 전체 재감사를 확대하지 않았다."
+  ]
+}

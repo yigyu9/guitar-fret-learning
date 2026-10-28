@@ -8,7 +8,9 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import torch
 
-from guitar_learning.gpu.thumb_support import load_thumb_support, thumb_support_geometry, THUMB_SUPPORT_CONTRACT
+from guitar_learning.gpu.contact import load_thumb_support
+from guitar_learning.gpu.contact import thumb_support_geometry
+from guitar_learning.gpu.contact import THUMB_SUPPORT_CONTRACT
 
 
 class ThumbSourceTests(unittest.TestCase):
@@ -72,8 +74,8 @@ class ThumbSourceTests(unittest.TestCase):
         self.assertEqual(result['contact_candidate'].tolist(), [True, False])
 
     def test_current_song_thumb_windows_fit_the_playing_neck(self):
-        from guitar_learning.gpu.press_surface import load_press_surface
-        from guitar_learning.gpu.wrist_region import load_wrist_region_track
+        from guitar_learning.gpu.contact import load_press_surface
+        from guitar_learning.gpu.contact import load_wrist_region_track
         bundle = Path(__file__).resolve().parents[2]/'data/song_bundles/05_BN2-131-B_solo'
         track = load_wrist_region_track(bundle, load_press_surface([0], [1]))
         centers = .5*(np.array(track['lower_G_m'])[:, 1]+np.array(track['upper_G_m'])[:, 1])

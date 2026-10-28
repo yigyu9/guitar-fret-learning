@@ -9,7 +9,7 @@ import unittest
 import numpy as np
 import torch
 from guitar_learning.core.training_environment import TrainingEnvironment
-from guitar_learning.music_task import ScoreTask, ScoreTarget
+from guitar_learning.song.task import ScoreTask, ScoreTarget
 from guitar_learning.training.policy import Policy
 from guitar_learning.training.ppo import PPOTrainer, PPOConfig
 from guitar_learning.tool.validation.rollout import RolloutCollector
@@ -62,6 +62,46 @@ class RecordedSession:
         self.scene.steps+=1
         return {'physics_step_before':self.scene.steps-1}
     def close(self): self.closed=True
+
+
+class LongRecordedSession(RecordedSession):
+    """긴 CPU 인터페이스 검사에 쓰는 정적 기록이며 native 동역학 근거는 아니다."""
+    def __init__(self, config, out):
+        super().__init__(config, out)
+        self.initial_target = self.scene.target.copy()
+        self.reset_calls = self.close_calls = 0
+        self.fail_reset = self.fail_preparation = False
+
+    def row(self):
+        return self.rows[min(max(0, self.scene.steps-480), len(self.rows)-1)]
+
+    def native(self):
+        native = super().native()
+        if self.scene.steps == getattr(self, 'unsafe_at', None):
+            for body in native['guitar_body_states']:
+                body['pose']['p']['x'] += .1
+        return native
+
+    def reset_episode(self, config, out):
+        self.reset_calls += 1
+        if self.fail_reset:
+            raise RuntimeError('injected episode reset failure')
+        self.scene.steps = 0
+        self.scene.target[:] = self.initial_target
+        self.scene.forbidden_calls.clear()
+        self.preparation_calls = self.policy_calls = 0
+        self.unsafe = False
+        return self
+
+    def integrate(self):
+        if self.fail_preparation:
+            raise RuntimeError('injected preparation failure')
+        return super().integrate()
+
+    def close(self):
+        if not self.closed:
+            self.close_calls += 1
+        super().close()
 
 
 def task(end=.9):

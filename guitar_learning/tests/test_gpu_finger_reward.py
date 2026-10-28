@@ -7,7 +7,7 @@ import torch
 from guitar_learning.gpu.finger_reward import (FINGER_TARGET_CONTRACT, finger_target_indices, FINGER_REWARD_CONTRACT,
     FINGER_COORDINATION_CONTRACT, finger_tracking_reward, finger_posture_reward,
     source_finger_frame_contract, _verify_source_frames)
-from guitar_learning.gpu.geometry import multiply
+from guitar_learning.gpu.control import multiply
 
 
 class FingerRewardTests(unittest.TestCase):

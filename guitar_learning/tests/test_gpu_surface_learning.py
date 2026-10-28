@@ -10,9 +10,9 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
-from guitar_learning.gpu.geometry import apply, conjugate
-from guitar_learning.music_task import EVENT_FIELDS, ScoreTask, ScoreTarget
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.gpu.control import apply, conjugate
+from guitar_learning.song.task import EVENT_FIELDS, ScoreTask, ScoreTarget
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.song.curriculum_runtime import CurriculumCoordinator
 from guitar_learning.tests import test_gpu_environment as fixtures
 from guitar_learning.training.ppo import PPOTrainer

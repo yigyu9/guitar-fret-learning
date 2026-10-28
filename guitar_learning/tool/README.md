@@ -1,72 +1,55 @@
-# 학습 보조·전문 실험 도구
+# 현재 학습 보조·진단 도구
 
-기본 GPU 왼손 finger-skill v2 학습은 [기본 실행](../README.md)의 `python -m guitar_learning.train`을 사용한다. 여기는 입력 생성·검수·시각화와 전문 학습·평가·시연을 위한 실행 코드다. 기본 실행은 이 디렉토리를 import하지 않는다. 전문 경로는 내부에서 공용 라이브러리와 다른 전문 경로를 재사용할 수 있다. `archive/`는 실행하지 않는다.
+기본 GPU 왼손 finger-skill v3 학습은 [기본 실행](/home/ajou/yigyu/3/guitar_learning/README.md)의 `python -m guitar_learning.train`을 사용한다. 이 디렉토리는 기존 song 실행, 입력 생성·검수, J 평가·영상과 현재 진단을 제공한다. 기본 학습은 이 디렉토리를 import하지 않는다.
 
-| 위치 | 역할 |
-| --- | --- |
-| 이 디렉토리의 기존 도구 | 곡 등록·압현/타현 입력·계획 생성·감사·로그 복구·렌더 |
-| `training/` | 구형 song·CPU/오른손·v24 실행과 기존 단계별 학습·설정 |
-| `evaluation/` | finger-skill·모방·타이밍·준비·음악 품질 평가 |
-| `demonstration/` | finger-skill 손/전신 영상·모방 자료·타이밍 시연 |
-| `validation/` | 결정적 rollout과 검증용 압현 환경 |
-| `experiments/` | 초기 전문가·양손 단음·전곡·전환·정밀화·접촉 회복8개 패키지 |
+## 목적별 필수 도구
 
-## 별도 보관한 학습 실행
+| 목적 | 현재 실행 모듈 | 필요한 때 |
+| --- | --- | --- |
+| 기본 J 학습 | `guitar_learning.train` | 새 GPU 왼손 J33 학습 |
+| J 평가·영상 | `tool.evaluation.evaluate_finger_skill`, `tool.demonstration.render_finger_skill` | 현재 소스·계약의 J 저장본 검증과 영상 |
+| 기존 song 학습 | `tool.training.train_legacy` | 기존 song·CPU·오른손 실행; GPU 실행기는 `training/legacy_gpu_runner.py` |
+| 곡 입력 | `tool.register_song_bundle`, `tool.build_fret_training_data`, `tool.build_strike_training_data`, `tool.build_strike_plan`, `tool.audit_strike_goal_quality` | 새 곡 번들 등록·목표 생성·검수 |
+| 저장 로그 점검·복구 | `tool.inspect_gpu_training_log`, `tool.recover_training_log` | 기존 실행 로그 검사 또는 검증한 prefix를 새 경로에 요약 |
+| 손가락 실제 동작 | `tool.demonstration.finger_motion` | 학습 없이 고정 손가락 동작 기록·재생 |
+| 압현·손 접촉 진단 | `tool.validation.press_acquisition` 등 `validation/` 도구 | 현재 물리·접촉의 별도 진단 |
+| 짧은 손가락 진단 학습 | `tool.experiments.short_finger_learning` | 고정 기타·손목 teacher의 단음 비교; [전용 안내](/home/ajou/yigyu/3/guitar_learning/tool/experiments/short_finger_learning/README.md) 필수 |
 
-이전 song·오른손·CPU·finger-skill-v24 실행은 `training.train_legacy`로 분리했다. 기본 `guitar_learning.train`에서는 이 family들을 선택하지 않는다.
+표의 `tool.` 모듈에는 `guitar_learning.`을 붙여 `python -m`으로 실행한다. 곡 입력 도구는 아래 전체 명령을 따른다. J 저장본의 평가·영상은 [기본 안내](/home/ajou/yigyu/3/guitar_learning/README.md)의 명령과 엄격한 입력 SHA·계약 검증을 따른다.
+
+## 기존 song·CPU·오른손 실행
 
 ```bash
 # 기존 GPU song (오른손은 --hand right)
 python -m guitar_learning.tool.training.train_legacy \
-  --hand left --learning-family song --physics gpu --device cuda:0 \
+  --hand left --physics gpu --device cuda:0 \
   --size large --num-envs 1024 --horizon 32 --updates 100 \
   --out /home/ajou/yigyu/3/runs/legacy_song_01
 
 # 기존 CPU song
 python -m guitar_learning.tool.training.train_legacy \
-  --hand left --learning-family song --physics cpu --device cpu --updates 1 \
+  --hand left --physics cpu --device cpu --updates 1 \
   --out /home/ajou/yigyu/3/runs/legacy_cpu_song_01
-
-# 기존 R/F/J 분리 학습 v24
-python -m guitar_learning.tool.training.train_legacy \
-  --hand left --learning-family finger-skill-v24 --physics gpu --device cuda:0 \
-  --size large --num-envs 128 --horizon 32 --updates 100 \
-  --out /home/ajou/yigyu/3/runs/legacy_finger_skill_v24_01
 ```
 
-모두 새 출력 경로를 사용한다. song 전용 GPU 실행기는 `training/legacy_gpu_runner.py`에 있고, v24는 활성 공용 `guitar_learning.training.finger_skill_runner`를 사용한다. 이번 분리는 실행 위치 변경이며 이전 결과의 성능·성공·checkpoint 호환성을 새로 보장하지 않는다. 변경 전 원문은 [보관 manifest](/home/ajou/yigyu/3/guitar_learning/archive/20261026_before_finger_skill_default/manifest.json)에 있다.
+출력은 새 경로를 사용한다. 기본 `guitar_learning.train`은 J 전용이며 기존 song은 위 별도 진입점을 사용한다. 현재 source SHA와 실제 환경·정책 계약을 엄격히 확인하며 이전 checkpoint의 검사를 우회하지 않는다.
 
-현재 v2와 v24의 평가·영상은 각각 `evaluation.evaluate_finger_skill`·`demonstration.render_finger_skill`을 사용한다. [기본 안내의 실행 예시](/home/ajou/yigyu/3/guitar_learning/README.md)를 따르며, 저장된 소스 SHA와 실제 환경·정책 계약을 엄격히 확인한다. 이번 정리 이전 checkpoint는 소스 이동·수정으로 재개·평가·렌더가 거부될 수 있고, 검사를 우회하지 않는다.
+## 보관한 전문 경로
 
-## 기존 단계별 실행
+과거 손별 단계·모방·타이밍·정책 준비·단음 음악 품질의 학습·평가·시연 CLI, `render_timing_video_v1.py`, 아래 실험8개는 활성 경로에서 제거했다. `tool/experiments/`에는 현재 `short_finger_learning`만 남는다.
 
-아래 이름 앞에 `python -m guitar_learning.tool.`을 붙여 실행한다. 실제 입력·전제는 [단계별 문서](../docs/CODE_STRUCTURE.md)를 따른다. 기존 실행기와 설정의 위치만 바꾸었으며, 새 기본 학습에 이 경로의 사전 gate를 추가하지 않는다.
-
-| 목적 | 모듈 |
+| 보관 패키지 | 당시 역할 |
 | --- | --- |
-| 준비 상태·손별 단계 | `training.train_persistent`, `training.train_skills`, `training.train_skills_v2`, `training.train_specialists` |
-| 모방 학습 | `training.train_imitation`, `training.train_imitation_ppo`, `training.train_imitation_ppo_v2` |
-| 타이밍 학습 | `training.train_timing`, `training.train_timing_v2` |
-| 준비·음악 품질 학습 | `training.train_actionable_preparation`, `training.train_musical_quality` |
-| 평가 | `evaluation.evaluate_imitation_v2`, `evaluation.evaluate_timing`, `evaluation.evaluate_actionable_preparation`, `evaluation.evaluate_musical_quality` |
-| 자료 수집 | `demonstration.capture_imitation`, `demonstration.timing_demonstration` |
+| [local_skills](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/guitar_learning/tool/experiments/local_skills/README.md) | 초기 손별 시연·전문가 생성 |
+| [joint](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/guitar_learning/tool/experiments/joint/README.md) | 단음 양손 정책 |
+| [song](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/guitar_learning/tool/experiments/song/README.md) | 전곡 BC 이전·양손 전문 학습 |
+| [song_reward_v2](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/guitar_learning/tool/experiments/song_reward_v2/README.md) | 전곡 보상 V2·이전·평가 |
+| [transition](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/guitar_learning/tool/experiments/transition/README.md) | 두 음 전환·교사·BC |
+| [transition_refinement](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/guitar_learning/tool/experiments/transition_refinement/README.md) | 준비·유지·해제 정밀화 |
+| [transition_refinement_runtime_v2](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/guitar_learning/tool/experiments/transition_refinement_runtime_v2/README.md) | 정밀화 계약·runtime 감사 |
+| [contact_recovery](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/guitar_learning/tool/experiments/contact_recovery/README.md) | 접촉 회복 평가·자료 수집 |
 
-## 전문 실험
-
-전문 실행기는 각 패키지 문서에 지정한 계약·초기화·자료를 요구한다. 같은 상태 차원이나 파일 이름만으로 checkpoint를 혼용하지 않는다.
-
-| 패키지 | 역할 |
-| --- | --- |
-| [local_skills](experiments/local_skills/README.md) | 초기 손별 시연·전문가 생성·검증 |
-| [joint](experiments/joint/README.md) | 단음 양손 정책·초기화·평가 |
-| [song](experiments/song/README.md) | 기존 전곡 BC 이전·양손 정책·전문 학습·평가 |
-| [song_reward_v2](experiments/song_reward_v2/README.md) | 전곡 보상 V2·이전·평가·PPO |
-| [transition](experiments/transition/README.md) | 두 음 전환·접촉 교사·BC·원자료 수집 |
-| [transition_refinement](experiments/transition_refinement/README.md) | 왼손 준비·유지·해제 정밀화·시연 PPO |
-| [transition_refinement_runtime_v2](experiments/transition_refinement_runtime_v2/README.md) | 정밀화 JSON 계약·runtime 감사 |
-| [contact_recovery](experiments/contact_recovery/README.md) | 회복 평가·교사 수집·자료 감사·내보내기 |
-
-기본 finger-skill v2가 사용하는 공용 환경·정책·곡·원장은 활성 라이브러리로 남긴다. `song/task.py` 등 기존 checkpoint의 원문 검증 대상은 보존하며, 보관본을 import하지 않는다. 전문 도구는 각각의 제어·보상·성공 계약을 따른다.
+[보관 안내](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/ARCHIVE_INDEX.md) · [원문 경로·SHA manifest](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/manifest.json) · [활성 제거 목록](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/retired_files.json). 전문 매뉴얼6개도 같은 보관본의 `guitar_learning/docs/`에 있다. 남은 `training/configs/`의 이전 JSON은 당시 설정 참고 자료이며 현재 CLI의 실행 예시가 아니다. 보관본을 현재 코드에서 import하지 않는다. 현재 사용하는 공용 압현·타현 품질 계산과 song·CPU의 준비·세션 기능은 활성 라이브러리로 유지한다.
 
 ## 곡 입력 생성
 
@@ -129,7 +112,7 @@ python -m guitar_learning.tool.validation.press_acquisition render --source /pat
 
 모든 목표의 위치·법선·하중·wrong·연속접촉·안전 요약과 입력 SHA를 저장하고, 사전 지정 row0/4/8/12만240Hz trace와60Hz 자세를 저장한다. 후보 탐색 실패는 도달 불가능의 증명이 아니며 정적50/100ms 지표는 곡의 음 달성과 다르다. 자세 재생 영상은 저장된 실제 물리 자세를 렌더하며 새 물리나 정책평가가 아니다. [실제 진단·검증 결과](/home/ajou/yigyu/3/docs/2026-10-25/guitar_learning_press_acquisition_v1/README.md)를 따른다.
 
-루트에 있던 다음 여섯 실행기는 이 디렉토리로 옮겼다. 이전 위치와 원문은 `../archive/20261019_before_structure_cleanup/manifest.json`에 보존한다. 새 실행은 아래 모듈 경로를 사용한다. 직접 파일 실행도 지원하며, 예전 루트 경로에는 실행기를 남기지 않는다.
+루트에서 옮겨 유지하는 저장 자료 감사·복구·검증·렌더 도구는 다음과 같다. 이전 이동 원문은 `../archive/20261019_before_structure_cleanup/manifest.json`에 보존한다. 아래 도구는 모듈 또는 직접 파일로 실행할 수 있다.
 
 | 모듈 | 역할·범위 |
 | --- | --- |
@@ -137,20 +120,18 @@ python -m guitar_learning.tool.validation.press_acquisition render --source /pat
 | `recover_training_log` | CRC로 검증한 로그 prefix를 새 디렉토리에 요약. PPO 재개·반영 여부를 추정하지 않음 |
 | `run_fretting_probe_v3` | 준비 자세와 기존 손 정착 조건의 native 압현 연결 검사. 학습하지 않음 |
 | `validate` | 기존 환경의 결정적 행동 probe와 엄격한 checkpoint 평가. 학습하지 않음 |
-| `render_timing_video_v1` | 과거 타이밍 평가의 저장된 body pose를 60fps 영상으로 재생 |
 | `render_pick_grip_v1` | 과거 준비 동작 평가의 저장된 오른손 pose·피크 위치를 시각화 |
-| `_rendering.py` | 두 렌더 실행기와 `experiments/local_skills/render.py`가 공유하는 원본 초기 상태·폰트·60fps 인코딩/검증 함수 |
+| `_rendering.py` | 현재 저장 자세 렌더가 사용하는 초기 상태·폰트·60fps 인코딩/검증 함수 |
 
 ```bash
 python -m guitar_learning.tool.audit_musical_quality_v2 --out /path/to/new_audit
 python -m guitar_learning.tool.recover_training_log --run /path/to/saved_run --out /path/to/new_summary
 python -m guitar_learning.tool.run_fretting_probe_v3 --config /path/to/baseline_v1.json --out /path/to/new_probe
 python -m guitar_learning.tool.validate --stage B --mode zero --seconds 3 --out /path/to/new_validation
-python -m guitar_learning.tool.render_timing_video_v1 --out /path/to/new_timing_video
 python -m guitar_learning.tool.render_pick_grip_v1 --out /path/to/new_pick_views
 ```
 
-`validate`와 압현 probe는 기존 과제 검사이며, 최신 전곡·전환·정밀화 평가를 대체하지 않는다. 렌더 도구의 입력은 코드에 명시된 과거 평가 기록이다. 렌더에는 MuJoCo·Pillow·NumPy와 해당 시스템 폰트가 필요하고, 영상에는 ffmpeg/ffprobe도 필요하다. 새 물리 step이나 정책 추론을 만들지 않으며 출력 영상은 원래 평가의 성공 범위를 확대하지 않는다. 현재 렌더 소스와 공통 helper도 새 출력의 입력 SHA에 포함한다.
+`validate`와 압현 probe는 기존 과제 검사이며 현재 J 저장본의 평가는 `evaluation.evaluate_finger_skill`을 사용한다. 렌더 도구의 입력은 코드에 명시된 과거 평가 기록이다. 렌더에는 MuJoCo·Pillow·NumPy와 해당 시스템 폰트가 필요하고, 영상에는 ffmpeg/ffprobe도 필요하다. 새 물리 step이나 정책 추론을 만들지 않으며 출력 영상은 원래 평가의 성공 범위를 확대하지 않는다. 현재 렌더 소스와 공통 helper도 새 출력의 입력 SHA에 포함한다.
 
 전체 이동표와 검증 범위는 [메인·도구 정리 기록](/home/ajou/yigyu/3/docs/2026-10-20/guitar_learning_main_tools_v1/README.md)을 따른다.
 

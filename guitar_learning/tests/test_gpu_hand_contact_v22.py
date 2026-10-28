@@ -10,8 +10,8 @@ import torch
 from scipy.spatial.transform import Rotation
 
 from guitar_learning.gpu.environment import TensorSongEnvironment
-from guitar_learning.gpu.geometry import apply, multiply
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.gpu.control import apply, multiply
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.tests import test_gpu_environment as fixtures
 from guitar_learning.tests.test_gpu_continuous_clean import ContinuousCleanTests
 from guitar_learning.tests.test_gpu_environment import fixture, SONG, BUNDLE

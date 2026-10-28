@@ -14,14 +14,14 @@ import numpy as np
 import torch
 
 from guitar_learning.core.control import LEFT_HAND_NAMES
-from guitar_learning.core.finger_control import default_profile
+from guitar_learning.core.control import default_profile
 from guitar_learning.runtime.finger_session import FlexibleLeftFingerSession
 from guitar_learning.runtime.persistent_session import PersistentHeadlessPreparedSession
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.song import hand_environment, runtime
 from guitar_learning.song.curriculum_runtime import CurriculumCoordinator
 from guitar_learning.tests.test_ppo import assert_tree
-from guitar_learning.tests.test_skill_environment import LongRecordedSession
+from guitar_learning.tests.test_training_environment import LongRecordedSession
 from guitar_learning.tests.test_song_environment import BUNDLE, SONG
 from guitar_learning.tool.validation.rollout import RolloutCollector
 from guitar_learning.training import parallel

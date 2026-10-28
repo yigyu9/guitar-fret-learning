@@ -5,9 +5,12 @@ import unittest
 import numpy as np
 from scipy.spatial.transform import Rotation
 from guitar_learning.quality.fretting_quality import classify_fretting
-from guitar_learning.core.fretting_v1 import FretTarget, FretContract, measure_sample
-from guitar_learning.core.geometry_v1 import frame, geometry_snapshot
-from guitar_learning.music_task import ScoreTarget
+from guitar_learning.core.measurement import FretTarget
+from guitar_learning.core.measurement import FretContract
+from guitar_learning.core.measurement import measure_sample
+from guitar_learning.core.geometry import frame
+from guitar_learning.core.geometry import geometry_snapshot
+from guitar_learning.song.task import ScoreTarget
 from guitar_learning.tests.test_fretting_v1 import fixture
 
 TARGET=ScoreTarget('a','e',0,5,1,1,1.,1.2,.8,1.,1.2)

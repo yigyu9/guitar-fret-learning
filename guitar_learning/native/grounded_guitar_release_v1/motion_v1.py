@@ -4,7 +4,7 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation
 from ..initial_pose_noise_v1 import pose
-from ..lower_body_release_v1.common import read,save,sha
+from guitar_learning.native.paths import read, save, sha
 
 WEIGHTS={**{'LH:'+digit+suffix:weight for digit in ('index','middle','ring','pinky')
             for suffix,weight in (('1_x',.7),('2',1.),('3',.6))},'LH:thumb2':1.,'LH:thumb3':.6}

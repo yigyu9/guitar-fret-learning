@@ -7,7 +7,6 @@ import torch
 from guitar_learning.gpu.environment import TensorSongEnvironment, TERMS
 from guitar_learning.gpu.finger_skill_environment import FingerSkillEnvironment
 from guitar_learning.tests.test_gpu_environment import fixture, SONG, BUNDLE
-from guitar_learning.tool.training.train_legacy import settings_document
 
 
 class FingerSkillEnvironmentTests(unittest.TestCase):
@@ -15,11 +14,12 @@ class FingerSkillEnvironmentTests(unittest.TestCase):
     def setUpClass(cls):
         torch.set_num_threads(1)
 
-    def make(self, phase='F', scope='phrases', hold=3, count=4):
+    def make(self, scope='phrases', count=4):
         metadata, snapshot = fixture(count)
         env = FingerSkillEnvironment(metadata, bundle=BUNDLE, song=SONG, device='cpu',
-            skill=dict(schema='guitar_learning.finger_skill.v1', phase=phase,
-                       scope=scope, hold_ticks=hold, exploration='independent'))
+            skill=dict(schema='guitar_learning.finger_skill.v3', phase='J', scope='scheduled',
+                hold_ticks=1, exploration='independent', planned_transitions=400, full_song_after=100))
+        if scope == 'full_song': env.set_evaluation(True, full_song=True)
         observation = env.reset(range(count), snapshot)
         return env, snapshot, observation
 
@@ -96,51 +96,8 @@ class FingerSkillEnvironmentTests(unittest.TestCase):
         self.assertFalse(bool(env.note['right'][0, note]))
         self.assertFalse(bool(env.note['coupled'][0, note]))
 
-    def test_full_song_view_matches_legacy_observations_rewards_costs_and_note_accounting(self):
-        env, snapshot, obs = self.make(scope='full_song')
-        metadata, _ = fixture(4)
-        legacy = TensorSongEnvironment(metadata, bundle=BUNDLE, song=SONG, hand='left', device='cpu')
-        old = legacy.reset(range(4), snapshot)
-        for _ in range(4):
-            for key in old:
-                actual = obs[key][:, :552] if key == 'state' else obs[key]
-                torch.testing.assert_close(actual, old[key], rtol=0, atol=0)
-            result = self.advance(env, snapshot)
-            original = self.advance(legacy, snapshot)
-            for key in (1, 2, 3, 4):
-                torch.testing.assert_close(result[key], original[key], rtol=0, atol=0)
-            for key in legacy.note:
-                torch.testing.assert_close(env.note[key], legacy.note[key], rtol=0, atol=0)
-            obs, old = result[0], original[0]
 
-    def test_R_only_rewards_support_but_preserves_measurements_and_cost(self):
-        env, snapshot, _ = self.make(phase='R')
-        env.clock[:] = 240
-        result = self.advance(env, snapshot)
-        allowed = ('song_wrist_position', 'song_thumb_support', 'action_change', 'terminal_failure')
-        for key, value in env.episode_reward_terms.items():
-            if key not in allowed:
-                self.assertFalse(bool(value.any()), key)
-        torch.testing.assert_close(result[1], sum(env.episode_reward_terms.values()))
-        self.assertTrue(bool((result[2] >= 0).all()))
-        self.assertTrue(bool((env.note['exposure_time'] > 0).any()))
 
-    def test_decision_plan_visits_before_and_after_off_grid_events(self):
-        env, _, _ = self.make()
-        for clock in (0, 175, 178, 179, 180, 181, 182):
-            env.clock[:] = clock*4
-            plan = env.plan_decisions(32)
-            self.assertTrue(bool(((plan >= 1) & (plan <= 3)).all()))
-            for row in range(env.N):
-                times = torch.stack((env.press, env.onset, env.end), -1)[env.focus_mask[row]]
-                scaled = (times-env.score_offset[row])*60
-                boundaries = torch.cat((scaled.floor().flatten(), scaled.ceil().flatten()))
-                ahead = boundaries[boundaries > clock]
-                if ahead.numel():
-                    self.assertLessEqual(int(plan[row]), int(ahead.min()-clock))
-        for phase in ('R', 'J'):
-            other, _, _ = self.make(phase=phase, hold=6)
-            self.assertEqual(other.plan_decisions(32).tolist(), [1]*4)
 
     def test_end_and_remaining_failure_cost_use_local_duration_not_source_offset(self):
         env, snapshot, _ = self.make()
@@ -156,7 +113,7 @@ class FingerSkillEnvironmentTests(unittest.TestCase):
         env.reset(range(4), snapshot)
         env.clock[:] = 236
         result = self.advance(env, snapshot, failure=True)
-        expected = 5*(env._episode_duration()-1).clamp_min(0)
+        expected = 2*(env._episode_duration()-1).clamp_min(0)+env.termination_note_budget.double()
         torch.testing.assert_close(env.failure_horizon_cost.double(), expected, rtol=1e-6, atol=1e-6)
 
     def test_evaluation_view_is_explicit_and_keeps_training_contract(self):
@@ -172,29 +129,32 @@ class FingerSkillEnvironmentTests(unittest.TestCase):
         self.assertTrue(result[-1][0]['evaluation'])
         self.assertEqual(result[-1][0]['finger_skill_eval']['scope'], 'full_song')
 
-    def test_planned_duration_is_scaled_and_observation_query_has_no_side_effect(self):
-        env, _, obs = self.make()
-        before = obs['state'].clone()
-        decision = env.decision_observation(torch.tensor([1, 3, 6, 2]), obs)
-        torch.testing.assert_close(decision['state'][:, -2], torch.tensor([1, 3, 6, 2])/6)
-        torch.testing.assert_close(before, obs['state'], rtol=0, atol=0)
-        with self.assertRaises(ValueError):
-            env.decision_observation(torch.tensor([0, 1, 1, 1]))
+    def test_full_song_retains_base_state_and_event_measurements(self):
+        env, snapshot, observation = self.make(scope='full_song')
+        metadata, _ = fixture(4)
+        base = TensorSongEnvironment(metadata, bundle=BUNDLE, song=SONG, hand='left', device='cpu')
+        original = base.reset(range(4), snapshot)
+        for _ in range(4):
+            for key, value in original.items():
+                actual = observation[key][:, :552] if key == 'state' else observation[key]
+                torch.testing.assert_close(actual, value, rtol=0, atol=0)
+            observation = self.advance(env, snapshot)[0]
+            original = self.advance(base, snapshot)[0]
+
+    def test_removed_phases_schemas_and_hold_options_are_rejected(self):
+        metadata, _ = fixture(2)
+        skill = dict(schema='guitar_learning.finger_skill.v3', phase='J', scope='scheduled',
+            hold_ticks=1, exploration='independent', planned_transitions=400, full_song_after=100)
+        for key, value in (('schema', 'guitar_learning.finger_skill.v1'),
+                ('schema', 'guitar_learning.finger_skill.v2'), ('phase', 'R'), ('phase', 'F'),
+                ('phase', 'auto'), ('hold_ticks', 3), ('hold_ticks', 6), ('hold_ticks', True),
+                ('exploration', 'correlated'), ('scope', 'phrases')):
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                FingerSkillEnvironment(metadata, bundle=BUNDLE, song=SONG, device='cpu',
+                    skill=dict(skill, **{key: value}))
 
 
-class SkillSettingsTests(unittest.TestCase):
-    def test_opt_in_and_phase_scope_defaults_and_legacy_unchanged(self):
-        legacy = settings_document('left')
-        self.assertNotIn('finger_skill', legacy)
-        self.assertEqual(legacy['song_training']['observation_dimension'], 552)
-        for phase in ('auto', 'R', 'F', 'J'):
-            new = settings_document('left', learning_family='finger-skill-v24', skill_phase=phase)
-            self.assertEqual(new['song_training']['observation_dimension'], 557)
-            self.assertEqual(new['finger_skill']['scope'], 'full_song' if phase == 'J' else 'phrases')
-        for kwargs in (dict(hand='right'), dict(hand='left', physics='cpu', device='cpu'),
-                       dict(hand='left', finger_action_mode='position'), dict(hand='left', finger_shape=True)):
-            with self.assertRaises(ValueError):
-                settings_document(learning_family='finger-skill-v24', **kwargs)
+
 
 
 if __name__ == '__main__':

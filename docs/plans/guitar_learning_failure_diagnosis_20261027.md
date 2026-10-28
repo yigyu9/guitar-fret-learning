@@ -1,7 +1,17 @@
 # 왼손 학습 실패 원인 진단 및 개선 구현 계획
 
 작성일: 2026-10-27
-상태: 단계0~1 완료. 단계2 정산·정적 부정 사례·실제 짧은 접촉/해제 검증 완료, loaded back-facing 미확인. 단계3 seed7 두 제어 비교 실패·seed17 재현 중. 단계4 독립 변경 준비. 최종 학습 개선 완료 보고는 아니다.
+상태: 목표각 NN 평균은 세음 전체126/128·A해제73/128이며, 후보 목표각 잡음에서는 NN10/128·신경망 없는 성공reference도2/128로 감소했다. 보호만 꺼도 NN확률 전체10/128로 같았다. 참고 잡음 실제분석 독립PASS(6aa6233d...)와 새distal128표본 이격 수집/실제검수PASS(985d9e94...)를 완료했다. N유지·이동의 가까운 기하가 남은 채 body-loaded/candidate가 재등장했다. 다음은 기존FK의 MCP2/native 일치 검증 후 유한해제 목표를 설계하고 접촉유지 탐색단위를 별도로 점검한다. 현재 기본학습 채택·100PPO·자유기타/J33 확대는 하지 않는다.
+
+- 원fresh PPO300: 전체0/896. 원incremental 지도학습1000회: 전체91/128·해제67/128. 같은 자료/NN교정 추가1000회는 둘 다 전체0/128로 후퇴했다.
+- 목표각 지도학습1000회: reference128/128·NN126/128, 해제는 reference128/128·NN73/128이다. 원fit의 저장 후 sys NameError/종료1/누락보고서2개는 보존했다. 독립 회복감사 뒤 새fit 없이 실제NN 평가와 분석을 완료했다.
+- 현재 모델의 손·전신 영상은 실제 종료0/91.963초다. 전체354프레임과 원평가의 원장·전128요약 대조 및 독립 QA PASS를 완료했다. env0는 세음 달성·A 해제 실패 사례 그대로다.
+- 같은fresh/자료/1000회 예산에서 지도학습 손실만 실제각도 rad² MSE로 바꾼 비교는 fit/evaluate 모두 종료0이다. 세음 전체109/128·A해제31/128로 후퇴해 채택하지 않는다. 실제 분석 독립검수 PASS(85249afe...)이며 원9개RL보상/물리/관측/성공·해제 기준을 유지했다.
+- 해제24행의 priority 두 token만 A4/B7으로 바꾼 CPU 감사는 독립PASS(ac56e9c7...)다. 예정PIP/DIP RMS가 .964/1.251→1.596/2.047도로 증가했으며 이변경은채택하지않는다. 원main에 A정보가 남으므로 정보누락이나 학습인과로 단정하지않는다.
+- A달성.25b 유보산술/탐색단위 두CPU 감사는 각각 독립PASS(7b51f77b.../c13b6284...)다. 예산·B7/B8불변/모집단·유한표본상한을 확인했고 원보상/모델/설정은 변경하지 않았다. 입력으로핀된상위PLAN은동결하고완료체크는별도RESULTS.md로기록한다.
+- 후보std native 사전비교는 두128조건 종료0/175.24초다. 평균126/73, 확률전체10/128·해제118/128·실패0이며 해제118중77은A미달성이다. 실제분석 독립PASS(4794c608...)다. 보호만 끈 후속 두128조건도 종료0/178.54초이며 평균125/64·확률10/124·실패0이다. 확률 A달성43 중 달성+해제41이며 미달성+해제83이다. 단독 보호 제거는 채택하지 않으며 실제분석 독립PASS(499e9071...)다. 같은 후보잡음을 원성공reference에만 넣은 한128조건도 종료0/86.67초다. 신경망0으로 원전체128→2/128·A54/B7 16/B8 12·A해제117(미달성해제65)·실패0이며 실제분석 독립PASS(6aa6233d...)다. 새PPO/fit/보상/기본설정 변경은0이다.
+
+저장공간 정리는 중단 상태이며 원자료와 진단 전체를 보존한다. 자유기타/J33·다른seed·원67음·자연스러움은 미완료다. 아래 시점별 진행 기록은 당시 상태를 남긴 이력이다.
 
 ## 목적과 기본 판단
 
@@ -206,3 +216,332 @@
 - 변경 전517Python/README/AGENTS519파일을 `archive/20261027_before_thumb_rear_surface_v3/`에 보존했다. 세부 수정·회귀 계획은 `05_verified_fixes/thumb_rear_surface_v3/PLAN.md`다. 기존 GPU 평가·영상은 원본으로 보존하며 수정 후 코드의 성과로 소급하지 않는다.
 - 수정 후 fresh 원래 gamma 기준선과 같은 기하의 시간척도 A를 비교한다. 기존 A/B는 GPU 미실행이며 과거 봉인을 보존한 뒤 현재 입력으로 재검사한다.
 - 과도한 중지/엄지 하중은 별도 문제다. 하중 감사18자료의 env0/60Hz 표본은 원인을 정책 단독으로 확정하지 않는다. 기존 움직임 비용0·native 가동범위·물리 PD를 유지한 채 접촉 하중/목표 추종과 해제를 먼저 분리 진단한다. 단음 점수만으로2~4음·자유 기타·전곡 단계를 통과시키지 않는다.
+
+## 교정된 기하 기준선 완료
+
+- 새 large128/H32/300/seed7 실행과10평가가 실제 종료코드0으로 완료됐다. 마지막 정책은127/128달성·압현 유지99.2644%·오압현0.6940%·물리/손목실패0이었다. 저장시점별 달성은2→21→37→90→74→127/128이며,250회 후퇴가 있어 연속2평가 통과 기준은 미달이다. 고정 기타·팔 teacher·중지1음 조건의 결과다.
+- source/입력 유지와 전체128 첫시도 분모는 원래 실행기로 검증했다. 최종 성공만으로 안정성·손 모양·과도한 하중·자유 기타·전곡 문제 해결을 주장하지 않는다. 같은 기하에서 시간척도 A를 별도로 비교할 기준선이 확보됐다.
+- 초기zero/reference·50회정책·최종정책의4조건에 대해 전체128 첫시도의 실제240Hz 힘·목표각·국소 point Jacobian을 수집한다. 기존 env0/60Hz 하중 감사의 표본 한계를 보완하며 제어/보상 변경을 추가하지 않는다.
+
+## 전체128환경 하중 관찰과 다음 제어 분리
+
+- 네 조건의128첫시도×872물리표본을 수집하고 독립 검수를 완료했다. 각 조건 실제 평가 JSON은 원래 평가와 전체 동일했고 종료코드0·장면종료·모델/RNG 불변을 확인했다.
+- final 음 구간 중지 합력 p50/p95/max는89.61/94.98/100.55N, reference는6.02/9.59/12.05N이다. final의 음 종료 뒤 중지 p50은95.35N이다. 이들은 몸체 합력이며 현 압력 인증이 아니다. 모든128성과 분모를 유지했고 이번 물리/손목 종료는0이다.
+- final 선택4 target−actual norm 중앙값44.34도와 지속 안쪽 요청이 관측됐다. Jn 외삽−59mm는 실제 침투량이 아니다. 실제속도와 Jacobian 예측의 음 구간 norm RMS잔차는 실제속도의약0.46%로, 국소 속도 분석에는 근거가 있다.
+- 현재 누적 제어는 접촉 부하나 actual q로 목표 누적을 중단하지 않는다. 행동0은 기존 목표를 유지하므로 이미 생긴 구동 오차를 지우지 않는다. 같은 기록 명령을 재생하는 진단에서 추가 안쪽 증분 억제와 기존 법선 오차의 유한 완화를 분리한다. 이 제어 변경은 아직 구현·채택되지 않았고 먼저 CPU 계획/검수 뒤 실제 비교한다.
+- gamma-only A는 기존 계획대로 별도 fresh300회 학습 중이다. 활성 소스와 기존 입력을 동결하고 GPU는 한 작업씩만 사용한다. A 결과와 하중 원인을 합쳐 후속 개선을 판단한다.
+
+## 시간 할인 A 완료와 후속 B/제어 분리
+
+- A를 같은 교정 기하에서300회/10평가 완료하고 종료코드0·실제 초기 모델 동일성·717입력·128첫시도 수치를 독립 검수했다. 달성0/80/126/0/0/0, 후반 오압현100%로 연속2평가 기준을 통과하지 못했다. 시간 할인 변경만으로 안정성 문제가 해결되지 않아 기본 채택/추가seed 확대를 하지 않는다.
+- 사전 계획의 B는 원래gamma .99에서 비용 예측 head2텐서만0으로 fresh 초기화해300회 비교를 시작했다. 실제 초기저장본에서 다른71텐서는 원래 기준선과 동일하다. 실패 벌점·종료·물리·행동 비용은 변경하지 않았다.
+- 별도 목표각 누적 진단은 `05_verified_fixes/contact_target_windup/PLAN.md`의3조건으로 내부 구현 승인을 마쳤다. 같은128환경 명령tape·첫2초무개입·고정materialpoint·원래native/rate box를 따르며 bounded halfspace projection으로 새증분억제와기존오차유한완화를 분리한다. CPU검사/독립검수 후root가GPU를직렬로인계한다. 현재생산제어는바꾸지않았다.
+
+## 목표각 누적 진단 CPU 준비 완료
+
+- 새 진단의6검사·독립360최소변경 투영 비교와696입력 검증을 완료했다. 실제GPU의 무개입 완전 재현과 첫2초 동일성은 아직 미검증이다. B의300회+10평가가 종료된 뒤3조건을 순차 실행한다. 활성 제어·보상·물리 파라미터는 유지한다.
+
+## B 및 접촉 목표 누적 비교 완료
+
+- B seed7/300회+10평가 실제종료0. 달성15/11/128/128/128/65로150–200/200–250 연속통과했으나 최종후퇴. 전체300회비용예측/advantage/손실0과실패0을 독립검수했다. 기존계획에따라seed17 재현을준비한다. 아직기본채택하지않는다.
+- 동일명령3조건GPU실제종료0, 원본전체재현과첫480물리표본동일성확인. 추가안쪽증분억제는128/128과중지합력p50 30.23N(원89.61N), 기존오차유한완화는0/128이었다. 높은잔여하중·접선변경·팔teacher혼입을기록했고실제결과독립검수도통과했다. 첫접촉부터누적을막는후속진단필요성을기존raw에서검토한다.
+- B 최고250회env0 손/전신영상을저장하고원래128배치·입력685개·모델불변·장면/인코더종료·화면방향을확인했다.
+
+## 후속 재현과 최초 접촉 비교 착수
+
+- Bseed17의최소orchestrator/CPU/독립검수/546입력봉인을마치고 실제GPU300회+10평가를시작했다. 초기2회업데이트를확인했고기존기하/보상/제어/실패비용은유지했다.
+- raw후속독립검수에서처음부하는clock413~422,2초clock480중지합력p5031.98N이었다. 기존누적억제의잔류하중이개입전preload와부합한다. 같은A에서clock480지연조건만제거하는새first-contact진단의CPU구현을승인했다. 기존실험·봉인·활성소스는보존한다. GPU는seed17완료후직렬인계한다.
+
+- Bseed17 actual initial의71일반tensor동일·head2zero와685입력검증을완료했다. 첫접촉timing진단은CPU6검사·739입력·독립검수를마치고GPU인계대기다. B250영상의8끝점판정도독립복원했으며끝쪽25%mesh범위에매끝점7~8개positive후보가있었다. 이근거만으로패드축소를자연스러운손모양해법으로채택하지않고원래판정은유지한다.
+
+## 다른 손가락의 압현 가능성 사전검사 준비
+
+- 검지·약지·소지 원자료 후보를 현재 CLI로 전달하는 준비와 독립 검수를 완료했다. 입력558개를 별도 봉인했으며 기존 중지 실험과 활성 소스는 변경하지 않았다. 각 손가락 initial 저장본의 reference/zero/random 4첫시도, 총12단계를 실행할 예정이다. 원자료의 접촉 성공을 새 팔 제어 조건의 성공으로 간주하지 않는다.
+- GPU 순서는 B seed17의300회 및10평가 완료 → 첫 접촉 시점 제어 진단 → 다른 손가락12단계 사전검사다. 현재 B seed17은282회까지 관측했고 최종 성과 판정은 대기 중이다.
+
+## B seed17와 최초 접촉 제어 실제 실행
+
+- B seed17의300회+10평가가 실제종료0으로 완료됐다(총1799.93초). 저장시점 달성은0/0/73/77/75/22(각128)로 연속통과가 재현되지 않았다. 훈련 중201회 한 환경의 심각 손목이탈 이후 비용예측이 학습된 사실과 최종 성과를 별도로 분석·검수한다. B 기본 채택은 보류한다.
+- 최초 접촉부터 추가 안쪽 증분을 억제한 단일 진단은 실제종료0/38.82초,122/128달성·clean94.81%·wrong4.15%·물리/손목실패0이었다. 실제prefix·tape·원래입력·장면종료 감사는 통과했고 하중 비교의 독립 검수를 진행한다. 아직 생산 제어로 채택하지 않았다.
+- 검지·약지·소지12단계 사전검사를 GPU에서 직렬 시작했다. 각 initial.pt만 평가하며 학습된 final.pt는 사용하지 않는다. 원자료접촉 성공을 새조건의 성공으로 상속하지 않는다.
+
+## 기타 손가락 사전검사 완료 및 분기
+
+- 검지·약지·소지12단계가 실제종료0(310.53초)으로 완료됐다. 각4첫시도 reference는검지0/4·약지4/4·소지4/4,zero는검지0/4·약지1/4·소지4/4였다. 소지는팔이동만으로이미접촉해손가락학습능력의증거가아니다. 검지는음시작뒤표본에서약2cm패드거리와손목추종오차가남아기준제어부터분석한다. 원래단음목표·시도분모는보존했고실제결과독립검수진행중이다.
+- 최초접촉누적억제는중앙값하중감소와함께일부큰순간하중/미달이남았다. 기존원본과2초지연조건·신규조건의6미달env 및최대하중env를현재raw로대조한뒤다음제어변경을정한다. 강제B/관절범위축소/움직임비용추가는하지않는다.
+
+## 완료 검수와 검지 후속 계획
+
+- Bseed17 최종분석·first-contact 실제비교·다른손가락12단계 실제분석의 독립 검수가 모두 PASS다. 원자료·봉인·활성소스는 유지한다. 고정중지와scripted손가락대조를자유기타/RL/전곡의성공으로확대하지않는다.
+- 검지시간추적에서2초뒤손목오차가재증가하고보정누적도커져단순준비시간부족으로설명하기어렵다. `05_verified_fixes/index_wrist_gain_probe/PLAN.md`에기존최대보정0.5→0.1도/tick만바꾸는새4단계분리검사계획을작성했다. 현재추가CPU분석/최소wrapper준비·검수가먼저이며root GPU실행은그뒤다. 새로운gain은사전고정하고물리·PD·가동범위·접촉·음시간·보상은유지한다.
+
+## 6미달·하중 peak 후속과 기준 영상
+
+- first-contact후속독립검수PASS:5미달은선택중지자체wrong현/프렛,1건은unload/wrong혼합이다. 두큰peak는gateON중발생했고gateOFF는한peak뒤였다. 같은clock고정점속도에서선택4가outward여도다른관절성분이더inward여서전체가안쪽인경우가확인됐다. 어느관절이힘peak를유발했는지는확정하지않는다. 선택4 target증분제한만으로전체실제안쪽속도를제한했다고볼수없다.
+- 기존검지reference의원4환경/env0첫시도손·전신영상을실제GPU종료0/34.88초로저장했다.110프레임·221control·884physics,기존q/target/body등11배열및왼손힘exact를확인했고화면방향·머리발표시를검사했다. 영상은기준도달실패사례이며학습된정책이아니다. 경로: `03_short_learning/other_finger_precheck_v3/native_video_index_reference/README.md`.
+
+## 보정 속도 단일 비교 완료와 좌표 일관성 후속
+
+- 보정 cap0.1도 조건의4단계실행은실제종료0/103.60초·실제initial73tensor동일·현재703입력/준비689핀·원12/신4scene종료를확인했고실제분석독립PASS다. ref/zero/random모두0/4로채택하지않는다. 손목추종은47.60→7.42mm,12.11→2.13도로개선됐지만선택index1_z약10.33도차이와position/loaded동시충족실패가남았다. 추가gain탐색은하지않는다.
+- root읽기CPU예비검사에서FK는현재q/nativepose와일치하지만position-coordinate유한차분Jacobian이저장된native-J기반보정delta를재현하지못하는후보를발견했다. nativeqd를qpos차분으로간주한속도복원도큰차이가있었다. 회전벡터위치와각속도의미분좌표·시각정합/COM/행열대응을독립검사한다. 아직오류확정/생산수정/기존진단소급변경은하지않는다. 필요하면원검지reference를동일제어로한번만재생해같은시점q/qd/body/nativeJ를소량수집한다. 소유폴더: `05_verified_fixes/jacobian_position_coordinate_audit/`.
+
+- 사용 위치의 읽기 분류:기본J33 rawpolicy→controller.targets는nativeJ에서qtarget증분을만들지않는다. 직접연산후보는진단short-wrist/thumb-helper/docsfilter다. nativeJ를nativeqd속도·gravity/Jᵀforce에쓰는곳과분리하며,이후보를원래전곡학습실패의확정원인으로확대하지않는다.
+
+
+## 동시 좌표 감사 완료 및 최소 수정 착수
+
+- 실제 관찰 종료0/32.06초,4시각×4환경의 q/qd/nativeJ/body를 같은 시각에 수집했다. 원 평가 exact, trace18/19 exact(힘1필드 최대3.81e−6N차)이며 원자료와690봉인을 보존했다. 실제 분석 독립 검수 PASS다.
+- native 속도 Jacobian과 q-position 미분은 다르다. 팔4개3축의 국소 변환 후 downstream 손목 독립 FK미분과 linear3.87e−7m/rad/angular3.90e−11까지 일치했고 원 helper delta4개는4.38e−8rad 이내 재현했다. native q±epsilon 직접 실험은 아니며 손가락 MCP/발 등으로 일반화하지 않는다.
+- 현재519원문을 새 archive에 검증 보존하고 `05_verified_fixes/wrist_position_jacobian_v2/PLAN.md`대로 진단 wrist helper만 교정한다. 기본J33 rawpolicy 직접사용은없고, 힘/속도J는원래대로유지한다. .5도 cap/2초ramp/3초onset/PD/범위/보상 불변의 새initial 검지4단계가 먼저다. 압현 개선·다른손가락학습·전환·자유기타·전곡은 여전히 미완료이며 전체 목표를 유지한다.
+
+
+## 위치 미분 교정과 검지 실제 재검사
+
+- wrist v2 최소수정·38 CPU검사·별도 코드검수 PASS, 새 initial모델73tensor가원래와동일했다. 새GPU4단계종료0/103.875초·686준비핀·모든scene종료/strict검증PASS다.
+- ref/zero/random모두0/4로압현은해결되지않았다. reference env0 음구간 wrist오차25.10mm/8.14도와패드13.97mm,position/loaded0이다. post-ramp전체에서손목오차최대72.26mm·팔target-actual최대축26.50도가남는다. 좌표교정의정확성과실제압현도달개선을구분한다.
+- 다른손가락중지/약지/소지12단계회귀를현재source로준비했고실제결과는별도검수한다. 다음은새gain탐색대신 기존raw에서 actual오차를누적request에더하는feedback과물리추종lag를분리하는CPU감사다. 가상requested-FK를native도달가능성으로확대하지않는다. 활성소스는동결한다. 학습/전환/자유기타/전곡전체목표는미완료로유지한다.
+
+
+## 다음 최소 제어 비교 계획(아직 미구현)
+
+`05_verified_fixes/wrist_position_candidate_v3/PLAN.md`에 actualq+DLS의위치후보를기존FF+correction proposal쪽으로유한하게요청하는비교를기록했다. rawdelta를그대로누적하는방식과분리하며현재.5도cap/FF/ramp/속도·범위/PD/보상을보존한다. 실제36시도회귀분석과requested-FK감사독립검수완료후새보관본을만들고최소구현/검수/native검지·중지회귀를진행한다. 새gain탐색이나실제향상추정으로대체하지않는다.
+
+
+v3구현43CPU/별도code및700입력준비검수PASS,8native단계종료0/199.807초. actual결과는고정기타·팔안내·freshinitial의scripted/zero/random이며학습성과가아니다. env0raw예비관찰에서손목추종은크게개선됐으나두reference압현0/4로남아원source의physics/충돌/선택finger actual-vs-target정합을별도CPU확인한다. rootREADME/AGENTS와실행준비입력은actual분석검수까지동결하고,전문README의손목제어설명은그뒤원문보존후갱신한다.
+
+
+## 정확한 손목 추종 뒤 손가락 도달 분리
+
+v3실제분석과source자세감사의독립검수모두PASS다. 검지env0음중손목오차중앙값0.205mm/0.041도,중지2.808mm/2.255도이나reference각0/4다. 같은source drive target은같은actual자세가아니며검지끝마디native palm-relative위치차5.020mm가확인됐다. source와current의전체action계약/handcollision/핵심physics소스가같으므로이름v19/v22만으로충돌변경을원인이라고볼수없다. 원source중지native bodypose는저장되지않아미확인이다.
+
+다음은동일row1/8에서선택4축유한grid다. 각225전체표를사전고정하고실제native범위내검지135/중지180만실행하며기준0offset112행을포함한다. 실패포함첫시도분모와원래음판정을보존한다. 현재CPU준비688핀/순수검사는완료했고별도검수중이다. policy학습/기준완화로대신하지않는다.
+
+저장된v3검지reference env0에서첫마디합력중앙값73.4N,가운데/끝마디0N이며zero/random의첫마디도63.7/49.9N이다. 검지·중지첫마디의벡터상쇄는접촉쌍인증이아니다. 별도 index_proximal_pair_isolation_v1에그1쌍만비활성화한native A/B를계획해관여를분리한다. 다른1484human쌍과external불변을검사하며active기본collision을수정하지않는다. GPU는root직렬실행한다. 전체압현/학습/해제/전곡goal은미완료다.
+
+
+## 동일 손목 안내에서 손가락 도달·구동 상한 분리
+
+원20Nm 유한grid 검지135/중지180 첫시도 실행·전체450선언표 분석·독립검수PASS다. 기존최소변경순위로 검지115(0,0,+5,0도), 중지114(0,0,+5,−5도)가 선정됐으나 새4환경 재현은 검지3/4·중지4/4였다. 검지실패env2는loaded0/position11로남았으며 상세native pose가없는환경의 원인을 단정하지 않는다. 검지선정성공env0의첫마디합력평균72.41N도남아압현가능성과적절한하중을구분한다.
+
+검지·중지첫마디 1쌍만비활성화한별도A/B는 다른1484쌍·external 불변을확인했으나 검지0/4를유지했고하중이첫마디73.4N에서다음마디52.7N로이동했다. 기본90충돌쌍은변경하지않는다. 두실제분석모두독립PASS이며새단음성과로과대해석하지않는다.
+
+원래선정목표에서16개비엄지LH effort20→0.25Nm만바꾼별도진단은실제종료0/60.342초다. 검지0/4·wrong100%, 중지4/4·clean100%이며물리/손목실패0이다. 검지env0첫마디합력은72.41→8.93N로줄었지만손목위치오차는0.843→12.440mm로커졌고손목y요청/target이−45도하한에체류했다. 선택4명령·target은원본과같지만actual/팔feedback은달라지므로힘상한하나로기본채택하지않는다. 현재actual분석독립검수중이다.
+
+다음은cap실제검수뒤 두조건index115/middle114의손/전신env0 native비교영상과 동일315목표각의0.25Nm 유한grid다. cap변경후원20Nm목표가동일실제자세를재현한다고가정하지않는다. grid가통과후보를보이면원순위1개만fresh4재현하고,없으면추가상한/범위검색대신손목workspace·팔bounds·비선택B간섭을분리한다. 원판정/음시계/가동범위/90쌍을완화하지않는다. 전체학습/해제/다음음/자유기타/67음평가는여전히미완료다. 저장공간정리는사용자확인에따라중지하고진단및원기준결과전체를제외한다.
+
+
+## 0.25Nm 동일 grid와 비교 영상: 단계 체크리스트
+
+- [x] 원315목표의낮은상한재검사 실제종료0/68.703초,833준비핀·90쌍·105속성·입력불변·장면종료확인. 실제분석독립PASS(review1ebe48e9...). 검지21→38/135·원rank112,중지4→5/180·rank114다. 전체wrong평균도검지.31852→.40741/중지.65556→.67778로증가해전체해결로해석하지않는다.
+- [x] 기존115/114선정각20/0.25Nm 네조건손·전신8영상 실제종료0/132.839초,836준비핀. 각4환경중env0첫시도영상이며학습checkpoint/새112성공영상이아니다.
+- [x] 영상실제QA/원raw정합/화면방향·전신머리발/인코더/독립검수PASS(review814d1a67...). 8MP4/32대표프레임·4env0/총16시도·878끝점,공통물리필드exact/시간표현만4.44e−16초차이.
+- [x] 새검지112 fresh4 최소producer/CPU준비893핀완료. cap원execute/4환경105검증/collect/acceptance를재사용하고새입력폴더·선택맵만일시연결/finally복원한다. 원소스/원JSON/원봉인은변경하지않았다.
+- [ ] 새검지112 준비독립검수→GPU1scene/4첫시도→실제분석/검수. 중지114는동일상한·동일목표의기존검수된4/4를재사용하며반복GPU검사는하지않는다. 출처를구분한다.
+- [ ] 재현성과자세·하중을확인한후해당손가락짧은학습/해제·다음음검사로진행. 자유기타/67음전체목표는미완료로유지한다.
+
+
+새검지fresh4 v1은nativeimport순서위반으로장면생성전실제종료1/0.969초다. 사전gate에서settings()→runner→Torch가불려Isaac Gym import가거부됐다. 소스/준비/review/실패launcher/log/출력전부보존하며압현결과로세지않는다. sibling reproduction_v2에서해당설정동일성을검수된두JSON직접비교로바꾸고CPUprepare가실제prenative gate를먼저실행해torch/numpy/isaac미import를확인하도록회귀를추가했다. 893핀준비완료·별도검수대기,아직v2native미실행이다. 활성학습소스/원물리/보상은바꾸지않았다.
+
+
+검지112 v2실제GPU종료0/30.489초,4/4·clean1/wrong0·물리/손목실패0. 893준비핀/105속성/90쌍·입력불변·장면종료·별칭복원확인했고실제분석독립검수중이다. 원v1import실패와분리하며중지동일조건기존4/4를재사용한다. root진단README최신요약도원문보존후갱신했다. 다음학습전무명령/무작위대조와약지소지회귀10scene/40첫시도PLAN을작성했고별도최소CPU구현중이다. 이새진단은아직GPU미실행이며학습성과로보고하지않는다.
+
+
+검지112 v2 실제분석 독립PASS(review83ab90ea...), 새4시도/기존중지4시도·221끝점·LH22·팔12·9보상독립검산. 검지음중첫/끝마디평균7.6808/.14685N·손목.8215mm/0.2312도, MCP_z목표−실제10.866도잔여를유지한다. 단계성과는고정명령의압현가능성이다. 다음40시도CPU준비를진행하며잔여MCP오차는접촉constraint와native2축관절특성을설치문서/기존native자료읽기만으로추가검토한다(추가GPU/물리변경은수행하지않음).
+
+
+## 학습전대조48분모 완료·다음 두 독립 준비
+
+- [x] 새10scene/40first·기존reference8=48분모실제분석독립PASS(review0db6a744...). ref검지/중지/약지각4/4와zero/random각0/4로선택finger명령기여가확인됐다. 소지ref/zero0/4wrong1·randomenv3만1/4이며그환경상세q/force는없다. 물리/손목실패모두0.
+- [ ] 소지동일225표중native범위내72목표유한grid:CPU준비1069핀/별도검수중. source원row23/PD/rate/90pairs/cap.25/원음/판정은불변. 원인분리진단이며성공보장·추가탐색범위확대없음.
+- [ ] 검지low_effort_index_learning_v1의별도128환경캡검증wrapper/CPU준비. 원hard4/135180우회없고명시128readback/계약identity/source핀을보존한다. native384사전시도(ref/zero/random각128)검수·사전수용기준통과뒤에만fresh300/50간격고정평가로간다. 원보상/PPO/costhead/gamma/production20/J33불변.
+
+2026-10-28KST로날짜가바뀌었지만동일진단실험의폴더/원자료경로는2026-10-27아래그대로유지한다. GPU직렬root전담,기존source·정리제외자료보존,현재새128학습은미실행이다.
+
+
+소지72grid는1069핀준비독립PASS후실제GPU종료0/33.710초, 225선언·72실제·153범위제외를보존했다. 원순위후보121/122중121을지정했으며아직fresh4재현전이다. 전체원장/상세6행분석독립검수중. 검지128wrapper는1073핀CPU준비완료·독립검수중이며새학습0, 원PLAN/소스/봉인입력은후속학습·평가·영상까지동결한다.
+
+
+검지128 CPU준비독립PASS(최종1075핀) 후 reference/zero/random 각128첫시도 GPU3scene 실제종료0/100.798초. 기준128/128·clean99.8471%·wrong0, 무명령0/128, 무작위31/128·clean24.3574%·wrong19.2087%였다. 학습성과가 아닌 비NN 대조이며 전체384원장/실제105native·close/source/acceptance 독립검수 뒤에만300학습을 시작한다. 현재 학습은 아직0이다.
+
+
+검지128 사전actual384 독립PASS(review07566ae9...)와strict stdlib train gate를통과하여large128/H32/seed7 fresh300(1,228,800전이) 학습을시작했다. root session21676은train후initial/50/100/150/200/250/300 각128첫시도를직렬평가한다. 원보상·PPO·gamma/costhead·실패·cap.25/손목v3조건유지, 모든준비/사전분석/PLAN/원자료는동결이다. 소지fresh4는CPU준비검수후대기하며현재GPU와겹치지않는다.
+
+
+검지large128/seed7/cap.25의300학습+7고정평가 전체실제종료0(1669.258초). 0/50/100/150/200/250/300 달성은0/128/128/128/0/0/76 (각분모128)로, 중간학습가능성과후반퇴행을분리한다. 원9보상/PPO/costhead/gamma를유지했으며기본채택은하지않는다. 전체실제분석·독립검수및퇴행진단후다음개입을선정한다. 동시에root소지121 fresh4만직렬GPU시작(session8866),1108핀준비독립PASS를유지했다.
+
+
+## 검지300 실제·영상·퇴행감사 및 소지4 재현 최종검수 완료
+
+- [x] 검지300+7×128 실제분석 PASS(841592ad...), 영상4개/440프레임·16PNG·2sheet QA PASS(cc88662a...), 퇴행감사 PASS(31326543...). 50/100/150성공과200/250붕괴·최종76/128을모두공개한다. 상계에서양의명령지속은확인됐지만목표는bounded clamp이며무한누적버그로주장하지않는다. cp150PIP차72.29도와DIP83.73도는자연성미해결이다.
+- [x] 소지121 fresh4 actualPASS(247a2eef...),4/4·clean1wrong0·fail0. 현재별도선택4각reference는네손가락각4/4이지만자유/J33·동시수행성과가아니다.
+- [x] 진단README 최신요약 갱신전21053바이트보존·과거본문불변·16링크검사·문서독립PASS.
+- [ ] 원B cost-head0초기화만현재낮은상한검지조건에서재사용하는새wrapper/CPU준비·독립검수. 실제비용0에서도costGAE가actor목적에들어간경로(190회std .024대reward .029,200회costEV−36)는확인했지만인과단일원인은아니다. 원9보상·제어·물리·PPOgamma·초기actor/Rcritic71tensor/RNG는유지하고2cost파라미터만0으로한다.
+- [ ] CPU독립PASS후에만root직렬새300+7고정평가. 원인접2music기준을유지하고200/250/300후반세평가유지를별도사전판정한다. 자세·추종포화는별도비교하며성공해도해제/다음음·seed/자유기타/67음완료로부르지않는다.
+
+후퇴메커니즘은비용추정과목표선택/물리추종을분리해계속확인한다. 기존position/목표완화대조의기존근거를재사용하고동시에여러변경을적용하지않는다. 저장공간정리중지·진단/원기준자료보호는유지한다.
+
+
+B단일초기화비교는CPU독립PASS후1267핀최종봉인(b9b5f0aa...)했다. baseline73중71exact/2costzero·추가RNG0·초기actor/Rvalue/std/optimizer동일·양의cost학습가능·evalrenderfreshFalse보존·strict교차거부·alias/출력보호를검증했다. root session71599에서fresh300+7고정평가를직렬시작했으며새성과는아직미검증이다. 현재source/모든기존자료/준비입력은동결하고새analysis준비만별도진행한다.
+
+다음원곡검지전환읽기전용탐색: 동일finger기회는source4→7→8→11이며A(3현4fret)→B(2현5fret)→B→A다. closed_groups는[4],[7,8],[11,12]이므로최소닫힌prefix는3음4→7→8이다. onset은원audio2.4497/3.4017/4.8065, 7/8은press3.2817·release5.1548를공유하여그사이무음을강제해제로바꾸지않는다. 현재A teacher/ref는B도달미검증이며기존24목표에도Breference가없으므로B기준압현실제도달을확인한뒤에만전환학습한다. 원음시간/다른finger원67목표를보존한다. 현재전환코드/새GPU실행0이다.
+
+
+B단일대조의300학습은실제종료0/1409.426초로끝났으며root직렬7고정평가를진행중이다. 아직전체8child완료·실제비교분석·수치검수전이므로개선판정을하지않는다. 다음source7은A손목안내를원finitefretcell중심차(+7.693,−28.504,0)mm만큼옮기는가설reference1개/4환경으로CPU준비한다. arm12·wrist회전·선택각은A와같으며B실제도달자료로위장하지않는다. source7음길이·공유release와257tick시계를원곡대로보존한다. GPU는현재평가완료뒤독립준비검수가끝난경우만직렬실행한다.
+
+
+B train+7평가는실제전체exit0/8children0/1676.633초로종료해분석main실행을인계했다. source7단일평행이동reference는독립CPU검수PASS/932핀최종봉인76f82a1e...뒤root session65327에서4환경첫시도실행을시작했다. B실제비교·source7도달성과는아직수치검수전이며원보상/성공/음시계·90쌍/원자료를유지한다.
+
+
+B실제분석독립PASS(review49995b26...,verification4691201b...):0/50/100/150/200/250/300 각0/128/128/128/128/128/128(분모128),후반200/250/300유지PASS·costGAE/loss300행모두0·초기71exact/2costzero확인. 단일seed통제대조에서후퇴개선근거는있으나자연성은미해결이다. B300env0음중PIP실제8.52/target90도,DIP89.21도와손목16.591mm/3.854도잔여를숨기지않는다. best=latest300을원사전순위로선정해root session84044에서손/전신실제영상2개를직렬저장중이다. source7단독4/4는actual독립수치검수중이고그PASS뒤원곡3음source4→7→8의354tick조건부prefix를최소CPU구현한다. 원allfinger그룹과의차이·원67행보존·공유press/release·해제원래latch를별도기록하며아직전환GPU는0이다.
+
+
+B300실제손/전신2영상(root84044,42.267초)과CPU전체220frame/8PNG/2sheet QA(42757)독립PASS(review20f32e91...). 221끝점q/target/body/action/gate/wrist9종exact·합력최대1.144409e−5N차이를보존했다. 정상방향/머리양발·일부넥가림과실제굴곡잔여를확인했다. source7 actual독립PASS(review5b5acc76...),4/4/clean1wrong0fail0·257끝점47음중·wrist2.009mm/.6305도이며A→B전환이나NN성과가아니다. 다음prefix계획root검토후새폴더에최소CPU구현중이며GPU0다. 원allfinger group과의차이를명시하고원samefinger nextpress상한산술로354tick, B7/8무음gap 강제해제없음·3음각원장과원released/release_s별도관찰을보존한다. 원acceptance는mean clean≥.70이며단음B학습별도.90판정과혼용하지않는다. rootREADME는기존57c24...본문을별도보존하고새비교요약4074a6a0...로갱신해문서검수를요청했다.
+
+
+3음prefix최소producer/view/runtime/evaluator459줄및CPU준비독립PASS후원970핀+review2=972핀최종봉인(9d7c0970...)했다. root session42143에서단1GPUscene/4firstattempts/3×4원장/354control상한노NNreference를시작했다. 기존B/단음/source/입력불변,원all67행/3mask/3기회수·원보상·90쌍/105cap·원release별도기록을보존한다. actual결과는아직미확인이다. 별도candidateDIP양증분가드진단은PLANroot검토후얇은hook/CPU준비만진행하며GPU0·원동결입력변경0이다. 문서RNG표현의CPU증거범위를명확히한rootREADME a3340639...는최종문서독립PASS(a60ae0d3...)다.
+
+
+3음prefix기준명령native실제전체exit0/root42143/47.663초,354끝점·4firstattempts종료. 원장예비집계는A4/4·B7/8각0/4wrong1·전체3음0/4이며물리/손목실패0이다. 단독B7성공을전환성공으로확대할수없음이확인돼새학습을바로시작하지않는다. actual독립분석에서원wronggate·A접촉지속/원release latch·손목actual추종/팔bounds·각도/힘을먼저분리한다. gap내finger release→wristmove→refclose는아직가설이며B각도나가상FK만으로native해제가능성을주장하지않는다. 원972핀/원자료/음시계/성공조건을유지하고임의grid·gain/속도확장을하지않는다.
+
+
+3음prefix actual+분석source 통합독립PASS(review4f62f039...): 원982direct/974verified·354끝점/12note/4episode9보상·기하/시계/release·힘/각도검산. A4/4·B7/B8각0/4wrong1·fail0이며B음중원assigneddistalloaded이지만position/positive/candidate0,해당index3의own_wrong_fret/string동시발생·otherhigher0이었다. A candidate는B7음46/46/B8음21/21남으나중간off도있으므로240Hz영구연속접촉을단정하지않는다. 첫saved Aoff4.95는원end+.1창밖이라releasedFalse·release_s0그대로다. 선택PIP/DIP는reference54.485/24.068도를대체로따라갔고손목평균17~18mm오차였다. 접촉쌍/단일원인확정은아니다. 기존A noNNzero128의검증된무압현target으로유한해제→이동→재압현하는새계획만준비하며추가학습을바로시작하지않는다.
+
+
+현재B300의candidate중DIP양의target증분만억제하는진단은probe217줄/CPU134줄의최소wrapper·독립검수PASS후원1418+review2=1420핀봉인(5bd649c7...)했다. root84989에서passthrough→candidate_dip_no_positive_increment 두조건각128첫시도를직렬GPU실행중이다. 원Bstrict/freshFalse·cap128/native10590pairs/원보상/evaluator유지,negative/opening및다른104열은동일snapshot원출력exact·memory/scene/obs정합을검사했다. 이는frozenpolicy실행개입의closed-loop진단이며새학습·기본제어채택이아니다. 현재효과미검증이고소스/1420/원자료동결이다.
+
+
+DIPguard두조건root84989실제전체exit0/85.074초각128평가종료. 원장예비집계두조건모두128/128clean1wrong0fail0이며자세/기하/제어sidecaractual분석과통합독립검수전이다. 새압현/행동제어학습성과로확대하지않고원Bstrict source/1420/입력불변을유지했다. 추가staged release_transfer PLAN은root검토후최소CPU구현중이다. N은원A zero128에서distal0N/candidate0인선택4목표이며body1 8.47N은남고이미압현한A에서실제풀렸다는증거가아니다. .10/.4417/.12초고정단계는원.6617gap안이며Cartesian목표속도만44.62→66.84mm/s로변함을명시,원joint속도/물리/90쌍/보상/음시계/성공조건을유지한다.
+
+
+DIP추가양증분억제actual+source통합독립PASS(reviewf5427fe9...,verificationfea454ee...): 두조건128/128clean1wrong0fail0,guard128환경총19457control억제·각조건negative3072통과·104열/targetmemory/sceneobs잔차0확인. env0음중PIP8.52155→52.42589도/DIP89.21126→37.19401도, DIPtarget90.00019→37.67494도·PIPtarget90유지, distal합력7.97780→6.61455N·손목16.59123→16.51664mm다. currentvalidcontact뒤DIP계속증분이극단자세에기여한통제대조근거지만closedloop로다른관측/NN행동도변하고자연성/전127압력/학습·다른finger/자유기타성과로확대하지않는다. 원B300대passthrough평가는exact이고netforce만최대1.144409e−5N차이를보존했다. root그래프직접확인후새guard조건native손/전신2영상준비만인계했으며기존B3002영상은비교대조로재사용한다. 아직guardvideo GPU0/기본제어채택0이다.
+
+
+개선DIP조건의실제영상은새native_video_v1/render.py123줄·CPU65줄로원renderer/strictB/freshFalse/128cap/동결observer를재사용했다. CPU준비독립PASS후1513+review2=1515핀최종봉인(cc9da2f3...),root22481에서단1scene/env0손·전신2영상저장을시작했다. 원evaluate fingerprint콜백은렌더에서미호출이라고정확히보고하고원renderer모델/체크포인트불변·업데이트300·close검증을재사용한다. 원B3002영상은재사용대조다. 실제픽셀/원평가재현·QA는종료후별도로검수하며아직미완료다. stagedrelease CPU구현과원972/1420/1515/source/raw동결을유지한다.
+
+
+원N3phase stagedrelease_transfer는CPU독립PASS/1215핀최종봉인(db45e977...)후root91905단1GPUscene4firstattempts/원12note·354control상한으로실제실행시작했다. 원prefix view/collector/compact/env/native4verifier재사용·새일정두함수만scoped연결,60Hz4env선택요청과240Hz4env×5phase최초사건/계수만bounded추가했다. 원1215/972/1420/1515/source/raw동결이며실제A release/Bnegative및원각음성공은아직미검증이다. 개선guard영상root22481은실제종료0/49.306초·CPU220decode/8PNG/2sheet 및원평가221종q/target등exact/force3.814697e−6N차이·whole128sidecarexact까지확인했고최종시각/수치통합독립검수중이다. root도2sheet+fullres를확인해정상방향/머리양발·가림한계를기록했다.
+
+
+### 2026-10-28: 참고 전환 검수 완료와 정책 직접 제어 준비
+
+- [x] staged release-transfer 실제 결과·원9항·입력 지문 독립 검수 PASS. 각음4/4와 A 해제4/4; 이동 중 재접촉과 B 근위하중 증가도 공개.
+- [x] DIP 추가 양의 증분 억제128대조 및 손·전신 영상 QA 독립 PASS. 새 학습/기본 채택 성과로 해석하지 않음.
+- [x] 새3음 학습 PLAN 검토·CPU 준비 구현 승인. 실제 새 schema·첫 tick NN 선택4축·N 주입 금지·음악/해제 기준 별도.
+- [x] 새128 reference/zero/random 사전 대조와 실제 검수:384시도·1152음, 참고 각음/all3/해제128/128·실패0; 무명령각0·무작위각10/15/18·all3 1/128. 음악/해제/stage_ready별도 통과.
+- [x] 준비 기준 통과 후 fresh large128/H32/seed7/300+7평가, 분석·best/latest 영상. 실행·검수 완료이며 음악/해제 기준은 실패했다.
+- [ ] 자유 기타·J33·원67음으로 단계적 평가.
+
+
+2026-10-28 추가 진행: 새3음 학습 준비1602입력·CPU/독립검수와 실제384대조 검수 PASS 후 fresh large128/H32/seed7/300+7평가를 시작했다. 선택4축 첫tick NN 제어·N은비NNreference만이며, 기본학습 소스/이전 봉인/보상9항/실패조건은 유지한다. 실제학습 결과는 아직 미확정이다.
+
+
+### 2026-10-28: 새3음 NN 학습 실제 실패를 확인
+
+- [x] large128/H32/seed7/300+7평가 actual 종료0, 총1873.64초·원1602봉인불변. 완료3456episode/열린5376전이 구분.
+- [x] 실제 분석/독립검수 PASS. 고정평가전체0/896·A해제0;100/150/250은B두음각128,200/300은A만128. 음악/해제/AND 인접2·후반 기준모두미달. cost/GAE/critic은300회모두0.
+- [x] 사전순위 best250/latest300 손/전신4영상과 QA 독립 PASS(708프레임, env0 가림 한계 유지).
+- [x] 접촉 기억 guard 단일변경 paired frozen300 PLAN 검토·CPU 준비 승인. 기존currentgoal 교체 뒤 A 접촉잔존시 DIP닫기 재개를 분리하며, 참고N/보상/범위/힘/손목/모델은 변경하지 않음.
+- [ ] 제어 비교 실제 결과를 근거로 다음 보상/제어/과제학습 변경을 좁힌다. 자유/J33/전곡 확대는 보류.
+
+
+2026-10-28 추가 진행: best250/latest300 손·전신4영상의 전체708프레임 QA와 실제 수치 독립 검수를 완료했다(review541586a6..., verification7baf5c23...). 접촉 기억 비교는 current_goal/acquired_contact 각각128 첫시도 실행을 마쳐 두 child exit0·총144.40초였다. 현재 실제 분석과 독립 검수를 기다리며 효과를 미리 판정하지 않는다. 보상 목표에서 A 해제 자체와 다음 B 성공이 어떻게 평가되는지는 기존 원장을 이용한 별도 읽기전용 감사로 좁힌다. 정리 중지·원본 보호·기본설정 미변경을 유지한다.
+
+
+### 2026-10-28: 접촉 기억 실제 검수 완료, 초기값 진단 준비
+
+- [x] 접촉 기억 paired128 실제/CPU 분석 통합 독립 PASS(review e747953c...). 총256시도/768음, 양쪽 A128·B7/B8각0·해제0·실패0. 추가 억제20864controls와 env0 B8 PIP/DIP10.68/89.22→55.02/26.73도를 확인했지만 전환/전체저하중 해결로 해석하지 않는다.
+- [x] 새 초기화 진단의 범위/예산 확정: 원 current-goal 제어/9보상/std 유지, 원 참고 관측을 env0..3에만 추가 수집, 지도학습1000×192 뒤 NN-only128. 원래 source와 checkpoint는 보호한다.
+- [ ] 핵심 음악5항의 해제/다음 음 유인 감사 및 새 CPU 준비 독립 검수.
+- [ ] 검수 후 필요한 새 reference 관측 수집→지도학습→NN-only 실제 검증. 통과 전 장기 PPO/자유/J33/전곡 확대 금지.
+
+
+2026-10-28: 핵심5항 지정 시간표 보상감사와 당시 root3문서 독립 PASS(d1f3c839...). 새 warmstart 준비는 이중 오류 기록 보존 수정을 거쳐 CPU 독립 PASS(433e4229...)·최종1882입력 봉인(9f1ba34d...)했다. root session51945에서 collect 한 번을 시작했다. NN-only가 아닌 비NN 참고 수집이며, env0..3의 사전관측/요청과 전128의 원음악/해제 분모를 검산한 뒤 고정1000회 지도학습·NN-only128 순서로 진행한다. 기존 source·체크포인트·보상·제어·std 변경은 없다.
+
+
+참고 수집 actual: root51945/collect exit1·69.193초. 원 native report는 completed/closed/source일치 true,1416substeps·128원장/각음/all3/A해제128·실패0이며 관측4×354를 저장했다. 새 imitation 종료검사만 noNN 경로의 NN_constructors 누락키를 None==0으로 비교하여 false였다. 원producer/원report/exit1/자료를 동결하며 CPU 독립 감사 후 명시적 recovery acceptance와 얇은 continuation으로 재사용한다. 같은 native 수집 재실행·무단 원report 교정·fit/eval 선진행은 하지 않는다.
+
+
+회복검수 완료: 원exit1/reportfalse·원관측을 보존한 collection_recovery 독립 CPU PASS 뒤 recovery_v1을1912입력으로 봉인(34f65d80..., review63db7a49...)했다. root1137에서 GPU 지도학습1000회를 시작했다. 원 PrefixPolicy/strict identity·초기73tensor·critic/std/기타actor 파라미터 불변과 emptyPPO0을 확인하며, 이는1000 PPO반복이나 native물리 수집 재실행이 아니다. 이후 NN-only128을 별도 실행한다.
+
+
+2026-10-28: GPU지도학습1000회는 exit0/25.344초·초기73/허용encoder+indexhead만변경·critic/std/다른head불변·새PPOempty0을 확인했다. NN-only128은 exit0/76.354초·reference/N호출0·원strict/RNG불변이며 각음113/95/91·전체91/128·A해제67/128·실패0이었다. 원clean/wrong 및90% 기준미달이므로100PPO로 진행하지 않는다. saved관측과목표 누적오차/해제타이밍을 actual독립검수하고 해당PPO0모델 영상은별도CPU준비한다. 보상·제어·std·예산을 동시에바꾸지 않는다.
+
+
+### warmstart 실제 검수 완료와 단일 자료 보강 대조
+
+- [x] actual독립PASS(2c7445ce..., verification6c1ccddf...). 원collect exit1/별도회복·fit/eval0를 보존. NN113/95/91·all391·A해제67/128/실패0, 원기준미달과100PPO0 유지.
+- [x] 원reference1416요청 CPU bit-exact 재현 및 savedNN관측의 교정 요청 차이·4환경 한계를 검수. A달성+해제67/달성+미해제46/미달성+미해제15를 분리.
+- [ ] warmstartPPO0 손/전신2영상 준비검수→root GPU촬영→QA.
+- [ ] 동일모델·추가1000회씩의 reference_only/corrective_mixed CPU최소구현·독립검수. 교정label은 실제 실행기록과 구별하며 원보상/codec/std/물리 유지·새수집0.
+- [ ] 두조건 실제 NN-only128과 원기준에 따른 후속100PPO 여부.
+
+
+## 목표각 출력 이후 PPO 탐색의 별도 확인
+
+현재 goal 비교는 deterministic 지도학습 평가다. 같은latent std=.171171을 복사해도 원증분과 물리탐색이 같지 않다. 정적 CPU 1차근사에서 증분 hold의 요청규모는 .653825도/tick이고, goal의Ref 부근 clip전 목표규모는MCPx/MCPz/PIP/DIP=13.785/.600/6.492/11.826도다. 035/N에서는 부호별affine기울기가 달라 하나의대칭미분으로해석할수없다. 실제요청에는±3.819719도/tick 속도제한·native범위·guard가있으므로 이수치를실제이동/토크표준편차로해석하지않는다.
+
+음악/해제의 원진급기준을 충족하더라도, 이 새출력의100PPO를 원std복사만으로 자동시작하지않는다. 물리탐색의단위·clip/비대칭을고려한별도계획과짧은확률실행검증을먼저수행한다. 지금은std/PPO설정변경·추가GPU실행이없다.
+
+
+2026-10-28: 목표각1000회126/128 모델의 native 손·전신 영상 준비는 독립검수 PASS(cf0aae66...)·최종2109핀347f8f18...·fresh stdlib gate 종료0이다. root session99600에서 env0 첫시도 단1 GPU scene 촬영을 시작했다. 원모델70e40d/PPO0·원NN128 평가/준비는동결하며 실제픽셀/평가일치는아직미검증이다. 각도손실 단일비교는 별도CPU준비중이다.
+
+목표각126모델영상root99600 실제종료0/91.963초·손/전신2clip 저장. 원모델/PPO0/첫env0사례는유지하고 실제CPU wholedecode/수치·픽셀QA 및 독립검수를 진행한다.
+
+
+2026-10-28: 각도손실 비교의 지정 CPU검사와 독립검수 PASS(d27ad191...) 후2104핀 최종봉인a415ea10...·reviewed fresh stdlib gate 종료0을 확인했다. root session64849에서 같은fresh/자료/1000회 예산의 fit→NN-only128을 직렬 시작했다. producer/준비와 기존자료는동결하며 신규성과는아직미확인이다.
+
+목표각126모델 영상의 실제 QA 독립PASS(review0ebd2cb1..., verification480f733b...), 원장9항/전128요약/typedgoal exact·force3.8147e−6N/time8.88e−16s 차이 보존, 전체354프레임/8PNG/2sheet 검산 완료. root도 시각확인했으며 env0의3음달성/A해제실패·고정기타/검지4축·가림한계를 유지한다.
+
+
+각도손실 비교root64849 fit/evaluate모두exit0·총125.098초를확인했다. 예비집계 A/B7/B8=126/110/111,전체109/128·해제31/128·실패0으로 원goal126/73보다후퇴했다. 새변경채택/추가fit/PPO100/자유J33확대는하지않는다. 현재실제분석·독립검수중이며 해제창우선순위가A→B로전환되는관측표현에대해읽기전용CPU counterfactual의최소가능성만조사한다. 원보상/시간표/모델/저장관측/판정/자료는변경하지않고 인과로단정하지않는다.
+
+
+2026-10-28: 각도손실actual 독립PASS(85249afe...) 및 priority24상태 민감도 독립PASS(ac56e9c7...) 완료. 두제안은후퇴해채택하지않는다. 원126/73모델/원보상/원std 유지, 신규해제보상산술·탐색단위 CPU계획만두하위폴더에분담했고 source·새GPU/학습은없다.
+
+
+2026-10-28: 두CPU검사·독립검수 완료후 후속범위를 보상불변 native 탐색 사전비교로 정했다. root는1페이지PLAN과직렬2job parent만준비했고 source/CPU준비는phrase가담당한다. 실제GPU는아직시작하지않았다.
+
+
+### 후속 PPO의 연결 위치: 읽기전용 메모
+
+현재는 탐색 사전비교 CPU 준비 중이며 PPO 구현·실행은 없다. 후속 여부는 실제 사전결과와 별도계획으로 정한다. 읽기전용 조사에서 확인한 최소 연결은 short_finger_learning/runner.py의 run() 정책factory(118행)→새trainer(119행)→_train(149행)이다. 별도 _load 함수는 없고 평가 trainer.load는127행이다.
+
+새실험을 한다면 원GoalPolicy/원계약/원PPOConfig로70e를 먼저 native full-strict 검증한 뒤, 새계약 genuine GoalPolicy에 state_dict만 strict 복사한다. action17..20은 실제 finger_log_std[0:4]에 대응한다. 이4개만 공통공식값으로 바꾸며 원optimizer/cost multiplier/RNG는 이전하지 않는다. 모든임시생성/검산 뒤 두조건의 Python/NumPy/Torch/CUDA seed7을 맞추고 새optimizer empty/update0의 새초기checkpoint를 새identity로 full-strict 재로드해야 한다. old→new strict resume는 거부한다.
+
+새reward/std 선언은 정책생성 전 pool.contract에 있어야 하며 허용차이만 검사한다. 원70e SHA/원fullstrict identity/명시가중치이전·새절차를 metadata에 기록하고 fresh_only/no actor transfer라는 기존설명을 그대로 남기지 않는다. 원GoalPool의 goal→physical은 한 번만 유지한다. DecisionCollector는 정책 result의 latent/old_mean/old_log_std를 직접저장하므로 PPO likelihood는 rawgoal latent를 유지하고 physical 요청로그와 구분해야 한다. 이메모는 source구현/새학습계획의 대체물이 아니다.
+
+
+2026-10-28: 목표각탐색 사전비교의 CPU·독립검수 PASS(b61f2ff7...)·최종2117핀c2891b30...·fresh reviewed gate 종료0 뒤 root session24084에서 deterministic128→stochastic128을 직렬시작했다. 실제before/after phase콜백 누락 한곳은 실행전에 교정/회귀확인했고 이전초안을 보존했다. 원9항/원모델파일/원가동범위·물리를 유지하며 선택4std만 선언된실행개입, PPO/fit0이다. 실제성과는아직미확인이다.
+
+
+2026-10-28: root24084 두native사전비교 종료0·총175.2399초(det87.5649/stoch87.6740). det126/73·원음별clean/wrong exact, stoch음별46/34/36·all3 10·A해제118·실패0. A달성/해제교차41/5/77/5를확인했고 실제분석/독립검수중이다. currentvalid DIP보호의일방향증분차단과확률absolutegoal의결합이있는지기존354×128자료만검사한다. 새계수탐색/관측/GPU/PPO/fit는하지않는다.
+
+
+2026-10-28: 기존guard 자료에서 연속eligible 동일goal의 DIP목표변화는 det중앙0/최소−.4375도,stoch중앙−.6135/최소−3.7011도이며양의증분0이었다. source구현과맞는관찰이지만원인확정은아니다. 원모델/후보std/보상을유지하고DIP보호만passthrough로바꾸는새guard_off_v1 PLAN을작성했다. 기존on두조건을재사용하고precheck실제분석독립PASS를gate로요구한다. 현재helper/CPU준비만이며 새GPU/PPO/fit/계수탐색0이다.
+
+
+2026-10-28: precheck 실제분석 독립PASS4794c608.../verification2523be7e...,256시도/768음·교차·1451/2977구간 부호·누적변화 독립검산완료. 해당10분석파일/source/원자료동결후 guard_off_v1의필수선행gate를해제했고최소CPU준비만진행중이다.
+
+## 2026-10-28: 목표각 탐색 하한과 명령 유지의 경계
+
+기존 FingerSkillPolicy.forward는 logstd를 [-5,2]로 clamp하므로 유효 표준편차의 하한은 exp(-5)=0.006737947이다. 현재 후보4는 .0081166131/.0119162761/.0125984587/.00944169145로 모두 내부다. std는 actor optimizer 대상이지만 raw logstd가 -5 아래면 해당 forward의 직접 기울기는0이고 Adam 잔여 momentum은 별개다. 모델 고정 평가에서는 optimizer 경계를 실제로 시험하지 않았다. 출력 의미를 바꾸며 같은 수치의 하한을 계승하는 문제는 별도 검토 대상이며, 이번 진단에서 하한을 바꾸지는 않았다.
+
+기존 명령 유지 collector의 K>1은 F 경로에 한정되며 현재 GoalPolicy는 J/independent/K1이다. 기존 correlated 옵션은 같은 시점 관절간 공간 상관이고 시간 상관이 아니다. K를 바꾼다면 유지할 값은 raw normalized goal이며 매60Hz 현재 oldtarget으로 physical request를 다시 변환해야 한다. physical increment를 반복하는 것은 다른 제어다. 현재 참고 잡음 비교에는 K·공간/시간 상관·새 std 후보를 섞지 않는다.
+
+## 2026-10-28: 다음 최소 단계 — 해제 여유와 탐색 단위
+
+목표각 reference는 원음악·A해제128/128이지만 N은035 준비자세이며 전체-pad 분리를 검증한 목표가 아니다. 저장된 staged/noisy 자료에서는 해제 latch 뒤 A candidate 재출현이 있었다. 근위 순힘만으로 줄 접촉이나 전체 피부 붙음을 단정하지 않는다. 같은 후보 탐색분포에서 신경망 없는 reference도 전체2/128로 감소했으므로, 다음 작업은 std계수나 지도학습량의 자동 검색이 아니다. 현재 결과의 실제 독립검수를 마친 후 아래 순서로 진행한다.
+
+1. **기존 표면 선택기를 재사용해 해제 이격 여유를 측정한다.** 이전 A에 대해 원선택기가 제공하는 index3 distal 굽힘 안쪽128개 표본의 거리·방향·유한 셀 범위와 candidate 재출현을 기록한다. 이128표본 전체의 여유를 측정하며, 검지3마디 전체나 전체 피부로 확대하지 않는다. 현재 body1/2에는 같은 palmar mask/normal 표본이 없으므로 전방향 support vertex를 가져와 손등 표본을 섞지 않는다. 원 latch 통과, 실제 distal 무하중, 이산 distal 표본의 이격을 각각 구분한다. 원자료에 없는 전체 표면 값은 추정하지 않고 사전 지정 소수 환경에서 필요한 시간창만 추가 수집한다. 기존128 성과를 재확인하려는 반복은 하지 않는다. 성공 기준·보상·종료·관절범위·마찰/충돌은 바꾸지 않는다. 검증: 표면/좌표·finite mask가 원선택기와 일치하고, 첫 해제부터 다음 press까지 거리와 재접촉을 추적할 수 있다.
+2. **여유와 탐색의 물리 단위를 연결한다.** 현재4축 목표변화와 실제 표면 변위·접촉 유지를 구분하고, 기존 logstd 하한을 실제 목표각 단위로 보고한다. 아직 확보하지 못한 최소 이격 여유를 가정해 새std를 고르지 않는다. 이 자료로 먼저 손가락 해제 목표가 부족한지, 탐색 분포/하한을 고쳐야 하는지 결정한다. K·시간상관·공간상관·보상변경을 한꺼번에 도입하지 않는다.
+3. **확인된 한 가지 원인만 바꾸어 검증한다.** 별도 계약/새 출력과 독립검수 후 같은음·실패포함분모·음악/해제/AND 기준으로 비교한다. 현재100PPO 준비기준은 미달이며, 이를 통과한 것처럼 이름만 바꿔 장기학습을 시작하지 않는다. 자유기타/J33/67음 확대도 보류한다.
+
+- [x] 해제 이격 여유의 최소 native 측정과 실제자료 검수: index_release_clearance_v1, 각232행/독립PASS
+- [ ] 물리 단위 탐색/해제 목표 중 수정대상 확정
+- [ ] 단일 변경 검증 및 이후 학습 진입 판단
+
+## 2026-10-28: distal 여유 측정 결과와 다음 수정의 경계
+
+원reference/noisy-reference 두child 종료0/총177.07초, 각232행(4env×58)을 수집했다. 원helper P1/P128·body/guitar→G·원loadedbool·시계/first/실패/reset을 검산하고 실제 독립PASS(985d9e94...)다. N 유지 이동104끝점 중 geometry/facing101·99, loaded/candidate27·15이며 해제 latch 뒤 rising8·6쌍은 기하방향 통과가 유지된 채 loaded0→1이었다. 거리는 변했다. 무잡음 최근접 유한 셀 거리 환경별 중앙은 약.87~.90mm로, 단순 latch 통과를 충분한 이격 여유로 해석하지 않는다. 전체 피부·표본별 힘·접촉쌍·240Hz 사건은 이 자료 범위 밖이다.
+
+다음 수정은 먼저 유한해제 목표의 실제 여유를 확보하는 것이다. 기존 full_fk/press_acquisition의 source기하 후보를 재사용할 수 있지만 준비 한상태와 제한 replay의 검증을 임의 MCP2 각도까지 확대하지 않는다. 현재 검증된 finger qpos-J는 없고 wrist full3/arm12 Jacobian을 손가락에 그대로 쓰지 않는다. 먼저 관련 실제 pose와 FK의 일치/좌표 경계를 확인한 뒤 원거리band 밖 유한해제 후보를 설계한다. 첫음 audible 구간의 잡음 취약성은 별도 문제로 남으므로 이 수정이 전체실패를 해결했다고 하지 않는다. 원std 하한/물리단위 탐색은 이후 별도로 검증하며 원90% gate·성공/보상·충돌/종료·손가락 움직임 비용0은 유지한다.

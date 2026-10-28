@@ -1,0 +1,79 @@
+{
+  "verdict": "PASS",
+  "summary": "문제없음",
+  "findings": [],
+  "review_date": "2026-10-28",
+  "CPU_only": true,
+  "GPU_executed": false,
+  "native_executed": false,
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_reference_noise_v1/PLAN.md": "b139083615b8110f1ab9fbd20c7de67a298fc6a26fc317c88ecb2c9958797ae5",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_reference_noise_v1/README.md": "76e7d3798704020234d328458849e3005bb0affb137b550ec7240f56001df0e0",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_reference_noise_v1/probe.py": "5f554a5a2bf052ee749d85d0ec4a3be57fa5d782a66c33b92f0fc80edf0e55ab",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_reference_noise_v1/cpu_checks.py": "578bb88645acf2e45a8aa3cfdb0dbbe868fbb53616c15d4803a9690d22ee07cc",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_reference_noise_v1/cpu_verification.json": "e3bd602567bc586c9657b615a584bccccdbff7e1d4edd19bd0d7d2b169a193c3",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_reference_noise_v1/fresh_process_gate.json": "5c4bdd97b08b3682633f0b8796a29165bad7118fad83be10d425316e9358e3db",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_reference_noise_v1/cpu_inputs/commands.json": "d4e681a063bd22d4c389f8108b41d776ec3d3d596fef409f1515be80a074f7ba",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_prefix_reference_noise_v1/cpu_inputs/settings.json": "8fe711c963a542c4d19769982f601d8d794b537aacda3097b3e700b9834f237c"
+  },
+  "pre_review_pending_seal": {
+    "sha256": "2479bbb12a97fdc8d857f98fbae18fb9634ebd923db444f88a2c5865e9f8b91f",
+    "input_count": 2183,
+    "canonical_input_pins_sha256": "e5b8da8ad9c54bd82d07bc818829334292e3423a6be1be2126375220480367d9",
+    "scope": "검수 전 pending snapshot 식별값. 최종 seal review/status 추가와 whole-file SHA 순환을 피하도록 reviewed_sha256에 넣지 않았다."
+  },
+  "resolved_issues": [
+    {
+      "issue": "noise typed raw 저장 오류 뒤 기존 report 읽기 오류가 첫 오류를 덮음",
+      "resolution": "old report 읽기/checks/value구성/write 전체를 기존 first-error 보존 try에 포함했다. 정확한 typed ValueError 후 read OSError 이중오류를 독립 재현해 첫 ValueError 유지와 secondary stderr를 확인했다.",
+      "old_files_preserved": "before_review_fix_01/manifest.json",
+      "independent_retest_passed": true
+    }
+  ],
+  "checks": {
+    "Python38_AST2_pass": true,
+    "independent_self_test_saved_CPU_JSON_exact": true,
+    "NN_Module_init_and_torch_load_forbidden_fixture_pass": true,
+    "original_reference_launch_codec_cap_evaluator_before_after_finish_reused": true,
+    "selected4_only_after_reference_encode": true,
+    "Normal_shape": [
+      128,
+      4
+    ],
+    "Normal_active4_RNG_exact": true,
+    "other35_raw_actions_exact": true,
+    "reference_input_unchanged": true,
+    "sigma0_roundtrip_max_abs_raw": 2.9802322387695312e-08,
+    "original_before_after_callback_exact": true,
+    "conversion_once": true,
+    "seed_after_pool_ready": true,
+    "no_first_mask_draw_compression": true,
+    "extra_draw_for_epsilon": false,
+    "original_reference_model_RNG_frozen_not_used_for_sampling_audit": true,
+    "callback_and_producer_aliases_primary_error_restore": true,
+    "typed_primary_write_and_read_secondary_errors_preserved": true,
+    "existing_and_dangling_symlink_before_gate": true,
+    "stdlib_gate_independent_exit0": true,
+    "owner_postfix_stdlib_gate_exit0_confirmed": true,
+    "Isaac_import_before_numeric_execution_scope_source_confirmed": true,
+    "own8_pin_SHA_current": true,
+    "pending2183_keys_unchanged_only_three_own_pins_changed": true,
+    "previous_five_manifest_bytes_SHA_verified": true,
+    "progress_and_future_own_analysis_excluded_from_runtime_pins": true,
+    "runs_absent": true
+  },
+  "evidence_scope": {
+    "source_model_constructor_calls_added": 0,
+    "source_model_loads_added": 0,
+    "new_checkpoint_writes": 0,
+    "CPU_fixture_model_construction_or_load_forbidden": true,
+    "full_native_pool_not_executed": true
+  },
+  "limits": [
+    "CPU는 noNN 수학/가짜pool 원callback/scope와 오류 검증이며 새 native128·실제 물리/성과/장면 종료를 검증한 것이 아니다. 원 성공reference/NN on·off 검수 근거는 고정 SHA로 재사용했다.",
+    "선행 gate가 provenance checkpoint를 해시하는 것은 모델 load가 아니다. 원 reference report의 model_RNG_frozen stage 진리값은 새 RNG 감사 근거로 사용하지 않는다.",
+    "전체128 Gaussian을 호출마다 생성하며 first mask는 bounded4 저장에만 쓴다. standardized epsilon=noise/std는 반올림이 포함되며 primitive epsilon을 추가 draw하거나 원NN 미저장 epsilon과 bitexact 동일하다고 주장하지 않는다.",
+    "잡음이 원raw 행동의 다른35열을 유지한다는 것과, 원 DIP 한열guard의 다른104target 보존을 구분한다. 잡음4 개입 전체가104target을 고정하거나 후속물리/인과를 보장하지 않는다.",
+    "단일seed reference 잡음 비교이며 NN단독 원인·자연성·압력·최적std·PPO성과를 증명하지 않는다."
+  ]
+}

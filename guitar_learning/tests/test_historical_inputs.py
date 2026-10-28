@@ -66,7 +66,7 @@ class HistoricalInputTests(unittest.TestCase):
     def test_historical_guitar_learning_version_does_not_read_current_implementation(self):
         source = str(ROOT / 'guitar_learning/music_task.py')
         versions = historical._index()[source]['versions']
-        current_sha = hashlib.sha256(Path(source).read_bytes()).hexdigest()
+        current_sha = hashlib.sha256((ROOT / 'guitar_learning/song/task.py').read_bytes()).hexdigest()
         old_sha = next(sha for sha in versions if sha != current_sha)
         self.assertNotEqual(current_sha, old_sha)
         original = Path.open

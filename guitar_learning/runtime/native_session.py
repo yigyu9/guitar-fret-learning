@@ -1,13 +1,12 @@
 """Shared finite native control; prepared resets are implemented separately."""
 import numpy as np
+from guitar_learning.native.paths import rebase_paths
+from guitar_learning.runtime.prepared_reset_v1 import (load_prepared_reset_contract,
+    _restore_once, _state_all, ControlPhaseView, CONTROL_PHASE_OFFSET_STEPS)
 
 
-ZERO_RANGE_NAMES = frozenset(side + '_' + part + '_' + axis for side in ('L', 'R') for part in ('Knee', 'Toe') for axis in 'yz')
 
 
-def target_rates(names):
-    lower = tuple(side + '_' + part + '_' for side in ('L', 'R') for part in ('Hip', 'Knee', 'Ankle', 'Toe'))
-    return np.array([.4 if name.startswith(lower) else .1 if name.startswith(('Torso_', 'Spine_', 'Chest_')) else .5 if name.startswith(('Neck_', 'Head_')) else 1.5 if name.startswith(('LH:', 'RH:')) else 3. for name in names])
 
 
 class NativeSession:
@@ -59,3 +58,33 @@ class NativeSession:
             self.scene.close()
             self.scene = None
 
+
+class PreparedSession(NativeSession):
+    def __init__(self, config, out):
+        contract = load_prepared_reset_contract()
+        config = rebase_paths(dict(config))
+        if dict(config) != contract['config']:
+            raise ValueError('Prepared reset requires the exact original035 baseline config')
+        super().__init__(config, out)
+        try:
+            # Original constructor references/FK are established before restoring q.
+            description = _restore_once(self.scene, contract, _state_all())
+            self.seed_target105 = contract['target105'].copy()
+            self.controller.s = ControlPhaseView(self.scene)
+            self.prepared_reset_description = dict(description, source_sha256=contract['source_sha256'], source_snapshot_step=CONTROL_PHASE_OFFSET_STEPS,
+                actual_initial_physics_step=self.scene.steps, control_phase_offset_steps=CONTROL_PHASE_OFFSET_STEPS,
+                control_phase_scope='Explicit mature support-control phase only; no22s physics replay or advancement of actual scene time',
+                initialization_scope='One reset-only DOF/guitar/target submission; fixed root/chair unchanged; no per-step state injection')
+        except BaseException:
+            self.close()
+            raise
+
+    def prepare_tick(self):
+        return self.submit_policy_target(self.seed_target105)
+
+    def integrate(self):
+        diagnostic = super().integrate()
+        diagnostic['control_phase_step_before'] = self.scene.steps - 1 + CONTROL_PHASE_OFFSET_STEPS
+        diagnostic['physics_step_before'] = self.scene.steps - 1
+        diagnostic['legacy_nested_step_fields_scope'] = 'Original controller metadata nested step fields use mature control-phase coordinates; actual physics_step_before above uses real reset time'
+        return diagnostic

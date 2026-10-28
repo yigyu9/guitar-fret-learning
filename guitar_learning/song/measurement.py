@@ -4,7 +4,7 @@ Classification uses full original contact evidence. Returned rows omit repeated
 feature dictionaries; IDs/counts retain the evidence provenance, not pressure.
 """
 import copy
-from guitar_learning.core.task_measurement import TaskMeasurement
+from guitar_learning.core.measurement import TaskMeasurement
 from guitar_learning.quality.fretting_quality import classify_fretting
 
 

@@ -1,1 +1,1 @@
-"""Runtime components for free-guitar learning."""
+"""초기 자세 입력과 네이티브 세션의 실행 구성요소."""

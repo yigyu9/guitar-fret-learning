@@ -1,1 +1,1 @@
-"""Current free-guitar learning environment and measurements."""
+"""자유 기타 학습 환경과 측정을 제공하는 현재 학습 패키지."""

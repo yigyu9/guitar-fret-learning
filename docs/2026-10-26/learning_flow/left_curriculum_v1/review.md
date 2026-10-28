@@ -10,7 +10,7 @@ Critical / Warning / Suggestion: 현재 검수 범위에서 미해결 사항 없
 
 - `song/left_curriculum.py`: 최근 8회 완료 이력, 실패의 0점 반영, 최소 4회·안전/도달/접촉 기준, 새 안전 전곡이 있는 업데이트의 최대 0.1 진행, 27개 상태의 의미 검증과 선형 보간.
 - `song/wrist_guide.py`, `song/left_environment.py`: manifest로 확인한 anchor만 사용한 기타 좌표계 손목 가이드, 실제 240Hz 표본쌍의 도달/clean 접촉 적분, 512개 관측, 실패 tick의 양성 보상 억제, 공유 감점·비용 및 원곡 성공 판정 유지.
-- `song/curriculum_runtime.py`, `training/start.py`, `runner.py`, `parallel.py`: 부모 집계, rollout 동안 고정된 비중, PPO 이후 worker 관측 재동기화, 에피소드 reset 없는 단계 적용, 정책 buffer의 float64 상태 저장/복원, 복원 검증 후 broadcast, 오른손 기존 500상태 분기.
+- `song/curriculum_runtime.py`, `training/launch.py`, `runner.py`, `parallel.py`: 부모 집계, rollout 동안 고정된 비중, PPO 이후 worker 관측 재동기화, 에피소드 reset 없는 단계 적용, 정책 buffer의 float64 상태 저장/복원, 복원 검증 후 broadcast, 오른손 기존 500상태 분기.
 - 새 단위 검사 및 `tests/test_training_runner_logging.py`의 실패 주입 회귀: 상태·시간·비중·저장/복원·IPC와 실패 회계의 검증 내용 확인.
 
 ## 지적 사항의 해결

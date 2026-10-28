@@ -1,1 +1,1 @@
-"""Continuous whole-score learning; independent of frozen single-note contracts."""
+"""연속 전곡 학습 구성요소. 보존된 단음 계약과 별도로 관리한다."""

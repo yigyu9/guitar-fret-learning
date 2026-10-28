@@ -1,18 +1,12 @@
 """Logging-only integration: detail, terminal semantics and interrupted reports."""
 import copy
-import gzip
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 import numpy as np
-import torch
-from guitar_learning.training.training_log_format import format_info, classification_signature
-from guitar_learning.training.training_reports import run_evidence, finalize_summary
-from guitar_learning.tool.training import train_musical_quality, train_actionable_preparation
+from guitar_learning.training.training_log_io import format_info, classification_signature
+from guitar_learning.training.training_log_io import run_evidence, finalize_summary
 from guitar_learning.training.training_log_io import TransitionJournal
 from guitar_learning.tool.recover_training_log import recover
 
@@ -74,38 +68,6 @@ class LoggingIntegrationTests(unittest.TestCase):
         self.assertEqual(before,classification_signature(info))
         info['musical_quality']['strike']['extra_count']=1
         self.assertNotEqual(before,classification_signature(info))
-
-    def interrupted(self,module):
-        with tempfile.TemporaryDirectory() as temporary:
-            out=Path(temporary)/'run'
-            args=SimpleNamespace(out=out)
-            def fail(settings,args):
-                out.mkdir()
-                (out/'report.json').write_text(json.dumps(dict(completed=False,stopped='interrupted',
-                    failure={'type':'KeyboardInterrupt'},transitions=0)))
-                info=dict(task_time_s=1/60.,debug={'action':[.1]*39},reward_terms={'quality_release':0.},
-                    musical_quality={'role':'left','stage_success':False})
-                with gzip.open(out/'transitions.jsonl.gz','wt') as stream:
-                    stream.write(json.dumps(dict(infos=[info]))+'\n')
-                raise KeyboardInterrupt('primary interrupt')
-            previous=module.previous if module is train_musical_quality else module.train_timing
-            with patch.dict(sys.modules,{'isaacgym':SimpleNamespace()}),patch.object(previous,'run',fail):
-                with self.assertRaisesRegex(KeyboardInterrupt,'primary interrupt'):
-                    module.run({},args)
-            return json.loads((out/('musical_quality_report.json' if module is train_musical_quality
-                                   else 'actionable_preparation_report.json')).read_text())
-
-    def test_quality_prefix_summary_exists_after_interrupt_without_completed_episode(self):
-        report=self.interrupted(train_musical_quality)
-        self.assertFalse(report['completed'])
-        self.assertEqual(report['completed_episodes'],0)
-        self.assertIsNone(report['success_rate'])
-        self.assertEqual(report['last_quality_by_worker']['0']['role'],'left')
-
-    def test_preparation_prefix_summary_exists_after_interrupt(self):
-        report=self.interrupted(train_actionable_preparation)
-        self.assertEqual(report['first2s_logged_transitions'],1)
-        self.assertEqual(report['first2s_nonzero_action_transitions'],1)
 
     def test_secondary_summary_error_does_not_replace_primary_exception(self):
         with tempfile.TemporaryDirectory() as temporary:

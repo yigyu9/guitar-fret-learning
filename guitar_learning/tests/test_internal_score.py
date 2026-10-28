@@ -11,7 +11,7 @@ import unittest
 from guitar_learning.score.canonical import (
     CanonicalEventTimeline, SongBundleValidationError, compile_song_bundle_events,
 )
-from guitar_learning.score.events import load_music_task
+from guitar_learning.score.canonical import load_music_task
 from guitar_learning.score.strike_goal_compiler import compiled_strike_goal_from_plan_document
 from guitar_learning.song.task import make_task
 
@@ -48,9 +48,10 @@ class InternalScoreTests(unittest.TestCase):
     def test_provenance_records_internal_compilers_and_every_bundle_input(self):
         task = load_music_task(BUNDLE)
         files = {Path(row['path']): row for row in task.provenance}
-        for name in ('events.py', 'canonical.py', 'strike_goal_compiler.py'):
+        for name in ('canonical.py', 'strike_goal_compiler.py'):
             path = ROOT / 'guitar_learning/score' / name
             self.assertEqual(files[path]['sha256'], hashlib.sha256(path.read_bytes()).hexdigest())
+        self.assertTrue(all(path.is_file() for path in files))
         for name in ('manifest.json', 'mapping/fingering.json', 'training/fret_training.json',
                      'training/strike_plan.json', 'training/strike_training.json', 'source/audio.wav'):
             self.assertIn(BUNDLE / name, files)
@@ -75,22 +76,7 @@ class InternalScoreTests(unittest.TestCase):
             compiled_strike_goal_from_plan_document(comp_plan)
 
     def test_import_and_score_build_with_old_packages_and_gpu_imports_blocked(self):
-        script = r'''
-import importlib.abc
-import sys
-class BlockFormerRuntime(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {'tab2body', 'stability_adapter_2', 'torch', 'isaacgym'}:
-            raise ImportError('forbidden runtime import: ' + fullname)
-sys.meta_path.insert(0, BlockFormerRuntime())
-from guitar_learning.music_task import ScoreTask
-from guitar_learning.song.task import make_task
-for stage in ('B', 'C', 'D'):
-    assert ScoreTask.from_bundle(sys.argv[1], stage=stage).targets
-assert len(make_task(sys.argv[1]).targets) == 67
-assert not any(name.split('.')[0] in {'tab2body', 'stability_adapter_2', 'torch', 'isaacgym'}
-               for name in sys.modules)
-'''
+        script = "\nimport importlib.abc\nimport sys\nclass BlockFormerRuntime(importlib.abc.MetaPathFinder):\n    def find_spec(self, fullname, path=None, target=None):\n        if fullname.split('.')[0] in {'tab2body', 'stability_adapter_2', 'torch', 'isaacgym'}:\n            raise ImportError('forbidden runtime import: ' + fullname)\nsys.meta_path.insert(0, BlockFormerRuntime())\nfrom guitar_learning.song.task import ScoreTask\nfrom guitar_learning.song.task import make_task\nfor stage in ('B', 'C', 'D'):\n    assert ScoreTask.from_bundle(sys.argv[1], stage=stage).targets\nassert len(make_task(sys.argv[1]).targets) == 67\nassert not any(name.split('.')[0] in {'tab2body', 'stability_adapter_2', 'torch', 'isaacgym'}\n               for name in sys.modules)\n"
         result = subprocess.run([sys.executable, '-c', script, str(BUNDLE)], cwd=ROOT,
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)

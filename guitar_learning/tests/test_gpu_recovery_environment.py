@@ -11,7 +11,7 @@ from guitar_learning.tests import test_gpu_environment as fixtures
 from guitar_learning.tests import test_gpu_preparation_B as preparation_fixtures
 from guitar_learning.tests.test_gpu_surface_learning import task
 from guitar_learning.tool.training.train_legacy import settings_document
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.training.policy import SpecialistPolicy
 
 
 class RecoveryEnvironmentTests(unittest.TestCase):

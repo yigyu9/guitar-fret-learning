@@ -1,1 +1,1 @@
-"""Standard-library-only compilation of reviewed guitar score bundles."""
+"""검토된 기타 악보 묶음을 표준 라이브러리만으로 컴파일하는 구성요소."""

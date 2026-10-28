@@ -5,9 +5,10 @@ import json
 from pathlib import Path
 import unittest
 
-from guitar_learning.gpu.hand_collision import (
-    FINGER_MASKS, SEGMENT_FINGER, left_hand_collision_properties,
-    verify_external_filter_preservation)
+from guitar_learning.gpu.scene import FINGER_MASKS
+from guitar_learning.gpu.scene import SEGMENT_FINGER
+from guitar_learning.gpu.scene import left_hand_collision_properties
+from guitar_learning.gpu.scene import verify_external_filter_preservation
 from guitar_learning.runtime.prepared_reset_v1 import load_prepared_reset_contract
 
 

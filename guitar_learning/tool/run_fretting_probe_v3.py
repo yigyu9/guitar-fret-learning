@@ -9,7 +9,7 @@ import argparse
 import json
 import traceback
 from dataclasses import asdict
-from guitar_learning.training.recording import digest, write, project_source_paths, bridge_dependency
+from guitar_learning.training.training_log_io import digest, write, project_source_paths, bridge_dependency
 from guitar_learning.core.dependency_inputs import parity_errors as source_parity_errors
 from guitar_learning.native.paths import resolve_input_path, rebase_paths
 
@@ -23,8 +23,9 @@ def main():
     import numpy as np
     from guitar_learning.tool.validation.fretting_environment import FrettingEnvironment
     from guitar_learning.core.environment_v4 import PREPARATION_SECONDS, PREPARATION_STEPS
-    from guitar_learning.core.fretting_v1 import FretTarget, FretContract
-    from guitar_learning.native.lower_body_release_v1.common import pin
+    from guitar_learning.core.measurement import FretTarget
+    from guitar_learning.core.measurement import FretContract
+    from guitar_learning.native.paths import pin
     from guitar_learning.native.gym_trial_recording import GymTrialRecording
     # Load the actual control dependency chain before the initial source census.
     from guitar_learning.runtime import prepared_reset_v1

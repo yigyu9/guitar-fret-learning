@@ -8,7 +8,7 @@ if __package__ in (None, ""):
 import argparse
 import hashlib
 import json
-from guitar_learning.training.recording import write
+from guitar_learning.training.training_log_io import write
 from guitar_learning.training.training_log_io import iter_transitions
 from guitar_learning.training.training_metrics import LearningMetrics
 

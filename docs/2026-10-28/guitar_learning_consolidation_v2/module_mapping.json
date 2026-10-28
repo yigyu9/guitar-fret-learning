@@ -1,0 +1,64 @@
+{
+  "guitar_learning.music_task": {
+    "target": "guitar_learning.song.task",
+    "symbols": {}
+  },
+  "guitar_learning.song.wrist_guide": {
+    "target": "guitar_learning.song.task",
+    "symbols": {
+      "SCHEMA": "WRIST_GUIDE_SCHEMA"
+    }
+  },
+  "guitar_learning.score.events": {
+    "target": "guitar_learning.score.canonical",
+    "symbols": {
+      "SCHEMA": "EVENTS_SCHEMA",
+      "_finite": "_event_finite"
+    }
+  },
+  "guitar_learning.song.left_curriculum": {
+    "target": "guitar_learning.song.curriculum",
+    "symbols": {
+      "SCHEMA": "CPU_SCHEMA",
+      "WINDOW": "CPU_WINDOW",
+      "STATE_SIZE": "CPU_STATE_SIZE",
+      "_ENDPOINTS": "CPU_ENDPOINTS",
+      "default_config": "cpu_default_config",
+      "CurriculumState": "CPULeftCurriculum"
+    }
+  },
+  "guitar_learning.song.gpu_left_curriculum": {
+    "target": "guitar_learning.song.curriculum",
+    "symbols": {
+      "SCHEMA": "GPU_SCHEMA",
+      "WINDOW": "GPU_WINDOW",
+      "STATE_SIZE": "GPU_STATE_SIZE",
+      "_ENDPOINTS": "GPU_ENDPOINTS",
+      "default_config": "gpu_default_config",
+      "CurriculumState": "GPULeftCurriculum",
+      "_FRACTIONS": "GPU_FRACTIONS"
+    }
+  },
+  "guitar_learning.gpu.geometry": {
+    "target": "guitar_learning.gpu.contact",
+    "symbols": {
+      "SCHEMA": "WRIST_REGION_SCHEMA"
+    },
+    "destinations": {
+      "conjugate": "guitar_learning.gpu.control",
+      "multiply": "guitar_learning.gpu.control",
+      "apply": "guitar_learning.gpu.control",
+      "rotvec": "guitar_learning.gpu.control",
+      "origin_velocity": "guitar_learning.gpu.control",
+      "relative_point": "guitar_learning.gpu.control"
+    }
+  },
+  "guitar_learning.training.recording": {
+    "target": "guitar_learning.training.training_log_io",
+    "symbols": {}
+  },
+  "guitar_learning.native.lower_body_release_v1.common": {
+    "target": "guitar_learning.native.paths",
+    "symbols": {}
+  }
+}

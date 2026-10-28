@@ -3,7 +3,7 @@ import copy
 import numpy as np
 import torch
 
-from guitar_learning.song.left_curriculum import CurriculumState
+from guitar_learning.song.curriculum import CPULeftCurriculum as CurriculumState
 
 
 class CurriculumCoordinator:
@@ -17,7 +17,7 @@ class CurriculumCoordinator:
             'guitar_learning.gpu_tensor_song_reward.v11', 'guitar_learning.gpu_tensor_song_reward.v12',
             'guitar_learning.gpu_tensor_song_reward.v13', 'guitar_learning.gpu_tensor_song_reward.v14', 'guitar_learning.gpu_tensor_song_reward.v15', 'guitar_learning.gpu_tensor_song_reward.v16', 'guitar_learning.gpu_tensor_song_reward.v17', 'guitar_learning.gpu_tensor_song_reward.v18', 'guitar_learning.gpu_tensor_song_reward.v19', 'guitar_learning.gpu_tensor_song_reward.v20', 'guitar_learning.gpu_tensor_song_reward.v21', 'guitar_learning.gpu_tensor_song_reward.v22')
         if self.gpu_surface:
-            from guitar_learning.song.gpu_left_curriculum import CurriculumState as SurfaceCurriculumState
+            from guitar_learning.song.curriculum import GPULeftCurriculum as SurfaceCurriculumState
             self.state = SurfaceCurriculumState(pool.environment.finger_counts)
         else:
             self.state = CurriculumState()

@@ -9,8 +9,8 @@ from types import MappingProxyType
 import numpy as np
 
 from guitar_learning.core.control import LEFT_HAND_NAMES
-from guitar_learning.core.finger_control import default_profile, validate_profile
-from guitar_learning.runtime.native_session import target_rates
+from guitar_learning.core.control import default_profile, validate_profile
+from guitar_learning.core.control import target_rates
 from guitar_learning.runtime.persistent_session import (
     PersistentHeadlessPreparedSession, _physical_signature)
 from guitar_learning.runtime.prepared_reset_v1 import load_prepared_reset_contract

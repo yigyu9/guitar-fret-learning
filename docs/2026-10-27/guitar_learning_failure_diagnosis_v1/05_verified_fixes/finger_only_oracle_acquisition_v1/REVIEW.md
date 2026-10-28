@@ -1,0 +1,15 @@
+# Finger-only oracle 독립 CPU 준비 검수
+
+요약 판정: **문제없음(PASS)**. Critical/Warning/Suggestion finding 없음.
+
+- Scoped read-only review of new single-file probe. No active source, teacher/reference, original raw/seal or proximal_load_observation edits, no historical full-audit repetition, no GPU/native execution.
+- Write-intercepted prepare() reproduced7JSON outputs exactly; all688preparation pins current; Python3.8syntax valid and no runs directory exists. Existing directory/dangling output guards execute before native import and new artifacts use exclusive creation in new output directories.
+- Independent Cartesian enumeration225 lexical rows, exact baseline112, native-bound exclusion reasons and contiguous valid env IDs reproduce index135valid/90excluded andmiddle180valid/45excluded. Only index MCPz+5/+10 andmiddle MCPz+10 exclude rows; middleDIP−5 offset gives−2.53260099degree, above native−5degree limit.9preregistered detail rows retained;8valid detail rows per finger.
+- Original ShortPool/currentwristv3/make_settings/trajectory_actions/compact_episode and original environment predicates remain reused. Only selected4action targets differ per grid row; other teacher/B/thumb/PD/ranges/rates/rewards/termination/clock unchanged. No NN, optimizer or checkpoint created or historical loader bypass.
+- First-attempt collector CPU fixture using actual collect(): env0 fails first endpoint and is reset/repeats whileenv1 finishes; failure endpoint retained, all later env0 attempts/statistics/details ignored, all assigned first attempts complete within maximumtick. Returned details lengths1and3, phase sample boundaries1/1/1,20metrics and separatebody1/2/3 forces verified.
+- Native loop is bounded by original view.duration_ticks and4physics substeps; first attempts including early failures are full denominator; original ended-row reset behavior retained. Entire valid table summaries include original ledger,3phase min/max/mean/RMS and6gate counts; detailed traces only preregistered rows, original wrist field names/scopes retained.
+- Eligibility matches preregistered achieved,clean>=.70,wrong<=.10,no physical/wrist failure. Rank is squared offset then maximum absolute offset then original gridindex; no target clamp, threshold weakening, posthoc detailed-row selection or broad reachability/learning claim.
+- Actual execute() CPU injected-error fixture, with native pool only replaced in-memory, confirms original collect exception propagates, pool.close called, report completedfalse/closedtrue records original error and inputs_after verifiedtrue. Source/unpinned/close failures truthfully fail final report and exit; original outputs preserved.
+- CPU bounds tolerance only compares prepared native/controller float32 representations; valid target tensors are actually checked inside current action bounds. GPU memory before/afterpool and peak fields planned;135/180environment physicalfit remains explicitly unverified and original contact-pair floor1048576 is retained.
+
+새 review.json/REVIEW.md 외 파일을 변경하지 않았다. GPU/native 실행은 없으며 실제 자원 적합성/압현/자연스러움은 미검증이다. 최종검수 SHA는 review.json에 기록했다.

@@ -55,10 +55,11 @@ def main():
     from guitar_learning.core.control import ACTIVE_NAMES
     from guitar_learning.gpu.scene import GpuScene
     from guitar_learning.gpu.control import BatchedController
-    from guitar_learning.gpu.geometry import apply, conjugate, multiply, rotvec
-    from guitar_learning.gpu.thumb_support import load_thumb_support, thumb_support_geometry
-    from guitar_learning.gpu.wrist_region import load_wrist_region_track
-    from guitar_learning.gpu.press_surface import load_press_surface
+    from guitar_learning.gpu.control import apply, conjugate, multiply, rotvec
+    from guitar_learning.gpu.contact import load_thumb_support
+    from guitar_learning.gpu.contact import thumb_support_geometry
+    from guitar_learning.gpu.contact import load_wrist_region_track
+    from guitar_learning.gpu.contact import load_press_surface
     from guitar_learning.runtime.prepared_reset_v1 import prepared_input_paths
     from guitar_learning.tool.validation.hand_contact_probe import GraphicsGym, physics_source_paths, finish_video
 
@@ -66,8 +67,8 @@ def main():
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     paths = physics_source_paths(root) | set(prepared_input_paths())
-    paths.update((Path(__file__).resolve(), root/'guitar_learning/gpu/thumb_support.py',
-        root/'guitar_learning/gpu/wrist_region.py', root/'guitar_learning/gpu/press_surface.py'))
+    paths.update((Path(__file__).resolve(), root/'guitar_learning/gpu/contact.py',
+        root/'guitar_learning/gpu/control.py'))
     patch = load_thumb_support()
     paths.update(Path(p) for p in patch['contract']['source_sha256'])
     bundle = root/'data/song_bundles/05_BN2-131-B_solo'

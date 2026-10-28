@@ -4,9 +4,10 @@ from unittest.mock import patch
 
 import torch
 
-from guitar_learning.gpu.geometry import apply
-from guitar_learning.gpu.simplified_finger_environment import SimplifiedFingerEnvironment
-from guitar_learning.gpu.wrong_press import pad_contact_cells, wrong_press_sources
+from guitar_learning.gpu.control import apply
+from guitar_learning.gpu.finger_skill_environment import FingerSkillEnvironment
+from guitar_learning.gpu.contact import pad_contact_cells
+from guitar_learning.gpu.contact import wrong_press_sources
 from guitar_learning.tests.test_gpu_environment import fixture, SONG, BUNDLE, place_pad_sample, press_goal
 from guitar_learning.tests.test_gpu_surface_learning import task
 from guitar_learning.tests.test_simplified_finger_environment import advance
@@ -119,10 +120,10 @@ class WrongPressEnvironmentTests(unittest.TestCase):
 
     def setup(self, score=None):
         metadata, row = fixture()
-        skill = dict(schema='guitar_learning.finger_skill.v2', phase='J', exploration='independent',
+        skill = dict(schema='guitar_learning.finger_skill.v3', phase='J', exploration='independent',
             hold_ticks=1, scope='scheduled', planned_transitions=400, full_song_after=100)
         with patch('guitar_learning.gpu.environment.make_task', return_value=score or task((1,), end=.5)):
-            env = SimplifiedFingerEnvironment(metadata, bundle=BUNDLE, song=SONG, skill=skill, device='cpu')
+            env = FingerSkillEnvironment(metadata, bundle=BUNDLE, song=SONG, skill=skill, device='cpu')
         env.set_evaluation(True, full_song=True)
         env.reset([0, 1], row)
         env.surface_valid.zero_()  # Isolate intentional full-surface witnesses.

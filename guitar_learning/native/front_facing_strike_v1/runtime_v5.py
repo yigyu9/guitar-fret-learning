@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 from scipy.spatial.transform import Rotation
 from ..initial_pose_noise_v1 import pose
-from ..lower_body_release_v1.common import HUMAN
+from guitar_learning.native.paths import HUMAN
 from ..lower_body_release_v1.control_math_v1 import rotation_error
 from .runtime_v4 import Controller as PreviousController, Scene, PROTOCOL
 

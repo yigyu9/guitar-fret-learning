@@ -18,9 +18,9 @@ import hashlib
 import json
 import numpy as np
 from guitar_learning.quality.fretting_quality import classify_fretting, FRETTING_QUALITY_METADATA
-from guitar_learning.core.fretting_v1 import FretContract
-from guitar_learning.core.geometry_v1 import geometry_snapshot
-from guitar_learning.music_task import ScoreTarget
+from guitar_learning.core.measurement import FretContract
+from guitar_learning.core.geometry import geometry_snapshot
+from guitar_learning.song.task import ScoreTarget
 from guitar_learning.quality.strike_quality import StrikeQualityDetector, STRIKE_QUALITY_METADATA
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -184,7 +184,7 @@ def audit(out):
     if any(p.exists() for p in paths):raise FileExistsError('preserve previous comparison')
     inputs=Inputs()
     inputs.pin(Path(__file__))
-    for name in ('quality/fretting_quality.py','core/fretting_v1.py','core/geometry_v1.py','music_task.py','core/strike.py','quality/strike_quality.py'):
+    for name in ('quality/fretting_quality.py','core/measurement.py','core/geometry.py','song/task.py','quality/strike_quality.py'):
         inputs.pin(ROOT/'guitar_learning'/name)
     left=analyze_left(SOURCE/'left_ppo_eval_v1',inputs)
     right=analyze_right(SOURCE/'right_ppo_eval_v1',inputs)

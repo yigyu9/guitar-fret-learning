@@ -1,0 +1,74 @@
+{
+  "CPU_only": true,
+  "GPU_executed": false,
+  "current_wrist_control": {
+    "schema": "guitar_learning.fixed_wrist_teacher.v3",
+    "feedback": "fixed guitar-local wrist origin and xyzw orientation; arm12 only; no pad error",
+    "ramp_s": 2.0,
+    "policy_onset_s": 3.0,
+    "position_interpolation": "linear in guitar frame",
+    "orientation_interpolation": "shortest-hemisphere normalized quaternion linear interpolation",
+    "rotation_length_scale_m": 0.1,
+    "damping": 1e-05,
+    "correction_step_rad": 0.008726646259971648,
+    "correction_rate_bound_rad_s": 0.5235987755982988,
+    "correction_algorithm": "raw dq=DLS(qposJ,error); candidate=actual_arm_q+dq; proposal=base+stored_correction; delta=clip(candidate-proposal,+/-correction_step_rad); existing request rate/bounds; correction=request-base",
+    "requested_delta_scope": "candidate minus proposal clipped to correction_step_rad before combined requested-target rate/bound clipping; inactive reset rows zero",
+    "candidate_arm_scope": "actual arm q plus raw qpos DLS dq before correction-step/request rate/bound clipping; inactive reset rows use valid proposal=base+stored_correction",
+    "target_bounds": "actual controller action bounds; accumulated correction clamped without windup",
+    "requested_target_rate": "existing per-axis controller rate, arm3rad/s; native alpha0.2 remains",
+    "jacobian_coordinates": "q-position differential: wrist-origin native J times ownjoint qpos-differential-to-native-velocity transform",
+    "jacobian_groups": [
+      "L_Thorax",
+      "L_Shoulder",
+      "L_Elbow",
+      "L_Wrist"
+    ],
+    "jacobian_basis": "S T = Rparent SO3left(Aq) A; S is ownbody native angular block; FK parent exp(Aq) bind has right-side bind",
+    "reset": "reset only affected teacher rows; no physics step; reset rows excluded from basis solve and zeroed before DLS solve; inactive actual q replaced by proposal and delta zero; feedforward preserved",
+    "limitation": "finite feedback target request; actual pose or3s arrival not guaranteed"
+  },
+  "parent_short_schema": "guitar_learning.short_finger_learning.v2",
+  "previous_v2_checkpoint_source_strict_rejected": true,
+  "current_v2_contract_strict_rejected_CPU_test": true,
+  "candidate_trace_field": "wrist_candidate_arm_rad",
+  "candidate_trace_width": 12,
+  "candidate_trace_scope": "actual arm q plus raw qpos DLS dq before correction-step/request rate/bound clipping; inactive reset rows use valid proposal=base+stored_correction",
+  "requested_delta_scope": "candidate minus proposal clipped to correction_step_rad before combined requested-target rate/bound clipping; inactive reset rows zero",
+  "CPU_trace_metadata_and_strict_contract_tests_passed": 2,
+  "only_settings_change": "wrist_control",
+  "original_PD_range_codec_reward_settings_preserved": true,
+  "original_cap_ramp_onset_Jacobian_math_contract_preserved": true,
+  "old73_model_value_only_equal": true,
+  "references": {
+    "index": {
+      "path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/03_short_learning/other_finger_precheck_v3/reference_index_row1.json",
+      "sha256": "99b50518d3e1d98d6863e6e0d85c3eb405a98ada2ab80a1423954c3013a5db0d",
+      "target_id": "event-000004/string-3/note-4",
+      "finger": 1
+    },
+    "middle": {
+      "path": "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/03_short_learning/reference_middle_row8_v2.json",
+      "sha256": "638c370bba6717c53df235bf57dd7fa0db70748767695925d6c07deeaf848825",
+      "target_id": "event-000052/string-3/note-53",
+      "finger": 2
+    }
+  },
+  "settings_exact_files": [
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/wrist_position_candidate_v3/native_precheck/cpu_inputs/index_settings.json",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/wrist_position_candidate_v3/native_precheck/cpu_inputs/middle_settings.json"
+  ],
+  "CPU_initial73_model_sha256": {
+    "index": "9532d0aafe41df8f47e5aa78cbd08eec66ede369fac2d4c93c082ebb858b04d1",
+    "middle": "9532d0aafe41df8f47e5aa78cbd08eec66ede369fac2d4c93c082ebb858b04d1"
+  },
+  "state_dim": 561,
+  "selected_action_count": 4,
+  "output_existing_and_dangling_symlink_rejected": true,
+  "original_CLI_jobs": 8,
+  "source_test_scope": "upstream current-source tests/review are separate; this script audits precheck readers/settings/model/inputs",
+  "CUDA_initialized": false,
+  "scope": "preparation only; no native outcome or learned performance",
+  "native_executed": false,
+  "active_runtime_imported": true
+}

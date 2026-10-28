@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from guitar_learning.training.finger_skill_curriculum import ExposureSchedule
+from guitar_learning.training.finger_skill_runner import ExposureSchedule
 
 
 class ExposureScheduleTests(unittest.TestCase):

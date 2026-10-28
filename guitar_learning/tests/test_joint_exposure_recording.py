@@ -9,16 +9,16 @@ import torch
 
 from guitar_learning.tests.test_finger_decisions import TinyDecisionPolicy, FakeDecisionPool
 from guitar_learning.training import finger_skill_runner as runner
-from guitar_learning.training.finger_skill_curriculum import ExposureSchedule
-from guitar_learning.training.decision_ppo import DecisionPPOTrainer
-from guitar_learning.training.gpu_log_records import iter_gpu_transitions
+from guitar_learning.training.finger_skill_runner import ExposureSchedule
+from guitar_learning.training.ppo import DecisionPPOTrainer
+from guitar_learning.training.training_log_io import iter_gpu_transitions
 
 
 class JointExposureRecordingTests(unittest.TestCase):
     def test_real_raw_scope_counts_and_committed_metadata_include_mixed_episodes(self):
         class Pool(FakeDecisionPool):
             def __init__(self, active, out):
-                super().__init__(k=1)
+                super().__init__()
                 self.progress = 0
                 self.focus = torch.tensor([[True, False], [True, False]])
                 self.sampler_index = 0
@@ -40,7 +40,7 @@ class JointExposureRecordingTests(unittest.TestCase):
                     count = int(self.focus[identity].sum())
                     episodes.append(dict(env_id=identity, steps=int(self.clock[identity]), valid=True,
                         reason='timeline_complete', reward=1., cost=0.,
-                        finger_skill=dict(schema='guitar_learning.finger_skill.v2',
+                        finger_skill=dict(schema='guitar_learning.finger_skill.v3',
                             scope='full_song' if full else 'phrase', selected_mask=self.focus[identity].tolist()),
                         song=dict(stage_success=False, left_success_count=0, right_success_count=0),
                         left_curriculum=dict(finger_metrics=[dict(target_count=count, success_fraction=0.)])))
@@ -62,11 +62,11 @@ class JointExposureRecordingTests(unittest.TestCase):
             def close(self, reason): pass
         active = dict(device='cuda:0', seed=7, num_envs=2, horizon=3, updates=2,
             initial_std=.05, min_available_memory_gib=0., max_wall_seconds=None, checkpoint_every=250,
-            finger_skill=dict(schema='guitar_learning.finger_skill.v2', phase='J', scope='scheduled',
+            finger_skill=dict(schema='guitar_learning.finger_skill.v3', phase='J', scope='scheduled',
                 planned_transitions=12, full_song_after=3, hold_ticks=1, exploration='independent'),
             ppo=dict(epochs=1, target_kl=.1, advantage_normalization='joint', cost_weight=1.,
                 episode_cost_budget=None, lambda_lr=0.))
-        model = TinyDecisionPolicy('J')
+        model = TinyDecisionPolicy()
         model.support_log_std = model.log_std[:17]
         model.finger_log_std = model.log_std[17:33]
         with tempfile.TemporaryDirectory() as temp:
@@ -74,8 +74,8 @@ class JointExposureRecordingTests(unittest.TestCase):
             def pins(settings, folder, extra):
                 path = folder/'settings.json'
                 return {str(path): runner.digest(path)}
-            with patch('guitar_learning.training.gpu_pool.GpuPool', Pool), \
-                    patch('guitar_learning.training.monitoring.Monitor', Monitor), \
+            with patch('guitar_learning.training.rollout.GpuPool', Pool), \
+                    patch('guitar_learning.training.training_log_io.Monitor', Monitor), \
                     patch('torch.cuda.mem_get_info', return_value=(2*1024**3, 4*1024**3)), \
                     patch('torch.cuda.synchronize'), patch('torch.cuda.is_available', return_value=False), \
                     patch.object(runner, '_policy', return_value=model), \
@@ -108,7 +108,7 @@ class JointExposureRecordingTests(unittest.TestCase):
             self.assertEqual(result['report']['journal']['committed'], 12)
             self.assertIsNone(result['report']['sampled_uncommitted_exposure_transitions'])
             checkpoint = torch.load(out/'final.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(checkpoint['metadata']['schema'], runner.RESUME_SCHEMA_V2)
+            self.assertEqual(checkpoint['metadata']['schema'], runner.RESUME_SCHEMA)
             self.assertEqual(checkpoint['metadata']['exposure_transitions'], expected)
             self.assertEqual(checkpoint['metadata']['curriculum']['committed_transitions'], 12)
             metrics = [json.loads(row) for row in (out/'learning_metrics.jsonl').read_text().splitlines()]

@@ -14,7 +14,7 @@ import torch
 from guitar_learning.runtime.prepared_reset_v1 import load_prepared_reset_contract
 
 
-import guitar_learning.gpu.rigid_guitar as rigid
+import guitar_learning.gpu.scene as rigid
 
 
 def pose(row):
@@ -57,7 +57,7 @@ class RigidGuitarTests(unittest.TestCase):
 
     def test_prepared_state_reconstructs_original_markers_and_velocities(self):
         saved = self.contract['state']
-        logical = torch.tensor([rigid._body_row(r) for kind in ('human', 'guitar', 'chair')
+        logical = torch.tensor([rigid._rigid_body_row(r) for kind in ('human', 'guitar', 'chair')
                                 for r in saved[kind + '_body_states']], dtype=torch.float32)
         native = torch.cat((logical[:66], self.guitar.prepared_root[None], logical[-1:]))[None].repeat(2, 1, 1)
         before = native.clone()

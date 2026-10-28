@@ -8,9 +8,9 @@ from unittest.mock import patch
 
 import torch
 
-from guitar_learning.gpu.geometry import apply
-from guitar_learning.music_task import ScoreTask
-from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.gpu.control import apply
+from guitar_learning.song.task import ScoreTask
+from guitar_learning.training.policy import SpecialistPolicy
 from guitar_learning.song.curriculum_runtime import CurriculumCoordinator
 from guitar_learning.tests import test_gpu_continuous_clean as clean_fixtures
 from guitar_learning.training.ppo import PPOTrainer

@@ -95,7 +95,7 @@ def build_environment(config, out, *, bundle, song, role, **kwargs):
     if 'finger_control' in song:
         if role != 'left':
             raise ValueError('flexible fingers require the left hand')
-        from guitar_learning.core.finger_control import validate_profile
+        from guitar_learning.core.control import validate_profile
         validate_profile(song['finger_control'])
         if 'finger_profile' in kwargs:
             raise ValueError('song finger control owns the environment profile')
@@ -103,7 +103,7 @@ def build_environment(config, out, *, bundle, song, role, **kwargs):
     if 'left_curriculum' in song:
         if role != 'left':
             raise ValueError('left curriculum requires the left hand')
-        from guitar_learning.song.left_curriculum import default_config
+        from guitar_learning.song.curriculum import cpu_default_config as default_config
         from guitar_learning.song.left_environment import LeftSongEnvironment
         if song['left_curriculum'] != default_config():
             raise ValueError('supported left curriculum contract required')

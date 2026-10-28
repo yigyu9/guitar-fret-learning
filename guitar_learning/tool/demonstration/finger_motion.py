@@ -12,14 +12,14 @@ def capture(out, profile):
     import isaacgym
     import numpy as np
     from guitar_learning.core.control import ACTIVE_NAMES
-    from guitar_learning.core.finger_control import default_profile
-    from guitar_learning.core.safety import StabilityMonitor
+    from guitar_learning.core.control import default_profile
+    from guitar_learning.core.measurement import StabilityMonitor
     from guitar_learning.core.training_environment import default_action_ranges
-    from guitar_learning.quality.actionable_preparation_environment import PersistentContactEnvironment
+    from guitar_learning.runtime.persistent_environment import PreparedPersistentContactEnvironment as PersistentContactEnvironment
     from guitar_learning.runtime.finger_session import FlexibleLeftFingerSession
     from guitar_learning.runtime.persistent_session import PersistentHeadlessPreparedSession
     from guitar_learning.runtime.prepared_reset_v1 import BASELINE_CONFIG, prepared_input_paths
-    from guitar_learning.training.recording import digest, write
+    from guitar_learning.training.training_log_io import digest, write
     out.mkdir(parents=True, exist_ok=False)
     sources = prepared_input_paths() | {Path(__file__).resolve()}
     sources.update(p for p in (ROOT/'guitar_learning').rglob('*.py') if 'archive' not in p.parts)
@@ -110,10 +110,10 @@ def render(capture_path, out):
     import mujoco
     import numpy as np
     from PIL import Image, ImageDraw, ImageFont
-    from guitar_learning.core.geometry_v1 import frame
+    from guitar_learning.core.geometry import frame
     from guitar_learning.native.initial_pose_video60_v1.static_visual_v7 import (
         build_model, set_body_poses, asset_paths)
-    from guitar_learning.training.recording import digest, write
+    from guitar_learning.training.training_log_io import digest, write
     out.mkdir(parents=True, exist_ok=False)
     initial = json.loads((capture_path/'initial_values.json').read_text())
     report = json.loads((capture_path/'report.json').read_text())
@@ -131,7 +131,7 @@ def render(capture_path, out):
     sources.update(ROOT/p for p in (
         'guitar_learning/native/initial_pose_video60_v1/static_visual_v7.py',
         'guitar_learning/native/initial_pose_video60_v1/replay_v6.py',
-        'guitar_learning/native/paths.py', 'guitar_learning/core/geometry_v1.py',
+        'guitar_learning/native/paths.py', 'guitar_learning/core/geometry.py',
         'guitar_learning/assets/native_provenance.json'))
     pins = {str(p):digest(p) for p in sources}
     model, data, mapping, _ = build_model(initial)

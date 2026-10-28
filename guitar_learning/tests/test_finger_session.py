@@ -10,7 +10,7 @@ from unittest.mock import patch
 import numpy as np
 
 from guitar_learning.core.control import LEFT_HAND_NAMES
-from guitar_learning.core.finger_control import default_profile
+from guitar_learning.core.control import default_profile
 from guitar_learning.runtime import finger_session as finger
 from guitar_learning.runtime import persistent_session as persistent
 from guitar_learning.runtime.headless_session import HeadlessPreparedSession

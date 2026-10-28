@@ -1,1 +1,1 @@
-"""Tensor environments for the versioned GPU physics training backend."""
+"""GPU 물리 기반 학습의 텐서 환경·제어·보상 구성요소."""

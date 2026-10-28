@@ -4,7 +4,7 @@ from unittest.mock import patch
 import numpy as np
 from guitar_learning.core import training_environment
 from guitar_learning.core.training_environment import TrainingEnvironment
-from guitar_learning.quality.actionable_preparation_environment import PersistentContactEnvironment
+from guitar_learning.runtime.persistent_environment import PreparedPersistentContactEnvironment as PersistentContactEnvironment
 from guitar_learning.runtime.persistent_environment import _CONSTRUCTION_LOCK
 from guitar_learning.song.task import make_task
 from guitar_learning.song.measurement import SongMeasurement

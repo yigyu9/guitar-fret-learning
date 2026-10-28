@@ -1,0 +1,54 @@
+{
+  "renames": {
+    "launch.py": {
+      "build_settings": {
+        "count": "environment_count",
+        "collection": "collection_ticks"
+      }
+    },
+    "finger_skill_runner.py": {
+      "_train_phase": {
+        "eligible": "recovery_eligible",
+        "scope_window": "update_exposure",
+        "scope_total": "committed_exposure",
+        "scope_committed": "exposure_committed"
+      }
+    },
+    "rollout.py": {
+      "TensorCollector.collect": {
+        "nxt": "next_values"
+      },
+      "DecisionCollector.collect": {
+        "n": "environment_count",
+        "nxt": "next_values",
+        "start": "start_control_tick"
+      }
+    },
+    "policy.py": {
+      "FingerSkillPolicy.forward": {
+        "std": "active_log_std",
+        "tokens": "priority_tokens"
+      },
+      "FingerSkillPolicy.analytic_kl": {
+        "old_std": "previous_log_std",
+        "std": "current_log_std"
+      }
+    },
+    "ppo.py": {
+      "DecisionPPOTrainer._update": {
+        "c": "config",
+        "b": "batch",
+        "ar": "reward_advantage",
+        "ac": "cost_advantage",
+        "rr": "reward_return",
+        "rc": "cost_return",
+        "old_std": "old_log_std"
+      }
+    }
+  },
+  "structural_changes": {
+    "policy.py": {
+      "FingerSkillPolicy.forward": "finger_mean list comprehension expanded into loop; operation and finger order preserved; added local finger_means/finger_index/finger_tokens/local_state/finger_input"
+    }
+  }
+}

@@ -5,7 +5,7 @@ import shutil
 import tempfile
 import unittest
 
-from guitar_learning.music_task import MusicLedger, ScoreTask
+from guitar_learning.song.task import MusicLedger, ScoreTask
 from guitar_learning.song.task import SongTask, make_task
 
 

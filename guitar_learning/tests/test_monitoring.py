@@ -5,7 +5,12 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from guitar_learning.training.monitoring import Monitor, LowMemoryError, process_memory, available_memory_bytes, save_failure_checkpoint, stopped_reason
+from guitar_learning.training.training_log_io import Monitor
+from guitar_learning.training.training_log_io import LowMemoryError
+from guitar_learning.training.training_log_io import process_memory
+from guitar_learning.training.training_log_io import available_memory_bytes
+from guitar_learning.training.training_log_io import save_failure_checkpoint
+from guitar_learning.training.training_log_io import stopped_reason
 
 
 class MonitoringTests(unittest.TestCase):

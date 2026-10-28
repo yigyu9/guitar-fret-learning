@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation
-from ..lower_body_release_v1.common import HUMAN
+from guitar_learning.native.paths import HUMAN
 from ..lower_body_release_v1.controller_horizontal_v4 import Controller as PreviousController
 from .runtime_v1 import Scene as InitialSeatScene
 

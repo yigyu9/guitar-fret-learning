@@ -1,0 +1,74 @@
+{
+  "verdict": "PASS",
+  "findings": [],
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/analysis/analyze.py": "6e55f8c0191f4b76e1750b4d40bc334650e97e6c3b12f6fb14685b0aa64e29b8",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/analysis/PLAN.md": "3a3f069d6fe2e40c5a9e1bb935cc69348eb8d0d9f79e9428bcc599070b67938f",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/analysis/results_v1/comparison.json": "53447efdc5d9f138e861699017f28b7afb6d3367c1ab1b93ede633069afb9f72",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/analysis/results_v1/verification.json": "fea454eea5093148f19d05403a1365fb941aaefe8268ac4883d7b175e2231083",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/analysis/results_v1/attempts.csv": "db548eabea61bd604bc78de7b95ab4b3b4525fff3db9dba6deacb0c936c88afc",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/analysis/results_v1/dip_controls.csv": "048a14c5ef953153b5bfbc3866575b9ae9d844e8c525c6c710475ba5e92dc301",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/analysis/results_v1/phase_tracking.csv": "3598a2243b98de00ba9d2e1bca81249344f0f2e4f569c4411ad1631a8ea66bb6",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/analysis/results_v1/RESULTS.md": "9f7378f5768ee64d791b90f62f47297db4361aca3588c41c74ad4901cb5cec1b",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_candidate_dip_guard_v1/analysis/results_v1/env0_tracking.png": "eb881769d1f342e66e0828cd7a01eb8adf32e3ba794becbc58e3eefb6f4f8ef9"
+  },
+  "scope": "두 closed-loop DIP 조건의 분석 source 및 실제 자료 통합 독립 CPU 검수",
+  "input_verification": {
+    "direct_input_paths": 1458,
+    "verified_input_paths": 1423,
+    "all_SHA_current": true
+  },
+  "independent_checks": [
+    "메모리 출력 가로채기 재실행: comparison.json/verification.json/CSV3/RESULTS.md 총6 출력 원본과 exact, PNG 저장 가로채기",
+    "전체 256 episode와 256 제어 요약 행의 첫 시도 분모/음악 원장/실패 및 원9보상 유한값·합계 잔차 확인",
+    "전128 sidecar first mask·clock·old/final memory 재귀·candidate/wrong 이전 endpoint 정합·양의 억제 및 음/0 증분 통과 재계산",
+    "저장 other104/memory/scene/normalized observation 잔차0 및 원 native/rate 제한 확인",
+    "env0 actual/target4·힘벡터 norm·SciPy 손목 세계위치/상대회전 독립 재계산과 음전/음중/음후 helper 재생",
+    "원 B300과 passthrough 전체 evaluation exact 및 원 trace 모든 필드 비교; net_body_force_n만 최대1.1444091796875e-5N 차이 보존",
+    "검수된 원 B strict/fresh=False·동일1420 준비핀·두128환경 native105/16effort.25/90pairs·계약/설정/close/alias·모델/RNG/updates 관측 검증 재사용",
+    "env0_tracking.png 직접 시각 확인"
+  ],
+  "results": {
+    "first_attempts": 256,
+    "first_attempt_controls_each": 28288,
+    "achieved_each": 128,
+    "clean_each": 1.0,
+    "wrong_each": 0.0,
+    "physical_or_wrist_failures": 0,
+    "guard_affected_environments": 128,
+    "guard_blocked_controls": 19457,
+    "negative_controls_each": 3072,
+    "episode_reward_component_sum_max_abs_residual": 1.0830602832356817e-06,
+    "passthrough_B300_evaluation_exact": true,
+    "passthrough_old_raw_max_force_difference_N": 1.1444091796875e-05,
+    "env0_audible_PIP_actual_deg": [
+      8.52155,
+      52.42589
+    ],
+    "env0_audible_DIP_actual_deg": [
+      89.21126,
+      37.19401
+    ],
+    "env0_audible_DIP_target_deg": [
+      90.00019,
+      37.67494
+    ],
+    "env0_audible_distal_resultant_mean_N": [
+      7.9778,
+      6.61455
+    ],
+    "env0_audible_wrist_position_error_mean_mm": [
+      16.59123,
+      16.51664
+    ]
+  },
+  "GPU_executed": false,
+  "native_executed": false,
+  "existing_files_modified": false,
+  "limits": [
+    "원 고정 B300에 실행개입한 closed-loop 결과이며 이후 정책 행동과 다른 관절 궤적도 달라짐",
+    "음의 명령 통과는 실제 해제 성공을 뜻하지 않으며 최초 target−actual 오차를 제거하거나 actual각을 동결한 것이 아님",
+    "자세/힘/기하는 env0 저장60Hz 범위; 다른127 상세힘·240Hz 최대·접촉쌍압력·모터토크를 입증하지 않음",
+    "단일 원인/인간 자연성/새 학습 개선/기본제어 채택을 승인하는 검수가 아님"
+  ]
+}

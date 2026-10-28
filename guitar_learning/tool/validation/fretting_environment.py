@@ -13,7 +13,7 @@ class FrettingEnvironment(FreeGuitarEnvironment):
         self.fretting_tracker = None
 
     def reset(self):
-        from guitar_learning.core.fretting_v1 import FrettingTracker
+        from guitar_learning.core.measurement import FrettingTracker
         self.contact_names = None
         self.fretting_tracker = FrettingTracker(self.fret_contract, self.note_start_step, self.note_end_step)
         sample, metadata = super().reset()
@@ -24,7 +24,7 @@ class FrettingEnvironment(FreeGuitarEnvironment):
         return sample, metadata
 
     def _snapshot(self):
-        from guitar_learning.core.fretting_v1 import measure_sample
+        from guitar_learning.core.measurement import measure_sample
         sample = super()._snapshot()
         scene = self.session.scene
         if self.contact_reader is None:
