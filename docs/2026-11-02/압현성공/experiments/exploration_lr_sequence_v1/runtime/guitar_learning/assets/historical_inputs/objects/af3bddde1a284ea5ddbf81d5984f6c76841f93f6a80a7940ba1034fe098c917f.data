@@ -1,0 +1,39 @@
+"""Make annotated and clean movies from the same preserved native camera run."""
+import argparse
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from unittest.mock import patch
+from . import render_initial_pose_search_v1 as annotate
+from .initial_pose_noise_v1 import read,save,sha
+
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--native',type=Path,required=True);parser.add_argument('--out',type=Path,required=True);parser.add_argument('--video',type=Path,required=True);args=parser.parse_args()
+    n=args.native.resolve();out=args.out.resolve();video=args.video.resolve();out.mkdir(parents=True,exist_ok=False);video.mkdir(parents=True,exist_ok=False)
+    paths={Path(__file__).resolve(),Path(annotate.__file__),Path(annotate.render.__file__),n/'report.json',n/'media/videos.json'}
+    raw=read(n/'media/videos.json')
+    paths|={Path(row['path']) for row in raw.values()}
+    pins={str(p):sha(p) for p in paths};save(out/'inputs_before.json',pins)
+    original=annotate.render.draw
+    def draw(path,frame,camera):
+        stage='long_stopped' if frame['stage']=='stopped' else 'long_prepare' if frame['time_s']<2 else 'long_strike' if frame['time_s']<5 else 'long_hold'
+        return original(path,{**frame,'stage':stage},camera)
+    titles={'long_stopped':'보호 중단 직전 · 15초 목표 미완료','long_prepare':'초기 준비 · 2초 유지','long_strike':'오른 팔꿈치·손목 왕복 타현','long_hold':'타현 후 유지 관찰 · 물리 계속 실행 중'}
+    with patch.object(annotate.render,'draw',draw),patch.dict(annotate.render.STAGES,titles),patch.object(sys,'argv',[__file__,'--native',str(n),'--out',str(out/'annotated')]):annotate.main()
+    report=read(out/'annotated/report.json');copies=[]
+    for kind in ('with_description','clean'):(video/kind).mkdir()
+    for view,key in [('front','whole_body'),('right_side','hands'),('top','top')]:
+        for kind,source in [('with_description',report['videos'][view]),('clean',raw[key])]:
+            source=Path(source['path']);dest=video/kind/(view+'.mp4');shutil.copy2(source,dest);assert sha(source)==sha(dest);copies.append({'kind':kind,'view':view,'source':str(source),'copy':str(dest),'sha256':sha(dest)})
+    source=Path(report['videos']['combined']['path']);dest=video/'with_description/front_side_top.mp4';shutil.copy2(source,dest);assert sha(source)==sha(dest);copies.append({'kind':'with_description','view':'combined','source':str(source),'copy':str(dest),'sha256':sha(dest)})
+    dest=video/'clean/front_side_top.mp4';command=['ffmpeg','-nostdin','-n','-loglevel','error']
+    for view in ('front','right_side','top'):command+=['-i',str(video/'clean'/(view+'.mp4'))]
+    command+=['-filter_complex','[0:v]scale=640:360[a];[1:v]scale=640:360[b];[2:v]scale=640:360[c];[a][b][c]hstack=inputs=3[v]','-map','[v]','-frames:v',str(report['frame_count_per_view']),'-c:v','libx264','-crf','20','-pix_fmt','yuv420p',str(dest)]
+    subprocess.run(command,check=True);copies.append({'kind':'clean','view':'combined','copy':str(dest),'sha256':sha(dest),'command':command})
+    assert all(sha(p)==h for p,h in pins.items())
+    save(out/'report.json',{'input_sha256':pins,'inputs_unchanged':True,'native_completed':report['native_completed'],'physics_end_s':report['physics_end_s'],'last_camera_time_s':report['last_camera_time_s'],'frame_count_per_view':report['frame_count_per_view'],'copies':copies,'annotated_report':str(out/'annotated/report.json'),'scope':'same native run; annotated has Xray contacts/footer, clean is native camera with no text or projected contact markers; no replay extension'})
+
+
+if __name__=='__main__':main()

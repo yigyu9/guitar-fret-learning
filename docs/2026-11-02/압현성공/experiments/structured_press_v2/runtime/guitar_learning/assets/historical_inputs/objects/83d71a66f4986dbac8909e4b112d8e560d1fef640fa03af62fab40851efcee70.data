@@ -1,0 +1,10 @@
+"""Scoped final-target diagnostics after the one original FootScene command."""
+from .runtime_v1 import Scene, Controller
+
+ORIGINAL_COMMAND = Scene.command
+
+
+def command_with_final(scene, named):
+    row = ORIGINAL_COMMAND(scene, named)
+    scene.play_logic.record_final(row)
+    return row

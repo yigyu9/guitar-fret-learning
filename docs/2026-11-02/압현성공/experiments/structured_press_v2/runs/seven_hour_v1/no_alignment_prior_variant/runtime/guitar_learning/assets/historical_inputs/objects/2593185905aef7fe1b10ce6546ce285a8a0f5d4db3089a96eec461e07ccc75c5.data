@@ -1,0 +1,114 @@
+"""Replay finite human joint requests; observe contact, hold, then return targets."""
+from pathlib import Path
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import save
+from ..native_contacts import body_names, read_contacts
+from ..horizontal_play_test_v1.analyze_v1 import physical_guitar_bodies
+from . import motion_v1 as old
+
+MODE='recorded_finite_finger_slow_return_v1'
+
+
+class Motion(old.Motion):
+    def __init__(self,scene,fk):
+        super().__init__(scene,fk)
+        assert self.spec['finger_control']==dict(mode=MODE,return_mode='capture13_to_reference2396_target15_smoothstep',
+            return_interval_s=[13,15],observation_interval_s=[15,16],
+            readiness_hz=60,required_dwell_s=.1,minimum_descent_m=.002,minimum_qchange_rad=.02,table_end_step=3120)
+        trajectory=self.spec['finger_trajectory']
+        assert trajectory['joint_indices105']==self.finger.tolist()
+        assert trajectory['joint_names']==[scene.names[j] for j in self.finger]
+        assert trajectory['rest_target_step']==2396
+        self.table={r['physics_step_before']:r for r in trajectory['rows']}
+        assert list(self.table)==list(range(2400,3120,4))
+        self.rest=np.array(trajectory['rest_final4_rad'])
+        self.ready_since=None
+        self.capture=None
+
+    def apply(self,named):
+        s=self.s;t=s.steps/240
+        if t<10:return named
+        state=s.native();q=np.array([r['pos'] for r in state['human_dof_states']])
+        gp,gr=pose(state['guitar_body_states'][0])
+        marker=pose(state['human_body_states'][s.human_bodies.index('LH:index3')])[0]
+        finger_G=gr.inv().apply(marker-gp)
+        if not self.started:
+            assert s.steps==2400
+            self.initial_finger=finger_G.copy();self.q10=q[self.finger].copy()
+            self.initial_pick=gr.inv().apply(pose(state['human_body_states'][s.human_bodies.index('RH:pick')])[0]-gp)
+            self.mapping=body_names(s.gym,s.env);self.physical=physical_guitar_bodies()
+            save(Path(s.cfg['attempt_out'])/'play_reference.json',dict(time_s=t,state=state,
+                initial_finger_G_m=self.initial_finger.tolist(),initial_pick_G_m=self.initial_pick.tolist(),spec=self.spec))
+            self.started=True
+        original=np.array([named[n] for n in s.names]);request=original.copy()
+        target=np.array(self.spec['press']['target_G_m']);relative=finger_G-target
+        positive=[]
+        for contact in read_contacts(s.gym,s.env,self.mapping):
+            a,b=contact['body0_name'],contact['body1_name']
+            if float(contact['lambda'])>0 and ((a=='human/LH:index3' and b in self.physical) or (b=='human/LH:index3' and a in self.physical)):
+                positive.append(dict(body0=a,body1=b,raw_lambda=float(contact['lambda'])))
+        ready=bool(positive and np.linalg.norm(relative[:2])<=self.spec['press']['geometry_xy_m']
+            and self.spec['press']['geometry_z_band_m'][0]<=relative[2]<=self.spec['press']['geometry_z_band_m'][1])
+        if not ready or t<10.8:self.ready_since=None
+        elif self.ready_since is None:self.ready_since=t
+        dwell=t-self.ready_since if self.ready_since is not None else 0.
+        descent=float(self.initial_finger[2]-finger_G[2]);change=float(np.max(abs(q[self.finger]-self.q10)))
+        before=s.target[self.finger].astype(float).copy()
+        if self.capture is None and 10.8<=t<13 and ready and dwell>=.1 and descent>=.002 and change>=.02:
+            self.capture=dict(step=s.steps,source_target_step=s.steps-4,final4_rad=before.tolist(),
+                observed_ready_duration_60Hz_s=dwell,actual_descent_m=descent,actual_qchange_rad=change)
+        reference_error=None
+        if t<13 and self.capture is None:
+            values=np.array(self.table[s.steps]['requested4_rad'])
+            reference_error=self.table[s.steps]['reference_IK_error_m']
+            phase='recorded_approach'
+        elif t<13:
+            values=np.array(self.capture['final4_rad']);phase='contact_target_hold'
+        else:
+            if self.capture is None:raise RuntimeError('recorded press table ended13s without actual capture')
+            u=float(np.clip((t-13)/2,0,1));weight=u*u*(3-2*u)
+            start=np.array(self.capture['final4_rad'])
+            values=start+(self.rest-start)*weight
+            if t>=15:values=self.rest.copy()
+            phase='return_rest_target'
+        assert np.isfinite(values).all() and np.all(values>=s.lower[self.finger]) and np.all(values<=s.upper[self.finger])
+        request[self.finger]=values
+        self.stage='press_'+phase
+        self.info=dict(case=self.case,press_enabled=True,strike_enabled=self.case=='combined',finger_control_mode=MODE,
+            finger_phase=phase,press_IK_evaluated=False,press_IK_error_m=None,recorded_reference_IK_error_m=reference_error,
+            finger_target_capture=self.capture,contact_hold_active=phase=='contact_target_hold',
+            readiness_observation_hz=60,ready_observation_start_s=self.ready_since,observed_ready_duration_s=dwell,
+            actual_geometry_contact_ready=ready,actual_index3_positive_contacts=positive,
+            actual_finger_G_m=finger_G.tolist(),actual_descent_from10_m=descent,actual_max_qchange_from10_rad=change,
+            actual_q4_rad=q[self.finger].tolist(),previous_submitted4_rad=before.tolist(),rest_reference_target4_rad=self.rest.tolist(),
+            actual_marker_G_displacement_from10_m=float(np.linalg.norm(finger_G-self.initial_finger)),
+            actual_q4_distance_to_rest_target_rad=float(np.linalg.norm(q[self.finger]-self.rest)),
+            scope='Recorded finite joint requests, not body-state replay. No live finger IK.60Hz observed readiness differs from240Hz dwell. Return restores a target, not a claimed exact actual pose.')
+        if self.case=='combined':
+            points=np.array(self.spec['strike']['waypoints_G_m'])
+            goal=old.interpolate(t,[10,10.8,11.1,11.5,12.1,12.3,12.9,13.1,13.5],
+                np.vstack([self.initial_pick,points[0],points[1],points[1],points[2],points[2],points[3],points[3],points[4]]))
+            fitted,error,nfev=old.solve_pick(self.fk,q,self.distal,s.lower,s.upper,s.q_ref,gp+gr.apply(goal),s.target[self.distal].astype(float))
+            if not np.isfinite(fitted).all() or error>.002 or np.any(np.linalg.norm(fitted[self.distal].reshape(2,3),axis=1)>=np.deg2rad(160)):
+                raise RuntimeError('strike finite distal IK/principal2mm hard gate')
+            request[self.distal]=fitted[self.distal]
+            self.info.update(pick_goal_G_m=goal.tolist(),pick_IK_error_m=error,pick_IK_nfev=nfev)
+        changed=set(self.finger)|(set(self.distal) if self.case=='combined' else set())
+        other=[j for j in range(105) if j not in changed]
+        assert np.array_equal(request[other],original[other]) and s.native()==state
+        self.info['other_base_request_channels_exact']=True
+        self.current_q=q
+        return dict(zip(s.names,request.tolist()))
+
+    def record_final(self,row):
+        if not self.started:return
+        final=np.array(row['final105_rad'])[self.finger];request=np.array(row['requested105_rad'])[self.finger]
+        reference_exact=None
+        if self.info['finger_phase']=='recorded_approach':
+            reference_exact=np.array_equal(final,self.table[self.s.steps]['final4_rad'])
+            assert reference_exact,'recorded final finger target mismatch'
+        self.info.update(recorded_final4_exact=reference_exact,final_target4_rad=final.tolist(),
+            requested_minus_actual4_norm_rad=float(np.linalg.norm(request-self.current_q[self.finger])),
+            final_minus_actual4_norm_rad=float(np.linalg.norm(final-self.current_q[self.finger])))
+        row['play']=self.info.copy()

@@ -90,30 +90,28 @@ def render(checkpoint, out, *, scope='full_song', num_envs=None):
     from guitar_learning.training.ppo import DecisionPPOTrainer
     from guitar_learning.training.rollout import DecisionCollector
     from guitar_learning.training.finger_skill_runner import (
-        resume_schema, _policy, _validate_pins, _pins, _DeterministicPolicy)
+        _validate_metadata_schema, _policy, _validate_pins, _pins, _DeterministicPolicy)
+    from guitar_learning.portability import ROOT, localize, portable, report_reference
     from guitar_learning.training.ppo import PPOConfig
     from guitar_learning.training.training_log_io import digest, write
     from guitar_learning.tool.validation.hand_contact_probe import GraphicsGym, finish_video
 
-    checkpoint, out = Path(checkpoint), Path(out).resolve()
-    if not checkpoint.is_absolute() or not checkpoint.is_file():
-        raise ValueError('existing absolute checkpoint path required')
-    checkpoint = checkpoint.resolve()
+    checkpoint, out = Path(checkpoint).resolve(), Path(out).resolve()
+    if not checkpoint.is_file():
+        raise ValueError('existing checkpoint path required')
     if scope not in ('full_song', 'phrases'):
         raise ValueError('full_song/phrases scope required')
     payload = torch.load(checkpoint, map_location='cpu', weights_only=False)
     metadata = payload.get('metadata') if isinstance(payload, dict) else None
-    if (not isinstance(metadata, dict) or
-            metadata.get('schema') != resume_schema(metadata.get('settings', {}))):
-        raise ValueError('own finger-skill checkpoint metadata required')
+    _validate_metadata_schema(metadata)
     _validate_pins(metadata)
-    settings = copy.deepcopy(metadata['settings'])
+    settings = localize(metadata['settings'])
     if num_envs is not None:
         if type(num_envs) is not int or not 1 <= num_envs <= 1024:
             raise ValueError('num_envs must be 1..1024')
         settings['num_envs'] = num_envs
     out.mkdir(parents=True, exist_ok=False)
-    write(out/'settings.json', settings)
+    write(out/'settings.json', portable(settings))
     pins = _pins(settings, out, [checkpoint])
     write(out/'inputs_before.json', pins)
     torch.set_num_threads(1)
@@ -206,6 +204,7 @@ def render(checkpoint, out, *, scope='full_song', num_envs=None):
                     len(codes) == 2 and all(code == 0 for code in codes.values()))
         report = dict(schema='guitar_learning.finger_skill_render.v1', completed=complete, failure=failure,
             checkpoint=str(checkpoint), checkpoint_sha256=digest(checkpoint), phase=policy.phase if policy else None,
+            portable_checkpoint_ref=report_reference(checkpoint, out), recorded_project_root=str(ROOT),
             scope=scope, recorded_environment=0, first_episode_only=True, policy_unchanged=unchanged,
             native_pixels=True, frames=len(capture.frame_times_s) if capture else 0,
             encoding_exit_codes=codes, cleanup_errors=cleanup_errors, source_pins_unchanged=not changed,

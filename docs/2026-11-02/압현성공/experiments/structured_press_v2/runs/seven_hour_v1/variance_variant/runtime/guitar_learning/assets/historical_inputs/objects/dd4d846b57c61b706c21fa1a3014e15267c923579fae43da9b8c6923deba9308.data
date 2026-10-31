@@ -1,0 +1,79 @@
+"""Joint actor views and strict PPO identity, without a simulator."""
+import copy
+from pathlib import Path
+import tempfile
+import unittest
+
+import torch
+
+from guitar_learning.joint.policy import JointPolicy
+from guitar_learning.joint.spec import STATE_DIM, COORDINATION_FIELDS, COORDINATION_SCALES
+from guitar_learning.ppo import PPOTrainer
+from guitar_learning.tests.test_quality_curriculum_transfer import contracts
+
+
+def joint_contract(hands):
+    contract = copy.deepcopy(hands['left'])
+    obs = contract['observation']
+    obs['dimension'] = STATE_DIM
+    obs['fields'] = [r+'.'+f for r in ('left', 'right') for f in hands[r]['observation']['fields']]
+    obs['fields'] += ['coordination.'+f for f in COORDINATION_FIELDS]
+    obs['scales'] = sum((list(hands[r]['observation']['scales']) for r in ('left', 'right')), [])+list(COORDINATION_SCALES)
+    contract['task']['joint'] = dict(hand_contracts=copy.deepcopy(hands))
+    contract['task']['specialist']['role'] = 'joint'
+    return contract
+
+
+def inputs(batch=3):
+    return [torch.randn(batch, STATE_DIM), torch.randn(batch, 64, 24), torch.ones(batch, 64, dtype=torch.bool),
+            torch.randn(batch, 2, 24), torch.ones(batch, 2, dtype=torch.bool)]
+
+
+class JointPolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls): torch.set_num_threads(1)
+
+    def test_separate569_views_central1132_critic_and_gradient_ownership(self):
+        with tempfile.TemporaryDirectory() as folder:
+            hands={r:contracts(folder,r)[0] for r in ('left','right')}
+            model=JointPolicy(contract=joint_contract(hands)); data=inputs()
+            with torch.no_grad():
+                for head in model.actor_heads.values(): head.weight.normal_(0,.02)
+            base=model(*data)
+            for role,other,start in [('left','right',563),('right','left',0)]:
+                changed=[v.clone() for v in data];changed[0][:,start:start+563]+=2
+                result=model(*changed)
+                torch.testing.assert_close(result['mean'][:,model.role_slices[role]],base['mean'][:,model.role_slices[role]],rtol=0,atol=0)
+                self.assertFalse(torch.equal(result['mean'][:,model.role_slices[other]],base['mean'][:,model.role_slices[other]]))
+            model.zero_grad();base['mean'].sum().backward()
+            self.assertTrue(all(any(p.grad is not None for p in model.actor_encoders[r].parameters()) for r in ('left','right')))
+            self.assertTrue(all(p.grad is None for p in model.value_parameters()))
+            self.assertEqual(model.actor_encoders['left'].state[0].in_features,569)
+            self.assertEqual(model.value_encoder.state[0].in_features,1132)
+            with self.assertRaises(ValueError): model(*[torch.zeros(3,563),*data[1:]])
+
+    def test_strict_joint_ppo_roundtrip_rejects_changed_contract_or_legacy_state(self):
+        with tempfile.TemporaryDirectory() as folder:
+            hands={r:contracts(folder,r)[0] for r in ('left','right')}
+            contract=joint_contract(hands);model=JointPolicy(contract=contract)
+            trainer=PPOTrainer(model);data=inputs(2)
+            with torch.no_grad(): sampled=model.act(*data)
+            buffer={key:value[None] for key,value in zip(('state','events','mask','priority_events','priority_mask'),data)}
+            buffer.update({key:sampled[key][None] for key in ('latent','logp','reward_value','cost_value')})
+            buffer.update(old_mean=sampled['mean'][None],old_log_std=sampled['log_std'][None],
+                reward=torch.tensor([[.2,-.1]]),cost=torch.tensor([[0.,.1]]),
+                next_reward_value=torch.zeros(1,2),next_cost_value=torch.zeros(1,2),
+                terminated=torch.zeros(1,2,dtype=torch.bool),truncated=torch.zeros(1,2,dtype=torch.bool))
+            trainer.update(buffer)
+            checkpoint=Path(folder)/'joint.pt';trainer.save(checkpoint)
+            restored=PPOTrainer(JointPolicy(contract=contract));restored.load(checkpoint)
+            self.assertEqual(restored.updates,1)
+            self.assertTrue(restored.actor_optimizer.state);self.assertTrue(restored.value_optimizer.state)
+            for key,value in model.state_dict().items():torch.testing.assert_close(value,restored.policy.state_dict()[key],rtol=0,atol=0)
+            changed=copy.deepcopy(contract);changed['reward']['joint']='different'
+            with self.assertRaises(ValueError):PPOTrainer(JointPolicy(contract=changed)).load(checkpoint)
+            with self.assertRaises(ValueError):JointPolicy(563,contract=contract)
+            with self.assertRaises(ValueError):model.transfer_actor(checkpoint,'left')
+
+
+if __name__=='__main__': unittest.main()

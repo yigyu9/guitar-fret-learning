@@ -1,0 +1,146 @@
+"""CPU ownership/lifecycle tests without importing a native environment."""
+import copy
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from .environment_v3 import FreeGuitarEnvironment, PREPARATION_STEPS, ZERO_RANGE_NAMES
+from ..music_pipeline_v2.control import ACTIVE_NAMES, EXPECTED_NAMES
+
+
+class FakeSession:
+    def __init__(self, config, out):
+        names = sorted(EXPECTED_NAMES) + [side + '_' + part + '_' + axis for side in ('L', 'R') for part in ('Hip', 'Knee', 'Ankle', 'Toe') for axis in 'xyz']
+        self.scene = SimpleNamespace(names=names, steps=0, target=np.zeros(105, dtype=np.float32), lower=np.full(105, -2.), upper=np.full(105, 2.), zero_indices=np.arange(81, 89), lower_indices=np.arange(81, 105), human_root_fixed=True, guitar_root_fixed=False, guitar_gravity_disabled=False, pd_properties=np.ones(105, dtype=[('effort', 'f4')]), forbidden_calls=[], human_bodies=[], guitar_bodies=[])
+        self.scene.zero_indices = np.array([names.index(name) for name in names if name in ZERO_RANGE_NAMES])
+        self.scene.lower[self.scene.zero_indices] = self.scene.upper[self.scene.zero_indices] = 0
+        self.q = np.zeros(105)
+        self.preparation_calls = self.policy_calls = self.physics_calls = 0
+        self.closed = False
+        self.scene.native = lambda: {'physics_step': self.scene.steps, 'q': self.q.tolist(), 'guitar_untouched': True}
+
+    def prepare_tick(self):
+        self.preparation_calls += 1
+        self.scene.target[:81] = .1
+
+    def submit_policy_target(self, target):
+        self.policy_calls += 1
+        self.scene.target[:] = target
+        # Model separate nonpolicy foot maintenance; upper81 must remain untouched.
+        movable_lower = np.setdiff1d(self.scene.lower_indices, self.scene.zero_indices)
+        self.scene.target[movable_lower] += np.float32(.0001 * self.policy_calls)
+        return {'final105_rad': self.scene.target.astype(float).tolist()}
+
+    def integrate(self):
+        self.physics_calls += 1
+        self.scene.steps += 1
+        self.q[:] = self.scene.target
+        return {'physics_step_before': self.scene.steps - 1}
+
+    def close(self):
+        self.closed = True
+
+
+class EnvironmentContracts(unittest.TestCase):
+    def test_metadata_scopes_finite_lower_without_mutating_original_codec(self):
+        _, metadata = self.environment.reset()
+        self.assertIn('finite foot/support', metadata['target_contract']['contact_roles']['thigh']['scope'])
+        self.assertIn('external fixed-lower', self.environment.contract.metadata['contact_roles']['thigh']['scope'])
+
+    def test_unknown_lower_name_and_wrong_zero_axes_rejected(self):
+        for corrupt in ('unknown', 'zero_axes'):
+            def factory(config, out):
+                session = FakeSession(config, out)
+                self.sessions.append(session)
+                if corrupt == 'unknown':
+                    session.scene.names[81] = 'unsupported_lower_joint'
+                else:
+                    old = int(session.scene.zero_indices[0])
+                    session.scene.lower[old], session.scene.upper[old] = -2., 2.
+                    session.scene.lower[81] = session.scene.upper[81] = 0.
+                    session.scene.zero_indices[0] = 81
+                return session
+            env = FreeGuitarEnvironment({}, Path(self.folder.name) / corrupt, action_half_range_rad=.002, session_factory=factory)
+            with self.assertRaises(ValueError):
+                env.reset()
+            self.assertTrue(self.sessions[-1].closed)
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.sessions = []
+        def factory(config, out):
+            session = FakeSession(config, out)
+            self.sessions.append(session)
+            return session
+        self.environment = FreeGuitarEnvironment({}, Path(self.folder.name), action_half_range_rad=.002, session_factory=factory, geometry_fn=lambda state, h, g: {'physics_step': state['physics_step']})
+
+    def tearDown(self):
+        self.environment.close()
+        self.folder.cleanup()
+
+    def test_zero_action_and_exact_single_owner_four_physics_samples(self):
+        state, info = self.environment.reset()
+        session = self.sessions[-1]
+        self.assertEqual(session.preparation_calls, 1320)
+        self.assertEqual(session.physics_calls, PREPARATION_STEPS)
+        reference = session.scene.target.copy()
+        state, info = self.environment.step(np.zeros(39))
+        self.assertEqual(session.preparation_calls, 1320)
+        self.assertEqual(session.policy_calls, 1)
+        np.testing.assert_array_equal(session.scene.target[:81], reference[:81])
+        self.assertFalse(np.array_equal(session.scene.target[89:], reference[89:]))
+        self.assertEqual([sample['native']['physics_step'] for sample in info['physics_samples240']], list(range(5281, 5285)))
+        self.assertTrue(state['native']['guitar_untouched'])
+
+    def test_nonzero_changes_only_canonical39_upper_channels(self):
+        self.environment.reset()
+        session = self.sessions[-1]
+        reference = session.scene.target.copy()
+        self.environment.step(np.ones(39))
+        active = [session.scene.names.index(name) for name in ACTIVE_NAMES]
+        held = sorted(set(range(81)) - set(active))
+        self.assertTrue(np.all(session.scene.target[active] > reference[active]))
+        np.testing.assert_array_equal(session.scene.target[held], reference[held])
+        np.testing.assert_array_equal(session.scene.target[session.scene.zero_indices], 0)
+
+    def test_invalid_actions_do_not_submit_or_advance(self):
+        self.environment.reset()
+        for action in (np.zeros(38), np.full(39, np.nan), np.full(39, 1.01)):
+            with self.assertRaises(ValueError):
+                self.environment.step(action)
+        self.assertEqual(self.sessions[-1].policy_calls, 0)
+        self.assertEqual(self.sessions[-1].scene.steps, PREPARATION_STEPS)
+
+    def test_reset_closes_old_scene_and_really_prepares_fresh(self):
+        self.environment.reset()
+        first = self.sessions[-1]
+        self.environment.step(np.ones(39))
+        self.environment.reset()
+        self.assertTrue(first.closed)
+        self.assertEqual(self.sessions[-1].scene.steps, PREPARATION_STEPS)
+        self.assertEqual(self.sessions[-1].policy_calls, 0)
+
+    def test_names_and_explicit_ranges_rejected_before_backend(self):
+        for names in (tuple(reversed(ACTIVE_NAMES)), ACTIVE_NAMES[:-1]):
+            with self.assertRaises(ValueError):
+                FreeGuitarEnvironment({}, self.folder.name, action_half_range_rad=.002, action_names=names)
+        for half in (0, float('nan'), np.ones(38)):
+            with self.assertRaises(ValueError):
+                FreeGuitarEnvironment({}, self.folder.name, action_half_range_rad=half)
+
+    def test_submitter_physical_state_overwrite_is_rejected(self):
+        self.environment.reset()
+        session = self.sessions[-1]
+        original = session.submit_policy_target
+        def corrupt(target):
+            result = original(target)
+            session.q[0] += .2
+            return result
+        session.submit_policy_target = corrupt
+        with self.assertRaisesRegex(RuntimeError, 'overwrote physical state'):
+            self.environment.step(np.zeros(39))
+
+
+if __name__ == '__main__':
+    unittest.main()

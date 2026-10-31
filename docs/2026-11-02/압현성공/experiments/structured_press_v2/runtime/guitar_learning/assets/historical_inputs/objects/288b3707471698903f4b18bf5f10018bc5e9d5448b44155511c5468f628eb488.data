@@ -1,0 +1,93 @@
+"""Small zero-integration native state-setter ordering diagnostic."""
+import json
+from pathlib import Path
+
+
+def differences(saved, actual, prefix=''):
+    if isinstance(saved, dict):
+        result = []
+        for key, value in saved.items():
+            if key != 'physics_step':
+                result.extend(differences(value, actual[key], prefix + '/' + key))
+        return result
+    if isinstance(saved, list):
+        result = []
+        for i, value in enumerate(saved):
+            result.extend(differences(value, actual[i], prefix + '/' + str(i)))
+        return result
+    delta = abs(float(saved) - float(actual))
+    return [{'field': prefix, 'saved': saved, 'native': actual, 'absolute_error': delta}] if delta else []
+
+
+def main():
+    import isaacgym
+    from isaacgym import gymapi
+    from unittest.mock import patch
+    from .replay_v5 import NoIntegration, assign, selected_rows, sha, save, original_expected_inputs
+    from ..front_facing_ready_v1.runtime_v15 import Scene
+    root = Path(__file__).resolve().parents[2]
+    out = root / 'paper/initial_pose/current_v3/presentation_60fps_v1/restore_diagnostic_v1/full_array_v2'
+    out.mkdir(parents=True, exist_ok=False)
+    run = root / 'paper/initial_pose/lower_body_release_v1/front_facing_ready_v1/native_free_strike_v14'
+    config = Path(json.loads((run / 'report.json').read_text())['config'])
+    required = {Path(__file__).resolve(), Path(__file__).with_name('replay_v5.py'), config, run / 'states240.json', run / 'attempt.json', run / 'support_wrapper.json', run / 'report.json'}
+    required.update(Path(p) for p in original_expected_inputs(run) if Path(p).is_file())
+    pins = {str(p.resolve()): sha(p) for p in required}
+    save(out / 'inputs_before.json', pins)
+    cfg = json.loads(config.read_text())
+    row = next(selected_rows(run / 'states240.json', 17, 18, True))
+    saved = row['state']
+    barrier = NoIntegration(gymapi.acquire_gym())
+    scene = None
+    stages = []
+    try:
+        with patch.object(gymapi, 'acquire_gym', lambda: barrier):
+            scene = Scene({**cfg, 'attempt_out': str(out)})
+        def sample(name):
+            state = scene.native()
+            save(out / (name + '.json'), state)
+            diffs = sorted(differences(saved, state), key=lambda x: x['absolute_error'], reverse=True)
+            grouped = {}
+            for key in ('human_dof_states', 'human_body_states', 'guitar_body_states', 'chair_body_states'):
+                subset = [d for d in diffs if d['field'].startswith('/' + key + '/')]
+                grouped[key] = {'max_error': max((d['absolute_error'] for d in subset), default=0.), 'different_scalar_count': len(subset), 'largest_differences': subset[:12]}
+            stages.append({'stage': name, 'max_error': max((d['absolute_error'] for d in diffs), default=0.), 'by_state_group': grouped})
+            print(name, {k: v['max_error'] for k, v in grouped.items()}, flush=True)
+        def dofs():
+            target = barrier.get_actor_dof_states(scene.env, scene.human, gymapi.STATE_ALL).copy()
+            for dst, src in zip(target, saved['human_dof_states']):
+                assign(dst, src)
+            assert barrier.set_actor_dof_states(scene.env, scene.human, target, gymapi.STATE_ALL) is not False
+        def bodies(actor, key):
+            target = barrier.get_actor_rigid_body_states(scene.env, actor, gymapi.STATE_ALL).copy()
+            for dst, src in zip(target, saved[key]):
+                assign(dst, src)
+            assert barrier.set_actor_rigid_body_states(scene.env, actor, target, gymapi.STATE_ALL) is not False
+        def full_states(domain):
+            if domain == gymapi.DOMAIN_SIM:
+                target = barrier.get_sim_rigid_body_states(scene.sim, gymapi.STATE_ALL).copy()
+            else:
+                target = barrier.get_env_rigid_body_states(scene.env, gymapi.STATE_ALL).copy()
+            for actor, key in ((scene.human, 'human_body_states'), (scene.guitar, 'guitar_body_states'), (scene.chair_actor, 'chair_body_states')):
+                for index, value in enumerate(saved[key]):
+                    global_index = barrier.get_actor_rigid_body_index(scene.env, actor, index, domain)
+                    assign(target[global_index], value)
+            return target
+        sample('00_initial')
+        dofs(); sample('01_set_human_dofs')
+        assert barrier.set_sim_rigid_body_states(scene.sim, full_states(gymapi.DOMAIN_SIM), gymapi.STATE_ALL) is not False
+        sample('02_set_sim_all_bodies')
+        dofs(); sample('03_reset_human_dofs')
+        assert barrier.set_env_rigid_body_states(scene.env, full_states(gymapi.DOMAIN_ENV), gymapi.STATE_ALL) is not False
+        sample('04_set_env_all_bodies')
+        assert scene.steps == 0 and not barrier.blocked_calls
+        changed = [p for p, digest in pins.items() if sha(p) != digest]
+        save(out / 'diagnostic_report.json', {'scope': 'State setter readback only; no graphics or integration', 'saved_run': str(run.resolve()), 'saved_step': row['physics_step'], 'joint_names': scene.names, 'human_body_names': scene.human_bodies, 'guitar_body_names': scene.guitar_bodies, 'physics_steps': scene.steps, 'blocked_calls': barrier.blocked_calls, 'inputs_unchanged': not changed, 'changed_inputs': changed, 'stages': stages})
+        assert not changed
+    finally:
+        if scene:
+            scene.close()
+
+
+if __name__ == '__main__':
+    main()

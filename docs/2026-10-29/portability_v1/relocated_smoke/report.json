@@ -1,0 +1,80 @@
+{
+  "schema": "tab2body.portability_smoke.v1",
+  "project": "/tmp/Tab2Body portable verification/project with spaces",
+  "original_project": "/home/ajou/yigyu/3",
+  "python": "/home/ajou/miniconda3/envs/rl38/bin/python",
+  "stages": [
+    {
+      "name": "local_runtime",
+      "passed": true,
+      "returncode": 0,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/tmp/Tab2Body portable verification/project with spaces/scripts/tab2body.py",
+        "--cache-root",
+        "/tmp/tab2body-portability-cache",
+        "prepare"
+      ],
+      "log": "local_runtime.log",
+      "wall_s": 0.6151880600082222
+    },
+    {
+      "name": "inputs",
+      "passed": false,
+      "returncode": 1,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/tmp/Tab2Body portable verification/project with spaces/scripts/tab2body.py",
+        "--cache-root",
+        "/tmp/tab2body-portability-cache",
+        "run",
+        "-m",
+        "guitar_learning.tool.validation.portable_inputs",
+        "--out",
+        "/home/ajou/yigyu/3/docs/2026-10-29/portability_v1/relocated_smoke/inputs.json"
+      ],
+      "log": "inputs.log",
+      "wall_s": 0.9162807349930517
+    },
+    {
+      "name": "gpu_probe",
+      "passed": false,
+      "returncode": 1,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/tmp/Tab2Body portable verification/project with spaces/scripts/tab2body.py",
+        "--cache-root",
+        "/tmp/tab2body-portability-cache",
+        "probe"
+      ],
+      "log": "gpu_probe.log",
+      "wall_s": 1.617776233004406
+    },
+    {
+      "name": "train",
+      "passed": false,
+      "skipped": true,
+      "reason": "prerequisite failed: gpu_probe"
+    },
+    {
+      "name": "resume",
+      "passed": false,
+      "skipped": true,
+      "reason": "prerequisite failed: train"
+    },
+    {
+      "name": "evaluation",
+      "passed": false,
+      "skipped": true,
+      "reason": "prerequisite failed: train"
+    },
+    {
+      "name": "render",
+      "passed": false,
+      "skipped": true,
+      "reason": "prerequisite failed: train"
+    }
+  ],
+  "completed": false,
+  "research_success_claimed": false
+}

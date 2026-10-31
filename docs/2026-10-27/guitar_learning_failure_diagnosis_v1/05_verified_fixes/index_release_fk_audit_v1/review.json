@@ -1,0 +1,140 @@
+{
+  "schema": "independent_release_geometry_review.v1",
+  "verdict": "scoped PASS",
+  "summary_judgment": "문제없음 — 확인 가능한 코드·저장 배열·범위에 한정. 원prepared 기반 전체 재실행은 미검증.",
+  "critical": [],
+  "warnings": [
+    {
+      "file": "analyze.py",
+      "line": 232,
+      "reason": "load_prepared_reset_contract의 외장 prepared.json/initial_values.json/inputs_before.json 3개가 현재 Errno5 EIO여서 원prepared 보정 경로의 전체 재실행 및 전체 source integrity를 재검증할 수 없다.",
+      "recommendation": "외장 입력 복구 후 기록된 SHA를 먼저 대조하고 원결과를 보존하는 별도 출력 경로에서 재현한다. 기존 gate/archive/input pin은 변경하지 않는다."
+    }
+  ],
+  "suggestions": [],
+  "reviewed_sha256": {
+    "analyze.py": "e08bf1fbc3216438f912278253829baa2174f36464522c535a050ed9ae5c8227",
+    "PLAN.md": "82cdbc09e7eb5891d5209670bcc86865e6592dc23c9beb07dcc0dcb31f4ae3b9",
+    "results.json": "9572d2dff494a2d13f6800e0bff60abf1b68844357d436857f2327aab428c566",
+    "RESULTS.md": "303167b204e7c024ff4ff0b0102a9eac5b4ab17bc6dff3db3ea19f27d7bbe53b",
+    "fk_native_comparison.png": "a5f37b9cbe3cf61bd311fc62ee927f8632b61411ae711c68b8677059a75ff288",
+    "series.json": "8ed78e62081412da9ad02761ab6541045a8cdc74644ed500ead4fab2f51160a7"
+  },
+  "current_input_verification": {
+    "matched": 122,
+    "mismatched": [],
+    "unreadable": [
+      {
+        "path": "/media/ajou/새 볼륨1/Guitar/guitar_project_docs_20261027_v1/docs/2026-10-12/stability_adapter_2/results/free_guitar_fretting_v1/native_probe_v1/initial_values.json",
+        "error": "[Errno 5] Input/output error: '/media/ajou/새 볼륨1/Guitar/guitar_project_docs_20261027_v1/docs/2026-10-12/stability_adapter_2/results/free_guitar_fretting_v1/native_probe_v1/initial_values.json'"
+      },
+      {
+        "path": "/media/ajou/새 볼륨1/Guitar/guitar_project_docs_20261027_v1/docs/2026-10-12/stability_adapter_2/results/free_guitar_fretting_v1/native_probe_v1/inputs_before.json",
+        "error": "[Errno 5] Input/output error: '/media/ajou/새 볼륨1/Guitar/guitar_project_docs_20261027_v1/docs/2026-10-12/stability_adapter_2/results/free_guitar_fretting_v1/native_probe_v1/inputs_before.json'"
+      },
+      {
+        "path": "/media/ajou/새 볼륨1/Guitar/guitar_project_docs_20261027_v1/docs/2026-10-12/stability_adapter_2/results/free_guitar_fretting_v1/native_probe_v1/prepared.json",
+        "error": "[Errno 5] Input/output error: '/media/ajou/새 볼륨1/Guitar/guitar_project_docs_20261027_v1/docs/2026-10-12/stability_adapter_2/results/free_guitar_fretting_v1/native_probe_v1/prepared.json'"
+      }
+    ],
+    "PLAN_is_pinned": false
+  },
+  "full_prepared_based_rerun_performed": false,
+  "all_source_integrity_pass_claimed": false,
+  "independent_saved_array_evidence": {
+    "reference": {
+      "full_rows": 354,
+      "release_rows": 58,
+      "phase3_rows": 26,
+      "clock_exact_join": true,
+      "native_MCP_log_xz_minus_actual_q_max_rad": 2.1487221002480794e-07,
+      "native_MCP_log_y_deg_min_median_max": [
+        -0.061134511860207935,
+        2.6484697188454023,
+        2.714860564856361
+      ],
+      "downstream_direct_hinge": {
+        "LH:index2": {
+          "native_relative_to_XML_position_max_mm": 0.00019919262499785764,
+          "native_relative_to_exp_actual_q_rotation_max_rad": 5.818542659169947e-07
+        },
+        "LH:index3": {
+          "native_relative_to_XML_position_max_mm": 0.00011779236661352105,
+          "native_relative_to_exp_actual_q_rotation_max_rad": 6.690721277268169e-07
+        }
+      },
+      "independent_firstrow_hinge_baseline_point_max_mm": 0.0001790313829916111,
+      "independent_firstrow_hinge_baseline_rotation_max_rad": 6.532506650159749e-07,
+      "candidate_min_height_mm": 7.558176719041174,
+      "candidate_perrow_difference_from_saved_max_mm": 3.4055192554838243e-06,
+      "original_min_height_mm": -0.2701161429286003,
+      "all_candidate_heights_at_least_5mm": true,
+      "candidate_target_range_XML_deg": [
+        [
+          0.0,
+          90.0002
+        ],
+        [
+          -5.0,
+          90.0002
+        ]
+      ],
+      "source_original_N_target_deg": [
+        51.897247314453125,
+        20.7514705657959
+      ]
+    },
+    "noisy_reference": {
+      "full_rows": 354,
+      "release_rows": 58,
+      "phase3_rows": 26,
+      "clock_exact_join": true,
+      "native_MCP_log_xz_minus_actual_q_max_rad": 2.017370483997638e-07,
+      "native_MCP_log_y_deg_min_median_max": [
+        -0.07130344095772027,
+        2.7429754386512317,
+        2.784835007129347
+      ],
+      "downstream_direct_hinge": {
+        "LH:index2": {
+          "native_relative_to_XML_position_max_mm": 0.00018953346621566615,
+          "native_relative_to_exp_actual_q_rotation_max_rad": 5.46201047385171e-07
+        },
+        "LH:index3": {
+          "native_relative_to_XML_position_max_mm": 0.00012440420766306147,
+          "native_relative_to_exp_actual_q_rotation_max_rad": 6.420029411488519e-07
+        }
+      },
+      "independent_firstrow_hinge_baseline_point_max_mm": 0.00012664221331006487,
+      "independent_firstrow_hinge_baseline_rotation_max_rad": 6.407818629037426e-07,
+      "candidate_min_height_mm": 7.565354544918024,
+      "candidate_perrow_difference_from_saved_max_mm": 3.988280816713541e-06,
+      "original_min_height_mm": -0.27551036328077316,
+      "all_candidate_heights_at_least_5mm": true,
+      "candidate_target_range_XML_deg": [
+        [
+          0.0,
+          90.0002
+        ],
+        [
+          -5.0,
+          90.0002
+        ]
+      ],
+      "source_original_N_target_deg": [
+        51.54608917236328,
+        20.572141647338867
+      ]
+    }
+  },
+  "independent_candidate_method": "Independent saved-array arithmetic, not rerun of prepared-calibrated full_fk. Candidate uses one first saved native row per condition to calibrate downstream hinge offsets, with measured index1 at each queried row.",
+  "CAS_bytes_and_full_fk_AST_verified": true,
+  "self_checks_executed_and_passed": true,
+  "plot_visually_inspected": true,
+  "active_source_or_original_artifacts_modified": false,
+  "historical_before_after_SHA_maps_equal": true,
+  "series_world_summary_stats_match_results": true,
+  "original_FK_accuracy_gate": false,
+  "prepared_calibration_results_independently_reproduced": false,
+  "plan_notes": "PLAN.md was not an original analysis input pin. Left unchanged by this review."
+}

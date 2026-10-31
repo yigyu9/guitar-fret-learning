@@ -1,0 +1,34 @@
+# Root 고정·하체 동적105 native 연결과 검증
+
+사용자 승인 네 항목(하체 초기각 복원/실제105제어/필요시 자세수정/발지면조정)을 수행한다. 이전 fixed-lower 실험과 소비 소스는 변경하지 않는다. 이 leaf는 실행 뒤 불변이며 진행은 새 logs와 root 메인 계획에 남긴다. 최신 fresh_music54 정책이나 이전39행동 CPU계약을 이번 diagnostic105목표 API와 섞지 않는다. 새 RL훈련/정책변경 없음.
+
+## 체크리스트
+
+- [ ] 이름 기반 margin_only upper81 + 원H0 lower24 입력과 원105 XML/모든mesh 사전 SHA.
+- [ ] source 발/지면/의자/하체 자기충돌 및 기준·교정안 별도검사.
+- [ ] 독립 preflight 검수 후 원형 native0초 초기FK/물성/105명령 검증과5초 정지.
+- [ ] 필요시 유한 범위 하체각 교정 후 새source/input/run으로5초 재검증.
+- [ ] 통과한 배치에서15초 왼손해제 또는 오른팔반복 진단과 전체자료 분석.
+- [ ] 다른 눈 검수·root 최종봉인. source_final/review/final_verification/inventory는 작성하지 않는다.
+
+## 설계
+
+기존 InitialEnvironment의 원105 모델 생성·CPU PhysX 조건만 재사용하고 fixed-lower 상속/81차원 action/observation/guard는 사용하지 않는다. 신규105 scene은 원 smpl_mpl_hands_body.xml을 실제 로드한다. Gym API guard는 생성 초기의 상태쓰기만 허용하고 이후 root/기타/관절 상태 재주입·물성 변경·외력 API를 금지한다. human105의 단일 position target owner와 단일 finite effort submission만 허용한다. 기존 leg step_physics/strap force 호출 경로는 우회하여 중복 effort/기타 힘을 방지한다. Root fix_base_link=True, 기타 free/gravity ON, strap OFF. self-collision은 원 importer exclude를 읽고 기존 opposite-hand/elbow 분리 및 proxy 제외 규칙을 그대로 적용한다.
+
+105 목표 API는 전체 joint-name→absolute rad map을 받으며 누락/추가 이름·비유한값을 거절한다. 실제 native 순서로 재배열하여 관절한계·변화율 제한을 적용하고 전105 목표를 실제 제출한다. upper81은 채택 qref exact, lower24는 build_fixed_lower_asset.REFERENCE의 원 native H0 states[0]/report names에서 복원한다. 8개 zero-range(Knee_y/z,Toe_y/z 양측)는0범위 그대로, 나머지16축만 비영 범위다. 초기 원형에서는 root·상체81·기타 p/q를 바꾸지 않는다. 원105 nativeFK를 fixed-lower의 채택 실제 초기 body pose와 대조한다.
+
+상체는 기존 유한제어 수식을 이름 기반으로 이식한다: body9+arms24 EFFORT(중력보상+기존 scalarPD+현재G 두 proximal support task), hands/head48 POSITION은 기존 native PD 속성 유지. 하체24는 EFFORT로 연결하되 16유효축에 중력보상+원래 유한gain PD·native effortcap을 적용하고 8 zero-range 명령은0. 이는 모터OFF/강제관절고정이 아니다. 전105 requested/final targets·native position readback·actual q/qd·submitted105 effort·driveMode/stiffness/damping/effort를 저장한다. 하체 하중/중력/접촉에 따른 실제 동적 응답을 별도 관측한다. measured actuator force API가 유효하면 측정값을 별도 field로 기록하며 submitted 명령과 혼동하지 않는다.
+
+기존 body K150/D1, arm Thorax30/1·Shoulder60/3·Elbow60/3·Wrist20/1; support K2000/D30, R_Thorax cap10N/depth4mm 및 R_Shoulder20N/8mm. 힘은 human 관절에만 매핑하는 virtual task이며 기타 직접힘/부착이 아니다. 왼손 추가 Cartesian virtual wrench OFF. 실제 Jacobian105열·COM/origin frame velocity 대조를 적용한다. 후속 왼손해제는 검증된 동시 개방/후퇴(2–4초손가락,2–5초G=(70,80,0)mm cubic) 목표를105FK/이름매핑으로 연결한다. 오른팔반복은 필요시 기존 EW6 6관절 IK/finite pick task를 같은105 native에서 이식하며 첫 구현과 혼동하지 않는다.
+
+## 발·지면과 교정 범위
+
+먼저 H0 원형의 source min signed gaps/foot lower vertices·지면z0/원래chair box·하체 자기충돌을 측정한다. source convex shape 진단은 cooked PhysX clearance 인증이 아니다. 원형 native0~5초 접촉/반발/하체q 변화·지지면·기타흔들림을 남겨 실패를 숨기지 않는다. 초기 겹침이 커서 명백한 비정상 반발이면 raw 첫 단계와 종료영상 보존 후 중단한다.
+
+교정은 원형과 별도 후보 ID로 만든다. 먼저 hips/root/상체/기타를 유지하고 Knee_x ±0.10rad, Ankle_x/y/z 및 Toe_x ±0.15rad 이내에서 작은 source 유효 후보만 비교한다. native 한계와 원8 zero-range는 유지한다. 부득이한 hip 조정은 ±0.03rad로 제한하고 허벅지/기타 지지 변화량을 별도 기록한다. 범위 안에서 해결되지 않으면 임의 geometry 변경/지면 이동으로 숨기지 않고 원인·남은 문제를 보고한다. 상체나기타초기값이필요해지면 별도 근거와 새leaf에먼저 기록한다.
+
+## 실행·기록과 판정
+
+원형0초 source/native 초기대조→5초 정지. 안전한 교정 배치가 있으면 동일길이5초 비교. 관절속도>50rad/s·비유한값·기타 actor-root200mm/35deg 이탈·API/owner violation은 종료하고 마지막 비격자 frame 포함. 정지5초가 유효하면15초 한손 동작 지지진단으로 연결한다. 숫자만으로 연주/강건성/보행성공을 선언하지 않는다. Root는고정이므로 전신 자유균형/걷기시험도 아니다.
+
+매run 실제 초기105 q/qd·전body state/물성·전체contact(ground/chair/self/guitar)·human105target/effort를240Hz(목표60Hz) 기록한다. 기타/전신·손·발이 보이는3개1280×720카메라30fps 전체 실제영상/PNG/카메라행렬을 보존한다. 5초151frame,15초451frame이며 실제물리시각과MP4길이를구분한다. 모든실제소스/helpers/config/원human/guitarXML의전체mesh선언은실행전SHA와후SHA대조. quat는정규화하여파생좌표/회전분석하고모든표본을raw와대조한다.

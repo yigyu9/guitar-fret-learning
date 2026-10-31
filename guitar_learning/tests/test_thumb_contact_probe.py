@@ -17,15 +17,6 @@ class ThumbDiagnosticTests(unittest.TestCase):
         point = probe.point_jacobian(native, torch.tensor([[.01, 0., 0.]]))
         torch.testing.assert_close(point[0, :, 0], torch.tensor([0., .01, 0.]))
 
-    def test_codec_zero_hold_and_bounded_increment(self):
-        current = torch.tensor([[.1, -.2, .3, .4, .5]])
-        torch.testing.assert_close(probe.incremental_request(current, current), torch.zeros_like(current))
-        desired = current+torch.tensor([[1., -1., .01, -.01, 0.]])
-        request = probe.incremental_request(current, desired)
-        self.assertTrue((request.abs() <= 1).all())
-        torch.testing.assert_close(request[0, :2], torch.tensor([1., -1.]))
-        torch.testing.assert_close((current+request*4/60)[0, 2:], desired[0, 2:])
-
     def test_damped_adjustment_moves_in_requested_direction_without_state_change(self):
         jacobian = torch.zeros(1, 3, 5, dtype=torch.float64)
         jacobian[0, :3, :3] = torch.eye(3, dtype=torch.float64)*.04

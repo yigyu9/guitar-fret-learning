@@ -15,9 +15,9 @@ from guitar_learning.native.paths import resolve_input_path, original_input_path
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE_CONFIG = resolve_input_path(ROOT / 'paper/initial_pose/lower_body_release_v1/front_facing_ready_v1/inputs_spine_margin035_v1/baseline_v1.json')
 PROBE = ROOT / 'docs/2026-10-12/stability_adapter_2/results/free_guitar_fretting_v1/native_probe_v1'
-PREPARED_SNAPSHOT = PROBE / 'prepared.json'
-INITIAL_VALUES = PROBE / 'initial_values.json'
-PROBE_INPUTS = PROBE / 'inputs_before.json'
+PREPARED_SNAPSHOT = resolve_input_path(PROBE / 'prepared.json')
+INITIAL_VALUES = resolve_input_path(PROBE / 'initial_values.json')
+PROBE_INPUTS = resolve_input_path(PROBE / 'inputs_before.json')
 CONTROL_PHASE_OFFSET_STEPS = 5280
 SOURCE_SHA256 = {
     BASELINE_CONFIG: '58d5b0946b4352abb76aebb15499269530f4f9c68a8fa9e784b5dee4c1bed26b',
@@ -25,6 +25,9 @@ SOURCE_SHA256 = {
     INITIAL_VALUES: '5b84e68b085ef63133bb1834c65d25c5413584d36a7998b31c9253beaac75e1b',
     PROBE_INPUTS: '4cc689037ec0a8bd67b4e2cdca005aee1d479d82f3b957e889bae6e5a40f1588'}
 
+
+LEFT_INITIAL_POSE = ROOT / 'guitar_learning/assets/prepared_reset_v1/left_standby_v9.json'
+LEFT_INITIAL_POSE_SHA256 = '568d88e9b963abb794d7f9cd89f6b7cdcca4d4137a5dd1f2aed2a42e9f090377'
 
 # 파일 해시는 공용 스트리밍 구현으로 계산한다.
 from guitar_learning.training.training_log_io import digest as _sha
@@ -52,7 +55,7 @@ def _prepared_input_paths():
 
 
 def prepared_input_paths():
-    return set(_prepared_input_paths())
+    return set(_prepared_input_paths()) | {LEFT_INITIAL_POSE}
 
 
 @lru_cache(maxsize=1)
@@ -60,8 +63,8 @@ def _load_prepared_reset_contract():
     verify_provenance()
     baseline, prepared, initial, before = (_verified_json(path) for path in (BASELINE_CONFIG, PREPARED_SNAPSHOT, INITIAL_VALUES, PROBE_INPUTS))
     source_pins = {str(path.resolve()): value for path, value in SOURCE_SHA256.items()}
-    expected = {str(Path(path).resolve()): value for path, value in before.items()}
-    for path in prepared_input_paths() - set(SOURCE_SHA256):
+    expected = before  # Historical path keys identify the original model bytes.
+    for path in _prepared_input_paths() - set(SOURCE_SHA256):
         value = _sha(path)
         if expected.get(str(original_input_path(path))) != value:
             raise ValueError('Prepared reset model SHA mismatch: ' + str(path))
@@ -78,6 +81,27 @@ def _load_prepared_reset_contract():
 def load_prepared_reset_contract():
     """프로세스마다 한 번 검증하고 리셋마다 상태·목표의 수정 가능한 독립 사본을 제공한다."""
     return copy.deepcopy(_load_prepared_reset_contract())
+
+
+def load_gpu_prepared_reset_contract(hand):
+    """GPU 왼손은 검증한 v9에서 시작하고, 오른손은 원본 준비 상태를 보존한다."""
+    if hand not in ('left', 'right'):
+        raise ValueError('GPU prepared reset requires left/right hand')
+    contract = load_prepared_reset_contract()
+    if hand == 'right':
+        return contract
+    if _sha(LEFT_INITIAL_POSE) != LEFT_INITIAL_POSE_SHA256:
+        raise ValueError('Left initial pose SHA mismatch: ' + str(LEFT_INITIAL_POSE))
+    pose = json.loads(LEFT_INITIAL_POSE.read_text())
+    if pose['joint_names'] != contract['initial']['joint_names']:
+        raise ValueError('Left initial pose native joint order mismatch')
+    contract['state'] = pose['state']
+    contract['target105'] = np.asarray(pose['target105_rad'], dtype=float)
+    contract['source_sha256'][str(LEFT_INITIAL_POSE.resolve())] = LEFT_INITIAL_POSE_SHA256
+    contract['initial_pose'] = dict(schema=pose['schema'], sha256=LEFT_INITIAL_POSE_SHA256,
+        source='guitar_learning/assets/prepared_reset_v1/left_standby_v9.json',
+        scope='episode-boundary reset and zero-action reference; no automatic standby return')
+    return contract
 
 
 class ControlPhaseView:

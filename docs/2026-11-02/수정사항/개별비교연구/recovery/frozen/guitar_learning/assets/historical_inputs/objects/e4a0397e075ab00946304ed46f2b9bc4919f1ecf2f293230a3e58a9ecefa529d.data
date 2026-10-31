@@ -1,0 +1,123 @@
+"""Move only press Y within the same fret, replaying the frozen right path."""
+import copy
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from .prepare_v1 import PHASE, PLAY, REFERENCE, REPEAT, full_fk, solve_finger, interpolate, pose, string_segments
+from ..lower_body_release_v1.common import ROOT, read, save, pin, verify, sha
+
+PLAN = ROOT/'docs/plans/grounded_guitar_in_place_press_20261016.md'
+OUT = PLAY/'preflight_v2'
+
+
+def main():
+    OUT.mkdir(exist_ok=False)
+    prior = PLAY/'preflight_v1'
+    discovery = pin(extra=[Path(__file__).resolve(), PLAN, prior/'report.json', prior/'play_spec.json'])
+    save(OUT/'discovery_before.json', discovery)
+    oldreport = read(prior/'report.json')
+    oldspec = read(prior/'play_spec.json')
+    paths = list(discovery)+list(oldreport['input_sha256'])+[OUT/'discovery_before.json']
+    paths += [PLAY/'inputs'/(case+'.json') for case in ('baseline', 'press', 'strike', 'combined')]
+    paths += [PLAY/'native_press_v1'/n for n in ('initial_values.json', 'final_state.json', 'native_properties.json',
+                'play_reference.json', 'states240.json', 'contacts240.json', 'efforts240.json', 'targets60.json',
+                'attempt.json', 'support_wrapper.json', 'report.json')]
+    paths += [PLAY/'analysis_press_v2'/n for n in ('summary.json', 'press_evidence.json', 'analysis_revision.json')]
+    inputs = pin(extra=paths)
+    save(OUT/'inputs_before.json', inputs)
+    assert verify(discovery) and verify(oldreport['input_sha256']) and oldreport['eligible_for_native']
+    assert oldspec['press']['string'] == 2 and oldspec['press']['fret'] == 5
+    initial, state = read(REFERENCE/'initial_values.json'), read(REFERENCE/'final_state.json')
+    names, bodies = initial['joint_names'], initial['human_body_names']
+    qref = np.array(initial['q_ref105_rad'])
+    q = np.array([r['pos'] for r in state['human_dof_states']])
+    fk = full_fk(SimpleNamespace(names=names, q_ref=qref, human_bodies=bodies), initial['native_initial_state'])
+    latch = oldreport['source_query_latch']
+    proximal = np.array([names.index(n) for n in latch['proximal_names']])
+    q[proximal] = latch['latched_final_command_rad']
+    finger = np.array([names.index(n) for n in ('LH:index1_x', 'LH:index1_z', 'LH:index2', 'LH:index3')])
+    distal = np.array([names.index(n+'_'+a) for n in ('R_Elbow', 'R_Wrist') for a in 'xyz'])
+    lower, upper = np.array(initial['PD_properties']['lower']), np.array(initial['PD_properties']['upper'])
+    gp, gr = pose(state['guitar_body_states'][0])
+    origin = gr.inv().apply(pose(state['human_body_states'][bodies.index('LH:index3')])[0]-gp)
+    bar = lambda n: float(gr.inv().apply(pose(state['guitar_body_states'][initial['guitar_body_names'].index('G:fret'+str(n))])[0]-gp)[1])
+    bars = sorted([bar(4), bar(5)])
+    starts, ends = string_segments(dict(native_initial_state=state, guitar_body_names=initial['guitar_body_names']))
+    target_y = float(np.float32(np.clip(origin[1], bars[0]+.0032, bars[1]-.0032)))
+    fraction = (target_y-starts[1, 1])/(ends[1, 1]-starts[1, 1])
+    string_point = starts[1]+fraction*(ends[1]-starts[1])
+    target = string_point.astype(np.float32).astype(float)
+    margins = [float(target.astype(np.float32)[1]-bars[0]), float(bars[1]-target.astype(np.float32)[1])]
+    spec = copy.deepcopy(oldspec)
+    spec['press']['target_G_m'] = target.tolist()
+    rows = []
+    seed = q[finger].copy()
+    for old in oldreport['samples']:
+        time = old['time_s']
+        hover, down = target+[0, 0, .008], target-[0, 0, .004]
+        goal = interpolate(time, [10, 10.8, 11.3, 13, 13.5, 14], np.array([origin, hover, down, down, hover, hover]))
+        values, error64 = solve_finger(fk, q, finger, lower, upper, qref, gp+gr.apply(goal), seed)
+        seed = values.astype(np.float32).astype(float)
+        trial = q.copy(); trial[finger] = seed
+        right = np.array(old['pick_targets_rad']).astype(np.float32).astype(float)
+        trial[distal] = right
+        poses = fk(trial)
+        finger_error = float(np.linalg.norm(poses['LH:index3'][0]-(gp+gr.apply(goal))))
+        pick_error = float(np.linalg.norm(poses['RH:pick'][0]-(gp+gr.apply(old['pick_goal_G_m']))))
+        selected = np.r_[finger, distal]
+        unchanged = np.setdiff1d(np.arange(105), selected)
+        rows.append(dict(time_s=time, finger_goal_G_m=goal.tolist(), finger_targets_rad=seed.tolist(),
+            finger_IK_error_m=finger_error, finger_IK_float64_error_m=error64,
+            pick_goal_G_m=old['pick_goal_G_m'], pick_targets_rad=right.tolist(), pick_IK_error_m=pick_error,
+            pick_recheck_mode='Replay unchanged V1 float32 right6 with new finger4 in combined FK; no refit.',
+            distal_ball_norm_deg=np.degrees(np.linalg.norm(right.reshape(2, 3), axis=1)).tolist(),
+            new10_targets_original_bounds=bool(np.all(trial[selected] >= lower[selected]) and np.all(trial[selected] <= upper[selected])),
+            other95_source_query_q_exact=bool(np.array_equal(trial[unchanged], q[unchanged]))))
+    gates = dict(oldreport['gates'])
+    gates.update(finger41_float32_reach_under3mm=all(r['finger_IK_error_m'] <= .003 for r in rows),
+        pick41_float32_reach_under2mm=all(r['pick_IK_error_m'] <= .002 for r in rows),
+        distal41_float32_principal_under160deg=all(max(r['distal_ball_norm_deg']) < 160 for r in rows),
+        new10_float32_targets_original_bounds=all(r['new10_targets_original_bounds'] for r in rows),
+        other95_source_q_exact=all(r['other95_source_query_q_exact'] for r in rows),
+        float32_both_bar_margins_strict_at_least3mm=min(margins) >= .003,
+        float32_target_exact_string2_interpolation=bool(np.array_equal(target, string_point.astype(np.float32).astype(float)) and 0. <= fraction <= 1.),
+        actual10_string_endpoints_exact_to_v1=bool(np.array_equal(starts, oldspec['string_start_G_m']) and np.array_equal(ends, oldspec['string_end_G_m'])),
+        strike_spec_exact=spec['strike'] == oldspec['strike'],
+        press_other_fields_exact={k: v for k, v in spec['press'].items() if k != 'target_G_m'} == {k: v for k, v in oldspec['press'].items() if k != 'target_G_m'})
+    gates = {k: bool(v) for k, v in gates.items()}
+    assert verify(inputs)
+    save(OUT/'play_spec.json', spec)
+    report = {k: copy.deepcopy(oldreport[k]) for k in ('source_candidate_sha256', 'reference_run', 'repeat_run', 'reference_time_s',
+        'repeat_verification_path', 'repeat_verification_sha256', 'raw_equal_sha256', 'actual10_FK_errors',
+        'actual10_FK_max_position_m', 'actual10_FK_max_rotation_deg', 'actual10_strict_all105_bounds',
+        'inherited_actual_outside_bounds', 'source_query_latch')}
+    report.update(eligible_for_native=all(gates.values()), gates=gates, inputs_unchanged=True,
+        input_sha256=inputs, inputs_after_sha256={p: sha(p) for p in inputs}, spec_sha256=sha(OUT/'play_spec.json'),
+        prior_preflight_report=str(prior/'report.json'), prior_preflight_report_sha256=sha(prior/'report.json'),
+        prior_press_actual_passed=read(PLAY/'analysis_press_v2/summary.json')['passed'],
+        target_selection=dict(string=2, fret=5, actual10_index_G_m=origin.tolist(), fret_bars_G_y_m=bars,
+            design_bar_margin_m=.0032, required_float32_margin_m=.003, actual_float32_margins_m=margins,
+            old_target_G_m=oldspec['press']['target_G_m'], target_G_m=target.tolist(),
+            new_minus_old_target_G_m=(target-np.array(oldspec['press']['target_G_m'])).tolist(),
+            target_Y_minus_actual10_Y_m=float(target[1]-origin[1]),
+            string2_start_G_m=starts[1].tolist(), string2_end_G_m=ends[1].tolist(), string_segment_fraction=float(fraction),
+            interpolated_string_point_before_float32_G_m=string_point.tolist(),
+            float32_rounding_displacement_m=float(np.linalg.norm(target-string_point))),
+        press_target=spec['press'], samples=rows, native_simulation_steps=0,
+        reusable_controls='V1 baseline and strike-only raw remain controls because neither uses press targets. Analysis with a new spec must still be versioned; no V2 actual success is inferred.',
+        scope='V2 chooses the nearest permitted Y within string2/fret5 and obtains XYZ by interpolation on the actual10 string2 segment, then float32. Source41 new finger IK and unchanged right6 combined FK are checked. Hover/down Z offsets, timing, gains/caps/right paths and original source/actual-drift distinctions are preserved. No simulation, actual contact/stability or collision certification.')
+    save(OUT/'report.json', report)
+    for case in ('press', 'combined'):
+        cfg = read(PLAY/'inputs'/(case+'.json'))
+        cfg.update(play_preflight_report=str(OUT/'report.json'), play_spec=str(OUT/'play_spec.json'), play_spec_sha256=sha(OUT/'play_spec.json'))
+        save(PLAY/'inputs'/(case+'_v2.json'), cfg)
+    assert verify(inputs)
+    save(OUT/'generation.json', dict(inputs_unchanged=True, input_sha256=inputs, eligible_for_native=report['eligible_for_native'], native_simulation_steps=0,
+        output_sha256={str(p): sha(p) for p in (OUT/'play_spec.json', OUT/'report.json', PLAY/'inputs/press_v2.json', PLAY/'inputs/combined_v2.json')}))
+    print(dict(eligible=report['eligible_for_native'], gates=gates, target=target.tolist(), margins_m=margins,
+        max_finger_error_m=max(r['finger_IK_error_m'] for r in rows), max_pick_error_m=max(r['pick_IK_error_m'] for r in rows)), flush=True)
+    assert report['eligible_for_native'], 'Source checks failed; V2 native play forbidden.'
+
+
+if __name__ == '__main__':
+    main()

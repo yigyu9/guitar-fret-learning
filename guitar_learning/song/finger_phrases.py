@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 import hashlib
 import json
 import math
+from guitar_learning.portability import portable
 
 
 SCHEMA = 'guitar_learning.finger_phrases.v1'
@@ -185,7 +186,9 @@ def build_phrase_catalog(task, *, preparation_s=3., tail_s=.5, control_hz=60):
                                     start, end, next_press, ticks, offset, counts))
     if {i for phrase in phrases for i in phrase.target_indices} != set(range(len(targets))):
         raise ValueError('phrase catalogue does not cover every original target')
-    provenance = dict(task.provenance or {})
+    # 목록 SHA에는 현재 실행 파일의 위치가 아닌 프로젝트 상대 식별자를 넣는다.
+    # source_manifest의 역사적 원본 식별자와 모든 내용 SHA는 그대로 보존한다.
+    provenance = portable(dict(task.provenance or {}))
     source_rows = tuple(tuple(sorted(asdict(target).items())) for target in targets)
     return FingerPhraseCatalog(tuple(phrases), tuple(groups), source_rows,
                                json.dumps(provenance, sort_keys=True, allow_nan=False),

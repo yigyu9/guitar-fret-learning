@@ -1,6 +1,6 @@
 # 학습 코드 읽는 순서와 작업 영역
 
-2026-10-28 과거 전문 경로 보관 후 기준이다. 실행은 [README](/home/ajou/yigyu/3/guitar_learning/README.md)의 기본 GPU 왼손 `finger-skill` v3를 따른다.
+2026-10-31 문서 재조사 기준이다. 실행은 [README](/home/ajou/yigyu/3/guitar_learning/README.md)의 기본 GPU 왼손 `finger-skill` v3를 따른다.
 
 ## 먼저 읽을 여섯 파일
 
@@ -25,7 +25,7 @@ train.py → training/launch.py → training/finger_skill_runner.py
                                   └─ training/training_log_io.py
 ```
 
-기본값은 medium·128환경·H32·100업데이트·seed7·checkpoint 간격250이다. 초기035/v14 자세, GPU 물리240Hz·정책60Hz·K1·J33, 계획 전이 예산25% 이후 다음 reset부터 전곡 전환을 유지한다. 실제 출력은 `--out/J/`에 저장한다.
+기본값은 medium·128환경·H32·100업데이트·seed7·checkpoint 간격250이다. GPU 왼손 초기 v9 자세, GPU 물리240Hz·정책60Hz·K1·J33, 계획 전이 예산25% 이후 다음 reset부터 전곡 전환을 유지한다. 실제 출력은 `--out/J/`에 저장한다.
 
 ## 필요할 때 더 읽을 구현
 
@@ -51,17 +51,17 @@ train.py → training/launch.py → training/finger_skill_runner.py
 
 ## 파일 수와 연결 범위
 
-| 기준 | 직전 상태 | 현재 보관 정리 후 |
+| 기준 | 직전 상태 | 2026-10-31 현재 |
 | --- | ---: | ---: |
-| 전체 활성 Python(archive 제외) | 474 | 281 |
-| 기본 진입점의 정적 의존성 | 32 | 32 |
-| 위 항목 중 구현 파일 | 24 | 24 |
+| 전체 활성 Python(archive 제외) | 474 | 295 |
+| 기본 진입점의 정적 의존성 | 32 | 33 |
+| 위 항목 중 구현 파일 | 24 | 25 |
 | 위 항목 중 패키지 초기화 | 8 | 8 |
 | GPU 디렉토리 Python | 8 | 8 |
 
-정적 의존성은 함수·조건문 안의 import도 포함해 같은 방법으로 센 것이다. 한 번의 학습에서 실제 실행한 파일 수와 다르다. 전체 체크포인트 입력 SHA는 여전히 활성281개 Python 전체를 포함한다.
+정적 의존성은 함수·조건문 안의 import도 포함해 센 것이다. 새 `portability.py`가 기본 경로에 연결되어 구현은25개다. 이 파일은 `project://` 경로 식별자·저장 설정 snapshot·필수 입력 SHA·보고서 상대 참조를 담당한다. 한 번의 학습에서 실제 실행한 파일 수와 다르다. 정적 조사에서 활성 Python은295개이며 실행기는 활성 소스를 입력 SHA 대상으로 수집한다. 실제 저장본의 봉인 목록은 해당 실행 시점의 계약을 따른다.
 
-이 기본 경로의 구현24개·패키지 초기화8개에는 역할과 기존 설명 주석을 한글로 작성했다. 파일 SHA는 `training/training_log_io.py`의 `digest`, 정책의 가치망 매개변수 선택은 `Policy.value_parameters`, 장면의 자세·속도 행 변환은 `_body_row`를 공유한다. CPU/GPU의 서로 다른 판정·설정은 각각 유지한다. [중복 정제·한글 주석 검증](/home/ajou/yigyu/3/docs/2026-10-28/guitar_learning_refinement_ko/README.md).
+이 기본 경로의 구현25개·패키지 초기화8개에는 역할과 기존 설명 주석을 한글로 작성했다. 파일 SHA는 `training/training_log_io.py`의 `digest`, 정책의 가치망 매개변수 선택은 `Policy.value_parameters`, 장면의 자세·속도 행 변환은 `_body_row`를 공유한다. CPU/GPU의 서로 다른 판정·설정은 각각 유지한다. [중복 정제·한글 주석 검증](/home/ajou/yigyu/3/docs/2026-10-28/guitar_learning_refinement_ko/README.md).
 
 공용 설정을 읽기 위한 CPU runner import, 관측 상수를 읽기 위한 CPU song 환경/원장 import, 준비 입력을 읽기 위한 CPU native 세션 import를 분리했다. 원문 기능을 보존하면서 기본 GPU 경로의 불필요한 연결을 제거한 것이다.
 
@@ -73,7 +73,7 @@ CPU 접촉·측정·안전은 [core/measurement.py](/home/ajou/yigyu/3/guitar_le
 
 ## 보관과 검증
 
-직전474개 Python 중 과거 전문 구현123개·검사/보조70개를 보관해 현재281개를 유지한다. 전문 실험8개·기존 단계별 CLI·`render_timing_video_v1.py`와 전문 매뉴얼6개도 보관했다. [이번 보관 안내](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/ARCHIVE_INDEX.md) · [원문 manifest](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/manifest.json) · [활성 제거 목록](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/retired_files.json). 보관본은 당시 구현·계약의 참고 자료이며 현재 명령으로 안내하지 않는다.
+2026-10-28에는474개 Python 중 과거 전문 구현123개·검사/보조70개를 보관해281개를 유지했다. 현재 재조사에서는295개다. 전문 실험8개·기존 단계별 CLI·`render_timing_video_v1.py`와 전문 매뉴얼6개도 보관했다. [이번 보관 안내](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/ARCHIVE_INDEX.md) · [원문 manifest](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/manifest.json) · [활성 제거 목록](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_legacy_retirement_v1/retired_files.json). 보관본은 당시 구현·계약의 참고 자료이며 현재 명령으로 안내하지 않는다.
 
 
 변경 전507개 Python과 문서28개는 [보관 manifest](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_domain_consolidation/manifest.json)에 원래 경로·SHA·대체 파일과 함께 보존했다. 보관본을 현재 코드에서 import하지 않는다.
@@ -85,14 +85,14 @@ CPU 접촉·측정·안전은 [core/measurement.py](/home/ajou/yigyu/3/guitar_le
 
 ## 현재 추가 통합의 원문과 상세 해설
 
-직전487개 Python과 당시 코드해설·경로는 [보관 manifest](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_learning_consolidation_v2/manifest.json)에 보존했다. 이전 모듈을 실행하는 facade는 남기지 않았다. 현재24개 구현 각각의 설명은 [코드해설 목차](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/README.md), CPU/GPU·입력·엄격 재개 검증은 [추가 통합 결과](/home/ajou/yigyu/3/docs/2026-10-28/guitar_learning_consolidation_v2/README.md)를 따른다.
+직전487개 Python과 당시 코드해설·경로는 [보관 manifest](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_learning_consolidation_v2/manifest.json)에 보존했다. 이전 모듈을 실행하는 facade는 남기지 않았다. 현재25개 구현 각각의 설명은 [코드해설 목차](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/README.md), CPU/GPU·입력·엄격 재개 검증은 [추가 통합 결과](/home/ajou/yigyu/3/docs/2026-10-28/guitar_learning_consolidation_v2/README.md)를 따른다.
 
 
 ## J 전용 실행 계약
 
 `training/finger_skill_runner.py`의 `ExposureSchedule` → `run` → `_train_phase` → `evaluate_checkpoint` 순서로 읽는다. R/F 학습·auto 전환·숙련도 gate·단계별 actor 이전은 남아 있지 않다. `_train_phase`는 J 실행 하나이고, `phase` 표기는 출력의 고정 역할 식별자다. `DecisionCollector`는 매 tick 새 행동을 만들고 `[H,N,...]`의 모든 슬롯에 duration1·validTrue를 저장한다. F 전용 명령 유지나 계획 길이 관측은 없다.
 
-환경 `finger_skill.v3`, 정책 `finger_skill_policy.v2`, 실행 `finger_skill_run.v2`, 재개 `finger_skill_resume.v3`를 사용한다. 기존 체크포인트를 받아들이는 호환 분기는 제거했으며 현재 동일 계약·동일 입력 SHA만 엄격 재개한다. 보상·종료·제어와 고정25% 구간→전곡 노출 일정은 유지한다. 변경 전 **480개 Python 원문**은 [J 전용 전환 전 보관본](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_joint_only_v3/manifest.json)에 있다.
+환경 `finger_skill.v3`, 정책 `finger_skill_policy.v2`, 실행 `finger_skill_run.v2`, 재개 `finger_skill_resume.v4`를 사용한다. 기존 체크포인트를 받아들이는 호환 분기는 제거했으며 현재 동일 계약·동일 입력 SHA만 엄격 재개한다. 보상·종료·제어와 고정25% 구간→전곡 노출 일정은 유지한다. 변경 전 **480개 Python 원문**은 [J 전용 전환 전 보관본](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_joint_only_v3/manifest.json)에 있다.
 
 
 ## 코드 안에서 읽는 단위

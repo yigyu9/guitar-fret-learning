@@ -1,0 +1,23 @@
+"""Recompute the extra marker tracking limitation with explicit before hashes."""
+import csv
+from pathlib import Path
+import numpy as np
+from ..lower_body_release_v1.common import BASE,read,save,sha,verify
+
+
+def main():
+    phase=BASE/'upright_horizontal_play_v1'
+    files=[Path(__file__).resolve(),Path(__file__).parents[1]/'lower_body_release_v1/common.py',phase/'inputs/play_spec_v1.json']
+    files += [phase/f'analysis_{case}_v1/samples.csv' for case in ('press','combined')]
+    pins={str(p):sha(p) for p in files};save(phase/'tracking_limits_v2_before.json',pins)
+    target=np.array(read(phase/'inputs/play_spec_v1.json')['press']['target_G_m']);target[2]-=.004;rows=[]
+    for case in ('press','combined'):
+        with (phase/f'analysis_{case}_v1/samples.csv').open() as stream:
+            samples=[r for r in csv.DictReader(stream) if 6.3<=float(r['time_s'])<=8]
+        errors=[np.linalg.norm([float(r['press_marker_G_'+a+'_m'])-target[i] for i,a in enumerate('xyz')]) for r in samples]
+        rows.append(dict(case=case,hold_goal_marker_G_m=target.tolist(),actual_marker_to_goal_min_m=float(min(errors)),actual_marker_to_goal_max_m=float(max(errors))))
+    save(phase/'tracking_limits_v2.json',dict(rows=rows,inputs_unchanged=verify(pins),scope='Recomputed from preserved CSV and spec. Body origin is not an anatomical pad. Preliminary root-derived v1 numbers are preserved; this v2 adds explicit producer/input before hashes.'))
+    assert verify(pins)
+
+
+if __name__=='__main__':main()

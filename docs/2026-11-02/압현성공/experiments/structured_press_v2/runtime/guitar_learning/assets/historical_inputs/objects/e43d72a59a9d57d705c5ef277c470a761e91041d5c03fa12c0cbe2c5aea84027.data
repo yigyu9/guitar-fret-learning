@@ -1,0 +1,35 @@
+"""Train with one native simulator per worker for the lifetime of the run."""
+import argparse
+from pathlib import Path
+import sys
+
+
+def main():
+    from unittest.mock import patch
+    from guitar_learning.training import parallel
+    from guitar_learning.training import runner as train_parallel
+    from guitar_learning.training.persistent_parallel import PersistentPool
+    from guitar_learning.training.persistent_audit import finalize_persistent_run
+    parser=argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--out',type=Path)
+    args,_=parser.parse_known_args()
+    out=args.out.resolve() if args.out is not None else None
+    existed=out.exists() if out is not None else False
+    try:
+        # Process-private CLI selection for the whole core run. This is not an
+        # embedding API for concurrently constructing other Pools in this parent.
+        with patch.object(parallel,'Pool',PersistentPool):
+            train_parallel.main()
+    finally:
+        original_error=sys.exc_info()[1]
+        if out is not None and not existed:
+            try:
+                passed=finalize_persistent_run(out)
+                if passed is False and original_error is None:
+                    raise RuntimeError('Persistent native lifecycle audit failed; see report.json')
+            except BaseException as audit_error:
+                if original_error is None:raise
+                print('[persistent] secondary audit error: '+str(audit_error),file=sys.stderr,flush=True)
+
+
+if __name__=='__main__':main()

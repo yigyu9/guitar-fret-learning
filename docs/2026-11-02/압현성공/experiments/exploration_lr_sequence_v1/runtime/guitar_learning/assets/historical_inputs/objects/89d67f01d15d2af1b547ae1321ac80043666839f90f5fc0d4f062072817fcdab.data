@@ -1,0 +1,93 @@
+"""Reusable105 scene runner, full native evidence through completion or failure."""
+import isaacgym
+import argparse,traceback
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from scipy.spatial.transform import Rotation
+from .common import ROOT,A,BASE,H0,HUMAN,MANIFEST,LOWER,read,save,sha,pin,verify
+
+
+def run(config,out):
+ cfg=read(config);assert sha(cfg['candidate'])==cfg['candidate_sha256'];out.mkdir(parents=True,exist_ok=False);pins=pin(config,extra=[Path(read(MANIFEST)['native_initial']).parent/'media/body_effort_configuration.json',Path(__file__).with_name('CHAIR_CLEARANCE_PLAN.md'),Path(__file__).with_name('LOWER_NATIVE_POSITION_PLAN.md'),Path(__file__).with_name('LOWER_POS_DIAGNOSTIC_PLAN.md'),BASE/'diagnosis_v2/STABLE_PD_PLAN.md',BASE/'diagnosis_v2/NATIVE_PREFLIGHT_V1.md',BASE/'diagnosis_v2/INTERIOR_TARGET_PLAN.md',ROOT/'docs/plans/upright_chest_support_20261015.md',ROOT/'docs/plans/upright_thigh_support_20261015.md',ROOT/'docs/plans/upright_thigh_support_v2_20261015.md',ROOT/'docs/plans/upright_foot_clearance_20261015.md',ROOT/'docs/plans/upright_hip_preload_20261015.md',ROOT/'docs/plans/upright_hip_preload_v2_20261015.md',ROOT/'docs/plans/upright_chest_normal20_20261015.md',ROOT/'docs/plans/upright_upper_target_20261015.md',ROOT/'docs/plans/upright_upper_target_v2_20261015.md',ROOT/'docs/plans/upright_chest_local_target_20261015.md',Path(cfg['upper_target105']),Path(read(cfg['candidate'])['support_candidate'])]);save(out/'attempt.json',{'input_sha256':pins,'config':str(config),'seconds':cfg['seconds'],'new_RL_training':False})
+ scene=recording=None;failure=None;states=[];contacts=[];efforts=[];targets=[];frames=[];videos={};initial_checks={};cleanup=[]
+ try:
+  from .scene_v8 import Scene
+  from .controller_v11 import Controller
+  from stability_adapter_2.native_contacts import body_names,read_contacts
+  from stability_adapter_2 import string_trial_recording_v1 as strings
+  from stability_adapter_2.gym_trial_recording import GymTrialRecording
+  from stability_adapter_2.initial_pose_noise_v1 import pose
+  runtime_cfg={**cfg,'attempt_out':str(out)};scene=Scene(runtime_cfg);initial=scene.native();controller=Controller(scene);candidate=scene.candidate;reference=read(read(MANIFEST)['native_initial']);expected=candidate['expected_initial_state'];assert scene.human_bodies==reference['human_body_names'];errors=[]
+  for n,actual,old in zip(scene.human_bodies,initial['human_body_states'],expected['human_body_states']):
+   p,r=pose(actual);p0,r0=pose(old);errors.append({'body':n,'position_error_m':float(np.linalg.norm(p-p0)),'rotation_error_deg':float(np.rad2deg((r0.inv()*r).magnitude()))})
+  gerrors=[]
+  for actual,old in zip(initial['guitar_body_states'],expected['guitar_body_states']):
+   p,r=pose(actual);p0,r0=pose(old);gerrors.append({'position_error_m':float(np.linalg.norm(p-p0)),'rotation_error_deg':float(np.rad2deg((r0.inv()*r).magnitude()))})
+  q=np.array([r['pos'] for r in initial['human_dof_states']]);old_upper=dict(zip(reference['joint_names'],reference['q_ref_rad']));upperexact=all(q[scene.names.index(n)]==float(np.float32(v+candidate['upper_deltas_rad'].get(n,0.))) for n,v in old_upper.items());h0=dict(zip(read(H0/'report.json')['human_joint_names'],[r['pos'] for r in read(H0/'states.json')[0]['human_dof_states']]));lower_expected={n:h0[n]+candidate['lower_deltas_rad'].get(n,0.) for n in scene.names if n.startswith(LOWER)}
+  restored_lower_exact=all(q[scene.names.index(n)]==float(np.float32(v)) for n,v in lower_expected.items());zero=all(r['vel']==0 for r in initial['human_dof_states']);original=not candidate['lower_deltas_rad']
+  initial_checks={'native105_order_exact':scene.names==candidate['joint_names'],'upper81_declared_delta_exact':upperexact,'lower24_restored_or_declared_delta_exact':restored_lower_exact,'q105_exact':bool(np.array_equal(q,scene.q_ref)),'initial_velocities_zero':zero,'root_fixed':scene.human_root_fixed,'guitar_free_gravity':not scene.guitar_root_fixed and not scene.guitar_gravity_disabled,'original105_asset_loaded':any(r['path']==str(HUMAN) and r['fixed_base'] for r in scene.loaded_assets),'zero_range8':len(scene.zero_indices)==8,'effective_lower16':sum(scene.lower[i]<scene.upper[i] for i in scene.lower_indices)==16,'upper_FK_under_10um_001deg':all(r['position_error_m']<1e-5 and r['rotation_error_deg']<.01 for r in errors if r['body'] not in [s+'_'+p for s in ('L','R') for p in ('Hip','Knee','Ankle','Toe')]),'guitar_FK_under_3um_001deg':all(r['position_error_m']<3e-6 and r['rotation_error_deg']<.001 for r in gerrors)}
+  if original:initial_checks['H0_all_body_FK_under_10um_001deg']=all(r['position_error_m']<1e-5 and r['rotation_error_deg']<.01 for r in errors)
+  corrected_errors=[]
+  if not original:
+   predicted=candidate['predicted_corrected_human_body_poses'];assert set(predicted)=={s+'_'+p for s in ('L','R') for p in ('Hip','Knee','Ankle','Toe')}
+   for name,old in predicted.items():
+    p,r=pose(initial['human_body_states'][scene.human_bodies.index(name)]);p0,r0=pose({'pose':old});corrected_errors.append({'body':name,'position_error_m':float(np.linalg.norm(p-p0)),'rotation_error_deg':float(np.rad2deg((r0.inv()*r).magnitude()))})
+   initial_checks['corrected_lower_source_FK_under_10um_001deg']=all(r['position_error_m']<1e-5 and r['rotation_error_deg']<.01 for r in corrected_errors)
+  chair_p,_=pose(initial['chair_body_states'][0]);chair_goal=np.r_[scene.chair_placement['applied_center_xy_W_m'],scene.chair_placement['half_m'][2]];initial_checks['chair_initial_placement_under_1um']=bool(np.linalg.norm(chair_p-chair_goal)<1e-6)
+  initial_checks={k:bool(v) for k,v in initial_checks.items()}
+  old_mass=read(Path(read(MANIFEST)['native_initial']).parent/'media/body_effort_configuration.json');human_mass_compare=[{'body':n,'mass_delta_kg':r['mass_kg']-m,'COM_delta_m':(np.array(r['COM_body_m'])-np.array(c)).tolist()} for n,r,m,c in zip(scene.human_bodies,scene.human_properties,old_mass['mass_kg'],old_mass['COM_local_m'])]
+  save(out/'initial_values.json',{'native_initial_state':initial,'joint_names':scene.names,'human_body_names':scene.human_bodies,'guitar_body_names':scene.guitar_bodies,'q_ref105_rad':scene.q_ref.tolist(),'PD_properties':{k:scene.pd_properties[k].tolist() for k in scene.pd_properties.dtype.names},'control_K105_Nm_rad':scene.control_kp.tolist(),'control_D105_Nms_rad':scene.control_kd.tolist(),'position_indices':scene.position_indices.tolist(),'effort_indices':scene.effort_indices.tolist(),'lower_indices':scene.lower_indices.tolist(),'zero_range_indices':scene.zero_indices.tolist(),'loaded_assets':scene.loaded_assets,'chair_initial_placement':scene.chair_placement,'root_qpos':scene.pose['root_qpos']})
+  save(out/'native_properties.json',{'human':scene.human_properties,'guitar':scene.guitar_properties,'upper_human_mass_COM_vs_fixed_lower':human_mass_compare,'collision_policy':scene.collision_policy,'actual_shape_properties':scene.shape_properties,'support_references':scene.references,'force_sensor_enabled':scene.force_sensor_enabled,'camera_spec':scene.camera_spec})
+  save(out/'initial_verification.json',{'checks':initial_checks,'human_pose_errors_vs_declared_upright_source_prediction':errors,'guitar_pose_errors':gerrors,'corrected_lower_pose_errors_vs_source_prediction':corrected_errors,'corrected_lower_deltas_rad':candidate['lower_deltas_rad']});assert all(initial_checks.values()),initial_checks
+  with patch.object(strings,'StrapTrialRecording',GymTrialRecording):recording=strings.StringTrialRecording(scene,out/'media')
+  recording.views=recording.strap.views=tuple(scene.cameras)
+  for r in (recording,recording.strap):
+   for view in r.views:(r.out/'frames'/view).mkdir(parents=True,exist_ok=True)
+  mapping=body_names(scene.gym,scene.env);root_index=scene.human_bodies.index('Pelvis');root_initial=initial['human_body_states'][root_index];gp0,gr0=pose(initial['guitar_body_states'][0])
+  def sample():
+   state=scene.native();assert state['chair_body_states']==initial['chair_body_states'],'fixed chair state changed';assert state['human_body_states'][root_index]==root_initial,'fixed root state changed';q=np.array([x['pos'] for x in state['human_dof_states']]);qd=np.array([x['vel'] for x in state['human_dof_states']]);gp,gr=pose(state['guitar_body_states'][0]);assert np.isfinite(np.r_[q,qd,gp,gr.as_quat()]).all()
+   sensor=scene.gym.get_actor_dof_forces(scene.env,scene.human).astype(float).tolist() if scene.force_sensor_enabled else None
+   states.append({'physics_step':scene.steps,'time_s':scene.steps/240,'state':state,'native105_dof_force_sensor_Nm':sensor,'scope':'Force sensor generalized native joint force readback; distinct from submitted command and contact force.'})
+   rows=read_contacts(scene.gym,scene.env,mapping);contacts.append({'physics_step':scene.steps,'time_s':scene.steps/240,'contacts':rows});assert scene.native()==state
+   if abs(qd).max()>50 or np.linalg.norm(gp-gp0)>.20 or np.rad2deg((gr0.inv()*gr).magnitude())>35:raise RuntimeError('native105 safety qdot/guitar displacement limit')
+  def capture():
+   recording.capture();frames.append({'physics_step':scene.steps,'time_s':scene.steps/240,'stage':targets[-1]['stage'] if targets else 'initial','cameras':{name:{'view_matrix':np.asarray(scene.gym.get_camera_view_matrix(scene.sim,scene.env,c)).tolist(),'projection_matrix':np.asarray(scene.gym.get_camera_proj_matrix(scene.sim,scene.env,c)).tolist()} for name,c in scene.cameras.items()}})
+  sample();capture()
+  for _ in range(round(cfg['seconds']*60)):
+   targets.append(controller.targets())
+   for _ in range(4):
+    effort,row=controller.effort();efforts.append(row);scene.integrate105(effort);sample()
+    if scene.steps%8==0:capture()
+   if scene.steps%240==0:print(cfg['mode'],scene.steps/240,'seconds',flush=True)
+ except BaseException as error:
+  failure={'type':type(error).__name__,'message':str(error),'traceback':traceback.format_exc()};print(failure['traceback'],flush=True)
+ finally:
+  steps=scene.steps if scene else 0;forbidden=scene.forbidden_calls if scene else []
+  if scene:
+   if recording is None and getattr(scene,'sim',None) is not None and getattr(scene,'cameras',None):
+    try:
+     from stability_adapter_2.gym_trial_recording import GymTrialRecording
+     recording=GymTrialRecording(scene,out/'initial_failure_media');recording.views=tuple(scene.cameras)
+     for view in recording.views:(recording.out/'frames'/view).mkdir(parents=True,exist_ok=True)
+     recording.capture();frames.append({'physics_step':scene.steps,'time_s':scene.steps/240,'stage':'initial_verification_failed'})
+    except BaseException as error:cleanup.append({'operation':'initial_failure_capture','error':str(error)})
+   try:save(out/'final_state.json',scene.native())
+   except BaseException as error:cleanup.append({'operation':'final_state','error':str(error)})
+   if recording and(not frames or frames[-1]['physics_step']!=scene.steps):
+    try:capture()
+    except BaseException as error:cleanup.append({'operation':'final_capture','error':str(error)})
+   try:scene.close()
+   except BaseException as error:cleanup.append({'operation':'close','error':str(error)})
+  if recording:
+   try:videos=recording.encode()
+   except BaseException as error:cleanup.append({'operation':'encode','error':str(error)})
+  unchanged=verify(pins)
+  for name,value in [('states240.json',{'rows':states}),('contacts240.json',{'rows':contacts}),('efforts240.json',{'rows':efforts}),('targets60.json',{'rows':targets}),('camera_frames.json',{'frames':frames})]:save(out/name,value)
+  save(out/'report.json',{'completed':failure is None and not cleanup and unchanged and not forbidden and steps==round(cfg['seconds']*240),'failure':failure,'cleanup_errors':cleanup,'physics_steps':steps,'physics_seconds':steps/240,'inputs_unchanged':unchanged,'forbidden_calls':forbidden,'initial_checks':initial_checks,'videos':videos,'config':str(config),'mode':cfg['mode'],'lower_control_mode':cfg['lower_control_mode'],'strap_enabled':False,'root_fixed':True,'guitar_free':True,'joint_count':105,'training_updates':0})
+ if failure or cleanup or not unchanged or forbidden:raise RuntimeError(failure or cleanup or 'input/guard violation')
+
+
+def main():
+ p=argparse.ArgumentParser();p.add_argument('--config',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();run(a.config.resolve(),a.out.resolve())
+if __name__=='__main__':main()

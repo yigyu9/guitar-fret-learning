@@ -1,0 +1,48 @@
+"""Keep world right support and increase only finite human Chest goal depth."""
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.controller_horizontal_v4 import skew
+from .runtime_v2 import Controller as WorldController
+
+
+class Controller(WorldController):
+    def __init__(self, scene):
+        super().__init__(scene)
+        assert scene.cfg['chest_normal_goal_depth_m'] == .009
+        assert scene.cfg['chest_initial_goal_depth_m'] == .008 and scene.cfg['chest_goal_ramp_s'] == [.75, 1.25]
+
+    def effort(self):
+        effort, row = super().effort()
+        s = self.s
+        state = s.native()
+        ref = next(v for v in s.references if v['body'] == 'Chest')
+        old = next(v for v in row['support_points'] if v['body'] == 'Chest')
+        p, r = pose(state['human_body_states'][ref['index']])
+        _, gr = pose(state['guitar_body_states'][0])
+        normal = gr.apply(old['normal_G'])
+        local = r.inv().apply(np.array(old['point_W_m'])-p)
+        block = s.jacobian.detach().cpu().numpy()[0].astype(float)[ref['index']-1]
+        j = block[:3]-skew(r.apply(local-(s.hcom[ref['index']] if s.jacobian_mode == 'COM' else np.zeros(3))))@block[3:]
+        u = float(np.clip((s.steps/240-.75)/.5, 0., 1.))
+        ramp = u*u*(3-2*u)
+        depth = .008+.001*ramp
+        raw = old['raw_normal_request_N']-2000*(depth-.003)
+        force = normal*np.clip(raw, -ref['cap_N'], 0.)
+        delta = np.zeros(105)
+        ix = ref['indices']
+        delta[ix] = (j.T@(force-np.array(old['virtual_force_request_W_N'])))[ix]
+        request = np.array(row['raw_requested105_Nm'])+delta
+        effort[s.upper_effort_indices] = np.clip(request[s.upper_effort_indices],
+            -s.pd_properties['effort'][s.upper_effort_indices], s.pd_properties['effort'][s.upper_effort_indices]).astype(np.float32)
+        effort[s.zero_indices] = 0
+        row['replaced_3mm_Chest_task'] = dict(old)
+        old.update(goal_W_m=(np.array(old['goal_W_m'])-(depth-.003)*normal).tolist(),
+            raw_normal_request_N=float(raw), virtual_force_request_W_N=force.tolist(),
+            human_virtual_goal_depth_m=depth, chest_goal_ramp_fraction=ramp,
+            depth_velocity_feedforward=False,
+            damping_reference='Actual guitar surface velocity; ramp changes spring preload only.',
+            mode='Actual-G nearest normal; human virtual depth8mm then9mm during.75to1.25s; unchanged PD and20N cap.')
+        row.update(support_task105_Nm=(np.array(row['support_task105_Nm'])+delta).tolist(),
+            raw_requested105_Nm=request.tolist(), submitted105_Nm=effort.astype(float).tolist())
+        assert np.isfinite(effort).all() and s.native() == state
+        return effort, row

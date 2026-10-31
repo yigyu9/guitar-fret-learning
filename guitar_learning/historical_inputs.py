@@ -12,13 +12,23 @@ import os
 from pathlib import Path
 
 _STORE = Path(__file__).resolve().parent / 'assets/historical_inputs'
-_PROJECT = Path(__file__).resolve().parents[1]
-_LEGACY_ROOTS = tuple(str(_PROJECT / name) + '/' for name in ('tab2body', 'stability_adapter_2'))
+from guitar_learning.native.paths import ROOT as _PROJECT, HISTORICAL_ROOT, resolve_input_path
+
+_LEGACY_ROOTS = tuple(str(HISTORICAL_ROOT / name) + '/' for name in ('tab2body', 'stability_adapter_2'))
+
+
+def _historical_key(source):
+    path = Path(os.path.abspath(os.fspath(source if Path(source).is_absolute() else _PROJECT / source)))
+    try:
+        path = HISTORICAL_ROOT / path.relative_to(_PROJECT)
+    except ValueError:
+        pass
+    return str(path)
 
 
 @lru_cache(maxsize=1)
 def _index():
-    document = json.loads((_STORE / 'index.json').read_text())
+    document = json.loads(resolve_input_path(_STORE / 'index.json').read_text())
     if document.get('schema') != 'guitar_learning.historical_inputs.v1':
         raise ValueError('unsupported historical input index')
     return document['entries']
@@ -49,7 +59,7 @@ def fingerprint_paths(paths):
     for source in paths:
         # 옛 경로 이름은 문자열 경로로 정규화한다. 심볼릭 링크를 해석하면 보존된
         # 원본 바이트를 선택하기 전에 삭제된 외부 디렉터리를 살펴보게 된다.
-        lexical = os.path.abspath(os.fspath(source))
+        lexical = _historical_key(source)
         legacy = lexical.startswith(_LEGACY_ROOTS)
         wanted = _checked_sha(expected[source]) if expected is not None else None
         entry = _index().get(lexical) if legacy or wanted is not None else None
@@ -58,14 +68,14 @@ def fingerprint_paths(paths):
             if wanted is None:
                 raise ValueError('unknown or ambiguous historical input: ' + lexical)
         if entry and wanted in entry['versions']:
-            actual = _digest(_STORE / 'objects' / (wanted + '.data'))
+            actual = _digest(resolve_input_path(_STORE / 'objects' / (wanted + '.data')))
             if actual != wanted:
                 raise RuntimeError('historical input SHA mismatch: ' + lexical)
             key = source if expected is not None else lexical
         elif legacy:
             raise ValueError('unknown historical input SHA: ' + lexical)
         else:
-            path = Path(source).resolve()
+            path = resolve_input_path(source)
             actual = _digest(path)
             if wanted is not None and actual != wanted:
                 raise RuntimeError('live input SHA mismatch: ' + str(path))
@@ -86,21 +96,21 @@ def evidence_input_pins(expected):
     pins = {}
 
     def require(path, sha):
-        key = str(path)
+        key = str(resolve_input_path(path))
         if key in pins and pins[key] != sha:
             raise RuntimeError('conflicting physical evidence SHA: ' + key)
         pins[key] = sha
 
     for source, wanted in expected.items():
-        lexical = os.path.abspath(os.fspath(source))
+        lexical = _historical_key(source)
         entry = _index().get(lexical)
         if entry and wanted in entry['versions']:
             index_path = _STORE / 'index.json'
             if str(index_path) not in pins:
-                require(index_path, _digest(index_path))
+                require(index_path, _digest(resolve_input_path(index_path)))
             require(_STORE / 'objects' / (wanted + '.data'), wanted)
         else:
-            require(Path(source).resolve(), wanted)
+            require(resolve_input_path(source), wanted)
     return pins
 
 

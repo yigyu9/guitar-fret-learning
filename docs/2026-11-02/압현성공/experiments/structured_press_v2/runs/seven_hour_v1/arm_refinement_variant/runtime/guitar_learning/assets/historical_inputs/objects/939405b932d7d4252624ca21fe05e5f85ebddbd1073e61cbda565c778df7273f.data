@@ -1,0 +1,33 @@
+"""Add an in-window joint-value loader to the preserved V2 UI."""
+from pathlib import Path
+from unittest.mock import patch
+from . import run_v2 as base
+from .lab_v3 import Lab
+
+DEFAULT = Path(__file__).with_name('upright_initial_v1.json')
+
+
+class Window(base.Window):
+    def __init__(self, lab, out, api):
+        super().__init__(lab, out, api)
+        row = self.ttk.Frame(self.root)
+        row.pack(after=self.root.winfo_children()[1], pady=3)
+        self.ttk.Button(row, text='관절값 불러오기', command=lambda:self.guard(self.load_joints)).pack()
+
+    def load_joints(self):
+        from tkinter import filedialog
+        filename = filedialog.askopenfilename(parent=self.root, title='저장한 관절값 선택',
+            initialdir=str(base.OUTPUT), filetypes=[('관절값 JSON', '*.json')])
+        if not filename:
+            return
+        self.lab.load_joints(filename)
+        self.sync()
+        self.messagebox.showinfo('관절값 적용', '물리 OFF에서 관절값을 불러왔습니다.\n기타 위치·회전은 유지했습니다.\n' + filename)
+
+
+def main():
+    with patch.object(base, 'Lab', Lab), patch.object(base, 'Window', Window), patch.object(base, 'DEFAULT', DEFAULT):
+        base.main()
+
+
+if __name__ == '__main__': main()

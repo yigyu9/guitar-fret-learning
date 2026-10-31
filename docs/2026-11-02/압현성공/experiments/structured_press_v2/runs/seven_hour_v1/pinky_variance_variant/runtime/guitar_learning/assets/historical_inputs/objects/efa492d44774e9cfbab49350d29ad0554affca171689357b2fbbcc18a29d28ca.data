@@ -1,0 +1,40 @@
+"""Bounded qualification follow-up: wait for two current trials, run four tests."""
+import json
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+ROOT=Path(__file__).resolve().parents[1]
+P=ROOT/'docs/2026-10-19/stability_adapter_2/results/initial_pose_qualification_v1'
+
+
+def launch(mode):
+    log=(P/('log_'+mode+'_v2.txt')).open('x')
+    command=[sys.executable,'-u','-m','stability_adapter_2.run_initial_pose_qualification_v2','--config',str(P/'source_v4'/('config_'+mode+'.json')),'--out',str(P/('native_'+mode+'_v2'))]
+    return mode,subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT,cwd=str(ROOT)),log
+
+
+def analyze(mode):
+    n=P/('native_'+mode+'_v2');report=json.loads((n/'report.json').read_text())
+    if not report['completed']:print(mode,'INCOMPLETE',report['failure'],flush=True);return False
+    subprocess.run([sys.executable,'-u','-m','stability_adapter_2.analyze_initial_pose_qualification_v1','--native',str(n),'--out',str(P/('analysis_'+mode+'_v1.json'))],cwd=str(ROOT),check=True)
+    return True
+
+
+def main():
+    deadline=time.monotonic()+1800
+    while not all((P/('native_'+mode+'_v2/report.json')).exists() for mode in ('baseline','static')):
+        if time.monotonic()>deadline:raise RuntimeError('initial trials did not finish within30minutes')
+        print('waiting for baseline/static native reports',flush=True);time.sleep(30)
+    baseline=analyze('baseline');static=analyze('static')
+    if not(baseline and static):raise RuntimeError('initial qualification incomplete; follow-ups skipped')
+    for group in [('repeat','strike'),('left_cycle','z_plus3mm')]:
+        jobs=[launch(mode) for mode in group]
+        while any(proc.poll() is None for _,proc,_ in jobs):
+            print('running',[(mode,proc.poll()) for mode,proc,_ in jobs],flush=True);time.sleep(30)
+        for mode,proc,log in jobs:
+            log.close();print('native exit',mode,proc.returncode,flush=True);analyze(mode)
+    print('bounded qualification suite finished',flush=True)
+
+if __name__=='__main__':main()

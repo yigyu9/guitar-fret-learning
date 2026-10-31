@@ -1,0 +1,71 @@
+"""Clean multi-note observations preserve continuous native geometry detection."""
+from dataclasses import replace
+import json
+import unittest
+from guitar_learning.music_task import ScoreTask
+from guitar_learning.core.task_measurement import TaskMeasurement
+from guitar_learning.tool.experiments.song.measurement import SongMeasurement
+from guitar_learning.tests.test_task_measurement_v2 import sample
+from guitar_learning.tests.test_task_measurement import score
+
+
+class SongMeasurementTests(unittest.TestCase):
+    def task(self):
+        original = score(onset=2/240., end=5/240.).targets[0]
+        return ScoreTask((original, replace(original, target_id='b', event_id='b',
+            onset_s=.5, end_s=.6, press_s=.45, source_onset_s=.5, source_end_s=.6)))
+
+    def test_multiple_targets_clean_classification_and_compact_evidence(self):
+        state, human, guitar = sample(0, higher=True)
+        measured = SongMeasurement(self.task(), human, guitar)
+        result = measured.reset(state)
+        self.assertEqual(len(result['targets']), 2)
+        for row in result['targets'].values():
+            self.assertTrue(row['positive_target_candidate'])
+            self.assertFalse(row['candidate'])
+            self.assertTrue(row['fretting_quality']['higher_fret'])
+            self.assertNotIn('contact_evidence', row['evidence'])
+            self.assertNotIn('feature_diagnostics', row['fretting_quality'])
+            self.assertGreater(row['fretting_quality']['feature_count'], 0)
+        json.dumps(result, allow_nan=False)
+
+    def test_strict_matching_preserved_for_clean_contact_without_single_ready_latch(self):
+        state, human, guitar = sample(0)
+        measured = SongMeasurement(self.task(), human, guitar)
+        base = TaskMeasurement(self.task(), human, guitar)
+        measured.reset(state); base.reset(state)
+        # Immediate original geometric crossing is retained; no single-note ready gate.
+        result = measured.update(sample(1, .03)[0])
+        reference = base.update(sample(1, .03)[0])
+        self.assertEqual(result['crossings'], reference['crossings'])
+        self.assertEqual(result['summary'], reference['summary'])
+        self.assertEqual(len(result['crossings']), 1)
+        self.assertEqual(result['summary']['matched50'], 1)
+
+    def test_all67_targets_measured_and_open_scope_fails_explicitly(self):
+        source = self.task().targets[0]
+        task = ScoreTask(tuple(replace(source, target_id=str(i), event_id=str(i),
+            onset_s=float(i+1), end_s=i+1.1, press_s=i+.9,
+            source_onset_s=float(i+1), source_end_s=i+1.1) for i in range(67)))
+        state, human, guitar = sample(0)
+        measured = SongMeasurement(task, human, guitar)
+        self.assertEqual(len(measured.reset(state)['targets']), 67)
+        self.assertEqual(len(measured.update(sample(1)[0])['targets']), 67)
+        with self.assertRaisesRegex(ValueError, 'all-fretted'):
+            SongMeasurement(score(fret=0, finger=0), human, guitar)
+
+    def test_continuous_rearm_allows_second_upstroke(self):
+        source = score(onset=1/240., end=3/240.).targets[0]
+        following = replace(source, target_id='up', event_id='up', direction=-1,
+            onset_s=4/240., end_s=7/240., press_s=3/240.)
+        state, human, guitar = sample(0)
+        measured = SongMeasurement(ScoreTask((source, following)), human, guitar)
+        measured.reset(state)
+        events = []
+        for step, x in ((1, .03), (2, .03), (3, .03), (4, .02)):
+            events.extend(measured.update(sample(step, x)[0])['crossings'])
+        self.assertEqual([row['direction'] for row in events], [1, -1])
+        self.assertEqual(measured.ledger.matches[.05].keys(), {'a', 'up'})
+
+
+if __name__ == '__main__': unittest.main()

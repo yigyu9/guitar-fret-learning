@@ -1,0 +1,103 @@
+"""OFF-only initial-state editing; ON submits finite PD targets without pose writes."""
+import json
+from pathlib import Path
+import numpy as np
+from scipy.spatial.transform import Rotation
+from .model import finite, joint_value
+
+
+def vec(value, axes='xyz'):
+    return np.array([value[a] for a in axes], dtype=float)
+
+
+class Lab:
+    def __init__(self, scene, initial, api):
+        self.scene, self.api = scene, api
+        self.names = scene.names
+        if initial['joint_names'] != self.names or len(self.names) != 81:
+            raise ValueError('같은 순서의 상체 81관절 초기 파일이 필요합니다.')
+        state = initial['native_initial_state']
+        self.start_q = finite([s['pos'] for s in state['human_dof_states']], 81).astype(np.float32)
+        if np.any(self.start_q < scene.lower) or np.any(self.start_q > scene.upper):
+            raise ValueError('초기각이 모델 한계를 벗어났습니다.')
+        root = state['guitar_body_states'][0]['pose']
+        self.start_p, self.start_r = vec(root['p']), vec(root['r'], 'xyzw')
+        self.template = scene.bodies(scene.guitar)
+        self.template_p = vec(self.template[0]['pose']['p'])
+        self.template_r = Rotation.from_quat(vec(self.template[0]['pose']['r'], 'xyzw'))
+        self.running = False
+        self.reset()
+
+    def pose(self):
+        root = self.scene.bodies(self.scene.guitar)[0]['pose']
+        return vec(root['p']), vec(root['r'], 'xyzw')
+
+    def _write_guitar(self, position, quaternion):
+        if self.running:
+            raise RuntimeError('기타 직접 편집은 물리 OFF에서만 가능합니다.')
+        p = finite(position, 3)
+        r = Rotation.from_quat(finite(quaternion, 4))
+        delta = r * self.template_r.inv()
+        states = self.template.copy()
+        for row, original in zip(states, self.template):
+            bp = p + delta.apply(vec(original['pose']['p']) - self.template_p)
+            br = (delta * Rotation.from_quat(vec(original['pose']['r'], 'xyzw'))).as_quat()
+            for axis, value in zip('xyz', bp): row['pose']['p'][axis] = value
+            for axis, value in zip('xyzw', br): row['pose']['r'][axis] = value
+        states['vel']['linear'].fill(0)
+        states['vel']['angular'].fill(0)
+        if not self.scene.gym.set_actor_rigid_body_states(self.scene.env, self.scene.guitar, states, self.api.STATE_ALL):
+            raise RuntimeError('기타 초기값 적용 실패')
+
+    def _write_joints(self):
+        if self.running:
+            raise RuntimeError('직접 관절 편집은 물리 OFF에서만 가능합니다.')
+        states = self.scene.gym.get_actor_dof_states(self.scene.env, self.scene.human, self.api.STATE_ALL).copy()
+        states['pos'] = self.scene.target
+        states['vel'] = 0
+        if not self.scene.gym.set_actor_dof_states(self.scene.env, self.scene.human, states, self.api.STATE_ALL):
+            raise RuntimeError('관절 초기값 적용 실패')
+
+    def set_joint(self, index, degrees):
+        angle = joint_value(degrees, self.scene.lower[index], self.scene.upper[index])
+        self.scene.target[index] = angle
+        self.scene._submit_targets()
+        if not self.running:
+            self._write_joints()
+            self._write_guitar(*self.pose())
+
+    def set_guitar(self, position, quaternion):
+        self._write_guitar(position, quaternion)
+
+    def toggle(self):
+        self.running = not self.running
+        if not self.running:
+            actual = self.scene.gym.get_actor_dof_states(self.scene.env, self.scene.human, self.api.STATE_ALL)
+            self.scene.target = actual['pos'].copy()
+            self.scene._submit_targets()
+        return self.running
+
+    def reset(self):
+        self.running = False
+        self.scene.target = self.start_q.copy()
+        self.scene._submit_targets()
+        self._write_joints()
+        self._write_guitar(self.start_p, self.start_r)
+        self.scene.steps = 0
+
+    def advance(self, count=8):
+        if self.running:
+            for _ in range(count): self.scene.step_physics()
+
+    def save(self, path):
+        if self.running:
+            raise RuntimeError('물리 OFF로 전환한 후 초기값을 저장하세요.')
+        p, q = self.pose()
+        payload = {'schema': 'manual_pose_lab_v1', 'joint_names': self.names,
+                   'joint_angles_rad': self.scene.target.astype(float).tolist(),
+                   'position_W_m': p.tolist(), 'quaternion_xyzw': q.tolist(),
+                   'strap_enabled': False, 'root_lower_fixed': True,
+                   'scope': 'manual initial placement; not a stability certification or trained controller'}
+        with Path(path).open('x') as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2, allow_nan=False)
+        return payload

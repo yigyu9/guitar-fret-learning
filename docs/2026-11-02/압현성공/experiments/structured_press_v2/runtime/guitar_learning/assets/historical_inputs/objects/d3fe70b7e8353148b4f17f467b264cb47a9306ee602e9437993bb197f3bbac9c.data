@@ -1,0 +1,41 @@
+"""Joint limits and guitar body-centre edits, independent of native physics."""
+import numpy as np
+from scipy.spatial.transform import Rotation
+
+
+def finite(value, size):
+    array = np.asarray(value, dtype=float)
+    if array.shape != (size,) or not np.isfinite(array).all():
+        raise ValueError('유한한 숫자 %d개가 필요합니다.' % size)
+    return array
+
+
+def body_pose(centre_W, euler_deg, reference_quaternion, centre_G):
+    centre = finite(centre_W, 3)
+    angles = finite(euler_deg, 3)
+    rotation = Rotation.from_euler('xyz', angles, degrees=True) * Rotation.from_quat(reference_quaternion)
+    return centre - rotation.apply(centre_G), rotation.as_quat()
+
+
+def body_fields(position, quaternion, reference_quaternion, centre_G):
+    rotation = Rotation.from_quat(quaternion)
+    centre = finite(position, 3) + rotation.apply(centre_G)
+    angles = (rotation * Rotation.from_quat(reference_quaternion).inv()).as_euler('xyz', degrees=True)
+    return centre, angles
+
+
+def joint_group(name):
+    if name.startswith(('Torso_', 'Spine_', 'Chest_')): return '몸통'
+    if name.startswith(('Neck_', 'Head_')): return '머리·목'
+    if name.startswith('LH:'): return '왼손 손가락'
+    if name.startswith('RH:'): return '오른손 손가락'
+    if name.startswith('L_'): return '왼팔'
+    if name.startswith('R_'): return '오른팔'
+    raise ValueError('알 수 없는 상체 관절: ' + name)
+
+
+def joint_value(degrees, lower, upper):
+    angle = finite([degrees], 1)[0] * np.pi / 180
+    if not lower <= angle <= upper:
+        raise ValueError('관절 모델 한계를 벗어났습니다.')
+    return np.float32(angle)

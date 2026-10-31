@@ -1,0 +1,98 @@
+"""PPO from reset: former settling2s is now goal-observed policy preparation."""
+import argparse
+import copy
+import gzip
+import json
+import os
+from pathlib import Path
+import random
+from unittest.mock import patch
+
+from . import train_timing
+
+
+def settings_document(raw):
+    settings = train_timing.settings_document(raw)
+    if settings['timing']['pre_roll_s'] != 3.:
+        raise ValueError('actionable preparation requires pre_roll_s3 and zero native settling')
+    return settings
+
+
+def compact(env, info, action):
+    result = train_timing.timing_compact(env, info, action)
+    if 'actionable_preparation' in info:
+        result['actionable_preparation'] = copy.deepcopy(info['actionable_preparation'])
+    return result
+
+
+def native_environment(spec, worker_id):
+    import isaacgym
+    import numpy as np
+    import torch
+    # Bind the original logger before installing our wrapper in a fresh spawn.
+    from .specialist_parallel import specialist_compact
+    from . import parallel
+    from .actionable_preparation_environment import build_environment
+    from .timing_curriculum import TimingConfig
+    if not spec.get('headless', True):
+        raise ValueError('actionable preparation training requires headless native sessions')
+    seed = int(spec.get('seed', 7))+worker_id
+    random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+    torch.set_num_threads(1)
+    parallel._compact = compact
+    return build_environment(spec['config'], Path(spec['out'])/'environment',
+        role=spec['specialist']['role'], bundle=spec['bundle'], timing=TimingConfig(**spec['timing']),
+        stage=spec['stage'], start_event_index=spec.get('start_event_index', 0),
+        phrase_events=spec.get('phrase_events', 8), tempo_scale=spec.get('tempo_scale', 1.),
+        seed=int(spec.get('seed', 7)), worker_id=worker_id, music=spec.get('music'),
+        **dict(spec.get('env_kwargs', {})))
+
+
+def preparation_summary(out):
+    from .recording import write
+    out = Path(out); prep_steps = nonzero = total = 0; rewards = {}
+    with gzip.open(out/'transitions.jsonl.gz', 'rt') as stream:
+        for line in stream:
+            for info in json.loads(line)['infos']:
+                total += 1
+                if info['task_time_s'] <= 2.+1e-9:
+                    prep_steps += 1
+                    nonzero += any(abs(float(v)) > 1e-8 for v in info['debug']['action'])
+                    for key, value in info['reward_terms'].items():
+                        rewards[key] = rewards.get(key, 0.)+value
+    result = dict(schema='guitar_learning.actionable_preparation_report.v1',
+        policy_control_from_reset=True, native_settling_s=0., converted_preparation_s=2.,
+        policy_horizon_s=7., total_logged_transitions=total,
+        first2s_logged_transitions=prep_steps, first2s_nonzero_action_transitions=nonzero,
+        first2s_reward_terms=rewards,
+        scope='preparation actions and all native costs are included in ordinary PPO transitions; no readiness-based delay of score')
+    write(out/'actionable_preparation_report.json', result)
+    return result
+
+
+def run(settings, args):
+    import isaacgym
+    from . import timing_transfer
+    from .actionable_preparation_transfer import apply_actor_initialization
+    existed = args.out.exists()
+    with patch.object(train_timing, 'timing_native_environment', native_environment), \
+            patch.object(timing_transfer, 'apply_actor_initialization', apply_actor_initialization):
+        result = train_timing.run(settings, args)
+    if not existed and (args.out/'report.json').is_file():
+        preparation_summary(args.out)
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--settings', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--resume', type=Path)
+    args = parser.parse_args()
+    for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+        os.environ[name] = '1'
+    import isaacgym
+    run(settings_document(json.loads(args.settings.read_text())), args)
+
+
+if __name__ == '__main__': main()

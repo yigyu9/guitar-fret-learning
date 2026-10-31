@@ -1,0 +1,117 @@
+"""Retask the563 quality environment only at persistent episode boundaries."""
+import copy
+from dataclasses import asdict
+from unittest.mock import patch
+
+from .. import training_environment
+from ..actionable_preparation_environment import PersistentContactEnvironment
+from ..music_task import ScoreTask
+from ..musical_quality_environment import MusicalQualityEnvironment
+from ..persistent_environment import _CONSTRUCTION_LOCK
+from ..task_sampling import BalancedTaskSampler
+from ..timing_curriculum import TimingConfig
+from ..timing_environment import execution_task
+
+SCHEMA = 'guitar_learning.quality_single_note_pool.v1'
+SELECTION = 'seed+worker_id shuffle without replacement each cycle; new episodes on resume'
+
+
+def settings_document(value):
+    if not isinstance(value, dict) or set(value) != {'goal_event_indices'}:
+        raise ValueError('curriculum requires explicit goal_event_indices only')
+    BalancedTaskSampler(value['goal_event_indices'], 0, 0)
+    return copy.deepcopy(value)
+
+
+def common_task(task):
+    """Only these score-selection fields may vary between otherwise equal tasks."""
+    result = copy.deepcopy(task)
+    for key in ('provenance', 'targets'):
+        result.pop(key)
+    timing = result['timing']
+    timing.pop('original_targets')
+    timing.pop('original_provenance')
+    return result
+
+
+def pool_task(candidates, indices):
+    if [row['event_index'] for row in candidates] != indices:
+        raise ValueError('ordered explicit pool candidates required')
+    common = common_task(candidates[0]['task'])
+    if any(common_task(row['task']) != common for row in candidates):
+        raise ValueError('pool tasks differ beyond explicit score selection/provenance')
+    common['curriculum'] = dict(schema=SCHEMA, selection=SELECTION,
+        goal_event_indices=list(indices), candidates=copy.deepcopy(candidates))
+    return common
+
+
+def validate_pool_task(task):
+    """Rebuild the canonical pool so a transfer cannot hide changed task metadata."""
+    declared = task.get('curriculum', {})
+    if (not isinstance(declared, dict) or set(declared) != {
+            'schema', 'selection', 'goal_event_indices', 'candidates'} or
+            declared['schema'] != SCHEMA or declared['selection'] != SELECTION):
+        raise ValueError('known explicit quality pool contract required')
+    indices = settings_document(dict(goal_event_indices=declared['goal_event_indices']))['goal_event_indices']
+    candidates = declared['candidates']
+    if (not isinstance(candidates, list) or len(candidates) != len(indices) or
+            any(not isinstance(row, dict) or set(row) != {'event_index', 'task'} for row in candidates)):
+        raise ValueError('complete concrete task per explicit pool member required')
+    if pool_task(candidates, indices) != task:
+        raise ValueError('pool common metadata does not match concrete candidates')
+    return candidates
+
+
+class QualityCurriculumEnvironment(MusicalQualityEnvironment):
+    def __init__(self, *args, tasks, sampler, timing, **kwargs):
+        self.original_tasks, self.sampler = tasks, sampler
+        super().__init__(*args, task=tasks[sampler.indices[0]], timing=timing, **kwargs)
+
+    def reset(self):
+        index = self.sampler.next_index()
+        self.original_task = self.original_tasks[index]
+        self.task = execution_task(self.original_task, self.timing_config)
+        # This rebuilds measurement, geometry, music/skill/timing/quality ledgers,
+        # guides and observation builders while reusing the owned native session.
+        observation, info = super().reset()
+        concrete = copy.deepcopy(self.contract['task'])
+        self.episode_task = dict(schema=SCHEMA, event_index=index, task=concrete)
+        candidates = []
+        for event_index in self.sampler.indices:
+            original = self.original_tasks[event_index]
+            selected = copy.deepcopy(concrete)
+            selected['provenance'] = copy.deepcopy(original.provenance)
+            selected['targets'] = [asdict(t) for t in execution_task(original, self.timing_config).targets]
+            selected['timing']['original_targets'] = [asdict(t) for t in original.targets]
+            selected['timing']['original_provenance'] = copy.deepcopy(original.provenance)
+            candidates.append(dict(event_index=event_index, task=selected))
+        self.contract['task'] = pool_task(candidates, list(self.sampler.indices))
+        info['training_contract'] = self.contract
+        info['episode_task'] = copy.deepcopy(self.episode_task)
+        return observation, info
+
+    def step(self, action):
+        result = super().step(action)
+        info = result[-1]
+        info['episode_task'] = copy.deepcopy(self.episode_task)
+        if 'episode' in info:
+            info['episode']['episode_task'] = copy.deepcopy(self.episode_task)
+        return result
+
+
+def build_environment(config, out, *, role, bundle, curriculum, timing=TimingConfig(pre_roll_s=3.),
+        stage='B', start_event_index=0, phrase_events=8, tempo_scale=1., seed=7, worker_id=0,
+        music=None, **kwargs):
+    declared = settings_document(curriculum)
+    if (role not in ('left', 'right') or stage != 'B' or start_event_index != 0 or
+            tempo_scale != 1. or dict(music or {}) not in ({}, {'reward_mode': 'legacy'},
+                {'reward_mode': 'legacy', 'goal_event_indices': None})):
+        raise ValueError('quality curriculum uses independent B notes, tempo1 and no legacy goal pool')
+    sampler = BalancedTaskSampler(declared['goal_event_indices'], seed, worker_id)
+    # Validate every requested event and its complete seven-second timeline before
+    # any simulator is created. Unsupported notes are never silently filtered.
+    tasks = {i: ScoreTask.from_bundle(bundle, stage='B', start_event_index=i) for i in sampler.indices}
+    for task in tasks.values(): execution_task(task, timing)
+    with _CONSTRUCTION_LOCK, patch.object(training_environment, 'ContactEnvironment', PersistentContactEnvironment):
+        return QualityCurriculumEnvironment(config, out, role=role, tasks=tasks,
+            sampler=sampler, timing=timing, **kwargs)

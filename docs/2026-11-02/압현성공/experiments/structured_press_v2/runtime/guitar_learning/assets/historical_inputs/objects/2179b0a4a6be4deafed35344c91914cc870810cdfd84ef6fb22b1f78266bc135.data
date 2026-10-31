@@ -1,0 +1,25 @@
+"""Right upper arm on front/top guitar edge; other source10 placement retained."""
+from pathlib import Path
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from .common import ROOT,A,BASE,HUMAN,read,save,sha,pin,verify
+from .upright_source_v1 import full_fk,make_state,metrics,INITIAL,NATIVE
+from stability_adapter_2.om_axilla_source_geometry_v3 import CapsuleBodyDistance
+
+
+def main():
+    source=BASE/'upright_chest_support_v1/source_v10';out=BASE/'upright_chest_support_v1/source_v12';out.mkdir(exist_ok=False);pins=pin(extra=[source/'candidate.json',source/'report.json',source/'support_candidate.json',INITIAL,NATIVE/'native_properties.json',ROOT/'docs/plans/upright_front_arm_v2_20261015.md']);save(out/'inputs_before.json',pins);c=read(source/'candidate.json');i=read(INITIAL);names=i['joint_names'];bodies=i['human_body_names'];q0=np.array(c['q_ref_rad']);q=q0.copy();fk,_=full_fk(names,bodies,c['expected_initial_state'],q0);original=fk(q0);goalp,goalr=original['RH:palm'];gp=np.array(c['guitar_position_W_m']);gr=Rotation.from_quat(c['guitar_quaternion_xyzw']);d=CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']),HUMAN);ix=np.array([j for j,n in enumerate(names) if n.startswith(('R_Thorax_','R_Shoulder_','R_Elbow_','R_Wrist_'))]);bounds=np.column_stack([i['PD_properties']['lower'],i['PD_properties']['upper']]);lo=np.maximum(bounds[ix,0]+1e-6,q0[ix]-1.1);hi=np.minimum(bounds[ix,1]-1e-6,q0[ix]+1.1)
+    def evaluate(v):
+        z=q0.copy();z[ix]=v;ps=fk(z);w=d.measure(ps,'R_Shoulder',gp,gr);n=np.array(w['capsule_axis_G_m'])-w['guitar_surface_G_m'];n/=max(np.linalg.norm(n),1e-12);return ps,w,n
+    def residual(v):
+        ps,w,n=evaluate(v);p,r=ps['RH:palm'];return np.r_[250*(p-goalp),30*(goalr.inv()*r).as_rotvec(),5000*(w['gap_m']-.0004),15000*min(w['gap_m']-.0001,0),80*min(n[2]-.65,0),6000*min(d.measure(ps,'R_Elbow',gp,gr)['gap_m']-.008,0),.1*(v-q0[ix])]
+    fits=[]
+    for seed in (q0[ix],q0[ix]+np.array([0,0,0,.15,0,0,0,0,0,0,0,0]),q0[ix]+np.array([0,0,0,0,.15,0,0,0,0,0,0,0])):
+        f=least_squares(residual,np.clip(seed,lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=150,diff_step=1e-4,ftol=1e-9,xtol=1e-9);fits.append(f);ps,w,n=evaluate(f.x);print('fit',f.cost,'normal',n,'gap',w['gap_m'],flush=True)
+    f=min(fits,key=lambda f:f.cost);q[ix]=f.x;q=q.astype(np.float32).astype(float);ps,w,n=evaluate(q[ix]);p,r=ps['RH:palm'];hand=dict(position_error_m=float(np.linalg.norm(p-goalp)),rotation_error_deg=float(np.rad2deg((goalr.inv()*r).magnitude())));m=metrics(ps,d,gp,gr);state=make_state(i['native_initial_state'],bodies,q,ps,gp,gr);assert np.array_equal(q[i['lower_indices']],q0[i['lower_indices']]) and np.all(q>=bounds[:,0]) and np.all(q<=bounds[:,1]);save(out/'support_candidate.json',{'right_block_cradle':{'capsule_body':m['capsules'],'upper_arm_witness':w,'scope':'New front/top right upper-arm witness, source10 torso/G/lower unchanged.'}})
+    for j in ix:c['upper_deltas_rad'][names[j]]=float(c['upper_deltas_rad'].get(names[j],0.)+q[j]-q0[j])
+    c.update(q_ref_rad=q.tolist(),expected_initial_state=state,support_candidate=str(out/'support_candidate.json'),scope='source10 unchanged outside right arm; front/top upper-arm initial contact pose, native validation required.');save(out/'candidate.json',c);save(out/'predicted_state.json',state);valid=hand['position_error_m']<.05 and hand['rotation_error_deg']<15 and .00005<=w['gap_m']<.002 and n[2]>=.45 and m['capsules']['R_Elbow']['gap_m']>=.0075;save(out/'report.json',dict(local_geometry_reach_eligible=bool(valid),full_collision_audit_complete=False,candidate_metrics=m,hand_metrics={'R':hand},right_upper_arm_normal_G=n.tolist(),inputs_unchanged=verify(pins),candidate_sha256=sha(out/'candidate.json')));print('valid',valid,'hand',hand,'normal',n,flush=True);assert valid and verify(pins)
+
+
+if __name__=='__main__':main()

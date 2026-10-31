@@ -2,6 +2,8 @@
 
 기본 GPU 왼손 finger-skill v3 학습은 [기본 실행](/home/ajou/yigyu/3/guitar_learning/README.md)의 `python -m guitar_learning.train`을 사용한다. 이 디렉토리는 기존 song 실행, 입력 생성·검수, J 평가·영상과 현재 진단을 제공한다. 기본 학습은 이 디렉토리를 import하지 않는다.
 
+도구를 실행하기 전 현재 기본용인지 특정 연구 전용인지 구분한다. [실행 자산 역할](/home/ajou/yigyu/3/guitar_learning/assets/README.md) · [연구 결과별 도구·계약 구분](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/experiments/README.md).
+
 ## 목적별 필수 도구
 
 | 목적 | 현재 실행 모듈 | 필요한 때 |
@@ -14,6 +16,7 @@
 | 손가락 실제 동작 | `tool.demonstration.finger_motion` | 학습 없이 고정 손가락 동작 기록·재생 |
 | 압현·손 접촉 진단 | `tool.validation.press_acquisition` 등 `validation/` 도구 | 현재 물리·접촉의 별도 진단 |
 | 짧은 손가락 진단 학습 | `tool.experiments.short_finger_learning` | 고정 기타·손목 teacher의 단음 비교; [전용 안내](/home/ajou/yigyu/3/guitar_learning/tool/experiments/short_finger_learning/README.md) 필수 |
+| 자연스러운 압현 준비 비교 | `tool.experiments.natural_press` | 목표 노출·대기 보상·줄 위 준비 영역 E0~E4 비교; [실행 안내](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/experiments/natural_press_v3/README.md) |
 
 표의 `tool.` 모듈에는 `guitar_learning.`을 붙여 `python -m`으로 실행한다. 곡 입력 도구는 아래 전체 명령을 따른다. J 저장본의 평가·영상은 [기본 안내](/home/ajou/yigyu/3/guitar_learning/README.md)의 명령과 엄격한 입력 SHA·계약 검증을 따른다.
 
@@ -36,7 +39,7 @@ python -m guitar_learning.tool.training.train_legacy \
 
 ## 보관한 전문 경로
 
-과거 손별 단계·모방·타이밍·정책 준비·단음 음악 품질의 학습·평가·시연 CLI, `render_timing_video_v1.py`, 아래 실험8개는 활성 경로에서 제거했다. `tool/experiments/`에는 현재 `short_finger_learning`만 남는다.
+과거 손별 단계·모방·타이밍·정책 준비·단음 음악 품질의 학습·평가·시연 CLI, `render_timing_video_v1.py`, 아래 실험8개는 활성 경로에서 제거했다. 이후 추가된 `natural_press` 등 명시적 비교 도구는 이 보관 대상과 구분한다.
 
 | 보관 패키지 | 당시 역할 |
 | --- | --- |

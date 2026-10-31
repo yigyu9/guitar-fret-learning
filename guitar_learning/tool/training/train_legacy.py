@@ -94,8 +94,8 @@ def main():
                         help='GPU left: B preference maximum rate per second (default0.02)')
     parser.add_argument('--finger-shape', action='store_true',
                         help='GPU left: enable separate experimental0.004/s DIP-PIP shape preference')
-    parser.add_argument('--finger-action-mode', choices=('position', 'incremental'),
-                        help='GPU left: incremental targets (default); position is an experimental comparison arm')
+    parser.add_argument('--finger-action-mode', choices=('position',),
+                        help='GPU left: direct position targets (default)')
     args = parser.parse_args()
     for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
         os.environ[name] = '1'

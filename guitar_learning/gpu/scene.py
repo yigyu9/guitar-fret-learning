@@ -34,7 +34,7 @@ class GpuScene:
         import isaacgym
         from isaacgym import gymapi, gymtorch
         import torch
-        from guitar_learning.runtime.prepared_reset_v1 import load_prepared_reset_contract
+        from guitar_learning.runtime.prepared_reset_v1 import load_gpu_prepared_reset_contract
         from guitar_learning.native.paths import resolve_input_path
         from guitar_learning.core.control import default_profile
 
@@ -55,7 +55,7 @@ class GpuScene:
         self._tensor_devices = {}
         self._rigid_readback_max_error = 0.
         self.episode_steps = torch.zeros(num_envs, dtype=torch.long, device=self.device)
-        self.contract = load_prepared_reset_contract()
+        self.contract = load_gpu_prepared_reset_contract(hand)
         self.rigid_guitar = RigidGuitar(self.contract, self.device)
         initial, saved = self.contract['initial'], self.contract['state']
         self.hand_collision = None
@@ -251,16 +251,18 @@ class GpuScene:
                 raise RuntimeError('GPU prepare_sim failed')
             self.origins = torch.tensor(self.origins, dtype=torch.float32, device=self.device)
             self._dof = gymtorch.wrap_tensor(self.gym.acquire_dof_state_tensor(self.sim)).view(num_envs, 105, 2)
+            self._dof_force_sensor = gymtorch.wrap_tensor(self.gym.acquire_dof_force_tensor(self.sim)).view(num_envs, 105)
             self._roots = gymtorch.wrap_tensor(self.gym.acquire_actor_root_state_tensor(self.sim)).view(num_envs, 3, 13)
             self._bodies = gymtorch.wrap_tensor(self.gym.acquire_rigid_body_state_tensor(self.sim)).view(num_envs, self.native_body_count, 13)
             self._native_contact_force = gymtorch.wrap_tensor(self.gym.acquire_net_contact_force_tensor(self.sim)).view(num_envs, self.native_body_count, 3)
             self.contact_force = torch.zeros(num_envs, self.body_count, 3, device=self.device)
             self.jacobian = gymtorch.wrap_tensor(self.gym.acquire_jacobian_tensor(self.sim, 'human'))
-            if any(t.device != self.device for t in (self._dof, self._roots, self._bodies, self._native_contact_force, self.jacobian)):
+            if any(t.device != self.device for t in (self._dof, self._roots, self._bodies, self._native_contact_force, self.jacobian, self._dof_force_sensor)):
                 raise RuntimeError('GPU pipeline returned non-CUDA tensors')
             self._tensor_devices = {name: str(value.device) for name, value in (
                 ('dof', self._dof), ('roots', self._roots), ('bodies', self._bodies),
-                ('contact_force', self._native_contact_force), ('jacobian', self.jacobian))}
+                ('contact_force', self._native_contact_force), ('jacobian', self.jacobian),
+                ('dof_force_sensor', self._dof_force_sensor))}
             self.q, self.qd = self._dof[..., 0], self._dof[..., 1]
             self.target = self.reference105.expand(num_envs, -1).clone()
             self.efforts = torch.zeros_like(self.target)
@@ -281,7 +283,9 @@ class GpuScene:
                 body_com=self.com.tolist(), reference105=self.reference105.tolist(),
                 position_indices=initial['position_indices'], effort_indices=initial['effort_indices'],
                 zero_indices=initial['zero_range_indices'], physics_hz=240, control_hz=60,
-                reset_body_source='Pinned035/v14 body snapshot until first actual GPU physics step',
+                reset_body_source=('Pinned left standby v9 body snapshot' if hand == 'left' else
+                    'Pinned035/v14 body snapshot') + ' until first actual GPU physics step',
+                initial_pose=self.contract.get('initial_pose', {'schema': '035/v14'}),
                 state_position_frame='Native environment-local coordinates; no environment-origin addition/subtraction',
                 synchronization_version='guitar_learning.cuda_gym_torch_barriers.v1',
                 environment_aggregate=self.aggregate.copy(),
@@ -327,6 +331,7 @@ class GpuScene:
     def _refresh(self):
         import torch
         self.gym.refresh_dof_state_tensor(self.sim)
+        self.gym.refresh_dof_force_tensor(self.sim)
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
@@ -345,6 +350,8 @@ class GpuScene:
         contact = torch.where(self._reset_mask[:, None, None],
                               torch.zeros_like(self.contact_force), self.contact_force)
         return dict(q=self.q, qd=self.qd, target=self.target, body_state=self.body_state,
+                    dof_force_sensor=torch.where(self._reset_mask[:, None],
+                        torch.zeros_like(self._dof_force_sensor), self._dof_force_sensor),
                     contact_force=contact, physics_step=self.episode_steps, jacobian=self.jacobian,
                     reset_body_snapshot=self._reset_mask.clone())
 
@@ -452,7 +459,7 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ASSET_DIR = Path(__file__).resolve().parents[1] / 'assets/gpu_rigid_guitar_v1'
-_MANIFEST_SHA256 = '8691885f712a687cb3e8d51001a2c9276ce7e9f3539a40ac5dc20afccd7f9ded'
+_MANIFEST_SHA256 = '7bc3f584fb0c75eea98aa9b2b1f286fab9127c4f51157ce9ee4f3161a878a60a'
 
 
 # 파일 해시는 공용 스트리밍 구현으로 계산한다.
@@ -476,8 +483,14 @@ class RigidGuitar:
         self.asset_path = _ASSET_DIR / 'guitar_compound.xml'
         if _sha(self.asset_path) != self.manifest['asset_sha256']:
             raise ValueError('Compound guitar asset SHA mismatch')
+        # Preview4 cannot import non-colliding capsule visuals. The six strings
+        # use explicit capsule meshes; verify their bytes before native loading.
+        for relative, expected in self.manifest['visual_mesh_sha256'].items():
+            if _sha(_ASSET_DIR / relative) != expected:
+                raise ValueError('Compound guitar visual mesh SHA mismatch: ' + relative)
+        from guitar_learning.native.paths import resolve_input_path
         for relative, expected in self.manifest['source_sha256'].items():
-            source = (_REPO_ROOT / relative).resolve()
+            source = resolve_input_path(_REPO_ROOT / relative)
             if _sha(source) != expected or contract['source_sha256'].get(str(source)) != expected:
                 raise ValueError('Compound guitar source SHA mismatch: ' + relative)
         initial, saved = contract['initial'], contract['state']

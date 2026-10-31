@@ -1,0 +1,179 @@
+"""Finite Chest orientation target; source4 initial state is never changed."""
+import copy
+import itertools
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from scipy.optimize import least_squares,lsq_linear
+from scipy.spatial.transform import Rotation
+from ..lower_body_release_v1.common import ROOT,A,BASE,HUMAN,read,save,sha,pin,verify
+from ..lower_body_release_v1.upright_source_v1 import INITIAL,NATIVE,full_fk,metrics,make_state
+from ..lower_body_release_v1.upright_polytope_v2 import GuitarBoxes
+from ..lower_body_release_v1 import upright_audit_v2 as capsules
+from ..om_axilla_source_geometry_v3 import CapsuleBodyDistance
+from ..initial_pose_noise_v1 import pose
+
+PHASE=BASE/'grounded_guitar_support_v1'
+SOURCE=PHASE/'source_v4'
+POLICY=PHASE/'native_static_v4/native_properties.json'
+PLAN=ROOT/'docs/plans/grounded_guitar_chest_orientation_20261016.md'
+
+
+def main():
+    out=PHASE/'posture_target_v1';out.mkdir(exist_ok=False)
+    cfgpath=SOURCE/'static5.json';cfg=read(cfgpath)
+    paths=[Path(__file__).resolve(),Path(__file__).with_name('__init__.py'),
+           Path(__file__).with_name('source_v4.py'),Path(__file__).with_name('runtime_v2.py'),
+           PLAN,A/'AGENTS.md',INITIAL,NATIVE/'native_properties.json',POLICY,cfgpath]
+    paths+=[SOURCE/n for n in ('candidate.json','predicted_state.json','report.json','support_candidate.json','upper_target105.json','inputs_before.json')]
+    paths+=list((A/'seated_foot_support_v1').glob('*.py'))
+    pins=pin(extra=paths);save(out/'inputs_before.json',pins)
+    initial_candidate_sha=sha(SOURCE/'candidate.json');c=read(SOURCE/'candidate.json');i=read(INITIAL)
+    assert cfg['candidate_sha256']==initial_candidate_sha and read(SOURCE/'report.json')['eligible_for_native']
+    assert cfg['right_arm_reference_mode']=='initial_world_finite_human_v2'
+    assert cfg['foot_support_mode']=='coherent_interior_hip_soles_v6'
+    names,bodies=c['joint_names'],i['human_body_names'];q0=np.array(c['q_ref_rad']);q=q0.copy()
+    fk,parents=full_fk(names,bodies,c['expected_initial_state'],q0);original=fk(q0)
+    bounds=np.column_stack([i['PD_properties']['lower'],i['PD_properties']['upper']])
+    chest=np.array([names.index('Chest_'+a) for a in 'xyz'])
+    right=original['R_Hip'][0]-original['L_Hip'][0];right[2]=0.;right/=np.linalg.norm(right)
+    forward_delta=Rotation.from_rotvec(-right*np.deg2rad(.2));goal=forward_delta*original['Chest'][1]
+    def orientation_residual(v):
+        trial=q0.copy();trial[chest]=v
+        return (goal.inv()*fk(trial)['Chest'][1]).as_rotvec()
+    fit=least_squares(orientation_residual,q0[chest],bounds=(bounds[chest,0],bounds[chest,1]),
+                      max_nfev=30,ftol=1e-12,xtol=1e-12,gtol=1e-12)
+    q[chest]=fit.x;q=q.astype(np.float32).astype(float)
+    gp=np.array(c['guitar_position_W_m']);gr=Rotation.from_quat(c['guitar_quaternion_xyzw'])
+    distance=CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']),HUMAN)
+    boxes=GuitarBoxes(distance);policy=read(POLICY)['actual_shape_properties']
+    shifted_i=copy.deepcopy(i)
+    for body in shifted_i['native_initial_state']['human_body_states']:
+        for k,v in zip('xyz',c['root_initial_translation_W_m']):body['pose']['p'][k]+=v
+    pose_path=(ROOT/read(A/'config.json')['pose_source']).resolve();original_read=capsules.read
+    def chair_read(path):
+        value=original_read(path)
+        if Path(path).resolve()==pose_path:value['params']['chair']['half']=list(c['chair_half_m'])
+        return value
+    def classify(rows):
+        result=[]
+        for original_row in rows:
+            row=dict(original_row);row['helper_collision_relevant']=bool(row['collision_relevant'])
+            if row['b_actor']=='guitar':
+                hp=policy['human'][row['a']];gpfilter=policy['guitar'][row['b']]
+                active=any((x['filter']&y['filter'])==0 for x in hp for y in gpfilter)
+                row.update(collision_relevant=bool(active),actual_native_cross_actor_enabled=bool(active),
+                           human_filters=[p['filter'] for p in hp],guitar_filters=[p['filter'] for p in gpfilter])
+            result.append(row)
+        return result
+    def audit_target(qq):
+        candidate=copy.deepcopy(c);candidate['q_ref_rad']=qq.tolist()
+        with patch.object(capsules,'read',chair_read):rows=capsules.audit(candidate,shifted_i)
+        return classify(rows)
+    oldrows=audit_target(q0);rows=audit_target(q)
+    key=lambda row:(row['a'],row['b'],row.get('geom',''))
+    before={key(row):row['gap_m'] for row in oldrows}
+    def new_intersections(values):
+        return [dict(row,baseline_gap_m=before.get(key(row))) for row in values if row['collision_relevant']
+                and row['gap_m']<-.0001 and row['gap_m']<before.get(key(row),.02)-.0002
+                and not(row['a']=='Pelvis' and row['b_actor']=='chair')]
+    human_worse=[row for row in new_intersections(rows) if row['b_actor']=='human']
+    left=np.array([j for j,n in enumerate(names) if n.startswith(('L_Thorax_','L_Shoulder_','L_Elbow_','L_Wrist_'))])
+    left_refit=None
+    if human_worse:
+        excluded={frozenset((e.get('body1'),e.get('body2'))) for e in ET.parse(HUMAN).findall('./contact/exclude')}
+        moving={'L_Thorax','L_Shoulder','L_Elbow'}
+        def enabled(a,b):
+            return parents.get(a)!=b and parents.get(b)!=a and frozenset((a,b)) not in excluded and any((x['filter']&y['filter'])==0 for x in policy['human'][a] for y in policy['human'][b])
+        pairs=[(a,b) for a,b in itertools.combinations(distance.capsules,2) if (a in moving or b in moving) and enabled(a,b)]
+        def clearances(ps):
+            caps={n:(ps[n][0]+ps[n][1].apply(seg),radius) for n,(seg,radius) in distance.capsules.items()};values=[]
+            for a,b in pairs:
+                x,ra=caps[a];y,rb=caps[b];matrix=np.column_stack([x[1]-x[0],y[0]-y[1]])
+                fit=lsq_linear(matrix,y[0]-x[0],bounds=([0.,0.],[1.,1.]),tol=1e-12)
+                values.append(np.linalg.norm(matrix@fit.x-(y[0]-x[0]))-ra-rb)
+            return np.array(values)
+        palm,rotation=original['LH:palm']
+        def residual(v):
+            trial=q.copy();trial[left]=v;ps=fk(trial);p,r=ps['LH:palm']
+            return np.r_[1500*(p-palm),100*(rotation.inv()*r).as_rotvec(),
+                         10000*np.minimum(clearances(ps)-.001,0.),.05*(v-q0[left])]
+        lo=np.maximum(bounds[left,0]+1e-6,q0[left]-.15);hi=np.minimum(bounds[left,1]-1e-6,q0[left]+.15)
+        lfit=least_squares(residual,np.clip(q[left],lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=150,
+                           diff_step=1e-4,ftol=1e-10,xtol=1e-10,gtol=1e-9)
+        q[left]=lfit.x;q=q.astype(np.float32).astype(float);rows=audit_target(q)
+        left_refit=dict(success=bool(lfit.success),nfev=int(lfit.nfev),cost=float(lfit.cost),
+                        triggered_by_active_self_intersections=human_worse,goal='Preserve initial world palm, small left12 target refit only.')
+    ps=fk(q);measured=metrics(ps,distance,gp,gr);base_metrics=metrics(original,distance,gp,gr)
+    changes=[dict(name=n,initial_rad=float(q0[j]),target_rad=float(q[j]),delta_rad=float(q[j]-q0[j])) for j,n in enumerate(names) if q[j]!=q0[j]]
+    all_worse=new_intersections(rows)
+    human_worse=[r for r in all_worse if r['b_actor']=='human']
+    chair_worse=[r for r in all_worse if r['b_actor']=='chair']
+    guitar_worse=[r for r in all_worse if r['b_actor']=='guitar']
+    # These raw base targets do not include the runtime world-right12 IK override.
+    # Small right-branch G overlap is recorded as a finite target prediction,
+    # never an initial-geometry clearance or actual penetration certificate.
+    unexpected_guitar_worse=[r for r in guitar_worse if r['a']!='R_Shoulder' or r['gap_m']<-.001]
+    boxrows=[dict(body=n,initial_gap_m=boxes.measure(original,n,gp,gr),target_gap_m=boxes.measure(ps,n,gp,gr)) for n in boxes.boxes]
+    chairps=dict(ps);chairps['chair']=(np.array(c['chair_initial_center_W_m']),Rotation.identity())
+    boxes.boxes['chair']=(np.zeros(3),np.array(c['chair_half_m']),Rotation.identity())
+    chairgap=boxes.measure(chairps,'chair',gp,gr)
+    target_state=make_state(c['expected_initial_state'],bodies,q,ps,gp,gr)
+    target_state['guitar_body_states']=copy.deepcopy(c['expected_initial_state']['guitar_body_states'])
+    palms={side:dict(initial_W_m=original[side+'H:palm'][0].tolist(),target_W_m=ps[side+'H:palm'][0].tolist(),
+                    displacement_W_m=(ps[side+'H:palm'][0]-original[side+'H:palm'][0]).tolist(),
+                    displacement_m=float(np.linalg.norm(ps[side+'H:palm'][0]-original[side+'H:palm'][0])),
+                    rotation_change_deg=float(np.rad2deg((original[side+'H:palm'][1].inv()*ps[side+'H:palm'][1]).magnitude()))) for side in ('L','R')}
+    allowed=set(chest.tolist())|(set(left.tolist()) if left_refit is not None else set())
+    frozen=[j for j in range(105) if j not in allowed]
+    goal_error=float(np.rad2deg((goal.inv()*ps['Chest'][1]).magnitude()))
+    gates=dict(original_source4_eligible=bool(read(SOURCE/'report.json')['eligible_for_native']),
+         initial_candidate_bytes_unchanged=sha(SOURCE/'candidate.json')==initial_candidate_sha,
+         q105_within_original_limits=bool(np.all(q>=bounds[:,0]) and np.all(q<=bounds[:,1])),
+         zero8_exact=bool(np.array_equal(q[i['zero_range_indices']],q0[i['zero_range_indices']])),
+         lower24_exact=bool(np.array_equal(q[i['lower_indices']],q0[i['lower_indices']])),
+         only_Chest3_or_declared_left12_target_changes=bool(np.array_equal(q[frozen],q0[frozen])),
+         Torso_Spine_q_exact=all(q[j]==q0[j] for j,n in enumerate(names) if n.startswith(('Torso_','Spine_'))),
+         all_finger_q_exact=all(q[j]==q0[j] for j,n in enumerate(names) if n.startswith(('LH:','RH:'))),
+         Chest_forward_orientation_error_under0p001deg=goal_error<=.001,
+         Chest_target_total_under5deg=measured['Chest']['tilt_deg']<=5.,
+         Chest_target_abs_right_under3deg=abs(measured['Chest']['right_tilt_deg'])<=3.,
+         Spine_source_gap_preserved=abs(measured['capsules']['Spine']['gap_m']-base_metrics['capsules']['Spine']['gap_m'])<1e-9,
+         LH_palm_world_change_under1mm=palms['L']['displacement_m']<=.001,
+         no_new_active_human_self_intersections=not human_worse,no_new_active_chair_intersections=not chair_worse,
+         raw_base_G_target_overlap_only_bounded_RShoulder_runtime_override=not unexpected_guitar_worse,
+         all_human_BOX_Gbody_clear=all(r['target_gap_m']>=.0001 for r in boxrows),
+         chair_Gbody_clear=chairgap>=.0001,actual_native_shape_policy_unchanged=policy==read(NATIVE/'native_properties.json')['actual_shape_properties'])
+    assert verify(pins)
+    target=dict(joint_names=names,q_target_rad105=q.tolist(),initial_candidate=str(SOURCE/'candidate.json'),
+         initial_candidate_sha256=initial_candidate_sha,scope='Finite human PD orientation target only; not native initialization. Chest world forward+0.2deg, optional declared left12 clearance correction. Runtime right12 world IK and finite foot final-command ownership remain separate.')
+    save(out/'upper_target105.json',target);save(out/'predicted_target_state.json',target_state)
+    report=dict(gates=gates,eligible_for_native_target=all(gates.values()),initial_source4_unchanged=True,
+         source_candidate=str(SOURCE/'candidate.json'),source_candidate_sha256=initial_candidate_sha,
+         target_sha256=sha(out/'upper_target105.json'),changed_target_channels=changes,left12_refit=left_refit,
+         world_hip_right=right.tolist(),forward_world_rotvec_rad=(-right*np.deg2rad(.2)).tolist(),
+         orientation_goal_xyzw=goal.as_quat().tolist(),orientation_fit_success=bool(fit.success),orientation_goal_error_deg=goal_error,
+         initial_metrics=base_metrics,target_metrics=measured,palms_world_change=palms,
+         initial_capsule_rows=oldrows,target_capsule_rows=rows,new_active_human_self_intersections=human_worse,
+         new_active_chair_intersections=chair_worse,raw_base_target_new_active_G_intersections=guitar_worse,
+         unexpected_raw_base_target_new_active_G_intersections=unexpected_guitar_worse,human_BOX_Gbody_pairs=boxrows,
+         chair_Gbody_SAT_gap_m=chairgap,actual_native_mask_reference=dict(path=str(POLICY),sha256=sha(POLICY)),
+         scope='Target-only FK prediction: no native initial-state or actual-contact claim. Raw q target excludes runtime initial-world right12 override; up to1mm RShoulder base-target G overlap is disclosed and excluded from initial-clearance claims, all other new active intersections rejected. Native collision policy unchanged; disabled rows retained. Same-actor parent/exclude/filter kept; chair uses inherited helper relevance. Hand meshes/anatomical pads and actual dynamic stability are not certified.',
+         inputs_unchanged=True)
+    save(out/'report.json',report)
+    cfg.update(upper_target105=str(out/'upper_target105.json'),upper_target105_sha256=sha(out/'upper_target105.json'),
+         upper_posture_mode='finite_Chest_world_forward_0p2deg_target_only',posture_target_report=str(out/'report.json'),
+         chest_normal_goal_depth_m=.009,chest_initial_goal_depth_m=.007,chest_goal_ramp_s=[.75,1.25])
+    save(out/'static5.json',cfg);assert verify(pins)
+    outputs={str(p):sha(p) for p in out.iterdir() if p.is_file()}
+    save(PHASE/'posture_target_generation_v1.json',dict(input_sha256=pins,inputs_unchanged=True,output_sha256=outputs,
+         eligible_for_native_target=report['eligible_for_native_target'],native_simulation_steps=0))
+    print(dict(eligible=report['eligible_for_native_target'],gates=gates,changed=changes,left_refit=left_refit,
+         Chest_initial_total_deg=base_metrics['Chest']['tilt_deg'],Chest_target_total_deg=measured['Chest']['tilt_deg'],
+         gaps_mm={n:measured['capsules'][n]['gap_m']*1000 for n in ('Chest','Spine','R_Shoulder')},
+         palms=palms,human_self_worse=human_worse,raw_target_G_worse=guitar_worse),flush=True)
+    assert report['eligible_for_native_target'],'Target geometry gate failed; native execution forbidden.'
+
+
+if __name__=='__main__':main()

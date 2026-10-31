@@ -751,3 +751,143 @@ class SkillEpisodeDiagnostics:
                 scope='Current control endpoint phase; mean of same128 material-point vector norms, '
                 'invalid samples contribute zero with fixed128 denominator. Paths are not additive '
                 'and do not measure force shares or causal success percentages.'))
+
+
+class FingerControlDiagnostics:
+    """완료된 물리 구간만 요약하고 대표 환경의 처음 600 tick만 압축 저장한다.
+
+    힘은 제출된 일반화 힘과 native sensor 결과를 구분한다. 센서 값에는 접촉·제약
+    효과가 섞일 수 있으므로 모터 토크나 모터 상한 포화로 해석하지 않는다.
+    """
+    schema = 'guitar_learning.finger_control_diagnostics.v1'
+
+    def __init__(self, count, names, indices, caps, position_indices, out=None,
+                 detail_control_ticks=600):
+        from pathlib import Path
+        import gzip
+        self.names, self.indices = list(names), indices
+        self.caps = caps[indices].double()
+        self.command_available = ~(indices[:, None] == position_indices[None]).any(-1)
+        self.count = torch.zeros(count, dtype=torch.long, device=indices.device)
+        self.episode_id = torch.full_like(self.count, -1)
+        self.values = {key: torch.zeros(count, len(names), dtype=torch.float64, device=indices.device)
+                       for key in ('request_error_square', 'applied_error_square', 'rate_gap_square',
+                                   'velocity_square', 'command_abs', 'command_cap', 'sensor_abs')}
+        self.sensor_count = torch.zeros(count, len(names), dtype=torch.long, device=indices.device)
+        self.detail_limit = detail_control_ticks*4
+        self.detail_rows = 0
+        self.stream = None
+        self.path = None
+        if out is not None:
+            self.path = Path(out)/'finger_control_trace.jsonl.gz'
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.stream = gzip.open(str(self.path), 'wt', encoding='utf-8')
+
+    def reset(self, indices):
+        self.episode_id[indices] += 1
+        self.count[indices] = 0
+        self.sensor_count[indices] = 0
+        for value in self.values.values():
+            value[indices] = 0
+
+    def record(self, request, applied, sample, command, environment):
+        """request/applied는 같은 60Hz 명령, q/qd/sensor는 완료된 240Hz 끝점이다."""
+        ix = self.indices
+        q, qd = sample['q'][:, ix].double(), sample['qd'][:, ix].double()
+        request, applied = request.double(), applied[:, ix].double()
+        command = command[:, ix].double()
+        self.count += 1
+        self.values['request_error_square'] += (request-q).square()
+        self.values['applied_error_square'] += (applied-q).square()
+        self.values['rate_gap_square'] += (request-applied).square()
+        self.values['velocity_square'] += qd.square()
+        self.values['command_abs'] += command.abs()
+        self.values['command_cap'] += (command.abs() >= self.caps-1e-6) & (self.caps > 0) & self.command_available
+        sensor = sample.get('dof_force_sensor')
+        if sensor is not None:
+            sensor = sensor[:, ix].double()
+            sensor_valid = torch.isfinite(sensor)
+            self.values['sensor_abs'] += torch.where(sensor_valid, sensor.abs(), torch.zeros_like(sensor))
+            self.sensor_count += sensor_valid
+        if self.stream is not None and self.detail_rows < self.detail_limit:
+            row = dict(schema=self.schema, env_id=0, episode_id=int(self.episode_id[0]),
+                episode_physics_step=int(self.count[0]), episode_time_s=int(self.count[0])/240.,
+                score_time_s=float(environment._score_time()[0]),
+                control_tick=(int(self.count[0])-1)//4+1,
+                substep=(int(self.count[0])-1)%4+1, joint_names=self.names,
+                action=environment.action[0, environment.finger_action_indices].tolist(),
+                requested_target_rad=request[0].tolist(), applied_target_rad=applied[0].tolist(),
+                actual_rad=q[0].tolist(), velocity_rad_s=qd[0].tolist(),
+                submitted_effort_Nm=command[0].tolist(),
+                submitted_effort_available=self.command_available.tolist(),
+                effort_cap_Nm=self.caps.tolist(),
+                native_sensor_net_generalized_force_Nm=(None if sensor is None else
+                    [value if np.isfinite(value) else None for value in sensor[0].tolist()]),
+                targets=self._targets(environment))
+            if getattr(environment, 'natural_preparation', None) is not None:
+                row['natural_preparation'] = environment.natural_preparation_trace()
+            self.stream.write(json.dumps(row, allow_nan=False)+'\n')
+            self.detail_rows += 1
+            if self.detail_rows == self.detail_limit:
+                self.close()
+
+    @staticmethod
+    def _targets(env):
+        selected = env._finger_targets(env._score_time())
+        result = []
+        for finger in range(4):
+            valid = bool(selected['valid'][0, finger, 0])
+            index = int(selected['indices'][0, finger, 0]) if valid else None
+            row = dict(finger=('index', 'middle', 'ring', 'pinky')[finger], target_present=valid,
+                       target_index=index)
+            if valid:
+                row.update(target_id=env.task.targets[index].target_id,
+                    pad_distance_m=float(env.surface_distance[0, index]),
+                    pad_facing_cos=float(env.surface_alignment[0, index]),
+                    pad_geometry=bool(env.contact_geometry[0, index]),
+                    assigned_body_loaded=bool(env.surface_body_loaded[0, index]),
+                    press_candidate=bool(env.candidate[0, index]),
+                    contact_achieved=bool(env.note['contact_done'][0, index]),
+                    press_achieved=bool(env.note['left'][0, index]),
+                    clean_streak_s=float(env.note['clean_streak'][0, index]))
+                for key, value in list(row.items()):
+                    if isinstance(value, float) and not np.isfinite(value):
+                        row[key] = None
+            result.append(row)
+        return result
+
+    def episode(self, index):
+        samples = int(self.count[index])
+        denominator = max(samples, 1)
+        values = {name+'_rms': (self.values[key][index]/denominator).sqrt().tolist()
+                  for name, key in (('requested_tracking_error_rad', 'request_error_square'),
+                                    ('applied_tracking_error_rad', 'applied_error_square'),
+                                    ('rate_limit_gap_rad', 'rate_gap_square'),
+                                    ('velocity_rad_s', 'velocity_square'))}
+        values['submitted_effort_mean_abs_Nm'] = (self.values['command_abs'][index]/denominator).tolist()
+        values['submitted_effort_cap_fraction'] = (self.values['command_cap'][index]/denominator).tolist()
+        sensor_samples = self.sensor_count[index].tolist()
+        sensor_sum = self.values['sensor_abs'][index].tolist()
+        values['native_sensor_net_generalized_force_mean_abs_Nm'] = [
+            value/count if count else None for value, count in zip(sensor_sum, sensor_samples)]
+        fingers = {}
+        for finger in ('thumb', 'index', 'middle', 'ring', 'pinky'):
+            ids = [i for i, name in enumerate(self.names) if name.startswith('LH:'+finger)]
+            if not ids:
+                continue
+            fingers[finger] = {key: (sum(value[i] for i in ids)/len(ids)
+                                        if value is not None and all(value[i] is not None for i in ids) else None)
+                               for key, value in values.items()}
+        return dict(schema=self.schema, env_id=index, episode_id=int(self.episode_id[index]), sampling_hz=240,
+            completed_physics_samples=samples, duration_s=samples/240., joint_names=self.names,
+            submitted_effort_available=self.command_available.tolist(), values=values,
+            fingers=fingers, finger_aggregation='arithmetic mean of per-joint summary values',
+            sensor_samples=sensor_samples,
+            effort_scope='submitted effort after cap/fallback; native position-drive axes unavailable (zero submission); sensor is net generalized force, not drive torque or drive-cap saturation',
+            trace_path=None if self.path is None else str(self.path),
+            trace_scope='env0 first600 completed control ticks across resets;240Hz; absolute episode identity; goals absent explicitly masked')
+
+    def close(self):
+        if self.stream is not None:
+            self.stream.close()
+            self.stream = None

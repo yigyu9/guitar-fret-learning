@@ -1,0 +1,78 @@
+"""Fixed right ring/pinky preparation and a separate initially withdrawn left hand."""
+import copy
+from pathlib import Path
+import xml.etree.ElementTree as ET
+import numpy as np
+from scipy.optimize import least_squares
+from .initial_pose_noise_v1 import read,save,sha,pose
+from .upper_arm_static_geometry_v1 import ROOT,ASSET,calibrated_upper_fk,state_from_fk
+from .realistic_guitar_geometry_v1 import source_scene,source_audit
+from .environment_contract_v1 import EnvironmentContract
+
+A=ROOT/'stability_adapter_2';P=ROOT/'docs/2026-10-19/stability_adapter_2/results/chest_upperarm_initial_v1';B=P/'native_hold_v2';CFG=P/'search_v1/near020/config.json'
+def main():
+    import mujoco
+    from .initial_overlap import build_probe
+    c=EnvironmentContract(CFG);cfg=read(CFG);seed=read(cfg['initial_candidate']);g=read(A/'assets/om_body_geometry_v3/manifest.json');asset=Path(g['asset']);out=P/'finger_search_v2';out.mkdir(exist_ok=False)
+    paths={Path(__file__).resolve(),A/'CHEST_UPPERARM_INITIAL_PLAN_V3.md',A/'CHEST_UPPERARM_INITIAL_PLAN_V4.md',CFG,B/'initial_values.json',P/'source_path_v1.json',ASSET,asset,A/'config.json',A/'assets/om_body_geometry_v3/manifest.json'}|set(A.glob('*.py'))|set(map(Path,c.inputs))|set(map(Path,g['input_sha256']))
+    for f in (ASSET,asset):
+        xml=ET.parse(f).getroot();md=(f.parent/xml.find('compiler').get('meshdir')).resolve();paths|={(md/m.get('file')).resolve() for m in xml.findall('./asset/mesh')}
+    pins={str(p.resolve()):sha(p) for p in paths};save(out/'inputs_before.json',pins)
+    b=read(B/'initial_values.json');state=b['native_initial_state'];q0=np.array(b['q_ref_rad']);names=b['joint_names'];bodies=b['human_body_names'];fk,parents=calibrated_upper_fk(names,bodies,state,q0);gp,gr=pose(state['guitar_body_states'][0]);original=fk(q0)
+    model,data,shapes=build_probe(source_scene(state,bodies,asset));human=[s for s in shapes if s['actor']=='human'];guitar=[s for s in shapes if s['actor']=='guitar'];ids={n:mujoco.mj_name2id(model,mujoco.mjtObj.mjOBJ_BODY,'human/'+n) for n in bodies};moving=lambda n:n in ('R_Elbow','R_Wrist') or n.startswith('RH:')
+    def adjacent(a,b):
+        chain=[]
+        while a in parents:chain.append(a);a=parents[a]
+        chain.append(a);steps=0
+        while b not in chain and b in parents:steps+=1;b=parents[b]
+        return b in chain and steps+chain.index(b)<=2
+    pairs=[(h,g) for h in human if moving(h['body']) for g in guitar]+[(h,g) for i,h in enumerate(human) for g in human[i+1:] if (moving(h['body']) or moving(g['body'])) and not adjacent(h['body'],g['body']) and not(h['body'].startswith('RH:') and g['body'].startswith('RH:'))]
+    distal=np.array([names.index(n+'_'+a) for n in ('R_Elbow','R_Wrist') for a in 'xyz']);samples=read(P/'source_path_v1.json')['rows'];results=[];chosen=None
+    for amount in (-.30,):
+        q=q0.copy()
+        for digit in ('ring','pinky'):
+            for suffix,weight in (('1_x',.7),('2',1.),('3',.6)):
+                i=names.index('RH:'+digit+suffix);q[i]=np.clip(q0[i]+amount*weight,c.lower[i],c.upper[i])
+        worst=.05;bad=0
+        for sample in samples:
+            trial=q.copy();trial[distal]=sample['q6_rad'];ps=fk(trial)
+            for n,i in ids.items():
+                if i>=0:p,r=ps[n];model.body_pos[i]=p;model.body_quat[i]=r.as_quat()[[3,0,1,2]]
+            mujoco.mj_forward(model,data);negative=False
+            for h,z in pairs:
+                gap=float(mujoco.mj_geomDistance(model,data,h['geom_id'],z['geom_id'],.05,None));worst=min(worst,gap);negative|=gap< -1e-6
+            bad+=negative
+        row={'amount_rad':amount,'bad_samples':bad,'minimum_source_gap_m':worst,'joint_angles_rad':q.tolist()};results.append(row);print('curl',amount,'bad',bad,'gapmm',worst*1000,flush=True)
+        if bad==0:chosen=row;break
+    selected=[]
+    if chosen:
+        q=np.array(chosen['joint_angles_rad']);left=np.array([i for i,n in enumerate(names) if n.startswith(('L_Thorax','L_Shoulder','L_Elbow','L_Wrist'))])
+        for label,delta_G in (('near',[0,0,0]),('left_clear_down_front',[.025,0,.040]),('left_clear_up_front',[-.020,0,.040]),('left_clear_head',[.045,.040,0]),('left_clear_front',[0,0,.060])):
+            withdraw=float(np.linalg.norm(delta_G))
+            target=q.copy()
+            if withdraw:
+                wp,wr=original['L_Wrist'];goal=wp+gr.apply(delta_G);lo=np.maximum(c.lower[left]+1e-6,q0[left]-.8);hi=np.minimum(c.upper[left]-1e-6,q0[left]+.8)
+                def residual(v):
+                    trial=target.copy();trial[left]=v;p,r=fk(trial)['L_Wrist'];return np.r_[1200*(p-goal),100*(wr.inv()*r).as_rotvec(),.02*(v-q0[left])]
+                fit=least_squares(residual,np.clip(q0[left],lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=60);target[left]=fit.x
+            target=target.astype(np.float32).astype(float);pred=state_from_fk(state,bodies,target,fk);audit=source_audit(source_scene(pred,bodies,asset),parents)
+            save(out/(label+'_audit.json'),{'source_audit':audit,'delta_G_m':delta_G,'joint_angles_rad':target.tolist()})
+            if not audit['source_clear']:
+                print(label,'rejected initial source collision',flush=True);continue
+            if not all(np.linalg.norm(target[[names.index(n+'_'+a) for a in 'xyz']])<np.deg2rad(160) for n in ('L_Thorax','L_Shoulder','L_Elbow','L_Wrist')):continue
+            path_bad=0;path_min=.05
+            for sample in samples:
+                trial=target.copy();trial[distal]=sample['q6_rad'];ps=fk(trial)
+                for n,i in ids.items():
+                    if i>=0:p,r=ps[n];model.body_pos[i]=p;model.body_quat[i]=r.as_quat()[[3,0,1,2]]
+                mujoco.mj_forward(model,data);bad=False
+                for h,z in pairs:
+                    gap=float(mujoco.mj_geomDistance(model,data,h['geom_id'],z['geom_id'],.05,None));path_min=min(path_min,gap);bad|=gap< -1e-6
+                path_bad+=bad
+            print(label,'path_bad',path_bad,'gap_mm',path_min*1000,flush=True)
+            if path_bad:continue
+            folder=out/label;folder.mkdir();candidate=copy.deepcopy(seed);candidate['joint_angles_rad']=target.tolist();candidate['predicted_human_poses']={n:{'p':p.tolist(),'q':r.as_quat().tolist()} for n,(p,r) in fk(target).items()};candidate['right_finger_ready']={'amount_rad':chosen['amount_rad'],'modified_names':[names[i] for i in range(81) if target[i]!=q0[i] and names[i].startswith('RH:')],'source_path_bad_samples':chosen['bad_samples'],'source_path_minimum_gap_m':chosen['minimum_source_gap_m'],'scope':'static initial ring/pinky flexion; runtime strum owner EW6'};candidate['left_initial_withdrawal_m']=withdraw;candidate['left_initial_withdrawal_G_m']=delta_G;candidate['source_full_path']={'bad_samples':path_bad,'minimum_gap_m':path_min,'sample_count':len(samples)}
+            save(folder/'candidate.json',candidate);save(folder/'config.json',{**cfg,'initial_candidate':str(folder/'candidate.json'),'initial_candidate_sha256':sha(folder/'candidate.json')});selected.append(str(folder/'config.json'))
+            if withdraw:break
+    assert all(sha(p)==h for p,h in pins.items());save(out/'search.json',{'input_sha256':pins,'rows':results,'selected':selected,'scope':'fixed ring/pinky offsets and diagonal left withdrawal; initial fullLP plus all61source poses on eachacceptedcase. PriorEW6 source samebecausefingerdescendants do not affectpick transform; actual runtime pending'})
+if __name__=='__main__':main()

@@ -1,6 +1,106 @@
 # 왼손 학습 실패 진단 v1
 
-## 현재 결론: 목표각 탐색의 접촉 유지 취약성과 해제 여유가 미해결
+> 이 문서는 2026-10-27~28 당시 진단 기록이다. 아래 ‘현재’와 단계 수치는 당시 범위이며, 현행 학습 상태는 [CURRENT_STATUS](/home/ajou/yigyu/3/CURRENT_STATUS.md)를 따른다. 팀원에게 전달할 FK/native 비교 배열과 초기 자세 입력은 [전달 안내](/home/ajou/yigyu/3/docs/TEAM_HANDOFF.md)에 정리했다. 기존 원계획이 모두 완료됐다는 뜻은 아니다.
+
+현재 후속: 저장소 기준 원본3개 복구·SHA 재확인 후, 현행 약지의128환경 기준 대조와 large/128/H32/PPO300·8평가·분석·마지막 손/전신 영상을 완료했다. 기준동작128/128·무행동0/128에 비해 새 정책 평균평가7개는 모두0/128, 마지막 확률평가는52/128이다. 원수용기준 미달이며 생산 미채택이다. 학습·분석·영상 독립 검수는818/814/718개 SHA PASS다. 원계획 전체는 미완료다.
+
+## 현재: 약지 fresh300 비교 완료 · 수용 미달
+
+[결과와 두 그래프](03_short_learning/current_ring_learning_v1/analysis/results_v1/RESULTS.md) · [학습 실제검수](03_short_learning/current_ring_learning_v1/REVIEW_ACTUAL.md) · [영상 실제검수](03_short_learning/current_ring_learning_v1/video/REVIEW_ACTUAL.md)
+
+동일557/Jv3·고정기타·유한 손목 보조·비엄지16축0.25Nm에서 기준동작128/128·무행동0/128을 확인한 뒤 fresh seed7 정책을300회(1,228,800전이) 학습했다. 학습은23분29초·정상종료0이다. 완료5504episode와열린17920전이를 구분했으며 학습 중 변경정책의1898달성을 고정평가 성과로 합산하지 않았다.
+
+초기·50/100/150/200/250/300 평균평가는 모두0/128, 마지막 별도 정책잡음seed7 평가는52/128·clean0.409655·wrong0이었다. 물리·손목 실패와실제비용은0이다. 원80/70/10/5 기준의연속2고정평가를 통과하지 못했다. 다른 학습seed 재현은 아니다.
+
+마지막 평균평가에서선택4축 목표의native한계점유는약91.5%(실제각24.4%)이고 MCP_x 목표추종RMS는약1.102rad였다. 목표각 누적과큰추종오차를 확인했으며, 힘 상한·접촉·축결합 중원인을 이통계만으로확정하지 않는다. 접근보상의 원비할인 누적값을 거리품질이나 실제압현 개선으로 해석하지 않는다. 다음은동일물리조건의누적명령/position 제어 비교다.
+
+[마지막 손 영상](03_short_learning/current_ring_learning_v1/video/runs/replay/hand.mp4) · [마지막 전신 영상](03_short_learning/current_ring_learning_v1/video/runs/replay/fullbody.mp4). 각110frame/30fps/3.667초이며env0 첫시도·달성0인실패사례다. 원128평가·비힘trace exact, 순힘차3.8147e-6N 별도,모델·두optimizer·update불변과전체decode/12frame정방향검수를 통과했다. 생산학습281Python은 변경하지 않았다. 실제해제·loaded-facing negative·다른손가락/학습seed·자유기타/J33·67음 등원요건은남아있다.
+
+## 직전 완료: 잡음·오압현 출처와 약지 물리 대조
+
+[고정모델 진단 결과](05_verified_fixes/index_policy_noise_contact_audit_v1/analysis/results_v2/RESULTS.md)는 네조건의실제128/384수행과1005SHA·독립CPU재실행 검수를통과했다. 세음달성은평균13,정책잡음7/17/27에서58/60/68이며이는학습seed재현이아니다. 평균행동 뒤두음의목표는2번현5프렛인데index3 출처프렛은4에남아원잘못된프렛/현 판정각.7421875다. 두원인은겹치므로더하지않는다. 원음악수용기준은전부실패했다.
+
+[현재계약24목표·대조근거](02_contact_reward/current_contract_coverage_v1/README.md)는100근거파일·219명시JSONPointer 검수를통과했다. 과거네손가락positive는561/v2이며현재557 성공으로상속하지않는다. 관측차이와실제물리/제어차이를분리했다.
+
+[현재약지사전검사](02_contact_reward/current_ring_precheck_v1/PLAN.md)는원row16/source54 한목표를현재557/Jv3에서새로실행했다. 기준4/4·선택무행동0/4·무작위0/4,12첫시도의물리/손목실패0이다. 실제PD105×10속성을전12nativeactor에서읽어비엄지16축effort20→0.25Nm외다른89축/속성불변과90충돌쌍을확인했다. 새NN/모델load/학습0이며 [실제분석](02_contact_reward/current_ring_precheck_v1/analysis/results_v1/RESULTS.md)과 [독립검수](02_contact_reward/current_ring_precheck_v1/REVIEW_ACTUAL.md)를 완료했다(607개 근거 SHA 확인). 엄지자유해제·loaded-facing negative·다른손가락/학습seed·자유J33·원67음요구는그대로남는다.
+
+상위 진행계획을 갱신하기 전 원문은 [동일 SHA 보관본](progress_review/document_snapshots/before_20261029_resume/guitar_learning_failure_diagnosis_20261027.md)에 보존했다. 과거 검수의 해당 문서 SHA는 이 보관본에 대응하며, 신규 실행은 현재 진행표를 입력으로 봉인하지 않는다.
+
+## 이전 단계: 보상·구간별 기울기와 오압현 출처 분석·검수 완료
+
+[진단 계획](05_verified_fixes/index_reward_gradient_audit_v1/PLAN.md)에 따라 고정 V6 fit/50/100/300 모델의 확률 수행을 비교하는 도구를 구현했다. 실제 rl38 CPU에서 최종9보상 합, reward critic/bootstrap 잔차를 포함한 GAE·공통 정규화·기울기 합, H32/reset 경계와 오류/입력불변 검사를 통과했다. 준비 독립 검수와559입력 봉인 후 원128환경·기존3음354tick의 GPU 수행 네 개를 모두 완료했다. 확률 수행 세 음 달성은 fit/50/100/300에서14/0/0/0이다. 초기·마지막의 원128원장과 관절/목표/접촉/NN출력은 기존 확률 평가와 같았다. CPU 기울기 분해를 완료하고 네 그림과 보상표를 저장했다. [최종 독립 검수](05_verified_fixes/index_reward_gradient_audit_v1/REVIEW_ACTUAL_ANALYSIS.md)에서660개 SHA, 원48buffer, 사전지정 대표4개 H32 CPU기울기, 독립 할인반환 검산과4그림 QA를 통과했다. 전체48 NN기울기를 독립 재실행한 검수는 아니다. 과거 training 미니배치/Adam 갱신을 재현하는 진단이 아니며, 보상·정책·물리는 그대로다.
+
+마지막 모델의 접촉/유지 cosine은−0.850288, 초기준비/첫음준비는−0.793090이었다. 이는 고정 정책의 초기 손실 기울기 측정이며 실제 과거 학습/Adam의 인과증명이 아니다. 마지막 A의 기록된 오압현 출처는 검지 끝마디 자신의 잘못된 프렛/현, 발음시간 비율각0.984375(겹침가능), 관측 프렛5/목표4다. 현재 v2 계약을 확인해 base v1 라벨 초안 오류를 정정했으며 원수집 raw/계약은 영향을 받지 않았다.
+
+[보상·구간·오압현 네 그림과 점수표](05_verified_fixes/index_reward_gradient_audit_v1/report/RESULTS.md) · [가치 예측 오차와 진단 해석](05_verified_fixes/index_reward_gradient_audit_v1/interpretation/RESULTS.md) · [실제 수집 독립 검수](05_verified_fixes/index_reward_gradient_audit_v1/REVIEW_ACTUAL_COLLECTION.md). 이 단계 다음에 계획했던 [reward critic 사전 보정](../../plans/guitar_learning_reward_value_warmup_20261028.md)은 V7에서 수행했다. 현재 결과와 미채택 사유는 [V7 요약](05_verified_fixes/index_reward_value_warmup_v7/SUMMARY.md)을 따른다.
+
+## 이전 단계: V6 비용 초기값 비교 완료, 첫 음 압현 퇴행 미해결
+
+비용 critic 마지막 층의 가중치·편향 2개만 0으로 초기화하고 실패 비용·cost_weight 1·보상 9항·물리를 유지했다. fresh·fit1000의 나머지69개 텐서와 초기 고정·확률128시도의 전체 원장·보상·실제 동작은 V5와 같았다. 같은128환경/H32/PPO300·1,228,800전이와 후속7평가가 정상 완료됐다.
+
+실제 비용과 비용 advantage·value·target·loss는 300회 모두0이었다. 하지만 고정평가의 세 음 달성은 초기98→50회59→100/150/200/250/300회0이었다. 마지막 모델은 A/B7/B8 달성0/128/128, A의 audible 오압현 비율1.0, 세 음 달성과 A해제 동시 성공0/128이다. 마지막 확률평가도 세 음0/128이다. 물리·손목 실패는0이다. 비용 신호 제거만으로 퇴행을 해결하지 못했으므로 현재 학습 코드에는 채택하지 않는다. 공유 value encoder 때문에 reward critic 표현도 달라질 수 있어 actor만의 단일 경로 격리로 해석하지 않는다.
+
+[최종 보상·비용·압현 분석](05_verified_fixes/index_cost_prior_zero_v6/analysis/RESULTS.md) · [성과 그래프](05_verified_fixes/index_cost_prior_zero_v6/analysis/performance.png) · [비교 계획](../../plans/guitar_learning_cost_prior_20261028.md). 실제 학습·7평가·최종 분석의 [독립 검수](05_verified_fixes/index_cost_prior_zero_v6/REVIEW_ACTUAL_FINAL.md)는 PASS다. 마지막300의 [손 영상](05_verified_fixes/index_cost_prior_zero_v6/video/runs/replay/hand.mp4)과 [전신 영상](05_verified_fixes/index_cost_prior_zero_v6/video/runs/replay/fullbody.mp4)도 저장했다. [영상 검수](05_verified_fixes/index_cost_prior_zero_v6/video/REVIEW_ACTUAL.md)에서570입력 불변·354제어/177프레임·원평가128원장 및 관절/목표/몸체/접촉/NN출력 일치를 확인했다. 힘 합력 최대차7.63e-6N은 별도 기록했다. 검수 PASS는 음악 성공과 구분한다. 현재 결과는 고정 기타·검지4축·3음·seed7 진단이며 다른 손가락·seed·자유 기타/J33·원67음 성공으로 확대하지 않는다.
+
+정책 행동과 학습 확률의 연결도 별도로 검토했다. 수집한 원래 latent/logp는 보존되고, 물리 요청 변환은 그 뒤에 적용되며 PPO는 원래 표본을 사용한다. 현재 감사에서는 이 연결의 오류나 반대 부호의 최적화는 발견되지 않았다. 다음 원인분리는 실제 rollout의 보상별·접근/유지/해제 구간별 정책 기울기와 접촉 변화를 함께 확인하는 것이다. 아직 검증되지 않은 원인을 확정해 추가 보상을 조정하지 않는다.
+
+## V5 비교 완료, 후반 A 압현 퇴행이 남음
+
+A의 기존 달성 예산0.25를 압현 달성·제때 해제 조건에 맞춰 정산하는 단일 변경을 비교했다. 새 계약과534입력을 봉인했고, 초기 모델의71개 가중치와 고정·확률128시도의 동작이 기존V4와 같음을 확인했다. 같은128환경/H32/PPO300·1,228,800전이와 후속7평가를 모두 정상 완료했다.
+
+최고 동시 성공(세 음 달성 AND A해제)은 V4의37/128에서 V5의46/128로 늘었으나, 마지막300회 모델의 A달성·세 음 달성·동시 성공은 둘 다0이다. 모든 저장본이 결합 수용 기준에 미달했다. 지급 조건 변경만으로 후반 퇴행을 해결했다고 볼 수 없어 생산 코드에는 채택하지 않았다.
+
+[보상9항·접촉·학습 신호 분석](05_verified_fixes/index_release_success_settlement_v5/analysis/RESULTS.md) · [성과 그래프](05_verified_fixes/index_release_success_settlement_v5/analysis/performance.png) · [마지막 손 영상](05_verified_fixes/index_release_success_settlement_v5/video/runs/replay/hand.mp4) · [전신 영상](05_verified_fixes/index_release_success_settlement_v5/video/runs/replay/fullbody.mp4). 실제 학습·7평가·최종 분석·영상의 독립 검수는 PASS이며 음악 성공 판정과 구분한다.
+
+실제 실패 비용이0인 동안에도 비용 예측·advantage 신호가 남았다. 다음은 실패 비용과cost_weight1을 유지하면서 비용critic 마지막 층의 초기값만0으로 두는 [원인분리 계획](../../plans/guitar_learning_cost_prior_20261028.md)이다. V6에서 실제 비교를 완료했으며 최신 결과는 이 문서 상단을 따른다. 현재 결과는 고정 기타·검지4축·3음 진단이며, 다른 손가락·자유 기타/J33·원67음 전환은 남아 있다.
+
+## V4 기준선: PPO300·7개 평가 완료, 마지막 모델 퇴행
+
+복구된 원자료의 SHA를 확인한 뒤 V2 참고동작을 재현하고, 새557상태·large 모델을 목표MSE1000회로 초기화했다. 같은 fit/update0에서 시작한 PPO300은 1,228,800전이를 정상 완료했다. 활성 학습 소스·보상9항·물리 조건은 유지했다. 첫 시도의49회 중단 자료는 별도 보존했으며 새300회 모델의 학습량에 합치지 않았다.
+
+NN-only 고정128평가의 세 음 전체 달성은 초기98→50회102→100회113→150회122→200회123→250회101→300회0이다. 마지막 모델은 첫 음 A가0/128, B7/B8은127/128·128/128이다. 세 음 달성과 A해제를 함께 만족한 시도는 최고37/128이며, 모든 저장본이 결합 수용 기준에 미달했다. 마지막 확률평가는 세 음1/128이다. 물리·손목 실패는0이지만 음악 학습의 해결을 뜻하지 않는다.
+
+실제 학습·7평가·최종 분석·영상의 입력/체크포인트/동결 검수는 PASS다. [실행 검수](05_verified_fixes/index_release_reference_learning_v4/REVIEW_ACTUAL_LEARNING.md) · [보상9항·접촉·후반 퇴행 분석](05_verified_fixes/index_release_reference_learning_v4/analysis/stage_PPO_v1/RESULTS.md). 마지막300회 모델의 실제 [손 영상](05_verified_fixes/index_release_reference_learning_v4/video/runs/replay/hand.mp4)·[전신 영상](05_verified_fixes/index_release_reference_learning_v4/video/runs/replay/fullbody.mp4)을 저장했다. 원평가의128원장·관절/목표/몸체/접촉/NN출력이 동일하며 합력의 최대7.63e-6N 차이는 별도로 기록했다. 아래 기록은 당시 진행 이력이며 고정기타·검지4축·3음 결과를 자유기타/J33/67음 성과로 확대하지 않는다.
+
+## 후속 진단: 잡음 한 축 제거는 미채택
+
+V2와 원본 난수128×4 전체를 같게 유지하고 실제 적용 index1_x 잡음만 제외한 V3는 전체 달성34/128→5/128, 음별54/56/65→45/7/33, A해제102→97로 악화됐다. 물리·손목 실패는0, 입력변경0이다. 특정 축의 탐색을 줄이는 해법은 채택하지 않는다. [V3 실험](05_verified_fixes/index_release_noise_x_ablation_v3/experiment.json) · [비교 분석](05_verified_fixes/index_release_noise_x_ablation_v3/analysis/RESULTS.md).
+
+[접촉 하중 감사](05_verified_fixes/index_release_contact_load_audit_v1/RESULTS.md)와 [독립 검수](05_verified_fixes/index_release_contact_load_audit_v1/REVIEW.md)는 PASS다. 저장 env0 음 구간의 누락11끝점은 모두 위치·방향 기하가 통과하지만 측정 몸체 합력이0이었다. 개별 현 압력/무접촉/실제 음향의 증명으로 확대하지 않는다. 연속 clean이 중간에 끊기며, 해제 latch의26미달을26손가락이 계속 눌렀다는 뜻으로 해석하지 않는다.
+
+다음은 새557/Jv3 계약에서 보정된 참고 동작을 사용하는 짧은 실제 학습 비교다. 탐색의 실패 자체는 허용되며 잡음90%성공을 학습 시작의 필수조건으로 삼지 않는다. 동일 잡음축이나 std를 계속 검색하지 않는다. 기존 NN·checkpoint의 계약 검증은 완화하지 않는다.
+
+## 복구 후 GPU 비교 결과 (2026-10-28)
+
+외장 저장소 원본 복구·SHA 확인 후 기준 동작을 다시 실행해 128/128회를 재현했다. 손가락 해제 목표(PIP40°/DIP10°)는 이동 중 불필요한 접촉을 줄였지만 다음 음 유지율이79.9%로 떨어졌다. 목표각과 물리는 유지하고 복귀 준비만120ms 앞당긴 V2에서는 유지율97.8%, 세 음 달성124/128회로 회복했다.
+
+다만 같은 잡음을 넣은 V2는 세 음 달성34/128회, 해제102/128회로 기준 미달이다. 물리·손목 실패는0회이며, 학습 성공이나 일반화가 입증된 결과가 아니다. 활성 학습 코드·보상은 이번 비교에서 변경하지 않았다. 실제 결과 분석은 독립 검수 PASS다. 전신·손 영상은354제어/177프레임으로 저장했고 원 비교의 관절·접촉·128회 원장과 정확히 일치한다. 영상 산출물 독립 검수도 범위 명시 PASS다. 원 실행 대비 q/target/body_state/candidate·128회 원장은 정확히 같고, net body force만59성분에서 최대7.63e-6N 차이가 있다. [영상 검수](05_verified_fixes/index_release_close_lead_v2/native_video/REVIEW_ACTUAL.md).
+
+- [V2 분석](05_verified_fixes/index_release_close_lead_v2/analysis/RESULTS.md)
+- [V2 분석 독립 검수](05_verified_fixes/index_release_close_lead_v2/analysis/REVIEW.md)
+- [전신 영상](05_verified_fixes/index_release_close_lead_v2/native_video/runs/candidate/fullbody.mp4) · [손 근접 영상](05_verified_fixes/index_release_close_lead_v2/native_video/runs/candidate/hand.mp4)
+- [V2 실행 원장](05_verified_fixes/index_release_close_lead_v2/runs/candidate/evaluation.json)
+- [잡음 비교 원장](05_verified_fixes/index_release_close_lead_v2/runs/noisy_candidate/evaluation.json)
+
+## 이전 V1 실제GPU 비교: 해제는 개선됐지만 다음 음 유지가 낮아짐
+
+외장원입력복구·SHA재확인과원FK전체CPU재실행을완료했다. 원FK 결과/series는기존과exact하다. 새현재Jv3 noNN baseline128은세음/해제128·물리/손목실패0이며env0의q/target/body/candidate/wrong/release354행이과거원reference와**바이트동일**했다. 후보N PIP40°/DIP10°는각음128/121/128·전체121·해제128·실패0이지만B7유지율99.53→79.92%로음악90%기준에미달했다. [실제결과·그래프](05_verified_fixes/index_release_hinge_native_v1/analysis/RESULTS.md) · [독립검수PASS](05_verified_fixes/index_release_hinge_native_v1/analysis/REVIEW.md).
+
+사전env0..3의N유지/이동104끝점에서는부하/후보27→0으로개선됐으나128표본최소높이는실제3.178mm이고5mm설계기준은80/104만충족했다. 정적7.56mm예측과실제기하를구별한다. 원0.25Nm/유한제어에서는더편자세를되돌리는PIP/DIP실제추종lag와다음음접촉토글이관찰됐다. 음악기준미달로잡음은IsaacGym전machinegate에서차단됐으며추가잡음native0/PPO0이다.
+
+이후 **PIP/DIP복귀준비만120ms앞당김** 단일변경의128실행을 완료했다. 목표각·MCP/손목·음시계·보상·원범위/속도/PD/힘상한·충돌/종료는유지한다. [v2계획](05_verified_fixes/index_release_close_lead_v2/PLAN.md) · [준비검수PASS](05_verified_fixes/index_release_close_lead_v2/REVIEW.md). 최신 V2 수치는 이 문서 상단과 V2 분석을 따른다. 고정기타 참고동작을 NN학습이나 자유기타/J33/67음 성공으로 상속하지 않는다.
+
+아래FK/외장오류절은그단계완료시점의이력이며현재저장소는복구됐다.
+
+## 이전 FK 단계: 실제 첫마디 회전과 원FK의 차이, 유한 해제 후보 설계
+
+원저장 native 두 조건의 env0를 대조하니, 원FK의 검지 distal 위치는 최대 약1.92mm·원안쪽128표본은 약3.13mm 어긋났다. 실제 첫마디 상대회전에는 노출qx/qz에 없는 y성분이 약2.7°까지 변했다. 노출xz 자체는 실제회전log와 맞았고 downstream PIP/DIP는 자체 parent기준에서 잘 맞았다. 따라서 q105만 넣는 기존FK로 mm수준 해제 여유를 설계하지 않는다. 미노출회전의 물리적 원인은 미확정이며 이것을 원J33 학습 실패의 확정원인으로 확대하지 않는다. [FK 감사·그래프](05_verified_fixes/index_release_fk_audit_v1/RESULTS.md).
+
+실제 index1 pose를 고정하는 조건부 hinge계산에서는 원실제128점을 최대0.000150mm 오차로 재현했다. 사전지정 PIP40°/DIP10° 한 후보는 phase3의 두 env0·각26끝점에서 최소 signedheight7.558/7.565mm였다. **실제 도달·해제 개선·학습 성과는 아직 미검증**이다. [후보 계산·그림](05_verified_fixes/index_release_hinge_candidate_v1/RESULTS.md) · [다음 실제 단일변경 계획](05_verified_fixes/index_release_hinge_candidate_v1/NEXT_NATIVE_PLAN.md).
+
+두CPU분석은 실행당시 원입력SHA 전후일치를 확인했다. 이후 외장 `/media/ajou/새 볼륨1`에서 I/O 오류가 발생해 원준비자세 JSON3개를 다시 읽을 수 없다. 현재읽힌 FK122/125·후보120/123입력은 변화0,3개는 재검증 불가다. 새native를 시작하거나 source/원SHA를 완화하지 않았다. 독립검수는 **로컬 코드·직접산술 범위 PASS**이며 원준비자료 기반 전체 재실행은 미검증으로 남겼다. 독립 hinge 계산의 후보 높이는 저장값과 최대0.000004mm 이내 일치했다. [FK 검수](05_verified_fixes/index_release_fk_audit_v1/REVIEW.md) · [후보 검수](05_verified_fixes/index_release_hinge_candidate_v1/REVIEW.md). 저장소복구 뒤 원3개SHA 재확인이 다음 실행의 선행조건이다. [오류 기록](05_verified_fixes/index_release_hinge_candidate_v1/input_recheck_after_analysis.json).
+
+## 이전 결론: 목표각 탐색의 접촉 유지 취약성과 해제 여유가 미해결
 
 신경망 없는 성공 참고 동작도 현재 후보 목표각 잡음에서 세음 전체128/128→2/128로 감소했다. DIP 보호만 꺼도 NN 확률평가의 전체 달성은10/128로 같았다. 따라서 신경망 근사나 보호 하나만을 원인으로 볼 수 없으며, 장기학습 전에 **distal 안쪽128표본의 해제 이격 여유와 탐색의 물리 단위**를 확인한다. [참고 잡음 비교의 실제 분석·독립검수 PASS](05_verified_fixes/index_prefix_reference_noise_v1/analysis/results_v1/REVIEW.md)다. 아래 고정기타 진단과 자유기타 전곡 성과를 구분하며 기본학습은 변경하지 않았다.
 
@@ -220,3 +320,32 @@ position/seed7은300회 학습5,632시도와 초기·50간격 모든 고정 평�
 - [B 최고250회 손·전신 영상](04_ablation/time_credit_ablation/corrected_source_v3/native_video_B_best250/README.md)은 사전 지정env0 첫시도다. 촬영 시도도달성했지만60Hz8표본의 중지 합력 중앙값53.17N으로 높은 하중이 남아 있다. 자유 기타·전곡·자연스러운 손 모양의 해결을 뜻하지 않는다.
 
 최초 접촉 후속 확인에서 전128환경의 첫 부하는1.721~1.758초였고, 기존 개입시점2초에 이미 중지합력 중앙값31.98N이었다. [근거](05_verified_fixes/contact_target_windup/analysis/PRELOAD_FOLLOWUP.md)는 독립검수를 통과했다. 같은 누적억제를 최초 유효접촉부터 적용하는 단일 시점 비교를 새 진단으로 준비하며, 생산 제어는 유지한다.
+
+
+### V4 PPO300와 저장본 평가 완료
+
+독립 실행 attempt02는 300회·1,228,800전이를 종료코드0으로 마쳤다. 3456개 완주 에피소드와 열린5376전이를 구분했다. 중단된 attempt01의49회는 이 모델 계보나 분모에 합치지 않았다. 소스·초기모델·체크포인트와7개 NN-only 동결평가의 독립 검수는 PASS다. 이는 실행 무결성 통과이며 음악적 성공은 아니다.
+
+| 반복 | 세 음 모두 달성/128 | A 해제/128 | 세 음 달성과 A 해제 동시/128 |
+|---:|---:|---:|---:|
+| fit 초기 |98|44|22|
+|50|102|54|36|
+|100|113|42|31|
+|150|122|37|34|
+|200|123|35|33|
+|250|101|62|37|
+|300|0|112|0|
+
+마지막 모델의 음별 달성은0/127/128이다. A 해제가112회여도 A 압현 달성이0이므로 성공적인 압현→해제로 해석하지 않는다. 마지막 확률평가는 세 음1/128, 음별1/11/21, 해제119/128이다. 모든평가의물리·손목실패는0이지만 결합수용기준은 모두 미달이다. 압현 최고200회 모델과 마지막300회 모델을 구분하며, 사전에 지정한 마지막300회 모델로 영상을 만든다. 고정기타·검지4축·3음 조건이며 자유기타/J33/전곡 성과가 아니다.
+
+
+### V5 보상 지급 조건 구현과 초기 실제 대조
+
+V5 CPU/독립준비검수534입력을 통과했고, fresh와fit1000후모델각71개가중치가V4와정확히같았다. 고정128·실제확률128은기존음별수행원장과관절/목표/몸체/접촉/NN출력이exact이며9항중A달성지급만바뀌었다. 고정전체98/해제44/A지급22,확률전체14/해제111/A지급20이다. 합력미세차이는각최대7.63e-6N/3.81e-6N으로분리했다.
+
+첫확률명령의root옵션누락으로추가고정128이실행됐고,runs/fit_stochastic와원로그·명령오류기록을보존했다. 올바른--stochastic실행은runs/fit_stochastic_actual이며성과분모와구분한다. 초기대조독립검수후동일PPO300을진행한다. 아직학습개선성과는없다.
+
+
+### V5 PPO300와7평가 완료
+
+300회·1,228,800전이 정상종료와534입력불변·장면종료·3456완주/열린5376전이를 확인했다. 학습과지급원장의독립검수PASS다. 고정50/100/150/200/250/300의세음달성은99/90/57/124/120/0,동시성공(all3 AND A해제)은42/42/42/39/46/0이다. 마지막고정A달성0,확률전체1/128·A달성4/128이다. 모든평가는물리/손목실패0이지만결합수용기준미달이다. V4최고동시37→V5최고46관찰만으로일반개선을채택하지않으며양쪽최종A퇴행이남는다. V5최종분석과사전선정마지막300영상/검수는진행중이다.

@@ -1,0 +1,61 @@
+"""Contact goals must follow the guitar, including equivalent quaternion signs."""
+import unittest
+import numpy as np
+from scipy.spatial.transform import Rotation
+from stability_adapter_2.underneck_contact_targets import moving_regions
+
+
+class MovingRegionsTests(unittest.TestCase):
+    def setUp(self):
+        self.p = np.array([-.23, .087, .676])
+        self.q = np.array([-.5, .5, .5, .5])
+        # Independent rectangular neck fixture, not imported production geometry.
+        self.regions = {
+            'palm': [[.02, 0, -.008], [.02, 0, .009], [.02, .05, .009], [.02, .05, -.008]],
+            'thumb': [[-.02, 0, -.008], [.02, 0, -.008], [.02, .05, -.008], [-.02, .05, -.008]],
+            'front': [[-.02, 0, .009], [.02, 0, .009], [.02, .05, .009], [-.02, .05, .009]]}
+
+    def test_horizontal_surfaces_and_opposing_hand_normals(self):
+        expected = {'palm': [0, 0, -1], 'thumb': [0, -1, 0], 'front': [0, 1, 0]}
+        for role, row in moving_regions(self.p, self.q, self.regions).items():
+            np.testing.assert_allclose(row['outward_normal_W'], expected[role], atol=1e-12)
+            np.testing.assert_allclose(row['desired_hand_normal_W'], -np.array(expected[role]), atol=1e-12)
+
+    def test_rigid_motion_equivariance_and_inverse(self):
+        delta = Rotation.from_euler('xyz', [17, -23, 11], degrees=True)
+        shift = np.array([.031, -.012, .024])
+        r = Rotation.from_quat(self.q)
+        before = moving_regions(self.p, self.q, self.regions)
+        after = moving_regions(delta.apply(self.p) + shift, (delta*r).as_quat(), self.regions)
+        for role in before:
+            np.testing.assert_allclose(after[role]['polygon_W_m'], delta.apply(before[role]['polygon_W_m']) + shift, atol=1e-12)
+            np.testing.assert_allclose(after[role]['outward_normal_W'], delta.apply(before[role]['outward_normal_W']), atol=1e-12)
+            np.testing.assert_allclose(r.inv().apply(before[role]['polygon_W_m'] - self.p), self.regions[role], atol=1e-12)
+
+    def test_equivalent_quaternion_signs(self):
+        a, b = moving_regions(self.p, self.q, self.regions), moving_regions(self.p, -self.q, self.regions)
+        for role in a:
+            for key in a[role]:
+                np.testing.assert_allclose(a[role][key], b[role][key], atol=1e-12)
+
+    def test_tapered_palm_normal_is_perpendicular(self):
+        self.regions['palm'][2][0] -= .001
+        self.regions['palm'][3][0] -= .001
+        row = moving_regions([0, 0, 0], [0, 0, 0, 1], self.regions)['palm']
+        normal = row['outward_normal_W']
+        edges = np.diff(self.regions['palm'], axis=0)
+        np.testing.assert_allclose(edges @ normal, 0, atol=1e-12)
+        self.assertGreater(normal[1], 0)
+
+    def test_invalid_pose_and_degenerate_region(self):
+        with self.assertRaises(ValueError):
+            moving_regions(self.p, [0, 0, 0, 0], self.regions)
+        with self.assertRaises(ValueError):
+            moving_regions([np.nan, 0, 0], self.q, self.regions)
+        self.regions['palm'] = [[0, 0, 0]] * 4
+        with self.assertRaises(ValueError):
+            moving_regions(self.p, self.q, self.regions)
+
+
+if __name__ == '__main__':
+    unittest.main()

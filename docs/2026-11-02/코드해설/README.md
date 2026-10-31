@@ -2,7 +2,7 @@
 
 현재 기본 명령 `python -m guitar_learning.train`이 사용하는 **GPU 왼손 finger-skill v3**를 이해하기 위한 문서다. 추가 통합한 코드를 실제로 읽어, 각 파일의 역할뿐 아니라 주요 함수 안에서 값이 어떻게 만들어지고 다음 파일로 전달되는지를 설명한다.
 
-요청한 `2026-11-02/코드해설` 경로에 저장했다. 문서가 설명하는 소스의 정확한 기준은 [소스기준.json](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/소스기준.json)의 파일 SHA와 정의 위치다. 이번 J 전용화에 맞춰 해설과 소스 기준을 갱신했다.
+요청한 `2026-11-02/코드해설` 경로에 저장했다. 문서가 설명하는 소스의 정확한 기준은 [소스기준.json](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/소스기준.json)의 파일 SHA와 정의 위치다. 2026-10-31 현재 파일을 다시 조사해 해설과 소스 기준을 갱신했다. 과거 실행 검증 자료는 당시 결과로 보존했다.
 
 ## 먼저 읽을 순서
 
@@ -29,16 +29,16 @@
 | [08 악보 컴파일](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/08_악보컴파일.md) | 번들 출처·음 일정·운지·프렛·타현 목표 변환 |
 | [09 초기 자세와 공통 기반](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/09_초기자세와공통기반.md) | 준비 상태·공통 제어/관측·과거 증거·내부 자산 경로 |
 | [10 패키지 초기화 파일](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/10_패키지초기화파일.md) | 실행 코드 없는8개 `__init__.py`의 역할 |
-| [11 클래스와 함수 찾아보기](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/11_클래스와함수찾기.md) | 32파일의 정의533개와 실제 소스 행 링크 |
+| [11 클래스와 함수 찾아보기](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/11_클래스와함수찾기.md) | 33파일의 정의561개와 실제 소스 행 링크 |
 | [12 실제 첫 음으로 따라가기](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/12_실제첫음으로따라가기.md) | 현재 곡의 첫 목표에서 관측·행동·접촉·유지·로그까지 실제 값으로 추적 |
 
 ## 어떤 파일을 포함했는가
 
-기본 진입점에서 `guitar_learning` 내부 import를 따라간 **정적 연결32개(구현24개·패키지 초기화8개)**를 빠짐없이 다룬다. 함수·조건문 안 import도 포함한다. 한 번의 학습에서 실행된 파일을 추적해서 센 수는 아니다. 정적으로 연결된 파일의 모든 함수가 기본60Hz 루프에서 실행되는 것도 아니다.
+기본 진입점에서 `guitar_learning` 내부 import를 따라간 **정적 연결33개(구현25개·패키지 초기화8개)**를 빠짐없이 다룬다. 함수·조건문 안 import도 포함한다. 한 번의 학습에서 실행된 파일을 추적해서 센 수는 아니다. 정적으로 연결된 파일의 모든 함수가 기본60Hz 루프에서 실행되는 것도 아니다.
 
 특히 공통 정책·악보 파일에는 현재 기본에서 사용하는 정의와 CPU·오른손·별도 song 경로에서 재사용하는 정의가 함께 있다. 해설은 이를 구분한다. 현재 기본은 J33 공동 학습·독립 탐색·K1·557상태이며, R/F 단계·정책 동결·상관 탐색·단계 이전·행동 유지 옵션은 삭제했다. 구간→전곡은 성공 관문 대신 계획 전이25% 이후의 reset에서 전환한다. 관측은 기존 왼손552+로컬 잔여시간1+손목 종료 타이머4이고, 정책 schema는 `guitar_learning.finger_skill_policy.v2`다. 이전 checkpoint는 지원하지 않으며 새 v3 학습 안에서 같은 소스·전체 계약의 엄격 재개를 사용한다.
 
-학습 외부 라이브러리인 Isaac Gym·PyTorch·NumPy·SciPy 자체의 구현, 별도 평가·영상 도구, 과거 실험 전체는 이32개에 넣지 않았다. 소스 SHA의 입력 목록은 이보다 넓은 활성 Python281개 전체를 포함하므로, 체크포인트가 읽는 입력 수와 기본 경로 파일 수를 같은 숫자로 해석하지 않는다.
+학습 외부 라이브러리인 Isaac Gym·PyTorch·NumPy·SciPy 자체의 구현, 별도 평가·영상 도구, 과거 실험 전체는 이33개에 넣지 않았다. 소스 SHA의 입력 목록은 이보다 넓은 활성 Python295개 전체를 포함하므로, 체크포인트가 읽는 입력 수와 기본 경로 파일 수를 같은 숫자로 해석하지 않는다.
 
 ## 파일별 해설 대응표
 
@@ -60,6 +60,7 @@
 | [native/__init__.py](/home/ajou/yigyu/3/guitar_learning/native/__init__.py:1) | [10_패키지초기화파일](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/10_패키지초기화파일.md) |
 | [native/paths.py](/home/ajou/yigyu/3/guitar_learning/native/paths.py:1) | [09_초기자세와공통기반](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/09_초기자세와공통기반.md) |
 | [runtime/__init__.py](/home/ajou/yigyu/3/guitar_learning/runtime/__init__.py:1) | [10_패키지초기화파일](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/10_패키지초기화파일.md) |
+| [portability.py](/home/ajou/yigyu/3/guitar_learning/portability.py:1) | [09_초기자세와공통기반](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/09_초기자세와공통기반.md) |
 | [runtime/prepared_reset_v1.py](/home/ajou/yigyu/3/guitar_learning/runtime/prepared_reset_v1.py:1) | [09_초기자세와공통기반](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/09_초기자세와공통기반.md) |
 | [score/__init__.py](/home/ajou/yigyu/3/guitar_learning/score/__init__.py:1) | [10_패키지초기화파일](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/10_패키지초기화파일.md) |
 | [score/canonical.py](/home/ajou/yigyu/3/guitar_learning/score/canonical.py:1) | [08_악보컴파일](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/08_악보컴파일.md) |
@@ -81,7 +82,7 @@
 
 - **관절 목표각과 실제 관절각:** 정책 명령이 물리 결과를 즉시 덮어쓰는 것은 아니다.
 - **접촉 후보와 압현 달성:** 한 프레임의 후보·하중, 연속 clean 유지, 음악 목표 달성은 서로 다른 판정이다.
-- **H32와 에피소드 종료:** 수집 창이 끝나도 살아 있는 에피소드의 시계·접촉·누적 제어를 유지한다.
+- **H32와 에피소드 종료:** 수집 창이 끝나도 살아 있는 에피소드의 시계·접촉·속도 제한된 목표각 상태를 유지한다.
 - **계획 전이25%와 실제 구간 비율:** 문턱을 넘은 뒤 reset하는 환경부터 전곡으로 넘어간다.
 - **공용 부모 코드와 현재 총보상:** 자식 환경의 최종 선택·계수까지 확인해야 한다.
 - **sampled와 committed:** 수집한 경험이 모두 모델에 반영됐다는 뜻은 아니다.
@@ -90,11 +91,4 @@
 작성 범위·작업 체크리스트는 [작성계획](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/작성계획.md), 파일별 해설 대응은 [문서대응표.json](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/문서대응표.json)에 남겼다. 검수와 문서 링크 검증 결과는 [검증결과](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/검증결과.md)에서 확인한다.
 
 
-현재 해설은 J 전용화 후의24개 구현·533개 정의를 기준으로 갱신했다. 변경 전 R/F/J 소스와 해설은 [보관 manifest](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_joint_only_v3/manifest.json), 새 계약의 검사 결과는 [J 전용 정리 기록](/home/ajou/yigyu/3/docs/2026-10-28/guitar_joint_only_v3/README.md)를 따른다.
-
-
-J 전용화 이전 원문·검사·해설·SHA는 [J 전용화 전 보관 manifest](/home/ajou/yigyu/3/guitar_learning/archive/20261028_before_joint_only_v3/manifest.json)에 보존했다. 현재 해설의 구현24개·초기화8개 구성은 유지된다.
-
-현재 과거 전문 학습·실험193개 Python을 보관한 뒤 활성281개를 기준으로 SHA와 링크를 갱신했다. J 기본의32파일·533개 정의는 그대로다. 보관 범위·공용 초기화 분리·실행 검증은 [정리 결과](/home/ajou/yigyu/3/docs/2026-10-28/guitar_legacy_retirement_v1/README.md)를 따른다.
-
-현재 해설은 가독성 정리 후 지역명과 코드 위치를 반영했다. 파일 수·533개 정의·학습 계약은 유지하며, 한 줄 복합문을 풀고 주요 흐름과 축·수명 설명을 코드 안에도 붙였다. [변경·검증 기록](/home/ajou/yigyu/3/docs/2026-10-28/guitar_readability_v1/README.md).
+과거 J 전용화·보관·가독성 검사는 [2026-10-28 검증 기록](/home/ajou/yigyu/3/docs/2026-11-02/코드해설/검증결과.md)의 당시 결과 절을 따른다. 그때의 32파일·533정의·281활성 Python을 현재 수량으로 사용하지 않는다.

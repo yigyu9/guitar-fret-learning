@@ -1,0 +1,115 @@
+"""Score V1/V2 on identical measured trajectories; this is not a learning A/B."""
+import argparse
+import copy
+import gzip
+import json
+import os
+from pathlib import Path
+import random
+import time
+
+
+def run(settings,args):
+    import isaacgym
+    import numpy as np
+    import torch
+    from guitar_learning.imitation.imitation_io import CONFIG, BUNDLE, pin_inputs_with_evidence, verify_inputs
+    from guitar_learning.training.recording import write
+    from guitar_learning.training.parallel import FIELDS
+    from guitar_learning.runtime.persistent_session import PersistentHeadlessPreparedSession
+    from guitar_learning.training.monitoring import available_memory_bytes, LowMemoryError
+    from guitar_learning.song.metrics import SongLedger as OldLedger
+    from guitar_learning.song.reward_environment import build_environment
+    from guitar_learning.tool.experiments.song_reward_v2.policy import RewardPolicy
+    from guitar_learning.tool.experiments.song_reward_v2.transfer import validate_experts, apply_experts
+    from guitar_learning.tool.experiments.song_reward_v2.worker import compact
+    if type(args.ticks) is not int or not 1<=args.ticks<=1969:raise ValueError('bounded1..1969 probe ticks required')
+    evidence=validate_experts(settings);out=args.out.resolve();out.mkdir(parents=True,exist_ok=False)
+    pins=pin_inputs_with_evidence([args.settings.resolve()], evidence['source_pins'])
+    write(out/'inputs_before.json',pins);write(out/'settings.json',settings)
+    env=None;primary=None;failure=None;cleanup=None;flags=False;forbidden=[];unchanged=False;steps=0
+    totals=dict(old={},new={});rows_count=0;episode=None;started=time.monotonic()
+    def guard(start=False):
+        if available_memory_bytes()<(8. if start else 6.)*1024**3:raise LowMemoryError('reward probe memory guard')
+        if time.monotonic()-started>900:raise TimeoutError('reward probe900s guard')
+    def encode(value):
+        if isinstance(value,np.ndarray):return value.tolist()
+        if isinstance(value,np.generic):return value.item()
+        raise TypeError(type(value).__name__)
+    try:
+        guard(True);random.seed(settings['seed']);np.random.seed(settings['seed']);torch.manual_seed(settings['seed']);torch.set_num_threads(1)
+        env=build_environment(CONFIG,out/'environment',bundle=BUNDLE,song=settings['song'],session_factory=PersistentHeadlessPreparedSession)
+        observation,reset=env.reset();write(out/'reset.json',reset);write(out/'training_contract.json',env.contract)
+        shadow=OldLedger(env.task,env.last_measured,window_s=settings['song']['window_s'],left_fraction=settings['song']['left_fraction'])
+        model=RewardPolicy(len(observation['state']),size=settings['size'],contract=env.contract).to(settings['device'])
+        write(out/'initialization.json',apply_experts(model,settings));model.eval()
+        with gzip.open(out/'comparison.jsonl.gz','xt',compresslevel=1) as trace:
+            for tick in range(args.ticks):
+                if tick%60==0:guard()
+                inputs=[torch.as_tensor(observation[k],device=settings['device']).unsqueeze(0) for k in FIELDS]
+                with torch.no_grad():action=model.act(*inputs,deterministic=True)['action'][0].cpu().numpy()
+                observation,new_reward,terminated,truncated,info=env.step(action);steps+=1
+                old_terms={k:info['reward_terms'][k] for k in ('action_change','terminal_failure')}
+                per_sample=[]
+                for measurement,sample in zip(info['physics_measurements'],info['native_control']['physics_samples240']):
+                    terms=shadow.update(measurement['music'],sample)
+                    if info['failure_reasons']:terms={k:min(0.,v) for k,v in terms.items()}
+                    for k,v in terms.items():old_terms[k]=old_terms.get(k,0.)+v
+                    per_sample.append(dict(physics_step=measurement['physics_step'],task_time_s=measurement['music']['task_time_s'],
+                        old_reward_terms=terms,new_reward_terms=measurement['song_reward_terms'],
+                        music_measurement=measurement['music']))
+                if info['failure_reasons']:shadow.invalidate(info['failure_reasons'])
+                new_terms=info['reward_terms']
+                for version,terms in (('old',old_terms),('new',new_terms)):
+                    for k,v in terms.items():totals[version][k]=totals[version].get(k,0.)+v
+                trace.write(json.dumps(dict(tick=tick,task_time_s=info['task_time_s'],action=action,
+                    old_reward=sum(old_terms.values()),new_reward=new_reward,old_terms=old_terms,new_terms=new_terms,
+                    reward_shaping=info['reward_shaping'],samples=per_sample,info=compact(env,info,action),
+                    native_last_sample=info['native_control']['physics_samples240'][-1]['native']),default=encode,allow_nan=False)+'\n');rows_count+=1
+                if (tick+1)%60==0:print('[reward probe] tick=%d/%d time=%.3f old=%.4f new=%.4f'%(tick+1,args.ticks,info['task_time_s'],sum(totals['old'].values()),sum(totals['new'].values())),flush=True)
+                if terminated or truncated:episode=copy.deepcopy(info['episode']);break
+        old_summary=shadow.summary(completed=bool(episode and episode['reason']=='timeline_complete'))
+        new_summary=env.song_ledger.summary(completed=bool(episode and episode['reason']=='timeline_complete'))
+        guard()
+    except BaseException as error:
+        primary=error;failure=dict(type=type(error).__name__,message=str(error));old_summary=None;new_summary=None
+    finally:
+        if env is not None:
+            try:
+                session=env.control.session
+                if session is not None:
+                    scene=session.scene;forbidden=copy.deepcopy(scene.forbidden_calls)
+                    flags=bool(scene.human_root_fixed and not scene.guitar_root_fixed and not scene.guitar_gravity_disabled
+                        and np.array_equal(scene.pd_properties,env.control.original_properties))
+            except BaseException as error:
+                cleanup=dict(type=type(error).__name__,message=str(error))
+                if primary is None:primary=error
+            try:env.close()
+            except BaseException as error:
+                cleanup=dict(type=type(error).__name__,message=str(error))
+                if primary is None:primary=error
+        try:unchanged=verify_inputs(pins)
+        except BaseException as error:
+            if failure is None:failure=dict(type=type(error).__name__,message=str(error))
+            if primary is None:primary=error
+    result=dict(schema='guitar_learning.reward_probe.v2',completed=bool(steps==args.ticks and primary is None),
+        requested_ticks=args.ticks,steps=steps,trace_rows=rows_count,totals=totals,old_metrics=old_summary,new_metrics=new_summary,
+        source_unchanged=unchanged,physical_flags_ok=flags,forbidden_calls=forbidden,episode=episode,
+        failure=failure,cleanup_error=cleanup,elapsed_wall_s=time.monotonic()-started,
+        scope='identical deterministic Actor/actions/native samples; reward accounting comparison only, not a trained-policy performance comparison')
+    write(out/'result.json',result)
+    if primary is not None:raise primary
+    return result
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--settings',type=Path,required=True);parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--ticks',type=int,default=360);args=parser.parse_args()
+    for key in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS'):os.environ[key]='1'
+    import isaacgym
+    from guitar_learning.tool.experiments.song_reward_v2.settings import settings_document
+    run(settings_document(json.loads(args.settings.read_text())),args)
+
+
+if __name__=='__main__':main()

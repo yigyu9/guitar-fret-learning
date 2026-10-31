@@ -81,8 +81,8 @@ FINGER_MOTION_CONTRACT = dict(schema='guitar_learning.gpu_left_finger_motion.v3'
     tracking_error='command target minus actual q at completed60Hz endpoints; excludes t0',
     action_samples='one applied action per completed control tick; first action has no change pair',
     action_sign_flip='opposite nonzero signs in adjacent actions; zero transitions are not flips',
-    action_sign='output sign only; velocity direction for incremental, prepared-reference side for position',
-    limit_outward='incremental only: action points outward at preceding target bound within1e-6rad; position reports0 because bounded desired angles cannot request beyond native bounds',
+    action_sign='prepared-reference side of the requested position; not velocity direction',
+    limit_outward='always0: bounded position requests cannot exceed native bounds',
     native_limit_fraction='actual and commanded angles separately within1e-6rad of native bounds at completed60Hz endpoints; not240Hz extrema or contact force',
     scope='diagnostic only; command target is not immediate physical motion, pressure or sound',
     base_rotation=dict(schema='guitar_learning.gpu_left_finger_base_rotation.v1',
@@ -115,9 +115,9 @@ class TensorSongEnvironment:
         self.contact_contract = PAD_CONTACT_CONTRACT if hand == 'left' else CONTACT_CONTRACT
         self.metadata = copy.deepcopy(metadata)
         codec = metadata['action_contract'].get('action_codec', {})
-        self.finger_action_mode = codec.get('mode', 'incremental')
-        if hand == 'left' and self.finger_action_mode not in ('position', 'incremental'):
-            raise ValueError('unknown left finger action codec')
+        self.finger_action_mode = codec.get('mode', 'position')
+        if hand == 'left' and self.finger_action_mode != 'position':
+            raise ValueError('left finger action codec must be position; legacy incremental control is archived')
         if hand == 'left' and song.get(
             'finger_action_mode',
             self.finger_action_mode,
@@ -880,12 +880,9 @@ class TensorSongEnvironment:
         self.before_progress = self._right_potential()
         if self.hand == 'left':
             self.before_surface_potential = self._surface_potential()
-            target = self.snapshot['target'][:, self.finger_joint_indices]
-            action = self.action[:, self.finger_action_indices]
-            self.finger_outward = ((target <= self.finger_lower+1e-6) & (action < 0) |
-                                   (target >= self.finger_upper-1e-6) & (action > 0))
-            if self.finger_action_mode == 'position':
-                self.finger_outward.zero_()
+            # 위치 요청은 native 범위 안에 있으므로 바깥 방향 누적 명령은 없다.
+            self.finger_outward = torch.zeros_like(
+                self.action[:, self.finger_action_indices], dtype=torch.bool)
         self._substeps = 0
 
     def _record_finger_motion(self):
@@ -1587,6 +1584,8 @@ class TensorSongEnvironment:
             values = torch.stack(list(v[index] for v in self.episode_reward_terms.values())).cpu().tolist()
             result['reward_components'] = dict(zip(self.episode_reward_terms, values))
             result['left_finger_motion'] = self._finger_motion_episode(index)
+            if hasattr(self, 'finger_control_diagnostics'):
+                result['finger_control_diagnostics'] = self.finger_control_diagnostics.episode(index)
             result['left_episode_diagnostics'] = self.episode_diagnostics.episode(index)
         return result
 

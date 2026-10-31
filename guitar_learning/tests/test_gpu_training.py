@@ -107,6 +107,7 @@ class GpuTrainingTests(unittest.TestCase):
     def test_uncertified_support_aborts_before_physics(self):
         pool = GpuPool.__new__(GpuPool)
         pool.closed, pool.valid = False, True
+        pool.finger_control_diagnostics = None
         pool.scene = SimpleNamespace(snapshot=lambda: {}, step=Mock())
         pool.controller = SimpleNamespace(targets=lambda *args: torch.zeros(2, 105),
             efforts=lambda *args: torch.zeros(2, 105), diagnostics={'finite': torch.tensor([True, True]),
@@ -121,6 +122,7 @@ class GpuTrainingTests(unittest.TestCase):
     def test_degenerate_normal_holds_only_failed_row_until_terminal_boundary(self):
         pool = GpuPool.__new__(GpuPool)
         pool.closed, pool.valid = False, True
+        pool.finger_control_diagnostics = None
         pool.last_valid_efforts = torch.full((2, 105), 3.)
         outputs = []
         pool.scene = SimpleNamespace(snapshot=lambda: {},

@@ -1,0 +1,141 @@
+"""Fresh hand launch keeps real input pins, role masks and old strict routes."""
+import copy
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+import numpy as np
+import torch
+
+from guitar_learning.training import runner as train_parallel
+from guitar_learning.training import start, parallel, policy
+from guitar_learning.training.recording import digest
+from guitar_learning.tests.quality_fixtures import fixed_note_contract
+from guitar_learning.skills.specialist_policy import SpecialistPolicy
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class SimpleStartTests(unittest.TestCase):
+    def test_fresh_hands_need_no_previous_model_or_evaluations(self):
+        for hand in ('left', 'right'):
+            with self.subTest(hand=hand):
+                settings = start.settings_document(hand, num_envs=1, updates=1, device='cpu')
+                self.assertEqual(settings['specialist'], dict(role=hand,
+                    left_checkpoint=None, right_checkpoint=None))
+                self.assertEqual(settings['timing']['pre_roll_s'], 3.)
+                self.assertEqual(settings['horizon'], 420)
+                self.assertEqual(settings['ppo']['cost_weight'], 1.)
+                self.assertNotIn('initialization', settings)
+                self.assertNotIn('actor_initialization', settings)
+        for kwargs in (dict(hand='joint'), dict(hand='left', updates=0),
+                       dict(hand='right', num_envs=3), dict(hand='left', horizon=0)):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                start.settings_document(**kwargs)
+
+    def test_automatic_device_selection_records_effective_device(self):
+        for available, expected in ((False, 'cpu'), (True, 'cuda:0')):
+            with patch.object(torch.cuda, 'is_available', return_value=available):
+                self.assertEqual(start.settings_document('left')['device'], expected)
+        with patch.object(torch.cuda, 'is_available', return_value=False) as available:
+            self.assertEqual(start.settings_document('right', device='cuda:0')['device'], 'cuda:0')
+            available.assert_not_called()
+
+    def test_help_needs_neither_native_nor_tensor_libraries(self):
+        script = '''
+import importlib.abc, runpy, sys
+class Guard(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in ('isaacgym', 'numpy', 'torch'):
+            raise AssertionError('help imported a native/tensor dependency: '+fullname)
+sys.meta_path.insert(0, Guard())
+sys.argv = ['train', '--help']
+runpy.run_module('guitar_learning.train', run_name='__main__')
+'''
+        result = subprocess.run([sys.executable, '-B', '-c', script], cwd='/tmp',
+            env=dict(os.environ, PYTHONPATH=str(ROOT), PYTHONDONTWRITEBYTECODE='1'),
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--hand {left,right}', result.stdout)
+        self.assertNotIn('--settings', result.stdout)
+
+    def test_selected_policy_keeps_other_hand_zero_on_actual_quality_contract(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for hand, inactive in (('left', slice(33, 39)), ('right', slice(0, 33))):
+                contract = fixed_note_contract(folder, hand)
+                model = SpecialistPolicy(563, size='small', contract=contract,
+                                         role=hand, frozen_partner=False)
+                inputs = (torch.zeros(2, 563), torch.zeros(2, 8, 24),
+                          torch.zeros(2, 8, dtype=torch.bool), torch.zeros(2, 2, 24),
+                          torch.zeros(2, 2, dtype=torch.bool))
+                action = model.act(*inputs)['action'].detach().numpy()
+                np.testing.assert_array_equal(action[:, inactive], 0.)
+                self.assertEqual(contract['termination']['preparation_seconds'], 0.)
+                self.assertEqual(contract['task']['duration_s'], 7.)
+
+    def test_dispatch_uses_current_worker_and_restores_bindings_on_interrupt(self):
+        from guitar_learning.tool.training import train_musical_quality as quality
+        from guitar_learning.training import persistent_audit
+        settings = start.settings_document('right', num_envs=1, device='cpu')
+        original_pool, original_policy = parallel.Pool, policy.Policy
+        original_argv = sys.argv
+        seen = {}
+
+        def capture_pool(instance, specs, **kwargs):
+            seen.update(specs=specs, **kwargs)
+
+        def interrupt(*, settings):
+            parallel.Pool([dict(out='unused')])
+            self.assertEqual(seen['specs'][0]['specialist']['role'], 'right')
+            self.assertEqual(seen['specs'][0]['timing']['pre_roll_s'], 3.)
+            self.assertIs(seen['worker_factory'], quality.native_environment)
+            self.assertEqual(policy.Policy.keywords, dict(role='right', frozen_partner=False))
+            self.assertEqual(settings['simple_start']['initial_pose'], 'agreed035_v14')
+            raise KeyboardInterrupt()
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.dict(sys.modules, {'isaacgym': SimpleNamespace()}), \
+                patch.object(original_pool, '__init__', capture_pool), \
+                patch.object(train_parallel, 'main', interrupt), \
+                patch.object(quality, 'run', side_effect=AssertionError('old transfer required')), \
+                patch.object(persistent_audit, 'finalize_persistent_run', side_effect=RuntimeError('cleanup fault')):
+            args = SimpleNamespace(out=Path(folder)/'run', resume=None)
+            before = copy.deepcopy(settings)
+            with self.assertRaises(KeyboardInterrupt):
+                start.run(settings, args)
+            self.assertEqual(settings, before)
+        self.assertIs(parallel.Pool, original_pool)
+        self.assertIs(policy.Policy, original_policy)
+        self.assertIs(sys.argv, original_argv)
+
+    def test_supplied_settings_are_permanent_and_pinned_before_native_start(self):
+        settings = start.settings_document('left', num_envs=1, updates=1,
+                                          horizon=2, device='cpu', size='small')
+        class StopPool:
+            def __init__(self, *args, **kwargs):
+                raise InterruptedError('stop before native')
+
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder)/'run'
+            path = out/'settings.json'
+            self.assertFalse(path.exists())
+            with patch.dict(sys.modules, {'isaacgym': SimpleNamespace()}), \
+                    patch.object(sys, 'argv', ['train', '--settings', str(path), '--out', str(out)]), \
+                    patch.object(parallel, 'Pool', StopPool):
+                with self.assertRaisesRegex(InterruptedError, 'stop before native'):
+                    train_parallel.main(settings=settings)
+            self.assertEqual(json.loads(path.read_text()), settings)
+            pins = json.loads((out/'inputs_before.json').read_text())
+            self.assertEqual(pins[str(path)], digest(path))
+            self.assertIn(str(ROOT/'guitar_learning/training/start.py'), pins)
+            self.assertTrue(all(Path(name).is_file() for name in pins))
+
+
+if __name__ == '__main__':
+    unittest.main()

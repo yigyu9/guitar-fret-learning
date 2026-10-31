@@ -1,0 +1,15 @@
+# 하체 finite native POSITION 분리비교
+
+Root 승인: 의자초기교정후 실제 고주파응답이 남으면 lower24를 원래 finite native POSITION으로 연결하는 최소안. 새 Scene_v4/run_v6/controller_v3만 사용하며 기존소스·자료는불변.
+
+- [ ] 원rightfoot+chair−2.5mm candidate105/root/G/의자배치 exact 유지, 하체 drive만 native finite POSITION으로전환; config와beforeSHA/독립검수.
+- [ ] 같은240Hz/105namedtarget/안전·Jacobian gate로5초 정지 비교. 정상/실패끝까지3view·원자료보존.
+- [ ] 물리적으로유효하면동일초기배치15초왼손해제. 실제지지/추종/접촉과음악성공구분.
+
+근거: corrected_right_chair_static_v1에서 step1–6까지 chair접촉은없음, 초기LHip속도충격제거. qdot최대는step1–4 .0889/.1795/.2722/.3627rad/s(상체), step5 R_Ankle_z1.2495→step6 12.7539rad/s. step5 R_Ankle_z external scalarPD+63.73Nm/총+63.94Nm 이후속도급증, step6 RAnkleCOM J오차.03002m/s로같은.01gate중단. 원래 implicitdrive의K/D를240Hz explicitPD로재사용한수치적동등성은보장되지않는다. 접촉교정과drive통합방법을별도분리한다.
+
+원105 XML/zero-range8/관절한계/effortcap/자기충돌/인체·기타물성은유지. 하체24 driveMode=POSITION, stiffness/damping은원 InitialEnvironment finite gain(Hip/Knee300/75,Ankle200/50,Toe30/7.5), native effortcap원값. 목표는105namedAPI의하체qref이며8nominal0범위목표도0. 관절물리고정/모터OFF가아니므로actualq/qd/force sensor와0범위잔차를측정한다.
+
+상체33 EFFORT·기존gravity+finitePD+2proximal task는동일, head/hands48 POSITION도동일. 총72POSITION+33EFFORT. POSITION72에는외부effort0만제출하며하체externalgravity/PD는제출하지않는다. Controller의gravity105하체값은진단값으로만남고실제제어와구분한다. 하체중력은native동역학에존재하되별도보상토크없이finite nativePD/접촉으로반응한다. 따라서externalgravitycompensated lower와동일제어라고주장하지않는다. 모든모드에서root고정/freeG/strapOFF/runtime상태overwrite금지/Jgate동일.
+
+이 비교는fresh54/PPO학습환경이식이아니며, 실제105scene/targetAPI/물리검증과재현entry를남긴다. 정상5/15초완료만으로전신균형·연주·강건성성공주장하지않는다.

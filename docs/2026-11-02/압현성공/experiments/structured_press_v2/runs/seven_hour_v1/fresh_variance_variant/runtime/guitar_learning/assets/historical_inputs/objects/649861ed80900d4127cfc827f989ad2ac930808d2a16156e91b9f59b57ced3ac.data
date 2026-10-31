@@ -1,0 +1,30 @@
+import unittest
+from types import SimpleNamespace
+from stability_adapter_2.underneck_pose_trial_v5 import NoStrapGym
+
+
+class FakeGym:
+    def __init__(self):self.calls=[]
+    def __getattr__(self,name):
+        def submit(*args):self.calls.append(name);return True
+        return submit
+
+
+class GuardTests(unittest.TestCase):
+    def test_initial_state_then_targets_only(self):
+        raw=FakeGym();owner=SimpleNamespace(started=False,forbidden_calls=[]);gym=NoStrapGym(raw,owner)
+        self.assertTrue(gym.set_actor_dof_states())
+        owner.started=True
+        for name in ('set_actor_dof_states','set_actor_rigid_body_states','set_dof_state_tensor_indexed','set_actor_root_state_tensor'):
+            with self.assertRaises(RuntimeError):getattr(gym,name)()
+        self.assertTrue(gym.set_actor_dof_position_targets())
+        self.assertEqual(raw.calls,['set_actor_dof_states','set_actor_dof_position_targets'])
+
+    def test_effort_never_allowed(self):
+        owner=SimpleNamespace(started=False,forbidden_calls=[]);raw=FakeGym();gym=NoStrapGym(raw,owner)
+        for name in ('apply_body_force_at_pos','apply_actor_dof_efforts','set_dof_actuation_force_tensor','set_actor_dof_efforts'):
+            with self.assertRaises(RuntimeError):getattr(gym,name)()
+        self.assertFalse(raw.calls)
+
+
+if __name__=='__main__':unittest.main()

@@ -106,7 +106,7 @@ required = min(D, max(0.05초, left_fraction × D))
 
 ### 한 tick의 처리: `begin_control → substep × 4 → end_control`
 
-원문: [begin_control](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:861), [substep](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:1031), [end_control](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:1241).
+원문: [begin_control](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:861), [substep](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:1025), [end_control](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:1235).
 
 `begin_control(actions)`는 유한한 `[N,39]` 행동과 비활성 손 0을 확인한다. tick 임시 보상·비용·실패를 비우고, **행동 전 접근 potential Φ**를 저장한다. 손가락이 이미 target 한계에 있는데 더 밖으로 누적하려는 행동도 진단용으로 표시한다.
 
@@ -135,7 +135,7 @@ missing_dt = audible_dt × (previous_absent + absent)/2
 
 ### 관측과 진단을 읽는 법
 
-원문: [_events](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:1367), [observation](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:1437), [_episode](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:1532).
+원문: [_events](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:1361), [observation](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:1431), [_episode](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:1526).
 
 `observation()`은 q−준비 q, qd, target−q, 이전 action, 기타의 골반 상대 자세·속도, 손/신체 proxy, 지지 flag, 기타·발 변위, 곡 이력 등을 이어 붙인다. 왼손에는 손목 영역 오차, 실제 MCP/PIP/DIP sin/cos, 손가락별 유효성·대기 gate, 엄지 안내를 더한다. 자식이 로컬 잔여 시간 1열과 종료 타이머 4열을 덧붙인 뒤 scale로 나누고 −10~10으로 자른다. 각 숫자가 SI 원값 그대로 들어간다고 생각하면 안 된다.
 
@@ -149,7 +149,7 @@ missing_dt = audible_dt × (previous_absent + absent)/2
 
 ### `FingerSkillEnvironment`: 원곡을 복사하지 않고 보는 범위만 바꾼다
 
-원문: [FingerSkillEnvironment](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:48).
+원문: [FingerSkillEnvironment](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:49).
 
 이 클래스 하나가 J·independent·K1·scheduled 계약을 받는다. 생성 시 v3 schema와 고정 J 메타데이터, 계획 전이 수와 25% 전환 문턱을 확인한다. 이전 R/F 부모와 별도 Simplified 자식은 없으며 `TensorSongEnvironment`를 직접 상속한다. 매 정책 tick(1/60초)에 새 행동을 내고 실제 물리 4표본을 처리한다.
 
@@ -182,7 +182,7 @@ b_i = 선택 음 수 / (선택 범위에 등장한 손가락 수 × 그 손가�
 
 ### 같은 클래스에서 보상·노출·종료 계약을 확정한다
 
-원문: [FingerSkillEnvironment.__init__](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:55).
+원문: [FingerSkillEnvironment.__init__](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:57).
 
 생성자는 v3·phase J·independent·hold_ticks1·scheduled를 검사하고 `full_song_after == planned_transitions//4`를 요구한다. phase·탐색·유지 길이는 선택 분기가 없는 고정 메타데이터다. 현재 보상 이름은 `REWARD_TERMS`의 9개이며 기존 계수·접촉 기하·물리 설정을 유지한다. R/F 보상 필터와 단계 이전은 없다.
 
@@ -190,7 +190,7 @@ b_i = 선택 음 수 / (선택 범위에 등장한 손가락 수 × 그 손가�
 
 ### 현재 9개 보상의 계산 소유자
 
-최종 선택은 [_reward_components](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:342)다. 아래의 `b`는 앞의 선택 음 균형계수, `D`는 음 길이다.
+최종 선택은 [_reward_components](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:500)다. 아래의 `b`는 앞의 선택 음 균형계수, `D`는 음 길이다.
 
 | 항목 | 실제 처리와 시점 |
 | --- | --- |
@@ -210,7 +210,7 @@ b_i = 선택 음 수 / (선택 범위에 등장한 손가락 수 × 그 손가�
 
 ### 목표 패드 접근: 가까이 서 있기만 해서 계속 양성을 받는 항이 아니다
 
-원문: [_surface_potential](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:283).
+원문: [_surface_potential](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:431).
 
 각 손가락 tracking slot 0에서 유효한 목표 하나를 고르고 다음을 합한다.
 
@@ -227,7 +227,7 @@ r = 0.99 × Φ_after - Φ_before
 
 ### 음 수행 부족: 두 감점을 합산하지 않고 큰 부족 하나로 정산한다
 
-원문: [performance_settlement](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:29), [_prepare_control_end](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:317).
+원문: [performance_settlement](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:30), [_prepare_control_end](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:475).
 
 음이 진행 중이면 `missing/D`가 증가한 만큼 `0.1b` 예산에서 조금씩 지급한다. 음 끝에서는 아래 비율 중 큰 값으로 최종 due를 정한다.
 
@@ -242,7 +242,7 @@ r = 0.99 × Φ_after - Φ_before
 
 ### 물리·손목 실패와 비용
 
-기존 물리 판정은 부모 [_safety](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:1223)에 있다.
+기존 물리 판정은 부모 [_safety](/home/ajou/yigyu/3/guitar_learning/gpu/environment.py:1217)에 있다.
 
 | 실패 | 문턱 |
 | --- | --- |
@@ -256,7 +256,7 @@ r = 0.99 × Φ_after - Φ_before
 
 지지 flag는 몸체 합력이며 상대 접촉쌍 인증이 아니다. 이 기준은 실제 압현 성공을 대신하지 않고 장면의 실패를 검출한다.
 
-현재 자식 [_safety](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:296)는 여기에 손목을 추가한다. 먼저 안내 상자의 최근접점까지의 축별 오차 중 최대 절댓값 `excess=max(abs(delta))`를 구한다. 유클리드 거리 문턱이 아니다.
+현재 자식 [_safety](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:454)는 여기에 손목을 추가한다. 먼저 안내 상자의 최근접점까지의 축별 오차 중 최대 절댓값 `excess=max(abs(delta))`를 구한다. 유클리드 거리 문턱이 아니다.
 
 * local 3초 뒤 normal 검사 활성. 상자 밖 **추가 3cm 초과**면 active가 되고 elapsed에 1/240초씩 더한다.
 * active 상태에서 추가 2~3cm로 돌아오면 elapsed를 같은 속도로 줄인다. 추가 2cm 이하로 들어오면 active와 elapsed를 0으로 만든다.
@@ -265,14 +265,14 @@ r = 0.99 × Φ_after - Φ_before
 
 예를 들어 3cm 초과 1.0초 뒤 2~3cm 회복대에 0.4초 머물렀다면 elapsed는 0.6초다. 음 목표가 바뀌거나 H32에 도달했다고 이 시간을 지우지 않는다. 선택 에피소드 reset에서만 타이머와 failure latch를 모두 지운다.
 
-[_apply_failure_cost](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:327)는 물리·손목을 합친 `failed & ~failure_paid`에 한 번만 비용을 매긴다.
+[_apply_failure_cost](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:485)는 물리·손목을 합친 `failed & ~failure_paid`에 한 번만 비용을 매긴다.
 
 ```text
 cost = 5 + 2×남은 local 에피소드 초
        + 선택·미정산 음의 미관측 wrong 상한 및 미지급 수행 부족 상한
 ```
 
-남은 음 예산은 [remaining_negative_budget](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:41)의 `0.15b×남은 발음 비율 + max(0,0.1b-performance_paid)` 합이다. 이미 관측해 지불한 감점을 다시 전액 더하지 않는다. 구형 running physics cost 함수는 자식에서 비워 두며, 구형 보상 −2 `terminal_failure`도 9항에 포함하지 않는다. 실패 비용은 `reward`와 별도인 `cost` 출력이며 PPO가 두 가치를 결합해 최적화한다.
+남은 음 예산은 [remaining_negative_budget](/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py:42)의 `0.15b×남은 발음 비율 + max(0,0.1b-performance_paid)` 합이다. 이미 관측해 지불한 감점을 다시 전액 더하지 않는다. 구형 running physics cost 함수는 자식에서 비워 두며, 구형 보상 −2 `terminal_failure`도 9항에 포함하지 않는다. 실패 비용은 `reward`와 별도인 `cost` 출력이며 PPO가 두 가치를 결합해 최적화한다.
 
 실패 tick의 최초 접촉·유지·달성·대기·엄지 양성은 억제한다. 오압현, 수행 부족과 terminal 접근 정산 같은 음성은 남긴다. 물리와 손목이 같은 tick에 실패해도 비용 2회를 청구하지 않는다.
 
@@ -288,3 +288,7 @@ cost = 5 + 2×남은 local 에피소드 초
 `_observation_state()`는 부모의 552열 뒤에 로컬 잔여 시간과 손목 종료 타이머 4열을 붙여 557열을 만든다. remaining의 scale은 원곡 task 길이이고, 타이머의 scale은 순서대로 1·1.5초·3초·0.1초다. 정책은 마지막 5개 필드명과 순서까지 확인한다.
 
 이전 561열 checkpoint와 R/F/J 계약은 지원하지 않는다. 과거 557열도 phase/계획 tick을 포함하던 다른 관측이므로 새 557열에 쓸 수 없다. 새로운 v3 환경·정책 v2로 학습하고, 같은 전체 계약·소스에서 저장한 checkpoint만 엄격 재개한다.
+
+## 명시적 자연 준비 연구 확장
+
+`FingerSkillEnvironment.natural_preparation`의 기본값은 None이다. 별도 연구에서만 `natural_preparation.v3`와 E0~E4를 지정한다. E1은 첫 목표를 초기부터 노출하고 E2는 그 목표 손가락의 준비 중 대기 지급을 끄며 E3는 줄 위4~8mm 준비 영역의 potential을 음 시작0.2초 전부터 기존 표면 potential에 연결한다. E4는 이를 조합한다. 관련 마스크·potential 상태는 reset 대상 환경만 갱신하고 H32 경계에서는 유지한다. 이 확장 코드가 존재한다고 기본 J33 학습에 자동 적용되는 것은 아니다. 전환 v2는601열의 별도 연구 정책으로, 기본557열 정책과 구분한다.

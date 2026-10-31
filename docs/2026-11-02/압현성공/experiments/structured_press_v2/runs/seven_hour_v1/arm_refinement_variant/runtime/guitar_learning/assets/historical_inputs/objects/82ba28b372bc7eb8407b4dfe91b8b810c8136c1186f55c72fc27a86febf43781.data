@@ -1,0 +1,61 @@
+{
+  "num_envs": 1,
+  "horizon": 420,
+  "updates": 1,
+  "device": "cuda:0",
+  "seed": 7,
+  "size": "medium",
+  "initial_std": 0.02,
+  "stage": "B",
+  "checkpoint_every": 1,
+  "max_wall_seconds": 600,
+  "min_available_memory_gib": 4.0,
+  "heartbeat_seconds": 10.0,
+  "resource_interval_seconds": 5.0,
+  "worker_timeout_seconds": 300.0,
+  "music": {
+    "reward_mode": "legacy",
+    "goal_event_indices": null
+  },
+  "start_event_index": 0,
+  "phrase_events": 8,
+  "tempo_scale": 1.0,
+  "ppo": {
+    "actor_lr": 1e-05,
+    "value_lr": 0.0003,
+    "gamma": 0.99,
+    "cost_gamma": 1.0,
+    "gae_lambda": 0.95,
+    "clip_ratio": 0.2,
+    "cost_weight": 1.0,
+    "epochs": 2,
+    "minibatch_size": 240,
+    "max_grad_norm": 0.5,
+    "target_kl": 0.02,
+    "kl_retries": 3,
+    "retry_lr_factor": 0.25,
+    "episode_cost_budget": null,
+    "lambda_lr": 0.01
+  },
+  "specialist": {
+    "role": "right",
+    "left_checkpoint": null,
+    "right_checkpoint": null
+  },
+  "skill": "timed",
+  "timing": {
+    "stage_index": 1,
+    "pre_roll_s": 3.0,
+    "success_bonus": 1.0,
+    "precision_bonus": 0.5,
+    "acquisition_bonus": 0.25,
+    "held_second": 2.0,
+    "right_guide_second": 0.2,
+    "right_guide_scale_m": 0.05,
+    "missed_penalty": -0.5,
+    "wrong_crossing_penalty": -0.1,
+    "unnecessary_crossing_penalty": -0.02
+  },
+  "actor_initialization": "/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_actionable_preparation_v1/right_ppo_smoke_v1/final.pt",
+  "actor_initialization_kind": "ppo"
+}

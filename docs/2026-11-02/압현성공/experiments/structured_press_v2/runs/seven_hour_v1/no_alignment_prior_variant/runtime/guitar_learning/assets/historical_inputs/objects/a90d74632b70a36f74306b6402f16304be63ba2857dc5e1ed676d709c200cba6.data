@@ -1,0 +1,11 @@
+# 06. 악기 지지와 안정성
+
+기준일: 2026-10-19. 기존 두 안정성 문서를 통합했다. 파일 이름은 기존 참조를 유지하기 위한 것이며 구형 adapter 패키지를 실행한다는 뜻이 아니다.
+
+학습은 기존035 설정·v14 준비 상태를 기준으로 한다. 현재 실행 설정은 [내부 baseline](/home/ajou/yigyu/3/guitar_learning/assets/runtime_inputs/paper/initial_pose/archive/experiment_records/lower_body_release_v1/front_facing_ready_v1/inputs_spine_margin035_v1/baseline_v1.json), 출처·원본과 현재 SHA는 [native_provenance](/home/ajou/yigyu/3/guitar_learning/assets/native_provenance.json), 자세 설명은 [초기 자세 값](/home/ajou/yigyu/3/paper/initial_pose/current_v3/VALUES.md)을 확인한다. 다른 자세 연구의 최신 후보가 학습에 자동 적용되는 것은 아니다.
+
+Root만 고정하고 하체는 유한한 유지 제어를 받는다. 기타는 자유 강체·중력ON·스트랩OFF이며 실제 신체·환경 접촉으로 지지한다. 가슴 접촉 지속·삼중접촉률 자체는 성공 필수조건이 아니다. 기타 이탈·과도한 회전·접지·관절 안전은 계속 검사한다. 직접 보조 힘·강제 부착·실행 중 상태 덮어쓰기로 대체하지 않는다.
+
+안전 측정은 [safety.py](/home/ajou/yigyu/3/guitar_learning/core/safety.py)와 [training_environment.py](/home/ajou/yigyu/3/guitar_learning/core/training_environment.py)에 연결된다. 물리240Hz의 모든 하위 표본을 측정하고 실패tick의 양성 보상을 억제한다. 접촉 횟수나raw lambda를N단위 부위별 지지력으로 해석하지 않는다.
+
+장면·제어·접촉 구현은 내부 `guitar_learning/native/`, 자산은 `assets/`를 사용한다. 과거 경로와 SHA 식별은 [historical_inputs](/home/ajou/yigyu/3/guitar_learning/historical_inputs.py)로 검증하고, [legacy 보관소](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/README.md)를 실행 입력으로 읽지 않는다. 이전 두 문서의 원문은 [개정 전 백업](/home/ajou/yigyu/3/docs/archive/master_plan_before_sync_20261019/manifest.json)에 보존했다.

@@ -1,0 +1,82 @@
+import copy
+import numpy as np
+import pytest
+from scipy.spatial.transform import Rotation
+from stability_adapter_2.guitar_relative_readiness_v2 import evaluate_readiness, world_target, PreparationGate
+
+
+def row(p):
+    return {'pose':{'p':dict(zip('xyz',p)), 'r':dict(zip('xyzw',[0,0,0,1]))}}
+
+
+def fixture():
+    hnames, gnames = ['LH:palm','RH:pick'], ['guitar']
+    state = {'human_body_states':[row([.024,0,0]), row([0,0,.04])], 'guitar_body_states':[row([0,0,0])]}
+    def contact(name,x):
+        return {'body0_name':'guitar/guitar','body1_name':'human/'+name,'lambda':1.,
+                'localPos0':{'x':x,'y':0.,'z':0.}}
+    return state,hnames,gnames,[contact('LH:palm',.027908-.01631590413943356*.241803),contact('LH:thumb3',0.)]
+
+
+def evaluate(values):
+    return evaluate_readiness(*values,np.array([0,0,.01]),np.zeros(3),[0,0,1],True)
+
+
+def test_current_guitar_common_translation_and_z_rotation_invariance():
+    values=fixture(); baseline=evaluate(values)
+    assert baseline['ready_now']
+    transformed=copy.deepcopy(values); rotation=Rotation.from_euler('z',37,degrees=True); shift=np.array([.2,-.3,.7])
+    for rows in (transformed[0]['human_body_states'],transformed[0]['guitar_body_states']):
+        for r in rows:
+            p=np.array([r['pose']['p'][k] for k in 'xyz'])
+            r['pose']={'p':dict(zip('xyz',shift+rotation.apply(p))), 'r':dict(zip('xyzw',rotation.as_quat()))}
+    result=evaluate(transformed)
+    assert result['ready_now']
+    np.testing.assert_allclose(result['pick_G_m'],baseline['pick_G_m'],atol=1e-14)
+    np.testing.assert_allclose(result['prep_target_W_m'],shift+rotation.apply(baseline['prep_target_W_m']))
+
+
+def test_guitar_only_translation_changes_target_and_rejects_old_hand_position():
+    values=fixture(); baseline=evaluate(values)
+    values[0]['guitar_body_states'][0]=row([.1,0,0])
+    result=evaluate(values)
+    assert not result['ready_now'] and not result['conditions']['right_near_strike']
+    np.testing.assert_allclose(np.array(result['prep_target_W_m'])-baseline['prep_target_W_m'],[.1,0,0])
+
+
+@pytest.mark.parametrize('change', ['no_palm','zero_lambda','body_contact','back_side','bad_grip'])
+def test_incomplete_or_wrong_side_evidence_cannot_start(change):
+    values=fixture()
+    if change=='no_palm': values[3].pop(0)
+    if change=='zero_lambda': values[3][0]['lambda']=0.
+    if change=='body_contact': values[3][0]['localPos0']['y']=-.5
+    if change=='back_side': values[0]['human_body_states'][1]=row([0,0,-.01])
+    result=(evaluate_readiness(*values,np.array([0,0,.01]),np.zeros(3),[0,0,1],False)
+            if change=='bad_grip' else evaluate(values))
+    assert not result['ready_now']
+
+
+def test_gate_debounce_resets_after_contact_loss_and_invalid_pose_rejected():
+    gate=PreparationGate(); good=evaluate(fixture())
+    assert not any(gate.update(good) for _ in range(5))
+    assert gate.update(good)
+    assert not gate.update({'ready_now':False})
+    assert not gate.update(good)
+    with pytest.raises(ValueError): world_target([0,0,0],[0,0,0,0],[0,0,0])
+
+
+@pytest.mark.parametrize('raw_lambda',[0.,float('nan'),1.])
+def test_any_right_guitar_contact_row_blocks_preparation(raw_lambda):
+    values=fixture()
+    values[3].append({'body0_name':'guitar/guitar','body1_name':'human/RH:index2',
+        'lambda':raw_lambda,'localPos0':{'x':0.,'y':0.,'z':0.}})
+    result=evaluate(values)
+    assert not result['conditions']['right_noncontact'] and not result['ready_now']
+
+
+def test_play_allows_string_plane_crossing_but_rejects_physical_backside():
+    from stability_adapter_2.guitar_relative_readiness_v2 import pick_behind_body
+    values=fixture();state=values[0]
+    state['guitar_body_states'].append(row([0.,-.4,-.0217]))
+    assert not pick_behind_body(state,['guitar','G:body'],[0,0,-.001],.02)[0]
+    assert pick_behind_body(state,['guitar','G:body'],[0,0,-.05],.02)[0]

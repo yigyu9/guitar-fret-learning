@@ -1,0 +1,59 @@
+# 접촉 회복 자료 수집과 평가 진단
+
+2026-10-19 첫 구현 묶음. 기존 단음 A·500차원 상태·39행동(왼손33, 오른손6은0), 원래 음악 판정과 물리 제어를 유지한다. 보상 R1/R2·새 BC/PPO·전곡 학습은 이 실행기에 포함하지 않는다.
+
+## 파일과 동작
+
+| 파일 | 역할 |
+|---|---|
+| `run.py`, `native.py` | 기존 엄격한 checkpoint/원자료/runtime 감사를 유지하는 평가·교사 수집 실행 |
+| `evaluation.py` | strict load 후 명시 seed 적용, 관절·기타 상태와 제어 이력 저장·reset 비교 |
+| `controller.py`, `capture.py` | 실제 측정 기반 기존 교사, 단일 왼손 관절 목표 교란, 연속240Hz 획득·상실·회복 기록 |
+| `audit_v2.py` | 원 관측·행동·안전·음악·보상 및 교사 행동과 회복 기록의 독립 재계산. float64 codec 이력을 정확히 재현 |
+| `dataset_v2.py` | 감사를 통과한 실제 회복 이후의 교사 보정 행만 별도 자료로 내보내기 |
+| `checkpoint_provenance.py` | 고정된 B32 원본 한 개의 내부화 전후 출처 기록만 검증·이관한 별도 평가 모델 생성 |
+| `configs/` | 명시 seed 목록, 새 프로세스/반복 reset, 결정적/확률적 평가와 수집 예시 |
+
+교란은 지정 손목 또는 목표 손가락의 유한 제어 목표 한 축에만 적용한다. 상한은0.01rad·0.2초이며 원래 행동 범위·속도 제한을 거친다. 기타 힘/상태·gain·충돌 정책을 바꾸지 않는다. 모든 원시 관측·행동과 실제240Hz 표본을 보존한다.
+
+획득은 안전한 clean 접촉50ms다. 이후 음 종료 전 접촉 상실이 있으면0.5초 내 재접촉 및 이후0.5초 구간의90% clean 유지로 회복을 별도 판정한다. 예정된 음 종료 후 해제를 상실로 세지 않는다. 이 진단 기준은 원래 음악 성공이나 향후 획득 단계의0.3초 기준을 대체하지 않는다.
+
+교사 보조 성공은 정책 성공과 다르다. 교란이 실제 상실을 만들지 않거나 회복/원 음악/안전 감사를 통과하지 않으면 회복 BC 자료로 내보내지 않는다. 교란 행동·마지막 교란 이전 행·교사 보정이 없는 행은 제외한다. 원본 capture는 옛 학습 자료 loader가 거부하는 별도 schema를 사용한다. 새 자료의 학습 연결은 다음 범위다.
+
+## 실행
+
+프로젝트 루트에서 rl38을 사용한다. `PATH`에 rl38/bin, `LD_LIBRARY_PATH`에 rl38/lib를 설정하며 출력은 존재하지 않는 새 경로로 지정한다.
+
+```bash
+python -u -m guitar_learning.contact_recovery.checkpoint_provenance \
+  --checkpoint /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_transition_refinement_long_v1/long_training_v2/checkpoint_000031.pt \
+  --capture /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_contact_recovery_v1/collect_native_v2/case_000 \
+  --out /tmp/reference_provenance_new
+
+python -u -m guitar_learning.contact_recovery.run evaluate \
+  --settings /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_transition_refinement_long_v1/long_settings_v4.json \
+  --checkpoint /tmp/reference_provenance_new/checkpoint_evaluation_only.pt \
+  --protocol /home/ajou/yigyu/3/guitar_learning/contact_recovery/configs/evaluate_persistent.json \
+  --out /tmp/contact_recovery_evaluate_new
+
+python -u -m guitar_learning.contact_recovery.run collect \
+  --settings /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_transition_refinement_long_v1/long_settings_v4.json \
+  --protocol /home/ajou/yigyu/3/guitar_learning/contact_recovery/configs/collect_held_v1.json \
+  --out /tmp/contact_recovery_collect_new
+
+python -u -m guitar_learning.contact_recovery.dataset_v2 \
+  --capture /tmp/contact_recovery_collect_new/case_000 \
+  --out /tmp/contact_recovery_filtered_new
+```
+
+`evaluate_fresh.json`는 각 조건을 새 프로세스/장면에서 실행한다. `evaluate_persistent.json`은 같은 장면을 reset한다. `evaluate_stochastic.json`은 탐색을 포함하며 결정적 결과와 구분한다. seed는 checkpoint RNG 복원 뒤 적용하지만 숨은 PhysX 상태나 물리 결정성을 보장하지 않는다. 설정 예시는 연결 검사용 소수 조건이며 고정20조건 성능 평가가 아니다.
+
+내부화 전 B32 원본은 현재 악보 소스의 경로·SHA와 달라 strict load가 거부한다. `checkpoint_provenance`는 지원 SHA 한 개, 고정된 이전/현재 소스 원문, 실제 명목 capture 전체 감사를 확인하고 출처 목록 외 계약·모델·optimizer·RNG·업데이트 수를 보존한다. 원본을 수정하거나 과거 성공을 상속하지 않는다. 출력의 평가 전용 표시는 사용 지침이며 일반 PPO loader의 학습 재개를 기술적으로 막는 장치는 아니다. 새 보상 학습의 초기화로 자동 채택하면 안 된다.
+
+`collect.json`의 초기 허용 시간창은 실제 획득1.9167초보다 일찍 끝나 교란이 실행되지 않았다. `collect_held_v1.json`은 관측한 획득 시각을 포함해 손가락 목표−0.01rad·0.05초를 적용한다. 실제 적용돼도 접촉이 유지될 수 있으며, 이 경우 내보내기는 자료0으로 거부하는 것이 정상이다. 기준을 바꿔 회복 성공으로 승격하지 않는다.
+
+`audit.py`/`dataset.py`는 첫 실행 원자료의 source SHA를 보존하는 v1이다. 권장 감사·내보내기는 v2다. v1은 이전 제어 목표를 float32 native 제출값에서 복원해 실제 float64 codec 이력과 달라지는 오류가 확인됐다. v2는 실제 행동으로 목표를 독립 계산하여 기록과 정확히 비교한다. 물리 실행·교사 행동·원 음악 판정은 변경하지 않았다.
+
+평가에는 `evaluation_seed.json`, `initial_state.json`, `reset_comparisons.json`, 수집에는 추가로 `plan.json`, `recovery.json`이 남는다. 원시 자료는 `trace.jsonl.gz`, `demonstration.npz`, 결과는 case/상위 `result.json`, runtime 감사는 출력 옆 `*_runtime_json_audit.json`이다. 부분 실행·실패도 보존하고 정상 종료와 음악 성공을 구분한다.
+
+기존 원본/계보: `guitar_learning/archive/20261019_before_contact_recovery/manifest.json`.

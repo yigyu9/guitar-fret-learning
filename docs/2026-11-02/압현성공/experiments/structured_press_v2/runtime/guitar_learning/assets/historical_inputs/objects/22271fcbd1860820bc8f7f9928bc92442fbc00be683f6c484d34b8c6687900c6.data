@@ -1,0 +1,175 @@
+"""Actual lower mobility, three-region guitar support and frontal spine alignment."""
+import csv
+from collections import defaultdict
+from pathlib import Path
+import numpy as np
+from scipy.spatial.transform import Rotation
+from ..lower_body_release_v1.common import ROOT, A, BASE, HUMAN, read, save, pin, verify, sha
+from ..initial_pose_noise_v1 import pose
+from ..seated_foot_support_v1.analyze_v6 import physical_guitar_bodies, LAYOUT_REFERENCE
+
+OLD=BASE/'front_facing_pose_v1'
+PHASE=BASE/'support_priority_audit_v1'
+RUNS=[OLD/'native_static_v5',OLD/'native_repeat_v1']
+REGIONS=('Chest','R_Shoulder','L_Hip','R_Hip','Spine','Left_hand','Other_human')
+PARTS=('Pelvis','Torso','Spine','Chest','Head','L_Ankle','L_Toe','R_Ankle','R_Toe')
+RAW=('states240.json','contacts240.json','efforts240.json','targets60.json')
+PLAN=ROOT/'docs/plans/support_priority_audit_v2_20261016.md'
+
+
+def stats(values):
+    x=np.asarray(values,dtype=float);assert x.size and np.isfinite(x).all()
+    return dict(min=float(x.min()),p05=float(np.quantile(x,.05)),median=float(np.median(x)),max=float(x.max()))
+
+
+def csv_save(path,rows):
+    with path.open('x',newline='') as stream:
+        writer=csv.DictWriter(stream,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+
+
+def main():
+    out=PHASE/'analysis_v2';out.mkdir(exist_ok=False)
+    anchors=read(PHASE/'preservation_before_v1.json')
+    inventory=Path(anchors['artifact_inventory']);closed=Path(anchors['closed_inputs'])
+    assert sha(inventory)==anchors['artifact_inventory_sha256'] and sha(closed)==anchors['closed_inputs_sha256']
+    exception_path=PHASE/'prior_review_manifest_mismatch_v1.json'
+    exception=read(exception_path);assert not exception['old_full_inventory_passed'] and len(exception['mismatches'])==1
+    known=exception['mismatches'][0]
+    assert exception['original_inventory_sha256']==anchors['artifact_inventory_sha256']
+    assert known['path']==str(OLD/'review_final_v1.md')
+    assert known['expected_sha256']=='c51b0818ef84a113b48a134cf99c927ba414e4eaa7e9fdd32b3f308fd009019f' and known['expected_bytes']==7138
+    assert known['current_sha256']=='43bfcb36f4be8ba1b0a1a846daf4aeaa7007dbaaa4f8a4cfe6dbcc2556e5c74c' and known['current_bytes']==5034
+    assert sha(known['path'])==known['current_sha256'] and Path(known['path']).stat().st_size==known['current_bytes']
+    recovery_path=PHASE/'prior_review_recovery_v1.json';recovery=read(recovery_path)
+    assert recovery['sha256']==known['expected_sha256']==sha(recovery['recovered_path'])
+    assert recovery['bytes']==known['expected_bytes']==Path(recovery['recovered_path']).stat().st_size
+    extras=[ROOT/'docs/plans/support_priority_audit_20261016.md',recovery_path,Path(recovery['recovered_path']),exception_path,Path(known['path']),Path(__file__).with_name('audit_v1.py'),PHASE/'audit_v1.log',PHASE/'analysis_v1/inputs_before.json',Path(__file__).resolve(),Path(__file__).with_name('__init__.py'),PLAN,PHASE/'preservation_before_v1.json',
+            inventory,closed,OLD/'repeat_verification_v2.json',LAYOUT_REFERENCE,A/'AGENTS.md',
+            A/'initial_pose_noise_v1.py',A/'seated_foot_support_v1/analyze_v6.py',
+            ROOT/'isaacgym/docs/api/python/struct_py.html',ROOT/'isaacgym/docs/api/python/enum_py.html']
+    extras += [run/n for run in RUNS for n in (*RAW,'attempt.json','report.json','initial_values.json','native_properties.json','support_wrapper.json')]
+    extras += [OLD/n/'summary.json' for n in ('analysis_static_v5','analysis_repeat_v1')]
+    inputs=pin(extra=extras)
+    for q,h in read(closed)['expected_sha256'].items():
+        assert q not in inputs or inputs[q]==h,q
+        inputs[q]=h
+    save(out/'inputs_before.json',inputs);assert verify(inputs)
+    old_files=read(inventory)['files'];assert old_files
+    mismatches=[r['path'] for r in old_files if not Path(r['path']).is_file() or sha(r['path'])!=r['sha256']]
+    assert mismatches==[known['path']],mismatches
+    old_row=next(r for r in old_files if r['path']==known['path'])
+    assert old_row['sha256']==known['expected_sha256'] and old_row['bytes']==known['expected_bytes']
+    initial=read(RUNS[0]/'initial_values.json');pd=initial['PD_properties'];names=initial['joint_names'];bodies=initial['human_body_names']
+    states=read(RUNS[0]/'states240.json')['rows'];contacts=read(RUNS[0]/'contacts240.json')['rows']
+    efforts=read(RUNS[0]/'efforts240.json')['rows'];targets=read(RUNS[0]/'targets60.json')['rows']
+    assert [s['physics_step'] for s in states]==[s['physics_step'] for s in contacts]==list(range(2401))
+    assert [e['physics_step_before'] for e in efforts]==list(range(2400))
+    assert [t['physics_step_before'] for t in targets]==list(range(0,2400,4))
+    assert all(s['time_s']==s['physics_step']/240 for s in states+contacts)
+    exact={name:sha(RUNS[0]/name)==sha(RUNS[1]/name) for name in RAW};assert all(exact.values())
+    summaries=[read(OLD/n/'summary.json') for n in ('analysis_static_v5','analysis_repeat_v1')]
+    assert all(s['passed'] and len(s['gates'])==25 and all(s['gates'].values()) for s in summaries)
+    low=initial['lower_indices'];zero=initial['zero_range_indices'];active=[j for j in low if j not in zero]
+    q=np.array([[v['pos'] for v in s['state']['human_dof_states']] for s in states])
+    qd=np.array([[v['vel'] for v in s['state']['human_dof_states']] for s in states])
+    assert np.isfinite(q).all() and np.isfinite(qd).all()
+    submitted=np.array([e['submitted105_Nm'] for e in efforts]);caps=np.asarray(pd['effort'])
+    gains=np.array([e['lower_stable_pd']['K16_Nm_rad'] for e in efforts]);damping=np.array([e['lower_stable_pd']['D16_Nms_rad'] for e in efforts])
+    lower=[]
+    for k,j in enumerate(active):
+        lower.append(dict(joint=names[j],index105=j,original_lower_rad=pd['lower'][j],original_upper_rad=pd['upper'][j],
+            native_drive_mode=pd['driveMode'][j],native_stiffness=pd['stiffness'][j],native_damping=pd['damping'][j],
+            external_K=gains[0,k],external_D=damping[0,k],effort_cap_Nm=caps[j],
+            actual_range_deg=float(np.degrees(np.ptp(q[:,j]))),actual_peak_speed_rad_s=float(abs(qd[:,j]).max()),
+            max_submitted_effort_Nm=float(abs(submitted[:,j]).max()),max_cap_fraction=float(abs(submitted[:,j]).max()/caps[j])))
+    csv_save(out/'lower16.csv',lower)
+    native_bounds=np.maximum(np.asarray(pd['lower'])-q,q-np.asarray(pd['upper']))
+    lower_checks=dict(original105_asset=initial['loaded_assets'][0]['path']==str(HUMAN),root_fixed_asset=initial['loaded_assets'][0]['fixed_base'],
+        channels105_zero8_active16=len(names)==105 and len(zero)==8 and len(active)==16,
+        nonzero_native_ranges=all(pd['lower'][j]<pd['upper'][j] for j in active),
+        effort_mode_no_native_position_lock=all(pd['driveMode'][j]==3 and pd['stiffness'][j]==pd['damping'][j]==0 for j in low),
+        finite_positive_external_KD=bool(np.isfinite(gains).all() and np.isfinite(damping).all() and (gains>0).all() and (damping>0).all()),
+        unchanged_gains=bool(np.array_equal(gains,np.broadcast_to(gains[0],gains.shape)) and np.array_equal(damping,np.broadcast_to(damping[0],damping.shape))),
+        all16_actual_moved=all(r['actual_range_deg']>0 and r['actual_peak_speed_rad_s']>0 for r in lower),
+        finite_original_caps=bool(np.isfinite(caps[low]).all() and (caps[low]>0).all() and np.isfinite(submitted).all() and (abs(submitted)<=caps).all()),
+        zero8_effort_zero=bool((submitted[:,zero]==0).all()),root_and_chair_all_states_exact=all(s['state']['human_body_states'][bodies.index('Pelvis')]==states[0]['state']['human_body_states'][bodies.index('Pelvis')]
+            and s['state']['chair_body_states']==states[0]['state']['chair_body_states'] for s in states))
+    for run in RUNS:
+        report=read(run/'report.json')
+        lower_checks[run.name+'_restrictions']=bool(report['completed'] and report['root_fixed'] and report['guitar_free'] and not report['strap_enabled'] and not report['forbidden_calls'] and not report['cleanup_errors'] and report['training_updates']==0)
+    assert all(lower_checks.values())
+    physical=physical_guitar_bodies();rows=[];pairs=defaultdict(int)
+    front=pose(states[0]['state']['human_body_states'][bodies.index('Pelvis')])[1].apply([0.,-1.,0.]);front[2]=0;front/=np.linalg.norm(front)
+    right=np.cross(front,[0.,0.,1.]);center_G=np.array(read(LAYOUT_REFERENCE)['reference_body_center_G_m'])
+    gp0,gr0=pose(states[0]['state']['guitar_body_states'][0]);center0=gp0+gr0.apply(center_G)
+    for state,contact in zip(states,contacts):
+        row=dict(step=state['physics_step'],time_s=state['time_s'])
+        counts=dict.fromkeys(REGIONS,0);lambdas=dict.fromkeys(REGIONS,0.);nonhuman=0;gbody0=0;physical_count=0
+        for c in contact['contacts']:
+            value=float(c['lambda']);assert np.isfinite(value)
+            if value<=0:continue
+            a,b=c['body0_name'],c['body1_name']
+            if a in physical or b in physical:
+                other=b if a in physical else a
+                if other in physical:continue
+                pairs[other]+=1;physical_count+=1;gbody0+=a in physical
+                if not other.startswith('human/'):
+                    nonhuman+=1;continue
+                human=other[len('human/'):]
+                assert human
+                region=human if human in REGIONS else 'Left_hand' if human.startswith('LH:') else 'Other_human'
+                counts[region]+=1;lambdas[region]+=value
+        for n in REGIONS:row[n+'_contacts']=counts[n];row[n+'_lambda_sum_raw']=lambdas[n]
+        row['three_support']=counts['Chest']>0 and counts['R_Shoulder']>0 and (counts['L_Hip']>0 or counts['R_Hip']>0)
+        row['guitar_nonhuman_contacts']=nonhuman;row['physical_G_contacts']=physical_count;row['G_body0_contacts']=gbody0
+        total=sum(lambdas.values());row['primary3_raw_normal_magnitude_fraction']=(lambdas['Chest']+lambdas['R_Shoulder']+lambdas['L_Hip']+lambdas['R_Hip'])/total if total>0 else 0.
+        for n in PARTS:
+            r=pose(state['state']['human_body_states'][bodies.index(n)])[1];up=r.apply([0.,0.,1.]);direction=r.apply([0.,-1.,0.])
+            if n in PARTS[:5]:assert up[2]>.5
+            row[n+'_side_deg']=float(np.degrees(np.arctan2(up@right,up[2])))
+            row[n+'_forward_deg']=float(np.degrees(np.arctan2(up@front,up[2])))
+            row[n+'_heading_deg']=float(np.degrees(np.arctan2(direction@right,direction@front)))
+        for parent,child in [('Pelvis','Torso'),('Torso','Spine'),('Spine','Chest')]:
+            row[parent+'_'+child+'_side_difference_deg']=row[child+'_side_deg']-row[parent+'_side_deg']
+        gp,gr=pose(state['state']['guitar_body_states'][0]);row['guitar_center_displacement_m']=float(np.linalg.norm(gp+gr.apply(center_G)-center0))
+        row['guitar_rotation_deg']=float(np.degrees((gr0.inv()*gr).magnitude()))
+        row['neck_elevation_deg']=float(np.degrees(np.arcsin(np.clip(gr.apply([0.,1.,0.])[2],-1,1))))
+        rows.append(row)
+    csv_save(out/'samples.csv',rows)
+    windows={}
+    for label,lo,hi in [('whole',0,10),('preparation',0,5),('hold',5,10)]:
+        selected=[r for r in rows if lo<=r['time_s']<=hi];assert len(selected)==round((hi-lo)*240)+1
+        windows[label]=dict(samples=len(selected),three_simultaneous_fraction=sum(r['three_support'] for r in selected)/len(selected),
+            positive_fraction={n:sum(r[n+'_contacts']>0 for r in selected)/len(selected) for n in REGIONS},
+            raw_normal_lambda_sum={n:stats([r[n+'_lambda_sum_raw'] for r in selected]) for n in REGIONS},
+            primary3_raw_normal_magnitude_fraction=stats([r['primary3_raw_normal_magnitude_fraction'] for r in selected]),
+            guitar_nonhuman_positive_fraction=sum(r['guitar_nonhuman_contacts']>0 for r in selected)/len(selected))
+    angles={n:{axis:stats([r[n+'_'+axis+'_deg'] for r in rows]) for axis in ('side','forward','heading')} for n in PARTS}
+    differences={pair:stats([r[pair+'_side_difference_deg'] for r in rows]) for pair in ('Pelvis_Torso','Torso_Spine','Spine_Chest')}
+    held=[r for r in rows if 5<=r['time_s']<=10]
+    angles_hold={n:{axis:stats([r[n+'_'+axis+'_deg'] for r in held]) for axis in ('side','forward','heading')} for n in PARTS}
+    differences_hold={pair:stats([r[pair+'_side_difference_deg'] for r in held]) for pair in ('Pelvis_Torso','Torso_Spine','Spine_Chest')}
+    hold=windows['hold']
+    evidence_checks=dict(existing_static25_each=all(s['passed'] for s in summaries),independent_repeat_raw4_exact=all(exact.values()),inputs_unchanged=verify(inputs))
+    gates=dict(lower_unlocked_finite_control=all(lower_checks.values()),three_body_support95pct=hold['three_simultaneous_fraction']>=.95,
+        no_guitar_ground_chair_contact_hold=hold['guitar_nonhuman_positive_fraction']==0.)
+    result=dict(passed=all(gates.values()) and all(evidence_checks.values()),mandatory_gates=gates,evidence_checks=evidence_checks,reference_runs=list(map(str,RUNS)),raw4_exact=exact,lower_checks=lower_checks,lower16=lower,
+        zero8_actual_max_abs_rad=float(abs(q[:,zero]).max()),active97_max_native_limit_excess_rad=float(max(0.,native_bounds[:,[j for j in range(105) if j not in zero]].max())),
+        contact_windows=windows,physical_guitar_contact_counterparts=dict(pairs),angles_whole_Pelvis_horizontal_frame_deg=angles,angles_hold_Pelvis_horizontal_frame_deg=angles_hold,
+        adjacent_side_orientation_difference_whole_deg=differences,adjacent_side_orientation_difference_hold_deg=differences_hold,
+        max_guitar_center_displacement_m=max(r['guitar_center_displacement_m'] for r in rows),max_guitar_rotation_deg=max(r['guitar_rotation_deg'] for r in rows),
+        max_abs_neck_elevation_deg=max(abs(r['neck_elevation_deg']) for r in rows),
+        optional_foot_heading_hold_max_deg=max(abs(r[n+'_heading_deg']) for r in rows if r['time_s']>=5 for n in PARTS[5:]),
+        physical_steps_this_analysis=0,controller_or_pose_changes=False,new_PPO=False,
+        prior_metadata_exception=exception,recovered_original_review=recovery,
+        scope='Prior full inventory retains one disclosed metadata mismatch; all physical evidence remains exact. Read-only actual2401-state audit; actual4raw exact repeat. Three-support sufficiency is limited to prepared static5s with original hands still present. Raw normal lambda fraction is NOT vertical weight/load share; tangential forces are not reconstructed. Body-up frontal-plane orientation differences are NOT anatomical curvature or medical assessment. Existing release preflight failure stays unchanged.')
+    assert all(gates.values()) and all(evidence_checks.values()),(gates,evidence_checks)
+    save(out/'report.json',result)
+    assert verify(inputs)
+    after=[r['path'] for r in old_files if not Path(r['path']).is_file() or sha(r['path'])!=r['sha256']]
+    preserved=after==[known['path']] and sha(known['path'])==known['current_sha256'] and verify(read(closed)['expected_sha256'])
+    save(out/'preservation_after.json',dict(passed_with_documented_preexisting_metadata_exception=preserved,old_full_inventory_passed=False,old_phase_files=len(old_files),unchanged_original_entries=len(old_files)-1,mismatches=after,documented_exception=known,old_inventory_sha256=sha(inventory),closed_inputs_unchanged=verify(read(closed)['expected_sha256'])))
+    assert preserved
+    print(dict(passed=True,lower16_unlocked=True,three_support_hold_fraction=hold['three_simultaneous_fraction'],new_physics_steps=0),flush=True)
+
+if __name__=='__main__':main()

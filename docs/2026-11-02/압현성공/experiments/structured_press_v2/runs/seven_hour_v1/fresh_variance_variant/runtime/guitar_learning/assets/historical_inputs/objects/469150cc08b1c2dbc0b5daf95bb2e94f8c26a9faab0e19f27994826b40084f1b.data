@@ -1,0 +1,33 @@
+"""Preserved EW6 finite controller: one path versus continuous repeated same path."""
+import isaacgym
+import argparse
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from stability_adapter_2.initial_pose_noise_v1 import read,save,sha
+from stability_adapter_2.pose_experiments_v1 import run as native,motion
+
+
+def repeated_point(time,initial,points,original):
+    # Preserved2–5s first cycle.2.6 and5s have identical elevated waypoint.
+    local=time if time<=5. else 2.6+(time-5.)%2.4
+    return original(local,initial,points)
+
+
+def main():
+    p=argparse.ArgumentParser();p.add_argument('--config',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();cfg=a.config.resolve();out=a.out.resolve();mode=read(cfg)['qualification_mode'];assert mode in ('strike_single','strike_repeat')
+    from stability_adapter_2 import run_elbow_wrist_ready_v7 as strike
+    from stability_adapter_2 import run_right_body_approach_v1 as runner
+    leaf=Path(__file__).with_name('RIGHT_PLAN_V2.md');pins={str(f):sha(f) for f in (Path(__file__).resolve(),leaf,cfg,Path(native.__file__),Path(strike.__file__))};before=out.parent/(out.name+'_wrapper_before.json');assert not before.exists();save(before,pins)
+    original=strike.desired_point
+    def point(t,initial,points):return repeated_point(t,initial,points,original) if mode=='strike_repeat' else original(t,initial,points)
+    def stage(t,_):return ('prepare' if t<2 else 'EW6_first_cycle' if t<=5 else 'EW6_repeated' if mode=='strike_repeat' else 'EW6_final_target_hold'),np.zeros(3),np.zeros(3)
+    try:
+        with patch.object(strike,'desired_point',point),patch.object(motion,'trajectory',stage),patch.object(runner,'main',lambda:native.run(cfg,out)):
+            strike.main()
+    finally:
+        unchanged=all(sha(f)==h for f,h in pins.items())
+        save(out.parent/(out.name+'_wrapper_after.json'),{'input_sha256':pins,'inputs_unchanged':unchanged})
+    assert unchanged
+
+if __name__=='__main__':main()

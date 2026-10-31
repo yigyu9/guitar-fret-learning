@@ -1,0 +1,141 @@
+"""새 정면 자세의28초 해제와 완전 이탈15초를 실제 전표본으로 검사한다."""
+import argparse
+import csv
+from pathlib import Path
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import ROOT, A, read, save, pin, verify, sha
+from ..lower_body_release_v1.upright_source_v1 import full_fk
+from ..lower_body_release_v1 import upright_native_audit_v3
+from ..seated_foot_support_v1.analyze_v6 import measure, contact_interval, sole_summary, RAW, LAYOUT_REFERENCE
+from ..grounded_guitar_support_v1.analyze_v19 import interval, right_goal_evidence, chest_extra_evidence
+from ..grounded_guitar_release_v1.analyze_v2 import prefix, release_evidence
+from .analyze_v1 import lower_math, heading, PARTS, GAIN_REFERENCE
+from .release_prepare_v1 import validate_reference, PROTOCOL
+
+
+def main(run, out):
+    run, out = Path(run).resolve(), Path(out).resolve()
+    assert not out.exists()
+    cfgpath = Path(read(run/'attempt.json')['config'])
+    cfg = read(cfgpath)
+    reference, repeat = Path(cfg['prepared_reference_run']), Path(cfg['prepared_repeat_run'])
+    certificate = Path(cfg['prepared_repeat_certificate'])
+    cert, analyses, _, _, baseline = validate_reference(reference, repeat, certificate)
+    preflight_path = Path(cfg['release_preflight_report'])
+    spec_path = Path(cfg['release_spec'])
+    preflight, spec = read(preflight_path), read(spec_path)
+    extras = [run/n for n in RAW]+[run/'support_wrapper.json', cfgpath, preflight_path, spec_path,
+        preflight_path.parent/'inputs_before.json', certificate, baseline, LAYOUT_REFERENCE, GAIN_REFERENCE,
+        ROOT/'docs/plans/front_facing_release_20261016.md']+analyses
+    for package in ('front_facing_pose_v1', 'grounded_guitar_release_v1', 'grounded_guitar_support_v1', 'seated_foot_support_v1'):
+        extras += list((A/package).glob('*.py'))
+    for key in ('source_report','posture_target_report','upper_target105','finite_right_goal_spec','finite_right_goal_report','hip_load_bias_spec','hip_load_bias_report'):
+        extras.append(Path(cfg[key]))
+    certificates = [cert['input_sha256'], read(preflight_path.parent/'inputs_before.json'),
+        read(run/'attempt.json')['input_sha256'], read(run/'support_wrapper.json')['input_sha256']]
+    for mapping in certificates:
+        extras += [Path(p) for p in mapping]
+    inputs = pin(cfgpath, extra=extras)
+    out.mkdir()
+    save(out/'inputs_before.json', inputs)
+    upright_native_audit_v3.main([run], out/'integrity')
+    initial = read(run/'initial_values.json')
+    properties = read(run/'native_properties.json')
+    states, efforts, targets = [read(run/name)['rows'] for name in ('states240.json','efforts240.json','targets60.json')]
+    rows, ground = measure(run)
+    assert len(rows) == len(states)
+    names = initial['human_body_names']
+    front = pose(initial['native_initial_state']['human_body_states'][names.index('Pelvis')])[1].apply([0.,-1.,0.])[:2]
+    front /= np.linalg.norm(front)
+    fk, _ = full_fk(initial['joint_names'], names, initial['native_initial_state'], np.array(initial['q_ref105_rad']))
+    predicted = []
+    for target in targets:
+        poses = fk(np.array(target['final105_rad']))
+        predicted.append({n: heading(poses[n][1], front) for n in PARTS})
+    for row, state in zip(rows, states):
+        assert row['step'] == state['physics_step']
+        for name in PARTS:
+            rotation = pose(state['state']['human_body_states'][names.index(name)])[1]
+            row[name+'_heading_deg'] = heading(rotation, front)
+            if name == 'Spine':
+                row['Spine_total_tilt_deg'] = float(np.degrees(np.arccos(np.clip(rotation.apply([0.,0.,1.])[2],-1.,1.))))
+    whole = interval(rows)
+    whole['max_Spine_total_tilt_deg'] = max(r['Spine_total_tilt_deg'] for r in rows)
+    windows = {key: interval([r for r in rows if lo <= r['time_s'] <= hi])
+        for key,lo,hi in [('prepared5to10',5,10),('release10to28',10,28)]
+        if any(lo <= r['time_s'] <= hi for r in rows)}
+    feet = {key: contact_interval([r for r in rows if lo <= r['time_s'] <= hi], ground)
+        for key,lo,hi in [('1to28',1,28),('5to10',5,10),('10to28',10,28)]}
+    soles = sole_summary(rows)
+    lower = lower_math(initial, states, efforts, targets, cfg)
+    right = right_goal_evidence(run, cfg, initial, efforts)
+    chest = chest_extra_evidence(initial, properties, states, efforts, cfg)
+    chest_checks = dict(chest['checks'])
+    legacy_duration = chest_checks.pop('full2400')
+    chest_checks['full6720'] = len(efforts) == 6720
+    if 'all2400_math_reconstructed' in chest_checks:
+        chest_checks['all6720_math_reconstructed'] = chest_checks.pop('all2400_math_reconstructed')
+    chest['legacy_duration_check'] = dict(full2400=legacy_duration)
+    chest['checks'] = chest_checks
+    chest['passed'] = all(chest_checks.values())
+    exact = prefix(run, reference)
+    release, release_rows = release_evidence(run, initial, states, targets, cfg, spec)
+    for name, value in [('lower_math.json',lower),('right_goal_evidence.json',right),('chest_evidence.json',chest),
+                        ('prepared_prefix_evidence.json',exact),('release_evidence.json',release)]:
+        save(out/name, value)
+    if release_rows:
+        with (out/'release_samples.csv').open('x', newline='') as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(release_rows[0]))
+            writer.writeheader(); writer.writerows(release_rows)
+    with (out/'samples.csv').open('x', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader(); writer.writerows(rows)
+    held = [r for r in rows if 5 <= r['time_s'] <= 28]
+    headings = {n: dict(initial_deg=rows[0][n+'_heading_deg'], max_abs_5to28_deg=max(abs(r[n+'_heading_deg']) for r in held) if held else None) for n in PARTS}
+    report, wrapper, integrity = read(run/'report.json'), read(run/'support_wrapper.json'), read(out/'integrity/report.json')
+    captures = [read(run/name) for name in ('media/capture.json','media/strap/capture.json')]
+    gates = dict(completed28=bool(report['completed'] and report['physics_steps']==6720),
+        duration_math=bool(len(states)==6721 and len(efforts)==6720 and len(targets)==1680
+            and [s['physics_step'] for s in states]==list(range(6721))
+            and [s['physics_step_before'] for s in efforts]==list(range(6720))),
+        protocol=bool(cfg['validation_protocol']==PROTOCOL and cfg['seconds']==28 and cfg['release_start_s']==10
+            and cfg['preparation_s']==5 and cfg['hold_interval_s']==[5,10] and cfg['full_release_interval_s']==[13,28]),
+        new_static_repeat=bool(cert['passed'] and exact['passed']),
+        source_preflight=bool(preflight['eligible_for_native'] and preflight['inputs_unchanged']
+            and verify(read(preflight_path.parent/'inputs_before.json')) and sha(spec_path)==cfg['release_spec_sha256']==preflight['spec_sha256']
+            and preflight['source_candidate_sha256']==cfg['candidate_sha256'] and preflight['reference_run']==str(reference)
+            and preflight['repeat_run']==str(repeat)),
+        restrictions=bool(not report['failure'] and not report['cleanup_errors'] and not report['forbidden_calls']
+            and all(report['initial_checks'].values()) and report['root_fixed'] and report['guitar_free']
+            and not report['strap_enabled'] and report['training_updates']==0),
+        integrity=bool(integrity['inputs_unchanged'] and integrity['runs'][0]['all_checks']),
+        wrapper=bool(wrapper['inputs_unchanged'] and wrapper['input_sha256'] and verify(wrapper['input_sha256'])
+            and wrapper['actual_scene_class']=='front_facing_pose_v1.release_runtime_v1.Scene'
+            and wrapper['controller']=='front_facing_pose_v1.release_runtime_v1.Controller'),
+        runner_inputs=bool(report['inputs_unchanged'] and verify(read(run/'attempt.json')['input_sha256'])),
+        body30mm=whole['max_body_displacement_m']<=.03, rotation5deg=whole['max_rotation_deg']<=5,
+        neck3deg=whole['max_abs_neck_deg']<=3, lateral20mm=whole['max_abs_lateral_m']<=.02,
+        trunk5deg=whole['max_Torso_Chest_tilt_deg']<=5, trunk_right3deg=whole['max_abs_Torso_Chest_right_deg']<=3,
+        Spine5deg=whole['max_Spine_total_tilt_deg']<=5,
+        Chest_arm_prepared95='prepared5to10' in windows and windows['prepared5to10']['samples']==1201 and windows['prepared5to10']['simultaneous_support_fraction']>=.95,
+        Chest_arm_release95='release10to28' in windows and windows['release10to28']['samples']==4321 and windows['release10to28']['simultaneous_support_fraction']>=.95,
+        feet_all_windows=all(v['all_contact_rows_present'] and v['both_feet_positive_fraction'] is not None
+            and v['both_feet_positive_fraction']>=.95 for v in feet.values()),
+        four_soles=soles['all_four_parts_passed'],
+        initial_heading2deg=all(abs(v['initial_deg'])<=2 for v in headings.values()),
+        heading5to28_under5deg=bool(held and all(v['max_abs_5to28_deg']<=5 for v in headings.values())),
+        submitted_heading2deg=bool(predicted and all(abs(r[n])<=2 for r in predicted for n in PARTS)),
+        all6720_finite_control_math=bool(lower['passed'] and right['passed'] and chest['passed']),
+        actual_release=release['passed'],
+        video5fps=all(c['fps']==5 and [f['physics_step'] for f in c['frames']]==list(range(0,6721,48)) for c in captures),
+        analysis_inputs=verify(inputs))
+    save(out/'summary.json', dict(passed=all(gates.values()), gates={k:bool(v) for k,v in gates.items()},
+        whole=whole, windows=windows, feet=feet, soles_last1=soles, headings=headings, inputs_unchanged=verify(inputs),
+        scope='새 정면 자세의 실제 정지/반복 이후 독립28초 해제.13..28 완전이탈15초/3601실제표본 판정. 옛 자세 성공·옛 연주 인증 상속 없음. source 도달/실제 무접촉/유한 노력 산술 분리.'))
+    print(dict(passed=all(gates.values()), gates=gates), flush=True)
+
+
+if __name__ == '__main__':
+    parser=argparse.ArgumentParser();parser.add_argument('--run',type=Path,required=True);parser.add_argument('--out',type=Path,required=True)
+    args=parser.parse_args();main(args.run,args.out)

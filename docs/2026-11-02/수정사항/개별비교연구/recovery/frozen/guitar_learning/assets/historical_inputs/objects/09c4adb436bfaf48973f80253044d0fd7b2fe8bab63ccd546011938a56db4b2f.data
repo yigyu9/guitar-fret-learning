@@ -1,0 +1,105 @@
+"""Simple hand training using the existing prepared pose and measured rewards."""
+import argparse
+import copy
+from dataclasses import asdict
+from functools import partial
+import os
+from pathlib import Path
+import sys
+from unittest.mock import patch
+
+
+def settings_document(hand, *, updates=100, num_envs=2, device='auto', seed=7,
+                      horizon=420, size='medium'):
+    """Supply the current single-note defaults without historical actor gates."""
+    if hand not in ('left', 'right'):
+        raise ValueError('left/right hand required')
+    from guitar_learning.train_parallel import settings_document as base_settings
+    from guitar_learning.timing.timing_curriculum import TimingConfig
+    from guitar_learning.quality.musical_quality import metadata
+    if device == 'auto':
+        import torch
+        device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    settings = base_settings(dict(updates=updates, num_envs=num_envs, device=device,
+        seed=seed, horizon=horizon, size=size))
+    settings.update(specialist=dict(role=hand, left_checkpoint=None, right_checkpoint=None),
+        skill='timed', timing=asdict(TimingConfig(stage_index=0, pre_roll_s=3.)),
+        musical_quality=metadata(), simple_start=dict(
+            schema='guitar_learning.simple_start.v1', initial_pose='agreed035_v14',
+            initialization='fresh_unless_strict_resume'))
+    return settings
+
+
+def run(settings, args):
+    """Bind the chosen hand to the shared collector/PPO for this process only."""
+    # Isaac Gym must precede imports of torch in the runner and policy.
+    import isaacgym
+    from guitar_learning import train_parallel
+    from guitar_learning.training import parallel, policy
+    from guitar_learning.training.persistent_audit import finalize_persistent_run
+    from guitar_learning.skills.specialist_policy import SpecialistPolicy
+    from guitar_learning.quality.train_musical_quality import native_environment, summarize_run
+    hand = settings['specialist']['role']
+    if hand not in ('left', 'right') or any(
+            settings['specialist'].get(name+'_checkpoint') is not None for name in ('left', 'right')):
+        raise ValueError('single hand without expert checkpoints required')
+    base_pool = parallel.Pool
+
+    class HandPool(base_pool):
+        def __init__(self, specs, **kwargs):
+            specs = copy.deepcopy(specs)
+            for spec in specs:
+                spec.update(specialist=copy.deepcopy(settings['specialist']),
+                    timing=copy.deepcopy(settings['timing']))
+            super().__init__(specs, worker_factory=native_environment, **kwargs)
+
+    out = args.out.resolve()
+    argv = [sys.argv[0], '--settings', str(out/'settings.json'), '--out', str(out)]
+    if args.resume is not None:
+        argv += ['--resume', str(args.resume)]
+    existed = out.exists()
+    summary = None
+    try:
+        with patch.object(parallel, 'Pool', HandPool), \
+             patch.object(policy, 'Policy', partial(SpecialistPolicy, role=hand, frozen_partner=False)), \
+             patch.object(sys, 'argv', argv):
+            train_parallel.main(settings=settings)
+    finally:
+        original_error = sys.exc_info()[1]
+        if not existed:
+            try:
+                passed = finalize_persistent_run(out)
+                if (out/'report.json').is_file():
+                    summary = summarize_run(out)
+                if passed is False and original_error is None:
+                    raise RuntimeError('persistent lifecycle audit failed; see report.json')
+            except BaseException as audit_error:
+                if original_error is None:
+                    raise
+                print('[training] secondary summary/audit error: '+str(audit_error),
+                    file=sys.stderr, flush=True)
+    return summary
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--hand', choices=('left', 'right'), required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--updates', type=int, default=100)
+    parser.add_argument('--num-envs', type=int, default=2)
+    parser.add_argument('--device', choices=('auto', 'cpu', 'cuda:0'), default='auto')
+    parser.add_argument('--seed', type=int, default=7)
+    parser.add_argument('--horizon', type=int, default=420)
+    parser.add_argument('--size', choices=('small', 'medium', 'large'), default='medium')
+    parser.add_argument('--resume', type=Path)
+    args = parser.parse_args()
+    for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+        os.environ[name] = '1'
+    import isaacgym
+    settings = settings_document(args.hand, updates=args.updates, num_envs=args.num_envs,
+        device=args.device, seed=args.seed, horizon=args.horizon, size=args.size)
+    return run(settings, args)
+
+
+if __name__ == '__main__':
+    main()

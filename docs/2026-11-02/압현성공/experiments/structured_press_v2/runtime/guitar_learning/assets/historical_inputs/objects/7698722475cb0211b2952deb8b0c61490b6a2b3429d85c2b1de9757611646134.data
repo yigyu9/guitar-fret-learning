@@ -1,0 +1,111 @@
+"""Artifact-backed joint preflight gates; synthetic evidence, no native claim."""
+import copy
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+from guitar_learning.imitation.imitation import dataset_manifest
+from guitar_learning.local_skills.learning import contract_digest
+from guitar_learning.joint.proofs import (EVALUATION_SCHEMA, PREFLIGHT_SCHEMA,
+                                         full_safe_episode, validate_preflight)
+
+
+class JointProofTests(unittest.TestCase):
+    def setUp(self):
+        self.folder=tempfile.TemporaryDirectory()
+        self.root=Path(self.folder.name)
+        self.expert=self.root/'expert.pt';self.expert.write_bytes(b'fixed expert weights')
+        self.support=self.root/'native_inputs.json';self.support.write_text('{"physics_hz":240}')
+        self.experts=dataset_manifest([self.expert])
+        self.contract=dict(schema='guitar_learning.training.v1', observation=dict(dimension=1132),
+                           task=dict(joint=dict(schema='guitar_learning.joint.v1')))
+        self.episode=dict(valid=True,reason='timeline_complete',steps=420,task_time_s=7.,
+            joint=dict(safety_invalidated=False,stage_success=False),
+            musical_quality=dict(role='joint',stage_success=False))
+        self.documents=dict(
+            result=dict(schema=EVALUATION_SCHEMA,kind='fixed_experts',completed=True,
+                source_unchanged=True,physical_flags_ok=True,physical_failure_episodes=0,
+                failure=None,cleanup_error=None,forbidden_calls=[],requested_episodes=1,
+                episodes=[copy.deepcopy(self.episode)],contract_sha256=contract_digest(self.contract)),
+            inputs_before=dataset_manifest([self.expert,self.support]),
+            initialization=dict(source_pins=dict(self.experts)),training_contract=self.contract)
+        self.paths={name:self.root/(name+'.json') for name in self.documents}
+        self.gate=self.root/'preflight_gate.json'
+        self.settings=dict(joint=dict(preflight_gate=str(self.gate)))
+        self.seal()
+        self.binding=patch('guitar_learning.joint.transfer.validate_experts',return_value=dict(source_pins=self.experts))
+        self.validate_experts=self.binding.start()
+
+    def tearDown(self):
+        self.binding.stop();self.folder.cleanup()
+
+    def seal(self, **gate_changes):
+        for name,value in self.documents.items():self.paths[name].write_text(json.dumps(value))
+        manifest=dataset_manifest(self.paths.values())
+        gate=dict(schema=PREFLIGHT_SCHEMA,passed=True,expert_pins=dict(self.experts),
+            contract_sha256=contract_digest(self.contract),
+            artifacts={name:dict(path=str(path),sha256=manifest[str(path)]) for name,path in self.paths.items()})
+        gate.update(gate_changes)
+        self.gate.write_text(json.dumps(gate))
+
+    def test_complete_safe_musically_unsuccessful_preflight_permits_fresh_learning(self):
+        result=validate_preflight(self.settings)
+        self.assertEqual(result['contract_sha256'],contract_digest(self.contract))
+        for path in [self.expert,self.support,self.gate,*self.paths.values()]:
+            self.assertEqual(result['pins'][str(path)],dataset_manifest([path])[str(path)])
+        self.assertFalse(self.documents['result']['episodes'][0]['musical_quality']['stage_success'])
+        self.validate_experts.assert_called_once_with(self.settings)
+
+    def test_exact_episode_boundaries_and_explicit_false_safety_required(self):
+        self.assertTrue(full_safe_episode(self.episode))
+        for changes in (dict(valid=False),dict(reason='time_limit'),dict(steps=419),
+                        dict(task_time_s=6.999),dict(joint={}),dict(joint=dict(safety_invalidated=True)),
+                        dict(joint=dict(safety_invalidated=None)),dict(joint=dict(safety_invalidated=0))):
+            with self.subTest(changes=changes):
+                row=copy.deepcopy(self.episode);row.update(changes)
+                self.assertFalse(full_safe_episode(row))
+
+    def test_incomplete_unsafe_or_failed_native_evidence_rejected_even_when_rehashed(self):
+        original=copy.deepcopy(self.documents['result'])
+        variants=[dict(completed=False),dict(source_unchanged=False),dict(physical_flags_ok=False),
+            dict(physical_failure_episodes=1),dict(failure='native failure'),dict(cleanup_error='close failed'),
+            dict(forbidden_calls=['guitar_force']),dict(requested_episodes=2),dict(episodes=[]),
+            dict(episodes=[copy.deepcopy(self.episode)]*5),dict(kind='trained_joint')]
+        for changes in variants:
+            with self.subTest(changes=changes):
+                self.documents['result']=dict(copy.deepcopy(original),**changes);self.seal()
+                with self.assertRaisesRegex(ValueError,'safe complete'):validate_preflight(self.settings)
+        for changes in (dict(reason='time_limit'),dict(steps=419),dict(task_time_s=6.),
+                        dict(joint=dict(safety_invalidated=True))):
+            self.documents['result']=copy.deepcopy(original)
+            self.documents['result']['episodes'][0].update(changes);self.seal()
+            with self.assertRaisesRegex(ValueError,'safe complete'):validate_preflight(self.settings)
+
+    def test_wrong_experts_initialization_or_consumed_evidence_rejected(self):
+        self.seal(expert_pins={str(self.expert):'different'})
+        with self.assertRaisesRegex(ValueError,'exact two validated'):validate_preflight(self.settings)
+        self.documents['initialization']['source_pins']={};self.seal()
+        with self.assertRaisesRegex(ValueError,'safe complete'):validate_preflight(self.settings)
+        self.documents['initialization']['source_pins']=dict(self.experts)
+        self.documents['inputs_before'].pop(str(self.expert));self.seal()
+        with self.assertRaisesRegex(ValueError,'consume the exact'):validate_preflight(self.settings)
+
+    def test_changed_artifact_and_changed_consumed_native_input_rejected(self):
+        self.paths['result'].write_text(self.paths['result'].read_text()+'\n')
+        with self.assertRaisesRegex(RuntimeError,'live input SHA mismatch: .*result.json'):validate_preflight(self.settings)
+        self.seal()
+        self.support.write_text('{"physics_hz":120}')
+        with self.assertRaisesRegex(RuntimeError,'live input SHA mismatch: .*native_inputs.json'):validate_preflight(self.settings)
+
+    def test_wrong_contract_digest_or_missing_artifact_rejected(self):
+        self.seal(contract_sha256='wrong')
+        with self.assertRaisesRegex(ValueError,'safe complete'):validate_preflight(self.settings)
+        self.documents['result']['contract_sha256']='wrong';self.seal()
+        with self.assertRaisesRegex(ValueError,'safe complete'):validate_preflight(self.settings)
+        self.seal(artifacts={})
+        with self.assertRaisesRegex(ValueError,'actual joint preflight artifacts'):validate_preflight(self.settings)
+        with self.assertRaisesRegex(ValueError,'full safe fixed-expert'):validate_preflight(dict(joint={}))
+
+
+if __name__=='__main__':unittest.main()

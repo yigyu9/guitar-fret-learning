@@ -1,0 +1,107 @@
+"""Refit only the left arm, preserving the level, laterally restored guitar."""
+import itertools
+import xml.etree.ElementTree as ET
+from pathlib import Path
+import numpy as np
+from scipy.optimize import least_squares, lsq_linear
+from scipy.spatial.transform import Rotation
+from .common import ROOT, A, BASE, HUMAN, read, save, sha, pin, verify
+from .upright_source_v1 import INITIAL, NATIVE, full_fk, make_state, metrics
+from stability_adapter_2.om_axilla_source_geometry_v3 import CapsuleBodyDistance
+
+
+def main():
+    source = BASE/'upright_horizontal_v1/source_v2'
+    out = BASE/'upright_horizontal_v1/source_v3'
+    out.mkdir(exist_ok=False)
+    pins = pin(extra=[source/'candidate.json', source/'report.json', INITIAL,
+                      NATIVE/'native_properties.json', BASE/'upright_horizontal_v1/source_audit_v1/geometry/report.json',
+                      ROOT/'docs/plans/upright_horizontal_20261015.md', ROOT/'docs/plans/upright_horizontal_yaw_20261015.md',
+                      ROOT/'docs/plans/upright_horizontal_left_clearance_20261015.md'])
+    save(out/'inputs_before.json', pins)
+    candidate = read(source/'candidate.json')
+    report = read(source/'report.json')
+    initial = read(INITIAL)
+    names, bodies = initial['joint_names'], initial['human_body_names']
+    q0 = np.array(candidate['q_ref_rad'])
+    fk, parents = full_fk(names, bodies, candidate['expected_initial_state'], q0)
+    original = fk(q0)
+    ix = np.array([j for j,n in enumerate(names) if n.startswith(('L_Thorax_', 'L_Shoulder_', 'L_Elbow_', 'L_Wrist_'))])
+    bounds = np.column_stack([initial['PD_properties']['lower'], initial['PD_properties']['upper']])
+    lower, upper = np.maximum(bounds[ix,0]+1e-6, q0[ix]-.9), np.minimum(bounds[ix,1]-1e-6, q0[ix]+.9)
+    gp = np.array(candidate['guitar_position_W_m'])
+    gr = Rotation.from_quat(candidate['guitar_quaternion_xyzw'])
+    distance = CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']), HUMAN)
+    properties = read(NATIVE/'native_properties.json')['actual_shape_properties']['human']
+    excluded = {frozenset((e.get('body1'),e.get('body2'))) for e in ET.parse(HUMAN).findall('./contact/exclude')}
+    moving = {'L_Thorax', 'L_Shoulder', 'L_Elbow'}
+    pairs = []
+    for a,b in itertools.combinations(distance.capsules, 2):
+        if (a in moving)==(b in moving):
+            continue
+        if parents.get(a)==b or parents.get(b)==a or frozenset((a,b)) in excluded:
+            continue
+        if any((x['filter']&y['filter'])==0 for x in properties[a] for y in properties[b]):
+            pairs.append((a,b))
+
+    def gaps(poses):
+        capsules = {n:(poses[n][0]+poses[n][1].apply(ep),radius) for n,(ep,radius) in distance.capsules.items()}
+        values = []
+        for a,b in pairs:
+            x,ra = capsules[a]
+            y,rb = capsules[b]
+            matrix = np.column_stack([x[1]-x[0],y[0]-y[1]])
+            fit = lsq_linear(matrix, y[0]-x[0], bounds=([0.,0.],[1.,1.]), tol=1e-12)
+            values.append(float(np.linalg.norm(matrix@fit.x-(y[0]-x[0]))-ra-rb))
+        return np.array(values)
+
+    goalp, goalr = original['LH:palm']
+    def residual(v):
+        q = q0.copy()
+        q[ix] = v
+        poses = fk(q)
+        p,r = poses['LH:palm']
+        return np.r_[1500*(p-goalp), 100*(goalr.inv()*r).as_rotvec(),
+                     10000*np.minimum(gaps(poses)-.001, 0.), .02*(v-q0[ix])]
+    fits = []
+    for delta in (np.zeros(len(ix)), np.array([.2,0.,-.2,0.,0.,.2,0.,0.,-.2,0.,0.,0.])):
+        fit = least_squares(residual, np.clip(q0[ix]+delta, lower+1e-8, upper-1e-8),
+                            bounds=(lower,upper), max_nfev=160, diff_step=1e-4, ftol=1e-9, xtol=1e-9)
+        fits.append(fit)
+        print('left arm clearance fit', fit.cost, flush=True)
+    best = min(fits, key=lambda f:f.cost)
+    q = q0.copy()
+    q[ix] = best.x
+    q = q.astype(np.float32).astype(float)
+    poses = fk(q)
+    p,r = poses['LH:palm']
+    hand = dict(position_error_m=float(np.linalg.norm(p-goalp)), rotation_error_deg=float(np.rad2deg((goalr.inv()*r).magnitude())))
+    state = make_state(initial['native_initial_state'], bodies, q, poses, gp, gr)
+    measured = metrics(poses, distance, gp, gr)
+    for j in ix:
+        n = names[j]
+        candidate['upper_deltas_rad'][n] = float(candidate['upper_deltas_rad'].get(n,0.)+q[j]-q0[j])
+    frozen = np.ones(len(q),dtype=bool)
+    frozen[ix] = False
+    assert np.array_equal(q[frozen],q0[frozen]) and np.all(q>=bounds[:,0]) and np.all(q<=bounds[:,1])
+    save(out/'support_candidate.json', {'right_block_cradle': {'capsule_body': measured['capsules'],
+         'upper_arm_witness': measured['capsules']['R_Shoulder'], 'scope':'Same level/lateral guitar; left-arm collision clearance refit only.'}})
+    candidate.update(q_ref_rad=q.tolist(), expected_initial_state=state,
+                     support_candidate=str(out/'support_candidate.json'),
+                     scope='Same source2 guitar/trunk/head/lower/right arm/fingers; left arm refit at identical guitar-local palm pose.')
+    save(out/'candidate.json',candidate)
+    save(out/'predicted_state.json',state)
+    clear = gaps(poses)
+    valid = (hand['position_error_m']<.005 and hand['rotation_error_deg']<2
+             and min(clear)>=.0001 and all(v['gap_m']>=.00005 for v in measured['capsules'].values()))
+    report.update(local_geometry_reach_eligible=valid, full_collision_audit_complete=False,
+                  candidate_metrics=measured, left_hand_error_after_clearance=hand,
+                  left_arm_relevant_capsule_gaps=[dict(a=a,b=b,gap_m=float(g)) for (a,b),g in zip(pairs,clear)],
+                  candidate_sha256=sha(out/'candidate.json'), inputs_unchanged=verify(pins))
+    save(out/'report.json',report)
+    print('valid',valid,'hand',hand,'min self gap',min(clear),flush=True)
+    assert valid and verify(pins)
+
+
+if __name__=='__main__':
+    main()

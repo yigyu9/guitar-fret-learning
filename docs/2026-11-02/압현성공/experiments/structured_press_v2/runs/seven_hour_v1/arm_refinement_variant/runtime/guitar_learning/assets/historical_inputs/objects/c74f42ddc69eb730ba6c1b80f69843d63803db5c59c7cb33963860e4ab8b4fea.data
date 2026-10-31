@@ -1,0 +1,13 @@
+# 의자 초기 미세배치 분리진단
+
+상위 사용자 승인 하체 복원/105연결/초기자세수정/발지면 조정과 root의 −2.5mm 의자 초기배치 진단 승인에 따른 새 조건이다. 기존 소비 소스·실패run·원형 및 교정안은 불변이다.
+
+- [ ] source v4에서 corrected-right-v2 인간105/root/기타/발 exact 유지, chair worldY만 −2.5mm(필요시 −3mm) 이동 후 모든 chair pair 검사. 동적human links·guitar와chair 목표 최소2.2mm clearance; fixedPelvis–fixedchair의 기존 source교차는별도보고하고전신무교차주장제외; source는 cooked PhysX 인증이 아니다.
+- [ ] scene_v3/run_v5 독립 사전검수 후 같은 finite105 제어/0.01m/s Jacobian gate/5초 한도로 실제 초기FK·의자배치·접촉·동적응답 검증.
+- [ ] 성공시 동일 초기배치15초 왼손해제. 실패면 동일원자료·세시점 끝영상 보존 및 원인보고. 임의 gate완화 없음.
+
+근거: 원형 및 오른발만교정한 native 첫step에서 왼하체12 actualq/qd는 exact하고 L_Ankle COM Jacobian-velocity오차 .010734m/s로중단. 오른ankle오차는 지면겹침제거 후 .003069→5.1e−9m/s. 왼 Hip/chair 초기교차는 약.245mm, raw lambda40451/36837(보정 N단위아님). LHip±.03rad source 교정은 +.035mm clearance에 그치고 thigh–guitar gap을최대8.22mm바꿔미채택. 인간/기타를 움직이는 대신 의자만 초기생성전에 미세배치하여 해당원인을 분리한다.
+
+candidate.chair_translation_W_m=[0,−.0025,0] 또는 [0,−.003,0]만허용한다. 원chair half/회전은보존하며 center_xy에constructor에서한번더한다. 런타임 state/transform/property overwrite는기존 guard로금지. chair actual body state도240Hz보존하고초기배치1um오차/고정상태불변검사. 인체105/G 초기FK,물성/자기충돌/중력/유한gain/48POSITION+57EFFORT 경로는기존과동일하다.
+
+이 조건은 의자 원래배치와 동일한 실험이라고주장하지않는다. 고정root 하체동적모델진단이며 보행·전신자유균형·음악성공·fresh54 RL이식이아니다. source/helper/입력/XML모든mesh 사전후SHA와 정상/실패 전구간 실제3view 및 raw기록을 유지한다.

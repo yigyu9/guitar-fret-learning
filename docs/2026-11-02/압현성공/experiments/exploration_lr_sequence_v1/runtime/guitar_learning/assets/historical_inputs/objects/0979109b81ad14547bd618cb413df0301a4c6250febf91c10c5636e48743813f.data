@@ -1,0 +1,153 @@
+"""CPU checks for explicit post-checkpoint RNG and reset-state diagnostics."""
+import copy
+import math
+import random
+import sys
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from guitar_learning.contact_recovery.evaluation import (
+    evaluation_case, apply_evaluation_seed, initial_state_snapshot, compare_initial_states)
+
+
+SHA = 'a'*64
+
+
+def environment():
+    body = dict(pose=dict(p=dict(x=1., y=2., z=3.), r=dict(x=0., y=0., z=0., w=1.)),
+                vel=dict(linear=dict(x=0., y=0., z=0.), angular=dict(x=0., y=0., z=0.)))
+    native = dict(human_dof_states=[dict(pos=0., vel=0.) for _ in range(105)], guitar_body_states=[body])
+    scene = SimpleNamespace(names=['joint_'+str(i) for i in range(105)], guitar_bodies=['guitar'],
+                            target=[0.]*105, last_target=[0.]*105)
+    controller = SimpleNamespace(target_rows=[], right_target=None, play_latch=False)
+    control = SimpleNamespace(session=SimpleNamespace(scene=scene, controller=controller), codec_previous=[0.]*81)
+    return SimpleNamespace(control=control, last_sample=dict(native=native, native_contacts=dict(contacts=[])),
+                           previous_action=[0.]*39, last_measured=dict(clean=False, time_s=0.))
+
+
+class EvaluationSeedTests(unittest.TestCase):
+    def test_case_labels_preserve_seed_and_separate_modes(self):
+        for mode in ('deterministic', 'stochastic'):
+            case = evaluation_case(7, case_index=1, evaluation_mode=mode, process_mode='persistent_reset')
+            self.assertEqual(case['seed'], 7)
+            self.assertEqual(case['evaluation_mode'], mode)
+        self.assertEqual(evaluation_case(0, case_index=0, evaluation_mode='deterministic',
+                                        process_mode='fresh_process')['process_mode'], 'fresh_process')
+
+    def test_rejects_ambiguous_seed_and_process_labels(self):
+        valid = dict(case_index=0, evaluation_mode='deterministic', process_mode='fresh_process')
+        for seed in (-1, 2**32, True, 1.2):
+            with self.assertRaises(ValueError): evaluation_case(seed, **valid)
+        for kwargs in (dict(valid, case_index=1), dict(valid, evaluation_mode='unknown'),
+                       dict(valid, process_mode='fresh'), dict(valid, case_index=True)):
+            with self.assertRaises(ValueError): evaluation_case(7, **kwargs)
+
+    def test_requires_loaded_checkpoint_before_touching_rng(self):
+        case = evaluation_case(7, case_index=0, evaluation_mode='deterministic', process_mode='fresh_process')
+        with patch('random.seed') as seed:
+            for loaded, sha in ((False, SHA), (True, 'bad'), (True, SHA.upper())):
+                with self.assertRaises(ValueError):
+                    apply_evaluation_seed(case, checkpoint_loaded=loaded, checkpoint_sha256=sha)
+            seed.assert_not_called()
+
+    def test_reseeds_all_backends_after_saved_rng_restore(self):
+        calls = []
+        numpy = SimpleNamespace(random=SimpleNamespace(seed=lambda seed: calls.append(('numpy', seed))))
+        cuda = SimpleNamespace(is_available=lambda: True, manual_seed_all=lambda seed: calls.append(('cuda', seed)))
+        torch = SimpleNamespace(manual_seed=lambda seed: calls.append(('torch', seed)), cuda=cuda)
+        case = evaluation_case(23, case_index=2, evaluation_mode='stochastic', process_mode='persistent_reset')
+        with patch.dict(sys.modules, numpy=numpy, torch=torch), patch('random.seed', side_effect=lambda seed: calls.append(('python', seed))):
+            calls.append(('strict_load_restored_rng', 999))
+            result = apply_evaluation_seed(case, checkpoint_loaded=True, checkpoint_sha256=SHA)
+        self.assertEqual(calls, [('strict_load_restored_rng', 999), ('python', 23), ('numpy', 23), ('torch', 23), ('cuda', 23)])
+        self.assertTrue(result['seed_applied_after_checkpoint_load'])
+        self.assertTrue(result['seeded_backends']['cuda'])
+
+    def test_cpu_seed_record_does_not_claim_cuda_seeded(self):
+        numpy = SimpleNamespace(random=SimpleNamespace(seed=lambda seed: None))
+        torch = SimpleNamespace(manual_seed=lambda seed: None, cuda=SimpleNamespace(is_available=lambda: False))
+        case = evaluation_case(7, case_index=0, evaluation_mode='deterministic', process_mode='fresh_process')
+        state = random.getstate()
+        try:
+            with patch.dict(sys.modules, numpy=numpy, torch=torch):
+                result = apply_evaluation_seed(case, checkpoint_loaded=True, checkpoint_sha256=SHA)
+            self.assertFalse(result['seeded_backends']['cuda'])
+        finally:
+            random.setstate(state)
+
+
+class InitialStateTests(unittest.TestCase):
+    def test_snapshot_is_detached_and_read_only(self):
+        env = environment()
+        before = copy.deepcopy(env)
+        state = initial_state_snapshot(env)
+        self.assertEqual(env.__dict__, before.__dict__)
+        state['human_position105'][0] = 1.
+        state['controller_history']['target_rows']['value'].append(1.)
+        self.assertEqual(env.last_sample['native']['human_dof_states'][0]['pos'], 0.)
+        self.assertEqual(env.control.session.controller.target_rows, [])
+        self.assertIn('not observed or restored', state['scope'])
+
+    def test_quaternion_sign_and_unit_roundoff_are_safe(self):
+        state = initial_state_snapshot(environment())
+        current = copy.deepcopy(state)
+        current['guitar_bodies'][0]['quaternion_xyzw'] = [0., 0., 0., -1.0000001]
+        self.assertTrue(compare_initial_states(state, current)['matched'])
+        self.assertEqual(compare_initial_states(state, current)['maxima']['guitar_rotation_error_rad'], 0.)
+
+    def test_rotations_and_velocity_differences_reported(self):
+        state = initial_state_snapshot(environment())
+        current = copy.deepcopy(state)
+        current['guitar_bodies'][0]['quaternion_xyzw'] = [math.sin(.01/2), 0., 0., math.cos(.01/2)]
+        current['human_velocity105'][4] = .02
+        result = compare_initial_states(state, current)
+        self.assertFalse(result['matched'])
+        self.assertAlmostEqual(result['maxima']['guitar_rotation_error_rad'], .01)
+        self.assertAlmostEqual(result['maxima']['scalar_abs_error'], .02)
+        self.assertEqual({v['kind'] for v in result['mismatches']}, {'rotation', 'scalar'})
+
+    def test_target_action_controller_and_contact_history_compared(self):
+        state = initial_state_snapshot(environment())
+        for field, mutate in (
+            ('target105', lambda x: x.__setitem__(0, .01)),
+            ('last_target105', lambda x: x.__setitem__(0, .01)),
+            ('codec_target81', lambda x: x.__setitem__(0, .01)),
+            ('previous_action39', lambda x: x.__setitem__(0, .01)),
+            ('controller_history', lambda x: x['target_rows']['value'].append(dict(t=.01))),
+            ('contact_history', lambda x: x['measured'].__setitem__('clean', True))):
+            current = copy.deepcopy(state)
+            mutate(current[field])
+            self.assertFalse(compare_initial_states(state, current)['matched'], field)
+
+    def test_invalid_shapes_and_nonfinite_states_rejected(self):
+        state = initial_state_snapshot(environment())
+        for field, invalid in (('human_position105', [0.]*104), ('previous_action39', [0.]*38),
+                               ('human_velocity105', [float('nan')]*105), ('target105', [True]*105)):
+            bad = copy.deepcopy(state); bad[field] = invalid
+            with self.assertRaises(ValueError): compare_initial_states(state, bad)
+        for quaternion in ([0.]*4, [0.]*3, [0., 0., 0., float('inf')]):
+            bad = copy.deepcopy(state); bad['guitar_bodies'][0]['quaternion_xyzw'] = quaternion
+            with self.assertRaises(ValueError): compare_initial_states(state, bad)
+        bad = environment(); bad.last_measured['value'] = float('inf')
+        with self.assertRaises(ValueError): initial_state_snapshot(bad)
+
+    def test_name_order_changes_are_not_matched_by_accident(self):
+        state = initial_state_snapshot(environment())
+        current = copy.deepcopy(state)
+        current['human_names'][0:2] = current['human_names'][1::-1]
+        self.assertFalse(compare_initial_states(state, current)['matched'])
+        current['human_names'][0] = current['human_names'][1]
+        with self.assertRaises(ValueError): compare_initial_states(state, current)
+
+    def test_tolerances_are_explicit_and_validated(self):
+        state = initial_state_snapshot(environment())
+        current = copy.deepcopy(state); current['human_position105'][0] = 1e-7
+        self.assertTrue(compare_initial_states(state, current)['matched'])
+        self.assertFalse(compare_initial_states(state, current, scalar_atol=0.)['matched'])
+        for tol in (-1., float('nan'), True):
+            with self.assertRaises(ValueError): compare_initial_states(state, current, scalar_atol=tol)
+
+
+if __name__ == '__main__':
+    unittest.main()

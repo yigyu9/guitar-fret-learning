@@ -1,0 +1,2605 @@
+{
+  "worker_id": 0,
+  "env_id": 0,
+  "valid": true,
+  "reason": "timeline_complete",
+  "failure_reasons": [],
+  "cost": 0.0,
+  "reward": 0.08920573443174362,
+  "steps": 360,
+  "task_time_s": 6.0,
+  "song": {
+    "schema": "guitar_learning.gpu_loaded_geometry_song.v1",
+    "role": "left",
+    "denominator": 1,
+    "target_count": 1,
+    "left_success_count": 1,
+    "right_success_count": 0,
+    "coupled_hit_count": 0,
+    "left_missed_count": 0,
+    "right_missed_count": 1,
+    "wrong_crossings": 0,
+    "repeat_crossings": 0,
+    "completed": true,
+    "stage_success": true,
+    "provisional_success": true,
+    "safety_invalidated": false,
+    "task_time_s": 6.0,
+    "mean_clean_audible_fraction": 0.9783333333333333,
+    "strict_music": {
+      "matched50": 0,
+      "matched100": 0,
+      "wrong_crossings": 0,
+      "missed_strict": 1
+    },
+    "contact_measurement": {
+      "schema": "guitar_learning.gpu_distal_pad_geometry.v2",
+      "force_threshold_n": 0.01,
+      "lateral_max_m": 0.003,
+      "height_abs_max_m": null,
+      "fret_cell_margin_m": 0.002,
+      "finger_proxies": "128 actual-triangle distal flexion-side patch samples per assigned finger",
+      "surface_sampling": "clipped eligible source triangles, deterministic stratified area sampling",
+      "candidate": "any same assigned distal patch point within inward finite fret cell, lateral3mm and signed plane height[-1,3]mm, facing cosine>=0.1, with distal body load",
+      "evidence": "GPU net rigid body contact force and live source-mesh surface geometry",
+      "limitations": "no body pair, contact witness, calibrated string force, pressure, vibration or sound; finite sampling can miss surface contacts",
+      "compatibility": "new measurement; original pair-feature clean success is not inherited",
+      "signed_plane_height_m": [
+        -0.001,
+        0.003
+      ],
+      "minimum_normal_cos": 0.1,
+      "wrong_press": {
+        "schema": "guitar_learning.wrong_press_sources.v2",
+        "causes": [
+          "other_higher",
+          "own_wrong_fret",
+          "own_wrong_string"
+        ],
+        "effective": "selected target geometry: own loaded facing distal pad at an unauthorized string/fret, or another finger at a higher fret on the target string; penalties only on audible overlap",
+        "own": "positive assigned pad takes precedence over incidental own samples; any simultaneous active selected own target cell is authorized",
+        "other": "full thumb/finger2/3 loaded virtual-string samples; same/lower fret is not wrong; higher blocks even with positive assigned pad",
+        "pad_geometry": "finite unique nearest press-plane string within3mm, signed height[-1,3]mm, facing cosine>=0.1, distal netload>=0.01N, fret interior inset2mm",
+        "times": "raw geometry at both physics endpoints, integrated over clipped audible overlap; no time-mask before trapezoid; overlapping sources do not multiply penalty",
+        "confidence": "only unambiguous fret interiors contribute; no inferred wrong from unloaded/absent contact",
+        "source_fret_range": "inclusive min/max contributing source fret per target/body; read only where source time>0",
+        "next_preparation": "matches future scoped own finger/string/fret in press-2..onset; diagnostic only, never exempts current interference",
+        "scope": "GPU left finger-skill only; net body force cannot identify contact partner, calibrated pressure or sound"
+      }
+    },
+    "scope": "new loaded-body geometric candidates; not original pair-feature clean or acoustic success"
+  },
+  "musical_quality": {
+    "schema": "guitar_learning.gpu_loaded_geometry_song.v1",
+    "role": "left",
+    "stage_success": true,
+    "provisional_success": true,
+    "song": {
+      "schema": "guitar_learning.gpu_loaded_geometry_song.v1",
+      "role": "left",
+      "denominator": 1,
+      "target_count": 1,
+      "left_success_count": 1,
+      "right_success_count": 0,
+      "coupled_hit_count": 0,
+      "left_missed_count": 0,
+      "right_missed_count": 1,
+      "wrong_crossings": 0,
+      "repeat_crossings": 0,
+      "completed": true,
+      "stage_success": true,
+      "provisional_success": true,
+      "safety_invalidated": false,
+      "task_time_s": 6.0,
+      "mean_clean_audible_fraction": 0.9783333333333333,
+      "strict_music": {
+        "matched50": 0,
+        "matched100": 0,
+        "wrong_crossings": 0,
+        "missed_strict": 1
+      },
+      "contact_measurement": {
+        "schema": "guitar_learning.gpu_distal_pad_geometry.v2",
+        "force_threshold_n": 0.01,
+        "lateral_max_m": 0.003,
+        "height_abs_max_m": null,
+        "fret_cell_margin_m": 0.002,
+        "finger_proxies": "128 actual-triangle distal flexion-side patch samples per assigned finger",
+        "surface_sampling": "clipped eligible source triangles, deterministic stratified area sampling",
+        "candidate": "any same assigned distal patch point within inward finite fret cell, lateral3mm and signed plane height[-1,3]mm, facing cosine>=0.1, with distal body load",
+        "evidence": "GPU net rigid body contact force and live source-mesh surface geometry",
+        "limitations": "no body pair, contact witness, calibrated string force, pressure, vibration or sound; finite sampling can miss surface contacts",
+        "compatibility": "new measurement; original pair-feature clean success is not inherited",
+        "signed_plane_height_m": [
+          -0.001,
+          0.003
+        ],
+        "minimum_normal_cos": 0.1,
+        "wrong_press": {
+          "schema": "guitar_learning.wrong_press_sources.v2",
+          "causes": [
+            "other_higher",
+            "own_wrong_fret",
+            "own_wrong_string"
+          ],
+          "effective": "selected target geometry: own loaded facing distal pad at an unauthorized string/fret, or another finger at a higher fret on the target string; penalties only on audible overlap",
+          "own": "positive assigned pad takes precedence over incidental own samples; any simultaneous active selected own target cell is authorized",
+          "other": "full thumb/finger2/3 loaded virtual-string samples; same/lower fret is not wrong; higher blocks even with positive assigned pad",
+          "pad_geometry": "finite unique nearest press-plane string within3mm, signed height[-1,3]mm, facing cosine>=0.1, distal netload>=0.01N, fret interior inset2mm",
+          "times": "raw geometry at both physics endpoints, integrated over clipped audible overlap; no time-mask before trapezoid; overlapping sources do not multiply penalty",
+          "confidence": "only unambiguous fret interiors contribute; no inferred wrong from unloaded/absent contact",
+          "source_fret_range": "inclusive min/max contributing source fret per target/body; read only where source time>0",
+          "next_preparation": "matches future scoped own finger/string/fret in press-2..onset; diagnostic only, never exempts current interference",
+          "scope": "GPU left finger-skill only; net body force cannot identify contact partner, calibrated pressure or sound"
+        }
+      },
+      "scope": "new loaded-body geometric candidates; not original pair-feature clean or acoustic success"
+    }
+  },
+  "cost_components": {
+    "termination_base": 0.0,
+    "termination_remaining_time": 0.0,
+    "termination_remaining_negative_note_budget": 0.0,
+    "running_physics": 0.0
+  },
+  "left_curriculum": {
+    "schema": "guitar_learning.finger_skill_metrics.v1",
+    "full_safe": true,
+    "reach_fraction": 1.0,
+    "contact_fraction": 1.0,
+    "finger_metrics": [
+      {
+        "target_count": 1,
+        "near_fraction": 1.0,
+        "contact_fraction": 1.0,
+        "success_fraction": 1.0,
+        "clean_fraction": 0.9783333333333333
+      },
+      {
+        "target_count": 0,
+        "near_fraction": 0.0,
+        "contact_fraction": 0.0,
+        "success_fraction": 0.0,
+        "clean_fraction": 0.0
+      },
+      {
+        "target_count": 0,
+        "near_fraction": 0.0,
+        "contact_fraction": 0.0,
+        "success_fraction": 0.0,
+        "clean_fraction": 0.0
+      },
+      {
+        "target_count": 0,
+        "near_fraction": 0.0,
+        "contact_fraction": 0.0,
+        "success_fraction": 0.0,
+        "clean_fraction": 0.0
+      }
+    ],
+    "scope": "diagnostic selected-task metrics; no stage weighting or mastery gate"
+  },
+  "left_note_ledger": {
+    "schema": "guitar_learning.surface_note_ledger.v8",
+    "target_ids": [
+      "event-000000/string-3/note-0"
+    ],
+    "values": {
+      "left": [
+        true
+      ],
+      "near_done": [
+        true
+      ],
+      "contact_done": [
+        true
+      ],
+      "clean": [
+        2.4458333333333333
+      ],
+      "clean_streak": [
+        0.0
+      ],
+      "best_clean_streak": [
+        2.4458333333333333
+      ],
+      "wrong": [
+        0.0
+      ],
+      "missing": [
+        0.05208333333333326
+      ],
+      "wrong_supported_time": [
+        0.0
+      ],
+      "wrong_ambiguous_time": [
+        0.0
+      ],
+      "wrong_next_preparation_time": [
+        0.0
+      ],
+      "contact_time": [
+        2.4458333333333333
+      ],
+      "contact_streak": [
+        0.0
+      ],
+      "best_contact_streak": [
+        2.4458333333333333
+      ],
+      "contact_progress": [
+        1.0
+      ],
+      "exposure_time": [
+        4.5
+      ],
+      "near_time": [
+        2.725
+      ],
+      "surface_min": [
+        0.000321611063554883
+      ],
+      "geometry_time": [
+        2.4833333333333334
+      ],
+      "loaded_target_time": [
+        2.45
+      ],
+      "body_load_time": [
+        2.45
+      ],
+      "facing_time": [
+        2.4833333333333334
+      ],
+      "middle_target_time": [
+        0.0
+      ],
+      "distal_target_time": [
+        2.45
+      ],
+      "rejected_target_time": [
+        0.0
+      ],
+      "other_higher_time": [
+        0.0
+      ],
+      "own_wrong_fret_time": [
+        0.0
+      ],
+      "own_wrong_string_time": [
+        0.0
+      ],
+      "performance_paid": [
+        0.0020833333643774164
+      ],
+      "performance_settled": [
+        true
+      ]
+    },
+    "required_clean_s": [
+      1.0
+    ],
+    "scope": "same order as task schedule; clean is cumulative valid overlap in onset..end; clean_streak is current uninterrupted audible overlap, resets on invalid contact or outside window; best_clean_streak retains its maximum for graded missed penalty; left latches once at required_clean_s; contact_time is cumulative valid overlap in press..end, contact_streak is current uninterrupted overlap and resets on invalid contact or outside window; contact_done latches once at min(0.05,end-press); best_contact_streak retains longest press..end overlap; contact_progress=min(best_contact_streak/tau,1) is consumed raw budget progress, not received reward; stage-weighted payout with failed-tick suppression is in reward_components.song_left_contact; pad distance/geometry/facing/positive use source press plane and inward cell; body_load is assigned distal load; middle/distal/rejected target diagnostics retain full original virtual-string samples; wrong uses assigned-pad errors and other-finger higher frets v2; rejected means old loaded target without valid pad candidate, not certified dorsal contact; times may overlap; surface_min=0 when exposure_time=0; no contact pair, pressure or sound",
+    "wrong_press_sources": {
+      "contract": {
+        "schema": "guitar_learning.wrong_press_sources.v2",
+        "causes": [
+          "other_higher",
+          "own_wrong_fret",
+          "own_wrong_string"
+        ],
+        "effective": "selected target geometry: own loaded facing distal pad at an unauthorized string/fret, or another finger at a higher fret on the target string; penalties only on audible overlap",
+        "own": "positive assigned pad takes precedence over incidental own samples; any simultaneous active selected own target cell is authorized",
+        "other": "full thumb/finger2/3 loaded virtual-string samples; same/lower fret is not wrong; higher blocks even with positive assigned pad",
+        "pad_geometry": "finite unique nearest press-plane string within3mm, signed height[-1,3]mm, facing cosine>=0.1, distal netload>=0.01N, fret interior inset2mm",
+        "times": "raw geometry at both physics endpoints, integrated over clipped audible overlap; no time-mask before trapezoid; overlapping sources do not multiply penalty",
+        "confidence": "only unambiguous fret interiors contribute; no inferred wrong from unloaded/absent contact",
+        "source_fret_range": "inclusive min/max contributing source fret per target/body; read only where source time>0",
+        "next_preparation": "matches future scoped own finger/string/fret in press-2..onset; diagnostic only, never exempts current interference",
+        "scope": "GPU left finger-skill only; net body force cannot identify contact partner, calibrated pressure or sound"
+      },
+      "body_names": [
+        "human/LH:thumb2",
+        "human/LH:thumb3",
+        "human/LH:index2",
+        "human/LH:index3",
+        "human/LH:middle2",
+        "human/LH:middle3",
+        "human/LH:ring2",
+        "human/LH:ring3",
+        "human/LH:pinky2",
+        "human/LH:pinky3"
+      ],
+      "target_strings_1based": [
+        3
+      ],
+      "values": {
+        "wrong_source_time": [
+          [
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ]
+          ]
+        ],
+        "wrong_source_fret_min": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "wrong_source_fret_max": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ]
+      }
+    },
+    "focus_mask": [
+      true
+    ],
+    "selected_target_ids": [
+      "event-000000/string-3/note-0"
+    ]
+  },
+  "reward_components": {
+    "song_left_approach": -1.4936878681182861,
+    "song_left_contact": 0.2500000298023224,
+    "song_clean_hold": 0.9783325791358948,
+    "song_left_success": 0.25,
+    "song_wrong_press": 0.0,
+    "song_performance_deficit": -0.00208333320915699,
+    "song_finger_standby": 0.1026768684387207,
+    "song_thumb_support": 0.003966956399381161,
+    "action_change": 0.0
+  },
+  "left_finger_motion": {
+    "schema": "guitar_learning.gpu_left_finger_motion.v3",
+    "joint_names": [
+      "LH:thumb1_x",
+      "LH:thumb1_y",
+      "LH:thumb1_z",
+      "LH:thumb2",
+      "LH:thumb3",
+      "LH:index1_x",
+      "LH:index1_z",
+      "LH:index2",
+      "LH:index3",
+      "LH:middle1_x",
+      "LH:middle1_z",
+      "LH:middle2",
+      "LH:middle3",
+      "LH:ring1_x",
+      "LH:ring1_z",
+      "LH:ring2",
+      "LH:ring3",
+      "LH:pinky1_x",
+      "LH:pinky1_z",
+      "LH:pinky2",
+      "LH:pinky3"
+    ],
+    "action_mode": "position",
+    "sampling_hz": 60,
+    "range_samples": 361,
+    "endpoint_samples": 360,
+    "action_samples": 360,
+    "action_change_pairs": 359,
+    "values": {
+      "actual_min_rad": [
+        0.6108652353286743,
+        -1.1031173467636108,
+        0.17398114502429962,
+        0.1743336170911789,
+        0.8726646304130554,
+        0.2682667374610901,
+        0.19677352905273438,
+        0.6497174501419067,
+        0.23328104615211487,
+        0.46169742941856384,
+        0.2966908812522888,
+        1.0250170230865479,
+        0.46228909492492676,
+        0.47142258286476135,
+        0.32315123081207275,
+        1.086272120475769,
+        0.43709373474121094,
+        0.579596996307373,
+        0.394393652677536,
+        0.8870441913604736,
+        0.3034254014492035
+      ],
+      "actual_max_rad": [
+        0.6111283302307129,
+        -1.102449893951416,
+        0.1745329201221466,
+        0.1745329201221466,
+        0.8727411031723022,
+        0.7262866497039795,
+        0.2276831567287445,
+        1.0258488655090332,
+        0.33122214674949646,
+        0.46187272667884827,
+        0.296706885099411,
+        1.0250431299209595,
+        0.462301105260849,
+        0.47158282995224,
+        0.32316699624061584,
+        1.0863041877746582,
+        0.43710654973983765,
+        0.5796952247619629,
+        0.3944171369075775,
+        0.8870611786842346,
+        0.30343398451805115
+      ],
+      "actual_range_rad": [
+        0.0002630949020385742,
+        0.0006674528121948242,
+        0.0005517750978469849,
+        0.0001993030309677124,
+        7.647275924682617e-05,
+        0.4580199122428894,
+        0.030909627676010132,
+        0.37613141536712646,
+        0.09794110059738159,
+        0.00017529726028442383,
+        1.6003847122192383e-05,
+        2.6106834411621094e-05,
+        1.2010335922241211e-05,
+        0.0001602470874786377,
+        1.576542854309082e-05,
+        3.2067298889160156e-05,
+        1.2814998626708984e-05,
+        9.822845458984375e-05,
+        2.3484230041503906e-05,
+        1.6987323760986328e-05,
+        8.58306884765625e-06
+      ],
+      "target_min_rad": [
+        0.6108652353286743,
+        -1.1031173467636108,
+        0.1745329201221466,
+        0.1745329201221466,
+        0.8726646304130554,
+        0.2577512562274933,
+        0.18873359262943268,
+        0.6437889337539673,
+        0.23564709722995758,
+        0.46187272667884827,
+        0.2967059910297394,
+        1.0250170230865479,
+        0.46228909492492676,
+        0.47158282995224,
+        0.3231619596481323,
+        1.086272120475769,
+        0.43709373474121094,
+        0.5796952247619629,
+        0.394393652677536,
+        0.8870441913604736,
+        0.3034254014492035
+      ],
+      "target_max_rad": [
+        0.6108652353286743,
+        -1.1031173467636108,
+        0.1745329201221466,
+        0.1745329201221466,
+        0.8726646304130554,
+        0.750050961971283,
+        0.2317042350769043,
+        1.0342750549316406,
+        0.3324486017227173,
+        0.46187272667884827,
+        0.2967059910297394,
+        1.0250170230865479,
+        0.46228909492492676,
+        0.47158282995224,
+        0.3231619596481323,
+        1.086272120475769,
+        0.43709373474121094,
+        0.5796952247619629,
+        0.394393652677536,
+        0.8870441913604736,
+        0.3034254014492035
+      ],
+      "target_range_rad": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.4922997057437897,
+        0.04297064244747162,
+        0.39048612117767334,
+        0.0968015044927597,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "action_mean": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.02182069563698153,
+        -0.0030216220501137693,
+        0.025880375065996,
+        0.014905626026706564,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "action_mean_abs": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.17115273379458815,
+        0.0310313290947104,
+        0.19609140594774443,
+        0.04250412986924251,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "action_positive_fraction": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.5166666666666667,
+        0.4861111111111111,
+        0.5194444444444445,
+        0.5638888888888889,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "action_negative_fraction": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.48333333333333334,
+        0.513888888888889,
+        0.48055555555555557,
+        0.4361111111111111,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "action_zero_fraction": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "action_mean_abs_change": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.002014200179772789,
+        0.00037622417084623677,
+        0.0023221712466069914,
+        0.0005279881438671048,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "action_opposite_sign_fraction": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.002785515320334262,
+        0.002785515320334262,
+        0.002785515320334262,
+        0.005571030640668524,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "limit_outward_command_fraction": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "actual_native_limit_fraction": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_native_limit_fraction": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "tracking_error_rms_rad": [
+        0.00022178584059541194,
+        0.0006193792006799634,
+        0.0004931523876181454,
+        0.00017147425691690544,
+        6.80872831794544e-05,
+        0.037587128817957886,
+        0.006554880090477299,
+        0.02862894263841552,
+        0.010110027663673153,
+        0.0001578722930735203,
+        7.627306530758253e-06,
+        2.1513197247378897e-05,
+        1.0669425539733143e-05,
+        0.0001440557489384889,
+        4.218488351384304e-06,
+        2.8602561955277652e-05,
+        1.1548834347330351e-05,
+        8.631766199122707e-05,
+        1.3096075693371816e-05,
+        1.3643744559578918e-05,
+        7.82539492611498e-06
+      ],
+      "tracking_error_max_abs_rad": [
+        0.0002630949020385742,
+        0.0006674528121948242,
+        0.0005517750978469849,
+        0.0001993030309677124,
+        7.647275924682617e-05,
+        0.17035934329032898,
+        0.017895936965942383,
+        0.14738190174102783,
+        0.06059330701828003,
+        0.00017529726028442383,
+        1.5109777450561523e-05,
+        2.6106834411621094e-05,
+        1.2010335922241211e-05,
+        0.0001602470874786377,
+        1.0728836059570312e-05,
+        3.2067298889160156e-05,
+        1.2814998626708984e-05,
+        9.822845458984375e-05,
+        2.3484230041503906e-05,
+        1.6987323760986328e-05,
+        8.58306884765625e-06
+      ]
+    },
+    "scope": {
+      "schema": "guitar_learning.gpu_left_finger_motion.v3",
+      "joint_names": [
+        "LH:thumb1_x",
+        "LH:thumb1_y",
+        "LH:thumb1_z",
+        "LH:thumb2",
+        "LH:thumb3",
+        "LH:index1_x",
+        "LH:index1_z",
+        "LH:index2",
+        "LH:index3",
+        "LH:middle1_x",
+        "LH:middle1_z",
+        "LH:middle2",
+        "LH:middle3",
+        "LH:ring1_x",
+        "LH:ring1_z",
+        "LH:ring2",
+        "LH:ring3",
+        "LH:pinky1_x",
+        "LH:pinky1_z",
+        "LH:pinky2",
+        "LH:pinky3"
+      ],
+      "sampling_hz": 60,
+      "range_samples": "prepared reset t0 plus every completed60Hz control endpoint; not240Hz extrema",
+      "tracking_error": "command target minus actual q at completed60Hz endpoints; excludes t0",
+      "action_samples": "one applied action per completed control tick; first action has no change pair",
+      "action_sign_flip": "opposite nonzero signs in adjacent actions; zero transitions are not flips",
+      "action_sign": "prepared-reference side of the requested position; not velocity direction",
+      "limit_outward": "always0: bounded position requests cannot exceed native bounds",
+      "native_limit_fraction": "actual and commanded angles separately within1e-6rad of native bounds at completed60Hz endpoints; not240Hz extrema or contact force",
+      "scope": "diagnostic only; command target is not immediate physical motion, pressure or sound",
+      "base_rotation": {
+        "schema": "guitar_learning.gpu_left_finger_base_rotation.v1",
+        "body_names": [
+          "human/LH:index1",
+          "human/LH:middle1",
+          "human/LH:ring1",
+          "human/LH:pinky1"
+        ],
+        "parent": "human/LH:palm",
+        "sampling_hz": 60,
+        "samples": "completed control endpoints only; excludes reset t0; not240Hz extrema",
+        "actual": "rotation log of inverse(palm quaternion)*finger1 quaternion in the source body frames",
+        "command": "diagnostic zero-y reference Exp([target_1_x,0,target_1_z]); source finger1 rest frames are identity",
+        "local_error": "rotation log of inverse(actual relative rotation)*diagnostic command rotation; xz metric is the vector norm of its x/z components",
+        "scope": "pose diagnostics only; neither a certified native drive error/torque nor proof of an extra free axis or musical success"
+      }
+    },
+    "base_rotation": {
+      "schema": "guitar_learning.gpu_left_finger_base_rotation.v1",
+      "body_names": [
+        "human/LH:index1",
+        "human/LH:middle1",
+        "human/LH:ring1",
+        "human/LH:pinky1"
+      ],
+      "sampling_hz": 60,
+      "endpoint_samples": 360,
+      "values": {
+        "palm_relative_rotvec_y_rms_rad": [
+          0.02468106877926879,
+          2.021764183626546e-05,
+          1.9948050316135047e-05,
+          1.2314856684786442e-05
+        ],
+        "palm_relative_rotvec_y_max_abs_rad": [
+          0.03226384958959308,
+          2.4073577938190812e-05,
+          2.5952800243319084e-05,
+          2.7153443694208672e-05
+        ],
+        "zero_y_command_rotation_error_rms_rad": [
+          0.0451086634136602,
+          0.00015883313476185441,
+          0.00014487334607823284,
+          8.733084103069786e-05
+        ],
+        "zero_y_command_rotation_error_max_rad": [
+          0.17031082587961993,
+          0.0001767147884417718,
+          0.00016083304920777168,
+          0.00010105505973674375
+        ],
+        "zero_y_command_local_xz_error_rms_rad": [
+          0.03677085117602313,
+          0.00015881119825086396,
+          0.00014481390076625302,
+          8.341062150057915e-05
+        ],
+        "zero_y_command_local_xz_error_max_rad": [
+          0.1679813646504926,
+          0.00017671211822302868,
+          0.00016070407715296721,
+          9.111236295165951e-05
+        ]
+      },
+      "scope": {
+        "schema": "guitar_learning.gpu_left_finger_base_rotation.v1",
+        "body_names": [
+          "human/LH:index1",
+          "human/LH:middle1",
+          "human/LH:ring1",
+          "human/LH:pinky1"
+        ],
+        "parent": "human/LH:palm",
+        "sampling_hz": 60,
+        "samples": "completed control endpoints only; excludes reset t0; not240Hz extrema",
+        "actual": "rotation log of inverse(palm quaternion)*finger1 quaternion in the source body frames",
+        "command": "diagnostic zero-y reference Exp([target_1_x,0,target_1_z]); source finger1 rest frames are identity",
+        "local_error": "rotation log of inverse(actual relative rotation)*diagnostic command rotation; xz metric is the vector norm of its x/z components",
+        "scope": "pose diagnostics only; neither a certified native drive error/torque nor proof of an extra free axis or musical success"
+      }
+    }
+  },
+  "finger_control_diagnostics": {
+    "schema": "guitar_learning.finger_control_diagnostics.v1",
+    "env_id": 0,
+    "episode_id": 1,
+    "sampling_hz": 240,
+    "completed_physics_samples": 1440,
+    "duration_s": 6.0,
+    "joint_names": [
+      "LH:thumb1_x",
+      "LH:thumb1_y",
+      "LH:thumb1_z",
+      "LH:thumb2",
+      "LH:thumb3",
+      "LH:index1_x",
+      "LH:index1_z",
+      "LH:index2",
+      "LH:index3",
+      "LH:middle1_x",
+      "LH:middle1_z",
+      "LH:middle2",
+      "LH:middle3",
+      "LH:ring1_x",
+      "LH:ring1_z",
+      "LH:ring2",
+      "LH:ring3",
+      "LH:pinky1_x",
+      "LH:pinky1_z",
+      "LH:pinky2",
+      "LH:pinky3"
+    ],
+    "submitted_effort_available": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "values": {
+      "requested_tracking_error_rad_rms": [
+        0.0002216763724404647,
+        0.0006190320165172383,
+        0.0004928763427536934,
+        0.00017137945383506118,
+        6.804885479547931e-05,
+        0.04423730274503655,
+        0.00663533880816976,
+        0.033130630300847654,
+        0.010768677683979936,
+        0.0001577848849203689,
+        7.616515887912204e-06,
+        2.1501975044947007e-05,
+        1.0663203025618132e-05,
+        0.00014396654511475253,
+        4.212585986166754e-06,
+        2.8590423926273106e-05,
+        1.1541889273446298e-05,
+        8.625582773715422e-05,
+        1.3086456481408813e-05,
+        1.3637058909508004e-05,
+        7.821855897136527e-06
+      ],
+      "applied_tracking_error_rad_rms": [
+        0.0002216763724404647,
+        0.0006190320165172383,
+        0.0004928763427536934,
+        0.00017137945383506118,
+        6.804885479547931e-05,
+        0.039277078321520914,
+        0.00663533880816976,
+        0.030099023151833965,
+        0.010636916523267455,
+        0.0001577848849203689,
+        7.616515887912204e-06,
+        2.1501975044947007e-05,
+        1.0663203025618132e-05,
+        0.00014396654511475253,
+        4.212585986166754e-06,
+        2.8590423926273106e-05,
+        1.1541889273446298e-05,
+        8.625582773715422e-05,
+        1.3086456481408813e-05,
+        1.3637058909508004e-05,
+        7.821855897136527e-06
+      ],
+      "rate_limit_gap_rad_rms": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.012518842877410388,
+        0.0,
+        0.008066020758550474,
+        0.0003982137239172399,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "velocity_rad_s_rms": [
+        0.0002680714294600575,
+        0.0013256348901245314,
+        0.0015006638487627141,
+        0.0003931733984820048,
+        0.00015585402286171272,
+        0.2878306652494917,
+        0.025433926753349417,
+        0.2351763856285586,
+        0.08391351388905555,
+        0.0005760099657350705,
+        0.000166672370007422,
+        6.334814405810788e-05,
+        3.2668415043082984e-05,
+        0.0005279738152299471,
+        0.00014850771183551518,
+        9.111388577037093e-05,
+        3.532269952746094e-05,
+        0.0003077492217071889,
+        8.131107894319356e-05,
+        4.0657227222090536e-05,
+        2.4834436337025346e-05
+      ],
+      "submitted_effort_mean_abs_Nm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "submitted_effort_cap_fraction": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "native_sensor_net_generalized_force_mean_abs_Nm": [
+        0.0015791594067902932,
+        0.00787836207293569,
+        0.006011672198373061,
+        0.001364194180051628,
+        0.0010797123581950372,
+        0.0037130532086949745,
+        0.0007848141322925686,
+        0.000321040852195943,
+        7.950209668273879e-05,
+        0.0038213072071408127,
+        0.0006233256243806157,
+        0.00028460173623190915,
+        0.0001749612083232124,
+        0.0034393825070259884,
+        0.0005425877578747733,
+        0.0003227535448180182,
+        0.00018810927682958814,
+        0.0020186966818679744,
+        0.0003411679803459972,
+        0.00021618182247493679,
+        9.502942503761207e-05
+      ]
+    },
+    "fingers": {
+      "thumb": {
+        "requested_tracking_error_rad_rms": 0.0003146026080683874,
+        "applied_tracking_error_rad_rms": 0.0003146026080683874,
+        "rate_limit_gap_rad_rms": 0.0,
+        "velocity_rad_s_rms": 0.0007286795179382041,
+        "submitted_effort_mean_abs_Nm": 0.0,
+        "submitted_effort_cap_fraction": 0.0,
+        "native_sensor_net_generalized_force_mean_abs_Nm": 0.003582620043269142
+      },
+      "index": {
+        "requested_tracking_error_rad_rms": 0.023692987384508472,
+        "applied_tracking_error_rad_rms": 0.021662089201198022,
+        "rate_limit_gap_rad_rms": 0.005245769339969526,
+        "velocity_rad_s_rms": 0.15808862288011383,
+        "submitted_effort_mean_abs_Nm": 0.0,
+        "submitted_effort_cap_fraction": 0.0,
+        "native_sensor_net_generalized_force_mean_abs_Nm": 0.0012246025724665561
+      },
+      "middle": {
+        "requested_tracking_error_rad_rms": 4.939164471971156e-05,
+        "applied_tracking_error_rad_rms": 4.939164471971156e-05,
+        "rate_limit_gap_rad_rms": 0.0,
+        "velocity_rad_s_rms": 0.00020967472371092086,
+        "submitted_effort_mean_abs_Nm": 0.0,
+        "submitted_effort_cap_fraction": 0.0,
+        "native_sensor_net_generalized_force_mean_abs_Nm": 0.0012260489440191376
+      },
+      "ring": {
+        "requested_tracking_error_rad_rms": 4.707786107515967e-05,
+        "applied_tracking_error_rad_rms": 4.707786107515967e-05,
+        "rate_limit_gap_rad_rms": 0.0,
+        "velocity_rad_s_rms": 0.00020072952809082356,
+        "submitted_effort_mean_abs_Nm": 0.0,
+        "submitted_effort_cap_fraction": 0.0,
+        "native_sensor_net_generalized_force_mean_abs_Nm": 0.001123208271637092
+      },
+      "pinky": {
+        "requested_tracking_error_rad_rms": 3.020029975630189e-05,
+        "applied_tracking_error_rad_rms": 3.020029975630189e-05,
+        "rate_limit_gap_rad_rms": 0.0,
+        "velocity_rad_s_rms": 0.00011363799105237458,
+        "submitted_effort_mean_abs_Nm": 0.0,
+        "submitted_effort_cap_fraction": 0.0,
+        "native_sensor_net_generalized_force_mean_abs_Nm": 0.0006677689774316302
+      }
+    },
+    "finger_aggregation": "arithmetic mean of per-joint summary values",
+    "sensor_samples": [
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440,
+      1440
+    ],
+    "effort_scope": "submitted effort after cap/fallback; native position-drive axes unavailable (zero submission); sensor is net generalized force, not drive torque or drive-cap saturation",
+    "trace_path": "/home/ajou/yigyu/3/docs/2026-11-02/\uc555\ud604\uc131\uacf5/experiments/structured_press_v2/runs/index_s3_f4_A_v1/render_selected/scene/finger_control_trace.jsonl.gz",
+    "trace_scope": "env0 first600 completed control ticks across resets;240Hz; absolute episode identity; goals absent explicitly masked"
+  },
+  "left_episode_diagnostics": {
+    "schema": "guitar_learning.gpu_left_episode_diagnostics.v6",
+    "contract": {
+      "schema": "guitar_learning.gpu_left_episode_diagnostics.v6",
+      "fingers": [
+        "index",
+        "middle",
+        "ring",
+        "pinky"
+      ],
+      "joints": [
+        "MCP",
+        "PIP",
+        "DIP"
+      ],
+      "finger_wrist_hz": 240,
+      "thumb_hz": 60,
+      "thumb_support_hz": 240,
+      "reset_sample_included": false,
+      "duration": "completed physics endpoint count/240; thumb completed control endpoint count/60",
+      "exclusions": "overlapping per-finger seconds; never sum exclusions as disjoint time",
+      "standby_masks": "actual v5 score-only per-finger active union; release0.05s and0.1s fade; next preparation0.35s and0.1s fade; direct/partial/full gap recovery; finite geometry required",
+      "idle_angles": "gate-weighted valid geometric flexion; denominator per joint valid gate-weighted seconds",
+      "press_angles": "own assigned press..end inclusive, valid geometric flexion; denominator per joint valid seconds",
+      "standby": "actual inverse-quadratic helper per_finger_rate integrated at240Hz; weighted reward excludes entire failed control tick exactly as environment",
+      "initial_quality_decline": "quality below reset reference minus1e-6; completed240Hz fullgate==1 samples before own first press-2; absent fingers whole song; invalid reset/current angles excluded; no sample means evaluableFalse",
+      "recovery": "fixed own-note-union gaps: previous end+0.05s release+1.0s provisional return budget through next press-0.35s; initial start1.05s, final end song duration; windows>=0.5s evaluated at80% planned occupancy; no policy gate in denominator; not a proven return-time guarantee",
+      "gate_runs": "actual gate>0 and gate==1 completed240Hz endpoint runs; lengths/counts/band occupancy include ongoing runs; thresholds0.5/1/3s; no dynamic per-tick trace",
+      "wrist": "absolute nearest-box delta by live guitar-local Gx/Gy/Gz; inclusive inside region; physics endpoint samples",
+      "thumb": "minimum Euclidean distance from existing finite source thumb2/3 support vertices to face-referenced playing-neck1 rear facets (outward normal Gz < -0.5); excludes unused OBJ vertices and headstock transition; rear-side compatible permits signed plane gap >= -1 mm",
+      "thumb_limitation": "legacy60Hz support vertices have no normals; shared thumb_support240Hz uses same-point patch position/normal and selected-point signed gap; neither certifies native contact pairs, pressure, sound, full mesh penetration or cooked collision geometry",
+      "thumb_support": "shared helper rate at240Hz:0.01/s geometric quality plus0.01/s same-point quality times binary contact candidate; actual weighted payout uses completed-control failure suppression, approach weight and explicit multiplier0(off)/1(on); native net force and rear-normal load are resultant proxies, never pressure or contact-pair certification",
+      "thumb_contact_candidate": "shared selected point signed gap[-0.001,0.0005]m, finite central neck-rear region, facing>=0.1, native thumb3 rear-normal load>=0.01N; force magnitude above threshold gives no further reward",
+      "thumb_normal_load": "helper relu(native thumb3 resultant in guitar coordinates dot unit rear normal); mean denominator is helper normal_load_valid completed physics seconds",
+      "thumb_nearbutunloaded": "near_geometry and normal_load_valid with rear-normal load<0.01N; excludes invalid loads and does not imply a known body pair",
+      "extreme_combinations": "240Hz geometric flags per finger: MCP<-20deg and PIP/DIP>60deg; MCP/PIP>75deg and DIP<10deg; DIP-PIP>50deg. Flags overlap and are diagnostics only; idle means outside own press..end, independent of B gate"
+    },
+    "physics_sampled_s": 5.99999999999998,
+    "physics_endpoint_count": 1440,
+    "standby": {
+      "eligible_s": [
+        3.100000000000049,
+        5.99999999999998,
+        5.99999999999998,
+        5.99999999999998
+      ],
+      "gate_weighted_s": [
+        3.0000000000000386,
+        5.99999999999998,
+        5.99999999999998,
+        5.99999999999998
+      ],
+      "raw_standby_reward": [
+        0.014977008288260454,
+        0.02894396053627119,
+        0.02875573735559963,
+        0.030000000000000648
+      ],
+      "weighted_standby_reward": [
+        0.014977008288260532,
+        0.028943960536271403,
+        0.02875573735559986,
+        0.03000000000000018
+      ],
+      "time_blocked_s": [
+        2.900000000000039,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "time_faded_s": [
+        0.19583333333333353,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "time_unavailable_weighted_s": [
+        3.0000000000000413,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "contact_excluded_s": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "proximity_excluded_s": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "nonfinite_distance_excluded_s": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "invalid_angle_s": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "initial_quality_decline": {
+        "reference_quality": [
+          1.0,
+          0.9648131132125854,
+          0.9585452079772949,
+          1.0
+        ],
+        "reference_valid": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "planned_window_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "observed_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "declined_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "declined_fraction": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "evaluable": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "tolerance": 1e-06
+      },
+      "eligible_mean_quality": [
+        0.9984672192173663,
+        0.9647986845423804,
+        0.9585245785200073,
+        1.0
+      ],
+      "actual_gate_runs": {
+        "count": [
+          2,
+          1,
+          1,
+          1
+        ],
+        "total_s": [
+          3.1000001430511475,
+          6.000000476837158,
+          6.000000476837158,
+          6.000000476837158
+        ],
+        "in_band_s": [
+          2.7750000953674316,
+          0.0,
+          0.0,
+          6.000000476837158
+        ],
+        "max_s": [
+          2.6500000953674316,
+          6.000000476837158,
+          6.000000476837158,
+          6.000000476837158
+        ],
+        "long_threshold_s": [
+          0.5,
+          1.0,
+          3.0
+        ],
+        "long_count": [
+          [
+            1,
+            1,
+            0
+          ],
+          [
+            1,
+            1,
+            1
+          ],
+          [
+            1,
+            1,
+            1
+          ],
+          [
+            1,
+            1,
+            1
+          ]
+        ],
+        "long_total_s": [
+          [
+            2.6500000953674316,
+            2.6500000953674316,
+            0.0
+          ],
+          [
+            6.000000476837158,
+            6.000000476837158,
+            6.000000476837158
+          ],
+          [
+            6.000000476837158,
+            6.000000476837158,
+            6.000000476837158
+          ],
+          [
+            6.000000476837158,
+            6.000000476837158,
+            6.000000476837158
+          ]
+        ],
+        "long_in_band_s": [
+          [
+            2.6500000953674316,
+            2.6500000953674316,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            6.000000476837158,
+            6.000000476837158,
+            6.000000476837158
+          ]
+        ],
+        "long_in_band_fraction": [
+          [
+            1.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            1.0,
+            1.0,
+            1.0
+          ]
+        ]
+      },
+      "full_gate_runs": {
+        "count": [
+          2,
+          1,
+          1,
+          1
+        ],
+        "total_s": [
+          2.9041669368743896,
+          6.000000476837158,
+          6.000000476837158,
+          6.000000476837158
+        ],
+        "in_band_s": [
+          2.6750001907348633,
+          0.0,
+          0.0,
+          6.000000476837158
+        ],
+        "max_s": [
+          2.5500001907348633,
+          6.000000476837158,
+          6.000000476837158,
+          6.000000476837158
+        ],
+        "long_threshold_s": [
+          0.5,
+          1.0,
+          3.0
+        ],
+        "long_count": [
+          [
+            1,
+            1,
+            0
+          ],
+          [
+            1,
+            1,
+            1
+          ],
+          [
+            1,
+            1,
+            1
+          ],
+          [
+            1,
+            1,
+            1
+          ]
+        ],
+        "long_total_s": [
+          [
+            2.5500001907348633,
+            2.5500001907348633,
+            0.0
+          ],
+          [
+            6.000000476837158,
+            6.000000476837158,
+            6.000000476837158
+          ],
+          [
+            6.000000476837158,
+            6.000000476837158,
+            6.000000476837158
+          ],
+          [
+            6.000000476837158,
+            6.000000476837158,
+            6.000000476837158
+          ]
+        ],
+        "long_in_band_s": [
+          [
+            2.5500001907348633,
+            2.5500001907348633,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            6.000000476837158,
+            6.000000476837158,
+            6.000000476837158
+          ]
+        ],
+        "long_in_band_fraction": [
+          [
+            1.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            1.0,
+            1.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    "wrist": {
+      "inside_fraction": 0.43958333333333915,
+      "mean_excess_G_xyz_m": [
+        0.0,
+        0.0,
+        0.002847694817723509
+      ],
+      "max_excess_G_xyz_m": [
+        0.0,
+        0.0,
+        0.0060521140694618225
+      ]
+    },
+    "thumb": {
+      "sampled_s": 5.999999999999984,
+      "endpoint_count": 360,
+      "mean_distance_m": 0.05601073200297037,
+      "min_distance_m": 0.04366448521614075,
+      "max_distance_m": 0.06433960050344467,
+      "rear_side_within3mm_fraction": 0.0,
+      "rear_side_within10mm_fraction": 0.0
+    },
+    "shape": {
+      "raw_shape_reward": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "weighted_shape_reward": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "extreme_combinations": {
+      "all": {
+        "valid_s": [
+          5.99999999999998,
+          5.99999999999998,
+          5.99999999999998,
+          5.99999999999998
+        ],
+        "index_like_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pinky_like_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "distal_excess_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "any_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "idle": {
+        "valid_s": [
+          3.495833333333402,
+          5.99999999999998,
+          5.99999999999998,
+          5.99999999999998
+        ],
+        "index_like_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pinky_like_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "distal_excess_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "any_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "press": {
+        "valid_s": [
+          2.504166666666686,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "index_like_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pinky_like_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "distal_excess_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "any_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "thumb_support": {
+      "sampled_s": 5.99999999999998,
+      "endpoint_count": 1440,
+      "valid_s": 5.99999999999998,
+      "invalid_s": 0.0,
+      "near_geometry_s": 0.0,
+      "near_geometry_fraction": 0.0,
+      "contact_candidate_s": 0.0,
+      "contact_candidate_fraction": 0.0,
+      "nearbutunloaded_s": 0.0,
+      "normal_load_mean_N": 0.0,
+      "normal_load_max_N": 0.0,
+      "normal_load_valid_s": 5.99999999999998,
+      "normal_load_invalid_s": 0.0,
+      "selected_deep_gap_s": 0.0,
+      "selected_negative_gap_s": 0.0,
+      "quality_integral": 0.3966956331084174,
+      "mean_quality": 0.06611593885140313,
+      "raw_reward": 0.0039669562463435235,
+      "weighted_reward": 0.00396695624634352,
+      "mean_signed_gap_m": 0.06161971427241565,
+      "min_signed_gap_m": 0.05065562203526497,
+      "max_signed_gap_m": 0.06883805990219116,
+      "mean_normal_cos": 0.77786941809787,
+      "min_normal_cos": 0.7452813386917114,
+      "max_normal_cos": 0.8071038126945496,
+      "mean_region_excess_m": 1.7884943625685067e-05,
+      "max_region_excess_m": 0.00048667044029571116,
+      "native_thumb3_net_force_mean_N": 0.0,
+      "native_thumb3_net_force_max_N": 0.0,
+      "force_valid_s": 5.99999999999998,
+      "force_invalid_s": 0.0
+    },
+    "idle_angles": {
+      "valid_weighted_s": [
+        [
+          3.0000000000000386,
+          3.0000000000000386,
+          3.0000000000000386
+        ],
+        [
+          5.99999999999998,
+          5.99999999999998,
+          5.99999999999998
+        ],
+        [
+          5.99999999999998,
+          5.99999999999998,
+          5.99999999999998
+        ],
+        [
+          5.99999999999998,
+          5.99999999999998,
+          5.99999999999998
+        ]
+      ],
+      "mean_rad": [
+        [
+          0.3434098130764602,
+          0.7075317125353456,
+          0.31322557327716577
+        ],
+        [
+          0.47512615697665517,
+          1.025038306829007,
+          0.4622995097811071
+        ],
+        [
+          0.4877525753445113,
+          1.086300587819689,
+          0.4371049826343865
+        ],
+        [
+          0.609300038135716,
+          0.8870576085729802,
+          0.30343302566972097
+        ]
+      ],
+      "min_rad": [
+        [
+          0.26988542079925537,
+          0.6497175097465515,
+          0.23606619238853455
+        ],
+        [
+          0.47510626912117004,
+          1.0250171422958374,
+          0.46228930354118347
+        ],
+        [
+          0.4877346158027649,
+          1.0862725973129272,
+          0.43709391355514526
+        ],
+        [
+          0.6092900037765503,
+          0.8870444893836975,
+          0.30342525243759155
+        ]
+      ],
+      "max_rad": [
+        [
+          0.7207861542701721,
+          1.0115959644317627,
+          0.3312222361564636
+        ],
+        [
+          0.4752868711948395,
+          1.02504301071167,
+          0.46230101585388184
+        ],
+        [
+          0.48789963126182556,
+          1.0863046646118164,
+          0.4371063709259033
+        ],
+        [
+          0.6093846559524536,
+          0.887061357498169,
+          0.3034341037273407
+        ]
+      ]
+    },
+    "press_angles": {
+      "valid_weighted_s": [
+        [
+          2.504166666666686,
+          2.504166666666686,
+          2.504166666666686
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "mean_rad": [
+        [
+          0.7051502178096084,
+          0.9991991337444451,
+          0.23634528662519522
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "min_rad": [
+        [
+          0.49308130145072937,
+          0.8263111710548401,
+          0.2332804948091507
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "max_rad": [
+        [
+          0.7369971871376038,
+          1.025848388671875,
+          0.2784440517425537
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ]
+    }
+  },
+  "finger_skill": {
+    "phase": "J",
+    "phrase_id": "full_song",
+    "scope": "full_song",
+    "score_offset_s": 0.0,
+    "local_duration_s": 6.0,
+    "original_target_count": 1,
+    "selected_target_count": 1,
+    "source_task_time_s": 6.0,
+    "schema": "guitar_learning.finger_skill.v3",
+    "committed_transitions_at_end": 0,
+    "planned_transitions": 204800,
+    "full_song_after": 51200
+  },
+  "evaluation": true,
+  "finger_skill_eval": {
+    "phase": "J",
+    "scope": "full_song",
+    "wrist_inside_fraction": 0.43958333333333915
+  },
+  "finger_skill_diagnostics": {
+    "schema": "guitar_learning.finger_skill_episode_diagnostics.v1",
+    "initial_preparation": {
+      "duration_s": 3.0,
+      "observed_s": [
+        2.999999999999994,
+        2.999999999999994,
+        2.999999999999994,
+        2.999999999999994
+      ],
+      "valid_s": [
+        2.999999999999994,
+        2.999999999999994,
+        2.999999999999994,
+        2.999999999999994
+      ],
+      "in_band_s": [
+        2.999999999999994,
+        0.0,
+        0.0,
+        2.999999999999994
+      ],
+      "gate_weighted_s": [
+        2.5979166666666598,
+        2.999999999999994,
+        2.999999999999994,
+        2.999999999999994
+      ],
+      "quality_integral": [
+        2.5979166666666598,
+        2.8943963830669754,
+        2.875575530280644,
+        2.999999999999994
+      ]
+    },
+    "source_recovery": {
+      "windows": [
+        {
+          "finger": 2,
+          "source_start_s": 1.05,
+          "source_end_s": 6.0,
+          "start_s": 3.0,
+          "end_s": 6.0,
+          "planned_s": 3.0,
+          "observed_s": 2.9999999999998863,
+          "valid_s": 2.9999999999998863,
+          "in_band_s": 0.0,
+          "evaluable": true,
+          "complete": true,
+          "occupancy80_met": false
+        },
+        {
+          "finger": 3,
+          "source_start_s": 1.05,
+          "source_end_s": 6.0,
+          "start_s": 3.0,
+          "end_s": 6.0,
+          "planned_s": 3.0,
+          "observed_s": 2.9999999999998863,
+          "valid_s": 2.9999999999998863,
+          "in_band_s": 0.0,
+          "evaluable": true,
+          "complete": true,
+          "occupancy80_met": false
+        },
+        {
+          "finger": 4,
+          "source_start_s": 1.05,
+          "source_end_s": 6.0,
+          "start_s": 3.0,
+          "end_s": 6.0,
+          "planned_s": 3.0,
+          "observed_s": 2.9999999999998863,
+          "valid_s": 2.9999999999998863,
+          "in_band_s": 2.9999999999998863,
+          "evaluable": true,
+          "complete": true,
+          "occupancy80_met": true
+        }
+      ],
+      "by_finger": [
+        {
+          "planned_windows": 0,
+          "planned_s": 0.0,
+          "observed_s": 0.0,
+          "valid_s": 0.0,
+          "in_band_s": 0.0,
+          "occupancy80_windows": 0,
+          "complete_windows": 0,
+          "incomplete_or_unobserved_windows": 0,
+          "credited_in_band_fraction": 0.0,
+          "coverage_fraction": 0.0,
+          "evaluable": false
+        },
+        {
+          "planned_windows": 1,
+          "planned_s": 3.0,
+          "observed_s": 2.9999999999998863,
+          "valid_s": 2.9999999999998863,
+          "in_band_s": 0.0,
+          "occupancy80_windows": 0,
+          "complete_windows": 1,
+          "incomplete_or_unobserved_windows": 0,
+          "credited_in_band_fraction": 0.0,
+          "coverage_fraction": 0.9999999999999621,
+          "evaluable": true
+        },
+        {
+          "planned_windows": 1,
+          "planned_s": 3.0,
+          "observed_s": 2.9999999999998863,
+          "valid_s": 2.9999999999998863,
+          "in_band_s": 0.0,
+          "occupancy80_windows": 0,
+          "complete_windows": 1,
+          "incomplete_or_unobserved_windows": 0,
+          "credited_in_band_fraction": 0.0,
+          "coverage_fraction": 0.9999999999999621,
+          "evaluable": true
+        },
+        {
+          "planned_windows": 1,
+          "planned_s": 3.0,
+          "observed_s": 2.9999999999998863,
+          "valid_s": 2.9999999999998863,
+          "in_band_s": 2.9999999999998863,
+          "occupancy80_windows": 1,
+          "complete_windows": 1,
+          "incomplete_or_unobserved_windows": 0,
+          "credited_in_band_fraction": 0.9999999999999621,
+          "coverage_fraction": 0.9999999999999621,
+          "evaluable": true
+        }
+      ],
+      "minimum_window_s": 0.5,
+      "occupancy_target": 0.8,
+      "scope": "Original score windows intersected with actual phrase playback; initial preparation excluded. Unobserved time after failure remains in planned denominators."
+    },
+    "physics_pressing_s": [
+      2.504166666666582,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "motion": {
+      "phases": [
+        "initial_preparation",
+        "preparation",
+        "press",
+        "hold",
+        "release",
+        "idle"
+      ],
+      "components": [
+        "total",
+        "support",
+        "finger"
+      ],
+      "path_m": [
+        [
+          [
+            0.04829615360846875,
+            0.015053805740356207,
+            0.04717170261606183
+          ],
+          [
+            0.013984552061569712,
+            0.01398873822583181,
+            2.6004042265640834e-05
+          ],
+          [
+            0.013338253468862686,
+            0.013342038839118286,
+            2.1747155294362754e-05
+          ],
+          [
+            0.01269272474685925,
+            0.012695566999582525,
+            1.5956842863076467e-05
+          ]
+        ],
+        [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        [
+          [
+            0.012428855835373169,
+            0.02259933173745437,
+            0.024696381091258546
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        [
+          [
+            0.0010670479421358622,
+            0.003974070905922865,
+            0.003495967340221721
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        [
+          [
+            0.00795149567302923,
+            0.017567256817295564,
+            0.01591900249051046
+          ],
+          [
+            0.04316105412379019,
+            0.04315910485175097,
+            1.96983869638771e-05
+          ],
+          [
+            0.04167048420589834,
+            0.04166907681363997,
+            1.744590152867081e-05
+          ],
+          [
+            0.04014719283076484,
+            0.04014638710151051,
+            1.5148244959608778e-05
+          ]
+        ]
+      ],
+      "observed_s": [
+        [
+          2.9833333333333263,
+          2.9833333333333263,
+          2.9833333333333263,
+          2.9833333333333263
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          2.499999999999992,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.14999999999999947,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.3666666666666655,
+          3.016666666666657,
+          3.016666666666657,
+          3.016666666666657
+        ]
+      ],
+      "valid_sample_s": [
+        [
+          2.9833333333333263,
+          2.9833333333333263,
+          2.9833333333333263,
+          2.9833333333333263
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          2.499999999999992,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.14999999999999947,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.3666666666666655,
+          3.016666666666657,
+          3.016666666666657,
+          3.016666666666657
+        ]
+      ],
+      "vector_sum_max_error_m": 0.0,
+      "fixed_samples": 128,
+      "scope": "Current control endpoint phase; mean of same128 material-point vector norms, invalid samples contribute zero with fixed128 denominator. Paths are not additive and do not measure force shares or causal success percentages."
+    }
+  },
+  "termination": {
+    "physical_failure": false,
+    "wrist_failure": false,
+    "primary_reason": "timeline_complete",
+    "wrist_outside": false,
+    "wrist_severe": false
+  },
+  "wrist_termination": {
+    "schema": "guitar_learning.wrist_termination_diagnostics.v2",
+    "sample_scope": "final240Hz sample at episode60Hz boundary; not a trajectory maximum",
+    "active": false,
+    "elapsed_s": 0.0,
+    "severe_elapsed_s": 0.0,
+    "recovery_band": false,
+    "delta_G_m": [
+      0.0,
+      0.0,
+      0.004820659756660461
+    ],
+    "wrist_G_m": [
+      0.0800565779209137,
+      0.023734480142593384,
+      -0.10552065819501877
+    ],
+    "lower_G_m": [
+      0.03228260949254036,
+      0.007640013936907053,
+      -0.1006999984383583
+    ],
+    "upper_G_m": [
+      0.10228261351585388,
+      0.1276400089263916,
+      -0.010700000450015068
+    ],
+    "dominant_axis": "Gz",
+    "score_time_s": 6.0,
+    "target_index_scope": "indices in compiled source score; candidates do not certify sound or pair pressure",
+    "audible_target_indices": [],
+    "preparing_target_indices": [],
+    "audible_pad_distance_m": [],
+    "audible_clean_candidate": []
+  },
+  "structured_press": {
+    "schema": "guitar_learning.structured_press.v2",
+    "stage": "A",
+    "initial_distribution": "aligned",
+    "phase_seconds": [
+      0.0833333358168602,
+      0.0,
+      5.916688919067383
+    ],
+    "blocked_seconds": [
+      0.0,
+      0.0,
+      2.4833316802978516,
+      0.0
+    ],
+    "blocked_columns": [
+      "wrist",
+      "tangent",
+      "height",
+      "normal"
+    ],
+    "active_axes": [
+      17,
+      18,
+      19,
+      20
+    ],
+    "final_hold_action": [
+      0.3940151631832123,
+      1.0,
+      -0.05031568929553032,
+      0.07129091024398804,
+      0.24968211352825165,
+      0.06823454052209854,
+      -0.02830404043197632,
+      -0.08800233155488968,
+      0.013276020996272564,
+      -0.015920571982860565,
+      -0.11279768496751785,
+      0.17177268862724304,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "executed_action_min": [
+      0.3940151631832123,
+      1.0,
+      -0.05031568929553032,
+      0.07129091024398804,
+      0.24968211352825165,
+      0.06823454052209854,
+      -0.02830404043197632,
+      -0.08800233155488968,
+      0.013276020996272564,
+      -0.015920571982860565,
+      -0.11279768496751785,
+      0.17177268862724304,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      -0.19678644835948944,
+      -0.042701415717601776,
+      -0.22501452267169952,
+      -0.03382492437958717,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "executed_action_max": [
+      0.3940151631832123,
+      1.0,
+      -0.05031568929553032,
+      0.07129091024398804,
+      0.24968211352825165,
+      0.06823454052209854,
+      -0.02830404043197632,
+      -0.08800233155488968,
+      0.013276020996272564,
+      -0.015920571982860565,
+      -0.11279768496751785,
+      0.17177268862724304,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.23924316465854645,
+      0.036940183490514755,
+      0.27505359053611755,
+      0.06458190083503723,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "scope": "this completed episode only; reset rows clear counters; no H32 tail from next episode"
+  }
+}

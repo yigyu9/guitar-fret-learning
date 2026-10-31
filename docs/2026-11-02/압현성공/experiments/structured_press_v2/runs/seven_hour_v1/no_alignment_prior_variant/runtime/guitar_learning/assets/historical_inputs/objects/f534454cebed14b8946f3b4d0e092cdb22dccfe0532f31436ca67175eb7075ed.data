@@ -1,0 +1,93 @@
+"""Measured early support, guitar motion and V7-phase strike summary."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import numpy as np
+from scipy.spatial.transform import Rotation
+
+ROOT = Path(__file__).resolve().parents[1]
+A = ROOT/'stability_adapter_2'
+CENTRE = ROOT/'docs/2026-10-19/stability_adapter_2/results/user_guided_no_left_v1/diagnostic_v1/diagnostic.json'
+
+
+def read(path):
+    return json.loads(path.read_text())
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def pose(state):
+    p = np.array([state['pose']['p'][k] for k in 'xyz'])
+    q = np.array([state['pose']['r'][k] for k in 'xyzw'])
+    return p, q
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--cases', nargs='+', type=Path, required=True)
+    parser.add_argument('--detectors', nargs='+', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    args = parser.parse_args()
+    assert not args.out.exists()
+    paths = {Path(__file__).resolve(), CENTRE, A/'run_elbow_wrist_ready_v7.py', A/'analyze_elbow_wrist_ready_v1.py'} | set(args.detectors)
+    filenames = ['report.json', 'initial_values.json', 'actual_contacts.json', 'media/physics_endpoint_contacts.json', 'media/six_joint_target_rows.json']
+    paths |= {n/f for n in args.cases for f in filenames}
+    pins = {str(p.resolve()): sha(p) for p in paths}
+    before = args.out.with_name(args.out.stem+'_before.json')
+    assert not before.exists()
+    before.write_text(json.dumps(pins, indent=2))
+    detector = {}
+    for path in args.detectors:
+        raw = read(path)
+        assert raw['passed']
+        detector.update(raw['cases'])
+    centre = np.array(read(CENTRE)['guitar_centre_G_m'])
+    results = {}
+    for case in args.cases:
+        report = read(case/'report.json')
+        assert report['completed'] and report['inputs_unchanged'] and report['physics_steps'] == 1200
+        assert not report['forbidden_calls'] and not report['strap_enabled'] and not report['checkpoints_connected']
+        initial = read(case/'initial_values.json')
+        rows = read(case/'actual_contacts.json')['rows']
+        endpoints = read(case/'media/physics_endpoint_contacts.json')['rows']
+        targets = read(case/'media/six_joint_target_rows.json')['rows']
+        assert len(rows) == len(endpoints) == 1200 and len(targets) == 300
+        assert all(r['physics_step'] == i+1 for i,r in enumerate(rows))
+        states = [initial['native_initial_state']['guitar_body_states'][0]] + [r['guitar_body_states']['guitar'] for r in endpoints]
+        poses = [pose(s) for s in states]
+        rotations = Rotation.from_quat([q for p,q in poses])
+        body = np.array([p for p,q in poses]) + rotations.apply(centre)
+        delta = np.linalg.norm(body-body[0], axis=1)*1000
+        angles = np.rad2deg((rotations[0].inv()*rotations).magnitude())
+        after2 = np.linalg.norm(body[480:]-body[480], axis=1)*1000
+        after2angle = np.rad2deg((rotations[480].inv()*rotations[480:]).magnitude())
+        contacts = {}
+        positive = {}
+        for name in rows[0]['contacts_by_body']:
+            anyc = np.array([bool(r['contacts_by_body'][name]) for r in rows])
+            pos = np.array([any(c['lambda'] > 0 for c in r['contacts_by_body'][name]) for r in rows])
+            positive[name] = pos
+            contacts[name] = {'contact_steps': int(anyc.sum()), 'positive_lambda_steps': int(pos.sum()), 'first_contact_s': float((np.flatnonzero(anyc)[0]+1)/240) if anyc.any() else None, 'first_positive_s': float((np.flatnonzero(pos)[0]+1)/240) if pos.any() else None}
+        both = positive['Chest'] & positive['R_Shoulder']
+        lh = sum(bool(r['left_arm_hand_contacts']) for r in rows)
+        rh = sum(bool(r['right_wrist_hand_contacts']) for r in rows)
+        first = float((np.flatnonzero(both)[0]+1)/240) if both.any() else None
+        strum = None
+        if report['six_joint_strike_enabled']:
+            raw = detector[case.name]
+            # V7 down is3.2–3.55, up3.75–4.45. Preserve actual original-detector releases.
+            releases = raw['releases']
+            down = [e['string'] for e in releases if e['direction'] == 1 and 3.2 <= e['time_s'] <= 3.55 and e['lane_allowed'] and e['global_zone_allowed']]
+            up = [e['string'] for e in releases if e['direction'] == -1 and 3.75 <= e['time_s'] <= 4.45 and e['lane_allowed'] and e['global_zone_allowed']]
+            strum = {'down': down, 'up': up, 'six_down_pass': down == [6,5,4,3,2,1], 'six_up_pass': up == [1,2,3,4,5,6], 'releases': releases, 'scope': 'original raw detector unchanged; phase aggregation uses actual V7 command windows, not old3.95 cutoff'}
+        results[case.name] = {'completed_5s': True, 'body_BB_centre_initial_W_m': body[0].tolist(), 'body_BB_centre_final_W_m': body[-1].tolist(), 'maximum_BB_motion_mm_240Hz': float(delta.max()), 'maximum_SO3_deg_240Hz': float(angles.max()), 'after2_max_BB_motion_mm_240Hz': float(after2.max()), 'after2_max_SO3_deg_240Hz': float(after2angle.max()), 'contacts': contacts, 'first_positive_chest_upperarm_together_s': first, 'early_support_within_025s': first is not None and first <= .25, 'both_positive_steps': int(both.sum()), 'left_arm_hand_contact_steps': lh, 'right_wrist_hand_contact_steps': rh, 'left_support_absent_entire_run': lh == 0, 'other75_targets_exact': all(r['other75_exact'] for r in targets), 'strike': strum, 'trajectory': {'time_s': (np.arange(1201)/240).tolist(), 'body_BB_centre_W_m': body.tolist(), 'delta_mm': delta.tolist(), 'SO3_deg': angles.tolist()}}
+        print(case.name, 'BBmm', float(delta.max()), 'deg', float(angles.max()), 'LH', lh, 'early', first, 'strum', None if strum is None else [strum['down'],strum['up']], flush=True)
+    assert all(sha(Path(p)) == h for p,h in pins.items())
+    args.out.write_text(json.dumps({'input_sha256': pins, 'inputs_unchanged': True, 'scope': '240Hz BB centre and SO3; explicit LH excludes LHip; raw positive lambda is not calibrated force N; no formal robustness or learned music success', 'cases': results}, indent=2))
+
+
+if __name__ == '__main__':
+    main()

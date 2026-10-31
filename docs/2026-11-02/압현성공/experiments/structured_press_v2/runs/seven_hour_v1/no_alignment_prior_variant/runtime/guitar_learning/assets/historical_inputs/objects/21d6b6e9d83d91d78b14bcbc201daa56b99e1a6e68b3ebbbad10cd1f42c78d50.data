@@ -1,0 +1,111 @@
+"""Synthetic native-measurement fixtures; no dynamic success claim."""
+import copy
+from types import SimpleNamespace
+import unittest
+
+from guitar_learning.tool.experiments.contact_recovery.capture import RecoveryLedger, select_bc_rows
+
+
+TARGET = SimpleNamespace(target_id='target', onset_s=2., end_s=2.5)
+SAFE = dict(failure_reasons=[])
+
+
+def measured(step, clean=False, positive=None, status=None):
+    if positive is None: positive = clean
+    return dict(physics_step=100+step, task_time_s=step/240., targets={
+        'target': dict(candidate=clean, fretting_quality=dict(
+            clean_target_candidate=clean, positive_target_candidate=positive,
+            positive_evidence_ids=['raw-native-feature'] if positive else [],
+            status=status or ('correct' if clean else 'missing')))})
+
+
+class RecoveryCaptureTests(unittest.TestCase):
+    def test_actual_loss_recovery_dwell_and_music_are_separate(self):
+        ledger = RecoveryLedger(TARGET, measured(0), SAFE)
+        for step in range(1, 601):
+            now = step/240.
+            ledger.update(measured(step, .1 <= now < .4 or .5 <= now < 2.5), SAFE)
+        result = ledger.summary(True, musical_success=False)
+        self.assertTrue(result['recovery_success'])
+        self.assertFalse(result['musical_success'])
+        self.assertEqual(result['loss_count'], 1)
+        loss = result['losses'][0]
+        self.assertAlmostEqual(loss['loss_s'], .4)
+        self.assertAlmostEqual(loss['recovery_delay_s'], .1)
+        self.assertGreater(loss['clean_dwell_fraction'], .99)
+        self.assertEqual(result['physics_sample_count'], 600)
+
+    def test_clean_loss_with_qualified_contact_remaining_is_loss_not_release(self):
+        ledger = RecoveryLedger(TARGET, measured(0, True), SAFE)
+        for step in range(1, 241):
+            ledger.update(measured(step, step < 50, positive=True, status='wrong'), SAFE)
+        result = ledger.summary(True)
+        self.assertEqual(result['loss_count'], 1)
+        self.assertFalse(result['recovery_success'])
+        self.assertGreater(result['wrong_s'], 0.)
+
+    def test_perturbation_and_normal_release_do_not_invent_recovery(self):
+        ledger = RecoveryLedger(TARGET, measured(0, True), SAFE)
+        ledger.mark_perturbation(0., dict(override_active=True))
+        for step in range(1, 961):
+            ledger.update(measured(step, step/240. < 2.5), SAFE)
+        result = ledger.summary(True)
+        self.assertEqual(result['loss_count'], 0)
+        self.assertFalse(result['recovery_success'])
+        self.assertTrue(result['acquisition_success'])
+        self.assertEqual(len(result['perturbations']), 1)
+
+    def test_too_late_recontact_and_unsafe_dwell_fail(self):
+        for unsafe in (False, True):
+            ledger = RecoveryLedger(TARGET, measured(0), SAFE)
+            for step in range(1, 601):
+                now = step/240.
+                clean = .1 <= now < .4 or (now >= (.5 if unsafe else 1.))
+                safety = dict(failure_reasons=['guitar_displacement']) if unsafe and step == 150 else SAFE
+                ledger.update(measured(step, clean), safety)
+            self.assertFalse(ledger.summary(True)['recovery_success'])
+
+    def test_second_loss_during_recovery_window_is_preserved(self):
+        ledger = RecoveryLedger(TARGET, measured(0), SAFE)
+        for step in range(1, 601):
+            now = step/240.
+            clean = .1 <= now < .4 or .5 <= now < .8 or .82 <= now < 2.5
+            ledger.update(measured(step, clean), SAFE)
+        result = ledger.summary(True)
+        self.assertEqual(result['loss_count'], 2)
+        self.assertEqual(result['recovered_count'], 2)
+        self.assertTrue(result['recovery_success'])
+
+    def test_skip_fabricated_contact_and_non_native_safety_rejected(self):
+        ledger = RecoveryLedger(TARGET, measured(0), SAFE)
+        with self.assertRaisesRegex(ValueError, 'actual240Hz'): ledger.update(measured(2), SAFE)
+        bad = measured(1, True)
+        bad['targets']['target']['fretting_quality']['positive_evidence_ids'] = []
+        with self.assertRaisesRegex(ValueError, 'evidence'): ledger.update(bad, SAFE)
+        with self.assertRaisesRegex(ValueError, 'stability'): ledger.update(measured(1), {})
+
+    def test_bc_publication_requires_audit_and_never_labels_probe_as_expert(self):
+        summary = dict(completed=True, safety_valid=True, acquisition_success=True)
+        rows = [dict(task_time_s=t/60., action39=[0.]*39, teacher_action39=[0.]*39,
+                    override_active=(t == 1), native_safe=True, teacher_corrective=True)
+                for t in range(3)]
+        options = dict(completed=True, input_pins_verified=True, native_audit_verified=True)
+        self.assertEqual(select_bc_rows(rows, summary, **options), [0, 2])
+        for key in options:
+            with self.assertRaisesRegex(ValueError, 'native-audited'):
+                select_bc_rows(rows, summary, **dict(options, **{key:False}))
+        bad = copy.deepcopy(rows)
+        bad[0]['action39'][0] = .1
+        with self.assertRaisesRegex(ValueError, 'actual teacher'): select_bc_rows(bad, summary, **options)
+
+    def test_failed_and_partial_cases_remain_unpublishable(self):
+        for summary in (dict(completed=False, safety_valid=True, acquisition_success=True),
+                        dict(completed=True, safety_valid=False, acquisition_success=True),
+                        dict(completed=True, safety_valid=True, acquisition_success=False, recovery_success=False),
+                        dict(completed=True, safety_valid=True, acquisition_success=True,
+                             loss_count=1, recovery_success=False)):
+            with self.assertRaises(ValueError):
+                select_bc_rows([], summary, completed=True, input_pins_verified=True, native_audit_verified=True)
+
+
+if __name__ == '__main__': unittest.main()

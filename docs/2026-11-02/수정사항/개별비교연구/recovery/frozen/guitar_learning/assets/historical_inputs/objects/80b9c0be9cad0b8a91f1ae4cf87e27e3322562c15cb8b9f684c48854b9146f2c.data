@@ -1,0 +1,12 @@
+"""A separate preset using the unchanged current-pose viewer and native controls."""
+from pathlib import Path
+from unittest.mock import patch
+import isaacgym
+from ..current_pose_test_v1 import run_v2 as base
+
+LAB=Path(__file__).resolve().parent
+P=LAB.parents[1]/'docs/2026-10-19/stability_adapter_2/results/right_shift_initial_v1'
+
+if __name__=='__main__':
+    with patch.object(base,'LAB',LAB),patch.object(base,'REFERENCE',P/'native_right10_v1'),patch.object(base,'RESULT',P/'interactive'):
+        base.launch()

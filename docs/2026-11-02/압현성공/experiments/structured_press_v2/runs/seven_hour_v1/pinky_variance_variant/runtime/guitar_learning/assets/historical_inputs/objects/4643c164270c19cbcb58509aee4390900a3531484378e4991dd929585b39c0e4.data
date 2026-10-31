@@ -1,0 +1,170 @@
+"""CPU doubles validate song dispatch, bounded resources and snapshot accounting."""
+import copy
+import gzip
+import json
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+from guitar_learning.training import parallel, policy, ppo
+from guitar_learning.training import runner as train_parallel
+from guitar_learning.training import persistent_audit, monitoring
+from guitar_learning.imitation.imitation import dataset_manifest
+from guitar_learning.tool.experiments.song import train, transfer, worker
+from guitar_learning.tool.experiments.song.policy import SongPolicy
+from guitar_learning.native.lower_body_release_v1 import common
+
+
+class SongTrainTests(unittest.TestCase):
+    def dispatch(self, folder, resume=False, failure=False, changed_pin=False, changed_transfer=False,
+                 verify_expert_parser=False):
+        root = Path(folder); source = root/'source.txt'; source.write_text('immutable')
+        pins = dataset_manifest([source])
+        settings = dict(min_available_memory_gib=4., song={'schema':'guitar_learning.song.v1'})
+        args = SimpleNamespace(out=root/'train', settings=root/'settings.json',
+            resume=root/'resume.pt' if resume else None)
+        args.settings.write_text('{}'); calls = []
+        original_pool, original_policy, original_trainer = parallel.Pool, policy.Policy, ppo.PPOTrainer
+        original_pin, original_argv = common.pin, sys.argv
+        class Trainer:
+            def __init__(self, model, config=None): calls.append('optimizer')
+        def apply(model, current):
+            calls.append('actors')
+            if verify_expert_parser:
+                # Exercise the real nested parser while the generic runner is
+                # patched: source experts remain single-note stageB settings.
+                from guitar_learning.tool.experiments.local_skills.learning import settings_document
+                source = Path(__file__).resolve().parents[2]/'docs/2026-10-12/stability_adapter_2/results/guitar_learning_local_skills_v1/left_bc_ppo_ready_settings_v1.json'
+                parsed_source = settings_document(json.loads(source.read_text()))
+                self.assertEqual(parsed_source['stage'], 'B')
+                self.assertEqual(parsed_source['specialist']['role'], 'left')
+                self.assertNotIn('song', parsed_source)
+                calls.append('real_source_stage_B')
+            return dict(source_pins={} if changed_transfer else pins)
+        def pin(config, extra=()): return dataset_manifest(extra)
+        def core():
+            args.out.mkdir()
+            parsed = train_parallel.settings_document({'song':settings['song']})
+            self.assertEqual(parsed['min_available_memory_gib'], 6.)
+            self.assertIs(policy.Policy, SongPolicy)
+            with patch.object(original_pool, '__init__', return_value=None) as initialize:
+                parallel.Pool([{'original':1}], timeout_s=12.)
+            self.assertEqual(initialize.call_args.args[0], [{'original':1, 'song':settings['song']}])
+            self.assertIs(initialize.call_args.kwargs['worker_factory'], worker.native_environment)
+            if changed_pin: source.write_text('changed')
+            self.assertEqual(common.pin(None), pins)
+            ppo.PPOTrainer(SimpleNamespace())
+            if failure: raise KeyboardInterrupt('primary interruption')
+        with patch.dict(sys.modules, {'isaacgym':SimpleNamespace()}), \
+                patch.object(monitoring, 'available_memory_bytes', return_value=16*1024**3), \
+                patch.object(transfer, 'validate_experts', return_value={'source_pins':pins}), \
+                patch.object(transfer, 'apply_experts', side_effect=apply), \
+                patch.object(ppo, 'PPOTrainer', Trainer), patch.object(common, 'pin', side_effect=pin), \
+                patch.object(train_parallel, 'main', side_effect=core), \
+                patch.object(persistent_audit, 'finalize_persistent_run',
+                    side_effect=OSError('secondary cleanup') if failure else lambda out: True):
+            if failure:
+                with self.assertRaisesRegex(KeyboardInterrupt, 'primary interruption'): train.run(settings, args)
+            elif changed_pin or changed_transfer:
+                with self.assertRaises(RuntimeError): train.run(settings, args)
+            else: train.run(settings, args)
+        self.assertIs(parallel.Pool, original_pool); self.assertIs(policy.Policy, original_policy)
+        self.assertIs(ppo.PPOTrainer, original_trainer); self.assertIs(common.pin, original_pin)
+        self.assertIs(sys.argv, original_argv)
+        self.assertEqual(settings['min_available_memory_gib'], 4.)
+        return calls, args
+
+    def test_actor_copy_precedes_optimizer_and_cleanup_preserves_primary_exception(self):
+        for failure in (False, True):
+            with tempfile.TemporaryDirectory() as folder:
+                calls, args = self.dispatch(folder, failure=failure)
+                self.assertEqual(calls, ['actors', 'optimizer'])
+                record = json.loads((args.out/'song_initialization.json').read_text())
+                self.assertEqual(record['mode'], 'physical_feature_actor_only')
+
+    def test_strict_resume_skips_actor_copy(self):
+        with tempfile.TemporaryDirectory() as folder:
+            calls, args = self.dispatch(folder, resume=True)
+            self.assertEqual(calls, ['optimizer'])
+            record = json.loads((args.out/'song_initialization.json').read_text())
+            self.assertEqual(record['mode'], 'strict_resume')
+            self.assertIsNone(record['transfer'])
+
+    def test_real_expert_settings_parser_keeps_stage_b_inside_song_dispatch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            calls, _ = self.dispatch(folder, verify_expert_parser=True)
+            self.assertEqual(calls, ['actors', 'real_source_stage_B', 'optimizer'])
+
+    def test_changed_source_or_transfer_pins_rejected_before_optimizer(self):
+        for option in ('changed_pin', 'changed_transfer'):
+            with tempfile.TemporaryDirectory() as folder:
+                calls, _ = self.dispatch(folder, **{option:True})
+                self.assertNotIn('optimizer', calls)
+
+    def test_eight_gib_start_guard_prevents_native_construction(self):
+        with tempfile.TemporaryDirectory() as folder:
+            args = SimpleNamespace(out=Path(folder)/'train', settings=Path(folder)/'settings.json', resume=None)
+            with patch.dict(sys.modules, {'isaacgym':SimpleNamespace()}), \
+                    patch.object(monitoring, 'available_memory_bytes', return_value=7*1024**3), \
+                    patch.object(train_parallel, 'main') as core, \
+                    patch.object(transfer, 'validate_experts') as validate:
+                with self.assertRaises(monitoring.LowMemoryError):
+                    train.run({'min_available_memory_gib':4.}, args)
+                core.assert_not_called(); validate.assert_not_called()
+            self.assertFalse(args.out.exists())
+
+    def test_native_factory_uses_song_and_persistent_reset_api(self):
+        import torch
+        from guitar_learning.song import environment
+        from guitar_learning.runtime.persistent_session import PersistentHeadlessPreparedSession
+        before = copy.deepcopy({'config':'fixed.json', 'bundle':'bundle', 'out':'out',
+            'headless':True, 'seed':7, 'song':{'window_s':.5}})
+        spec = copy.deepcopy(before)
+        original = parallel._compact
+        try:
+            with patch.dict(sys.modules, {'isaacgym':SimpleNamespace()}), \
+                    patch.object(environment, 'build_environment', return_value='fake environment') as build, \
+                    patch.object(torch, 'manual_seed') as seed, patch.object(torch, 'set_num_threads'):
+                self.assertEqual(worker.native_environment(spec, 2), 'fake environment')
+                self.assertEqual(build.call_args.args, ('fixed.json', Path('out')/'environment'))
+                self.assertEqual(build.call_args.kwargs['song'], {'window_s':.5})
+                self.assertIs(build.call_args.kwargs['session_factory'], PersistentHeadlessPreparedSession)
+                self.assertNotIn('timing', build.call_args.kwargs)
+                seed.assert_called_once_with(9)
+                self.assertIs(parallel._compact, worker.compact)
+        finally: parallel._compact = original
+        self.assertEqual(spec, before)
+
+    def test_summary_counts_complete_episode_snapshots_and_partial_progress_separately(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root/'report.json').write_text(json.dumps(dict(completed=True, optimizer_updates=2, accounting={})))
+            base = dict(valid=True, reason='timeline_complete', song=dict(safety_invalidated=False,
+                stage_success=False, target_count=67, left_success_count=3, right_success_count=2, coupled_hit_count=1))
+            failed = dict(valid=True, reason='terminal_failure', song=dict(safety_invalidated=True,
+                stage_success=False, target_count=67, left_success_count=1, right_success_count=0, coupled_hit_count=0))
+            ignored = dict(valid=False, reason='timeline_complete', song=dict(target_count=999))
+            (root/'episodes.jsonl').write_text(''.join(json.dumps({'episode':row})+'\n' for row in (base, failed, ignored)))
+            with gzip.open(root/'transitions.jsonl.gz', 'wt') as trace:
+                for tick in range(3):
+                    trace.write(json.dumps(dict(infos=[dict(task_time_s=4.+tick, song=dict(target_count=67,
+                        left_success_count=tick, expired_count=tick, per_note={'large':1}, events=[1]))]))+'\n')
+            result = train.summarize(root)
+            self.assertEqual(result['counts']['completed_episodes'], 2)
+            self.assertEqual(result['counts']['full_safe_episodes'], 1)
+            self.assertEqual(result['counts']['physical_failure_episodes'], 1)
+            self.assertEqual(result['counts']['target_count'], 134)
+            self.assertEqual(result['counts']['left_success_count'], 4)
+            self.assertEqual(result['counts']['coupled_hit_count'], 1)
+            self.assertEqual(result['maximum_episode_time_s'], 6.)
+            self.assertEqual(result['maximum_expired_targets'], 2)
+            self.assertEqual(result['last_by_worker']['0']['left_success_count'], 2)
+            self.assertNotIn('per_note', result['last_by_worker']['0'])
+            self.assertNotIn('events', result['last_by_worker']['0'])
+            self.assertEqual(result['counts']['whole_song_successful_episodes'], 0)
+            self.assertTrue((root/'song_report.json').is_file())
+
+
+if __name__ == '__main__': unittest.main()

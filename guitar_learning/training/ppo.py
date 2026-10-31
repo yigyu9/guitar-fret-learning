@@ -10,6 +10,7 @@ import random
 import tempfile
 import numpy as np
 import torch
+from guitar_learning.portability import PATH_SCHEMA, portable
 
 
 @torch.no_grad()
@@ -343,8 +344,8 @@ class PPOTrainer:
         config=asdict(self.config)
         if self.config.advantage_normalization=='joint':
             config.pop('advantage_normalization')
-        return dict(schema=self.schema,architecture=self.policy.architecture,config=config,
-                    resume_scope='PPO_optimizer_RNG_only_new_environment_episode')
+        return portable(dict(schema=self.schema,architecture=self.policy.architecture,config=config,
+                    path_schema=PATH_SCHEMA, resume_scope='PPO_optimizer_RNG_only_new_environment_episode'))
 
     def save(self,path,metadata=None):
         path=Path(path)
@@ -363,6 +364,8 @@ class PPOTrainer:
 
     def load(self,path):
         payload=torch.load(path,map_location=next(self.policy.parameters()).device,weights_only=False)
+        if not isinstance(payload,dict) or payload.get('identity',{}).get('path_schema') != PATH_SCHEMA:
+            raise ValueError('portable checkpoint path contract required; legacy checkpoints must use their original source/control checkout')
         if not isinstance(payload,dict) or payload.get('identity')!=self._identity():
             raise ValueError('own schema/architecture/input/control/config mismatch')
         if not all(torch.isfinite(v).all() for v in payload['model'].values()):
@@ -420,6 +423,11 @@ def compute_decision_gae(reward, value, next_value, terminated, truncated, durat
 class DecisionPPOTrainer(PPOTrainer):
     """기본 J 경로: 유효 결정만 모아 actor를 갱신한 뒤 고정 GAE 목표로 critic을 갱신한다."""
     schema = 'guitar_learning_decision_ppo_v1'
+
+    def _retry_actor_lr(self, retry):
+        """기존 재시도 감소식을 유지하며 연구 실행에서만 별도로 재정의한다."""
+        for group in self.actor_optimizer.param_groups:
+            group['lr'] *= self.config.retry_lr_factor**(retry+1)
 
     def _update(self, buffer, completed_episodes):
         config = self.config
@@ -505,8 +513,7 @@ class DecisionPPOTrainer(PPOTrainer):
                     if retry == config.kl_retries:
                         raise KLGuardError(dict(epoch=epoch, retries=retries, attempted_kl=float(kl),
                                                 target_kl=config.target_kl))
-                    for group in self.actor_optimizer.param_groups:
-                        group['lr'] *= config.retry_lr_factor**(retry+1)
+                    self._retry_actor_lr(retry)
         # actor 갱신을 모두 통과한 뒤 수집 시 고정한 GAE 목표로 critic을 갱신한다.
         # 이 과정의 실패까지 포함한 전체 상태 복원은 상속한 update()가 담당한다.
         for _ in range(config.epochs):

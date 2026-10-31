@@ -68,19 +68,33 @@ class FingerRecoveryTests(unittest.TestCase):
             degrees = torch.tensor(B_PREPARATION_ANGLES_DEGREES, dtype=torch.float64)+offset
             data['segment_quaternion'] = segments(degrees)[None]
             result = finger_preparation_reward(**data)
-            q = 1/(1+3*(max(offset-15., 0.)/30.)**2)
+            q = 1/(1+(max(offset-30., 0.)**2 + 2*max(offset-15., 0.)**2)/30.**2)
             self.assertAlmostEqual(float(result['rate']), .02*q, places=14)
             torch.testing.assert_close(result['per_finger_rate'], torch.full((1, 4), .005*q, dtype=torch.float64))
             observed.append(float(result['rate']))
         self.assertAlmostEqual(observed[0], observed[2], places=14)
         self.assertTrue(all(a>b for a,b in zip(observed[2:], observed[3:])))
-        self.assertEqual(FINGER_PREPARATION_CONTRACT['schema'], 'guitar_learning.gpu_finger_preparation_rate.v5')
+        self.assertEqual(FINGER_PREPARATION_CONTRACT['schema'], 'guitar_learning.gpu_finger_preparation_rate.v6')
+
+    def test_mcp_has_more_room_while_other_joints_keep_their_band(self):
+        for joint, offset, expected in ((0, -30., 1.), (0, 30., 1.),
+                                         (0, 31., 1/(1+1/900)),
+                                         (1, 16., 1/(1+1/900)),
+                                         (2, 16., 1/(1+1/900))):
+            data = inputs()
+            degrees = torch.tensor(B_PREPARATION_ANGLES_DEGREES, dtype=torch.float64)
+            degrees[:, joint] += offset
+            data['segment_quaternion'] = segments(degrees)[None]
+            result = finger_preparation_reward(**data)
+            torch.testing.assert_close(result['quality'], torch.full((1,4), expected, dtype=torch.float64),
+                                       rtol=0, atol=1e-14)
 
     def test_B_large_error_has_nonvanishing_tail_and_actual_rate_breakdown(self):
         data = inputs(); data['segment_quaternion'] = segments(torch.tensor([[0., 0., 90.]]*4, dtype=torch.float64))[None]
         result = finger_preparation_reward(**data)
         ref = B_PREPARATION_ANGLES_DEGREES[0]
-        s = sum((max(abs(a-b)-15., 0.)/30.)**2 for a,b in zip((0.,0.,90.),ref))
+        s = sum((max(abs(a-b)-band, 0.)/30.)**2
+                for a,b,band in zip((0.,0.,90.),ref,(30.,15.,15.)))
         self.assertAlmostEqual(float(result['quality'][0, 0]), 1/(1+s), places=14)
         self.assertGreater(float(result['quality'][0, 0]), math.exp(-s))
         self.assertFalse(result['band_inside'].any())

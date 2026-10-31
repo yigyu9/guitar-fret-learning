@@ -2,9 +2,9 @@
 
 ## 현재 기본 GPU 실행
 
-2026-10-28 코드 기준. 기본 실행은 GPU 왼손 `finger-skill` v3(J 전용), 상태557·J33 공동 학습·매 tick K1 결정이다. 단계 구분3열과 계획 결정 길이1열을 제거해 상태는 기반552+남은시간1+손목종료4다. 실행은 `finger_skill_run.v2`, 정책은 `finger_skill_policy.v2`, 재개는 `finger_skill_resume.v3` 계약을 사용하며 이전 v1/v2 저장본은 받지 않는다. 보상 계약은 `guitar_learning.simplified_finger_reward.v2`, 음별 원장은 `guitar_learning.surface_note_ledger.v8`이다. 실행법은 [README](../README.md), 흐름은 [CODE_STRUCTURE](CODE_STRUCTURE.md)를 따른다. 아래 기본 로그와 뒤의 구형 GPU·CPU·전문 경로 기록을 구분한다.
+2026-10-31 문서 대조 기준. 기본 실행은 GPU 왼손 `finger-skill` v3(J 전용), 상태557·J33 공동 학습·매 tick K1 결정이다. 단계 구분3열과 계획 결정 길이1열을 제거해 상태는 기반552+남은시간1+손목종료4다. 실행은 `finger_skill_run.v2`, 정책은 `finger_skill_policy.v2`, 재개는 `finger_skill_resume.v4` 계약을 사용하며 이전 resume.v3 이하 저장본은 받지 않는다. 보상 계약은 `guitar_learning.simplified_finger_reward.v2`, 음별 원장은 `guitar_learning.surface_note_ledger.v8`이다. 실행법은 [README](../README.md), 흐름은 [CODE_STRUCTURE](CODE_STRUCTURE.md)를 따른다. 아래 기본 로그와 뒤의 구형 GPU·CPU·전문 경로 기록을 구분한다.
 
-기본 연결32개(구현24개·초기화8개), 활성 Python281개다. 공용 로그·복구 도구와 CPU·오른손 song은 유지한다. 과거8실험·전문 환경·CLI·timing 영상 도구·매뉴얼은 [원문·SHA 보관 안내](../archive/20261028_before_legacy_retirement_v1/ARCHIVE_INDEX.md)로 옮겼으며, 아래 전문 경로 명령은 당시 로그 형식의 기록이다.
+기본 연결33개(구현25개·초기화8개), 활성 Python295개다. 공용 로그·복구 도구와 CPU·오른손 song은 유지한다. 과거8실험·전문 환경·CLI·timing 영상 도구·매뉴얼은 [원문·SHA 보관 안내](../archive/20261028_before_legacy_retirement_v1/ARCHIVE_INDEX.md)로 옮겼으며, 아래 전문 경로 명령은 당시 로그 형식의 기록이다.
 
 최상위 `--out/settings.json`과 `--out/report.json`은 전체 실행을 설명한다. 실제 학습 로그·모델·계약은 **`--out/J/`**에 저장되며, 다음 표의 경로는 `J/` 기준이다.
 
@@ -22,6 +22,26 @@
 | `gpu_scene_initial.json`, `gpu_scene_final.json` | GPU 장면 생성·종료 감사. |
 
 기본100회처럼 저장 간격보다 짧은 실행은 초기·최종만 남는다. 실패 복구 파일은 기존 유효 optimizer 경계에서만 생성한다. 평가 결과의 최고 모델은 이미 저장된 파일 경로로 지정하며 같은 모델을 별도로 복사할 필요가 없다. 최고 모델은 학습 보상만으로 정하지 않는다.
+
+### 손가락 제어·압현 진단 (2026-10-29 추가)
+
+기본 GPU 왼손 학습은 별도 옵션 없이 다음 기록을 `J/`에 추가한다. 보상·제어 목표·힘 상한·종료 조건은 바꾸지 않는다.
+
+| 위치 | 내용 |
+| --- | --- |
+| `episodes.jsonl` → `finger_control_diagnostics` | 종료 에피소드의 240Hz 관절21축·손가락5개 요약. 요청 목표 오차, 적용 목표 오차, 속도 제한 차이, 실제 속도, 제출 힘과 센서 합력을 분리한다. |
+| `finger_control_trace.jsonl.gz` | 대표 환경0의 실행 시작 후 최대600제어 tick(2400물리 끝점) 상세 기록. reset을 거쳐도 전체 저장 한도는 늘어나지 않는다. |
+| `finger_control_diagnostics.json` | 정상적인 pool 종료 시점의 진행 중 에피소드 요약. 완료 에피소드나 전체 실행 누계가 아니다. |
+
+상세 기록은 행동, 속도 제한 전 요청 목표각, 모터에 적용한 목표각, 실제각·속도, 제출 힘·힘 상한·native 관절 센서, 손가락별 선택 목표의 패드 거리·방향·기하·하중·압현 후보·접촉 및 달성 여부·연속 유지 시간을 같은 시점으로 연결한다. 목표가 없는 손가락은 `target_present=false`이며 임의의 거리0으로 채우지 않는다. 엄지의 넥 안내는 기존 엄지 진단을 함께 읽는다.
+
+정책 명령은60Hz로 네 물리 표본 동안 유지되고 실제각·속도·센서는240Hz 완료 끝점에서 기록한다. `episode_id`, `episode_physics_step`, `episode_time_s`, `score_time_s`로 reset과 곡 시간 오프셋을 구분한다. 기존 `left_finger_motion`의60Hz 끝점 통계와 표본 주기를 혼동하지 않는다. H32에서 요약은 유지하며 선택 reset된 환경만 새 에피소드로 시작한다.
+
+해석 순서는 **요청 목표가 변하는가 → 적용 목표가 따라가는가 → 실제 관절이 따라가는가 → 패드가 접근하는가 → 후보 접촉과 연속 압현이 성립하는가**다. 손가락 요약은 관절별 지표의 산술평균이므로 특정 관절의 이상은21축 원값에서 확인한다.
+
+`submitted_effort`는 상한·실패 fallback을 거쳐 실제 제출한 명령이다. native position-drive 축은 명시적인 힘 제출값이0이므로 `submitted_effort_available=false`로 표시한다. native DOF 센서는 접촉·제약 등의 영향을 포함하는 일반화 합력이며 모터 단독 토크가 아니다. 센서/힘 상한 비율을 모터 포화로 해석하지 않는다. 제출 힘의 상한 도달 비율은 직접 힘을 제출하는 축에만 유효하다. 접촉·압현 후보 역시 실제 현 압력이나 음향 성공의 인증은 아니다.
+
+상세 로그는 최초10초 분량만 포착하므로 이후 곡 구간은 종료 에피소드 요약·음별 원장으로 확인한다. 장기 학습 전체의 원시 자세를 저장하지 않는다. 이 진단 추가 뒤 새 소스 봉인이 적용되며 과거 체크포인트의 엄격한 소스 검증을 완화하지 않는다.
 
 ### 9개 보상과 실패 비용 읽기
 

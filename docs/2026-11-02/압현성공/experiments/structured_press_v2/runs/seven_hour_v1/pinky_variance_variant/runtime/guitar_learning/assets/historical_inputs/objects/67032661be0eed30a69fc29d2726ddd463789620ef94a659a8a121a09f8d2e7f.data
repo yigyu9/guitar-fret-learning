@@ -1,0 +1,10 @@
+# 단음 품질 확인 후 두 목표 학습
+
+기존563 단음 경로를 유지하면서 **episode별로 하나의 단음만 선택**하는 새 확장 경로다. 현재 실험은 곡 `05_BN2-131-B_solo`의 event[0,2]를 명시한다. 순차 두 음·화음·전곡·양손 통합은 지원 범위가 아니다.
+
+- `environment.py`: 모든 후보를 먼저 검증하고 reset마다 실제 task·실행시각·측정/skill/timing/품질 ledger를 새로 구성한다. pool 정책 계약은 고정하고 선택은 episode_task에 남긴다.
+- `transfer.py`: 기존563 Actor/해당 손 std만 명시적으로 이전한다. 기존 task가 정확히 pool 구성원이고 task 선택 외 공통 계약이 같아야 한다. critic/Adam/RNG는 새로 시작한다. strict PPO resume는 바꾸지 않는다.
+- `train.py`: 기존 musical_quality PPO/물리/로그/보호를 재사용한다. `--settings --out`으로 새 단계를 시작하고, 같은 pool의 `--resume`은 원 strict 계약을 사용한다.
+- `evaluate.py`: 실제 pool을 선택하고 결과에 목표별 품질·timing-only·물리 실패와 covered_event_indices를 기록한다.
+
+실제 설정·진급 기준·자동 후속 실행은 [실험 안내](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_single_note_curriculum_v1/README.md)에 있다. 원 단음이 통과하기 전 새 단계의 성공을 주장하지 않는다. CPU 검사와 실제 native 검증은 구분한다.

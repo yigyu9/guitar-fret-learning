@@ -1,0 +1,341 @@
+"""Read-only native press/pick diagnostics; task success requires actual actions."""
+import argparse
+import csv
+import traceback
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import numpy as np
+
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import ROOT, BASE, read, save, pin, verify
+from ..lower_body_release_v1 import upright_analyze_v2, horizontal_measure_v1, upright_native_audit_v3
+
+
+RAW = ('initial_values.json', 'states240.json', 'contacts240.json',
+       'efforts240.json', 'targets60.json', 'report.json', 'attempt.json')
+REFERENCE = BASE/'upright_horizontal_v1/native_static_v6'
+SOURCE = BASE/'upright_horizontal_v1/source_v4/report.json'
+
+
+def contact_count(contacts, human, physical_guitar):
+    """Named human body against actual guitar geoms, excluding proxy/markers."""
+    count = 0
+    for contact in contacts:
+        a, b = contact['body0_name'], contact['body1_name']
+        counterpart = b if a == 'human/'+human else a if b == 'human/'+human else None
+        count += float(contact['lambda']) > 0 and counterpart in physical_guitar
+    return count
+
+
+def physical_guitar_bodies():
+    manifest = read(ROOT/'stability_adapter_2/assets/om_body_geometry_v3/manifest.json')
+    tree = ET.parse(manifest['asset'])
+    return {'guitar/'+body.get('name') for body in tree.iter('body')
+            if body.find('geom') is not None and 'proxy' not in body.get('name', '').lower()
+            and not body.get('name', '').startswith(('G:string', 'G:pluck_range'))}
+
+
+def trajectory(run, spec, source):
+    initial = read(run/'initial_values.json')
+    physical_guitar = physical_guitar_bodies()
+    samples = read(run/'states240.json')['rows']
+    contacts = {r['physics_step']: r for r in read(run/'contacts240.json')['rows']}
+    names = initial['human_body_names']
+    gnames = initial['guitar_body_names']
+    first = samples[0]['state']
+    right = pose(first['human_body_states'][names.index('R_Hip')])[0] - pose(first['human_body_states'][names.index('L_Hip')])[0]
+    right[2] = 0
+    right /= np.linalg.norm(right)
+    target = np.array(spec['press']['target_G_m'])
+    center_G = np.array(spec['guitar_body_center_G_m'])
+    reference_row = next((s for s in samples if s['physics_step'] == 1200), None)
+    anchor = None
+    if reference_row:
+        gp, gr = pose(reference_row['state']['guitar_body_states'][0])
+        anchor = (gp+gr.apply(center_G), gr)
+    rows, picks, segments = [], [], []
+    began = None
+    for sample in samples:
+        step = sample['physics_step']
+        state = sample['state']
+        gp, gr = pose(state['guitar_body_states'][0])
+        center = gp+gr.apply(center_G)
+        pelvis = pose(state['human_body_states'][names.index('Pelvis')])[0]
+        finger = gr.inv().apply(pose(state['human_body_states'][names.index(spec['press']['marker'])])[0]-gp)
+        pick = gr.inv().apply(pose(state['human_body_states'][names.index(spec['strike']['marker'])])[0]-gp)
+        endpoints = [np.array([gr.inv().apply(pose(state['guitar_body_states'][gnames.index('G:string%d%s' % (n, suffix))])[0]-gp)
+                              for n in range(1, 7)]) for suffix in ('', '_end')]
+        picks.append(pick)
+        segments.append(endpoints)
+        delta = finger-target
+        xy = float(np.linalg.norm(delta[:2]))
+        geometry = xy <= spec['press']['geometry_xy_m'] and spec['press']['geometry_z_band_m'][0] <= delta[2] <= spec['press']['geometry_z_band_m'][1]
+        available = step in contacts
+        native_contacts = contacts[step]['contacts'] if available else []
+        index_contact = contact_count(native_contacts, spec['press']['marker'], physical_guitar)
+        valid = bool(geometry and index_contact and available)
+        if valid:
+            if began is None:
+                began = sample['time_s']
+            dwell = sample['time_s']-began
+        else:
+            began = None
+            dwell = 0.
+        neck = gr.apply([0., 1., 0.])
+        row = dict(step=step, time_s=sample['time_s'], contacts_row_available=available,
+                   body_center_W_x_m=float(center[0]), body_center_W_y_m=float(center[1]), body_center_W_z_m=float(center[2]),
+                   guitar_body_right_coordinate_m=float((center-pelvis)@right),
+                   lateral_error_m=float((center-pelvis)@right-source['reference_lateral_coordinate_m']),
+                   neck_elevation_deg=float(np.rad2deg(np.arcsin(np.clip(neck[2], -1., 1.)))),
+                   body_displacement_from_5s_m=float(np.linalg.norm(center-anchor[0])) if anchor else None,
+                   rotation_from_5s_deg=float(np.rad2deg((anchor[1].inv()*gr).magnitude())) if anchor else None,
+                   press_marker_G_x_m=float(finger[0]), press_marker_G_y_m=float(finger[1]), press_marker_G_z_m=float(finger[2]),
+                   press_xy_error_m=xy, press_z_error_m=float(delta[2]), press_geometry_band=bool(geometry),
+                   press_native_index3_positive_contacts=index_contact, press_geometry_and_contact=valid,
+                   string_marker_contact_anomalies=sum(any(n.startswith('guitar/G:string') for n in (c['body0_name'], c['body1_name'])) for c in native_contacts),
+                   press_dwell_s=float(dwell), press_ready=bool(valid and dwell+1e-12 >= spec['press']['required_dwell_s']),
+                   pick_G_x_m=float(pick[0]), pick_G_y_m=float(pick[1]), pick_G_z_m=float(pick[2]))
+        for body in ('Torso', 'Chest'):
+            _, rotation = pose(state['human_body_states'][names.index(body)])
+            up = rotation.apply([0., 0., 1.])
+            row[body+'_total_tilt_deg'] = float(np.rad2deg(np.arccos(np.clip(up[2], -1., 1.))))
+            row[body+'_right_tilt_deg'] = float(np.rad2deg(np.arctan2(up@right, up[2])))
+        for body in ('Chest', 'R_Shoulder', 'R_Hip', 'Spine'):
+            row[body+'_positive_contacts'] = contact_count(native_contacts, body, physical_guitar)
+        row['Chest_and_RShoulder_positive'] = bool(row['Chest_positive_contacts'] and row['R_Shoulder_positive_contacts'])
+        rows.append(row)
+    return initial, samples, rows, np.array(picks), segments
+
+
+def prefix(run, reference):
+    result = {}
+    counts = {'states240.json': 1201, 'contacts240.json': 1201, 'efforts240.json': 1200, 'targets60.json': 300}
+    keys = ('requested105_rad', 'final105_rad', 'native105_position_readback_rad')
+    for filename, count in counts.items():
+        a, b = read(run/filename)['rows'], read(reference/filename)['rows']
+        length = min(count, len(a), len(b))
+        if filename == 'targets60.json':
+            result[filename] = dict(required_rows=count, compared_rows=length, complete=len(a) >= count and len(b) >= count,
+                                    arrays_exact={k: [r[k] for r in a[:length]] == [r[k] for r in b[:length]] for k in keys})
+        else:
+            result[filename] = dict(required_rows=count, compared_rows=length, complete=len(a) >= count and len(b) >= count,
+                                    exact=a[:length] == b[:length])
+    result['passed'] = all(v['complete'] and (all(v['arrays_exact'].values()) if 'arrays_exact' in v else v['exact']) for v in result.values())
+    return result
+
+
+def interval(rows):
+    if not rows:
+        return dict(samples=0, first_time_s=None, last_time_s=None, stability_gates=None, stability_passed=False, full_support_passed=False)
+    def maximum(key, absolute=False):
+        vals = [r[key] for r in rows if r[key] is not None]
+        return max((abs(v) if absolute else v for v in vals), default=None)
+    contacts = {n: sum(r[n+'_positive_contacts'] > 0 for r in rows)/len(rows) for n in ('Chest', 'R_Shoulder', 'R_Hip', 'Spine')}
+    simultaneous = sum(r['Chest_and_RShoulder_positive'] for r in rows)/len(rows)
+    metrics = dict(max_body_displacement_from_5s_m=maximum('body_displacement_from_5s_m'),
+                   max_rotation_from_5s_deg=maximum('rotation_from_5s_deg'), max_abs_neck_elevation_deg=maximum('neck_elevation_deg', True),
+                   max_abs_lateral_error_m=maximum('lateral_error_m', True),
+                   max_Torso_Chest_total_tilt_deg=max(maximum(n+'_total_tilt_deg') for n in ('Torso', 'Chest')),
+                   max_abs_Torso_Chest_right_tilt_deg=max(maximum(n+'_right_tilt_deg', True) for n in ('Torso', 'Chest')))
+    gates = dict(anchor_5s_available=metrics['max_body_displacement_from_5s_m'] is not None,
+                 body_displacement_30mm=metrics['max_body_displacement_from_5s_m'] is not None and metrics['max_body_displacement_from_5s_m'] <= .03,
+                 rotation_5deg=metrics['max_rotation_from_5s_deg'] is not None and metrics['max_rotation_from_5s_deg'] <= 5.,
+                 neck_3deg=metrics['max_abs_neck_elevation_deg'] <= 3., lateral_20mm=metrics['max_abs_lateral_error_m'] <= .02,
+                 Torso_Chest_total_5deg=metrics['max_Torso_Chest_total_tilt_deg'] <= 5.,
+                 Torso_Chest_right_3deg=metrics['max_abs_Torso_Chest_right_tilt_deg'] <= 3.,
+                 contacts_available=all(r['contacts_row_available'] for r in rows), RShoulder_positive_95pct=contacts['R_Shoulder'] >= .95)
+    return dict(samples=len(rows), first_time_s=rows[0]['time_s'], last_time_s=rows[-1]['time_s'], metrics=metrics,
+                positive_contact_fraction=contacts, simultaneous_Chest_RShoulder_fraction=simultaneous,
+                stability_gates=gates, stability_passed=all(gates.values()),
+                full_support_passed=bool(all(gates.values()) and simultaneous >= .95))
+
+
+def press_summary(initial, states, rows):
+    hold = [r for r in rows if 6.3 <= r['time_s'] <= 8.]
+    action = [r for r in rows if 5. <= r['time_s'] <= 9.]
+    indices = [initial['joint_names'].index(n) for n in ('LH:index1_x', 'LH:index1_z', 'LH:index2', 'LH:index3')]
+    q = np.array([[s['state']['human_dof_states'][i]['pos'] for i in indices] for s in states if 5. <= s['time_s'] <= 9.])
+    anchor = next((r for r in rows if r['step'] == 1200), None)
+    hold_min_z = min((r['press_marker_G_z_m'] for r in hold), default=None)
+    z_descent = anchor['press_marker_G_z_m']-hold_min_z if anchor and hold_min_z is not None else None
+    q_ptp = np.ptp(q, axis=0).tolist() if len(q) else None
+    movement_gates = dict(marker_z_descent_2mm=z_descent is not None and z_descent >= .002,
+                          finger4_actual_peak_to_peak_002rad=q_ptp is not None and max(q_ptp) >= .02)
+    candidate = any(r['press_ready'] for r in hold)
+    return dict(hold_samples=len(hold), hold_complete=bool(hold and hold[0]['time_s'] <= 6.3+1/240 and hold[-1]['time_s'] >= 8.),
+                candidate_ready_in_hold=candidate, actual_action_detected=bool(candidate and all(movement_gates.values())),
+                movement_gates=movement_gates, marker_G_z_at_5s_m=anchor['press_marker_G_z_m'] if anchor else None,
+                hold_min_marker_G_z_m=hold_min_z, marker_z_descent_from_5s_m=z_descent,
+                hold_geometry_samples=sum(r['press_geometry_band'] for r in hold),
+                hold_native_index3_positive_samples=sum(r['press_native_index3_positive_contacts'] > 0 for r in hold),
+                hold_geometry_and_contact_samples=sum(r['press_geometry_and_contact'] for r in hold),
+                max_hold_dwell_s=max((r['press_dwell_s'] for r in hold), default=0.),
+                max_action_dwell_s=max((r['press_dwell_s'] for r in action), default=0.),
+                hold_marker_G_z_range_m=[min(r['press_marker_G_z_m'] for r in hold), max(r['press_marker_G_z_m'] for r in hold)] if hold else None,
+                hold_z_error_range_m=[min(r['press_z_error_m'] for r in hold), max(r['press_z_error_m'] for r in hold)] if hold else None,
+                actual_finger4_action_peak_to_peak_rad=q_ptp,
+                scope='Candidate only: LH:index3 native body origin is not an anatomical pad. XY10mm exceeds about7mm string spacing, and Z[-6,+10]mm includes +8mm hover. Native index3 contact must be against actual geom-bearing guitar bodies including frets, excluding string/marker/proxy bodies. Actual action additionally requires hold minimum marker_G_z at least2mm below5s and at least one actual finger joint peak-to-peak .02rad. Dwell starts at0 on first valid240Hz sample. No single-string certification, pressureN, acoustic output or string deformation is measured.')
+
+
+def strikes(picks, segments, rows, spec):
+    import torch
+    from tab2body.env.strike_detector import PickStrikeDetector
+    from tab2body.strike_cfg import STRIKE
+    cfg, zone = STRIKE['detector'], STRIKE['zone']
+    detector = PickStrikeDetector(1, 6, device='cpu', min_across_speed=max(cfg['min_across_speed_m_s'], cfg['min_displacement_m']*60),
+                                  min_depth=cfg['min_depth_m'], rearm_separation=cfg['rearm_distance_m'], rearm_min_frames=cfg['rearm_min_frames'],
+                                  parallel_epsilon=cfg['parallel_epsilon'], allowed_y=(zone['allowed_y_min_m'], zone['allowed_y_max_m']),
+                                  preferred_y=(zone['preferred_y_min_m'], zone['preferred_y_max_m']))
+    events, frames = [], []
+    selected_string = spec['press']['string']
+    for step in range(4, len(rows), 4):
+        start, end = segments[step]
+        result = detector.step(torch.tensor(picks[step-4:step-3], dtype=torch.float64), torch.tensor(picks[step:step+1], dtype=torch.float64),
+                               torch.tensor(start, dtype=torch.float64), torch.tensor(end, dtype=torch.float64), dt=1/60)
+        emitted = []
+        for n in range(6):
+            if bool(result['release'][0, n]):
+                cross = result['crossing_pos_g'][0, n].numpy()
+                u = float(result['subframe_t'][0, n])
+                event_time = (step-4+4*u)/240
+                fractional_step = step-4+4*u
+                lower, upper = int(np.floor(fractional_step)), int(np.ceil(fractional_step))
+                bracket = [rows[lower], rows[upper]]
+                emitted.append(dict(physics_step_end=step, time_s=event_time, string=n+1, direction=int(result['direction'][0, n]),
+                                    crossing_G_m=cross.tolist(), depth_m=float(result['depth'][0, n]), across_speed_m_s=float(result['across_speed'][0, n]),
+                                    subframe_t=u, global_zone_allowed=bool(zone['allowed_y_min_m'] <= cross[1] <= zone['allowed_y_max_m']),
+                                    lane_allowed=bool(abs(cross[1]-spec['strike']['lane_G_y_m']) <= .0125),
+                                    press_240Hz_bracket_steps=[lower, upper], press_bracket_ready=all(r['press_ready'] for r in bracket),
+                                    press_bracket_dwell_s=[r['press_dwell_s'] for r in bracket], selected_press_string=n+1 == selected_string))
+        emitted.sort(key=lambda e: e['subframe_t'])
+        events.extend(emitted)
+        frames.append(dict(physics_step_end=step, time_s=step/240, release_strings=[e['string'] for e in emitted],
+                           blocked_wait_rearm=result['blocked_wait_rearm'][0].tolist(), rearmed=result['rearmed'][0].tolist()))
+    action = [e for e in events if 5 <= e['time_s'] <= 9 and e['global_zone_allowed'] and e['lane_allowed']]
+    down = [e['string'] for e in action if e['direction'] == 1]
+    up = [e['string'] for e in action if e['direction'] == -1]
+    selected = [e for e in action if e['selected_press_string']]
+    return dict(events=events, frames=frames, action_allowed_down_order=down, action_allowed_up_order=up,
+                six_string_down_pass=down == [6, 5, 4, 3, 2, 1], six_string_up_pass=up == [1, 2, 3, 4, 5, 6],
+                selected_string_action_events=selected,
+                all_selected_string_events_press_ready=bool(len(selected) >= 2 and all(e['press_bracket_ready'] for e in selected)),
+                selected_string_ready_events=[e for e in selected if e['press_bracket_ready']],
+                settings=dict(detector=cfg, zone=zone, dt_s=1/60, frequency_Hz=60, lane_half_width_m=.0125),
+                scope='Original PickStrikeDetector on actual native RH:pick/current guitar coordinates at60Hz, from240Hz endpoint records. Global zone, speed, depth and rearm unchanged. RH:pick and strings are noncolliding markers; RELEASE is kinematic, not physical string excitation or sound. Combined press readiness requires both surrounding240Hz samples ready with100ms dwell.')
+
+
+def main(run, out, baseline=None):
+    out.mkdir(exist_ok=False)
+    attempt = read(run/'attempt.json')
+    config_path = Path(attempt['config'])
+    config = read(config_path)
+    spec_path = Path(config['play_spec'])
+    spec = read(spec_path)
+    extra = list(Path(__file__).resolve().parent.glob('*.py'))+list((ROOT/'tab2body').rglob('*.py'))
+    extra += [config_path, spec_path, SOURCE, ROOT/'docs/plans/upright_horizontal_play_20261015.md',
+              ROOT/'docs/plans/upright_horizontal_play_measurement_20261015.md',
+              ROOT/'docs/plans/upright_horizontal_play_provenance_20261015.md',
+              Path(read(run/'play_wrapper.json')['before_manifest'])]
+    extra += [run/n for n in RAW]+[run/'play_wrapper.json']+[REFERENCE/n for n in RAW]
+    if baseline:
+        extra += [baseline/n for n in RAW]+[baseline/'play_wrapper.json']
+    pins = pin(extra=extra)
+    save(out/'inputs_before.json', pins)
+    helpers = {}
+    for name, call, result_path in (
+        ('posture', lambda: upright_analyze_v2.analyze(run, out/'posture'), out/'posture/summary.json'),
+        ('layout', lambda: horizontal_measure_v1.main(run, out/'posture', SOURCE, out/'layout'), out/'layout/summary.json'),
+        ('integrity', lambda: upright_native_audit_v3.main([run], out/'integrity'), out/'integrity/report.json')):
+        try:
+            call()
+            helpers[name] = read(result_path)
+        except Exception:
+            helpers[name] = dict(error=traceback.format_exc(), passed=False)
+            save(out/(name+'_failure.json'), helpers[name])
+    source = read(SOURCE)
+    physical = physical_guitar_bodies()
+    pairs = {}
+    for sample in read(run/'contacts240.json')['rows']:
+        positive_pairs = set()
+        for contact in sample['contacts']:
+            a, b = contact['body0_name'], contact['body1_name']
+            human, guitar = (a, b) if a.startswith('human/') else (b, a)
+            if human.startswith('human/') and guitar.startswith('guitar/'):
+                key = human+' <-> '+guitar
+                item = pairs.setdefault(key, dict(human_body=human, guitar_body=guitar, physical_guitar=guitar in physical,
+                                                 raw_contacts=0, positive_lambda_contacts=0, positive_lambda_samples=0))
+                item['raw_contacts'] += 1
+                if float(contact['lambda']) > 0:
+                    item['positive_lambda_contacts'] += 1
+                    positive_pairs.add(key)
+        for key in positive_pairs:
+            pairs[key]['positive_lambda_samples'] += 1
+    save(out/'contact_pairs.json', dict(pairs=pairs, scope='Actual native pair counts. Positive lambda is solver contact response, not measured pressureN. physical_guitar excludes nonphysical markers/proxies.'))
+    initial, states, rows, picks, segments = trajectory(run, spec, source)
+    with (out/'samples.csv').open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    strike = strikes(picks, segments, rows, spec)
+    save(out/'strike_events.json', strike)
+    press = press_summary(initial, states, rows)
+    original_prefix = prefix(run, REFERENCE)
+    comparison = None
+    if baseline:
+        bi, bs, br, _, _ = trajectory(baseline, spec, source)
+        bmap = {r['step']: r for r in br}
+        pairs = [(r, bmap[r['step']]) for r in rows if r['time_s'] >= 5 and r['step'] in bmap]
+        differences, rotations = [], []
+        for r, b in pairs:
+            differences.append(float(np.linalg.norm([r['body_center_W_'+a+'_m']-b['body_center_W_'+a+'_m'] for a in 'xyz'])))
+            step = r['step']
+            rotations.append(float(np.rad2deg((pose(bs[step]['state']['guitar_body_states'][0])[1].inv()*pose(states[step]['state']['guitar_body_states'][0])[1]).magnitude())))
+        comparison = dict(prefix=prefix(run, baseline), matched_action_samples=len(pairs),
+                          max_action_body_center_difference_m=max(differences, default=None), max_action_rotation_difference_deg=max(rotations, default=None),
+                          baseline_press=press_summary(bi, bs, br))
+    report = read(run/'report.json')
+    wrapper = read(run/'play_wrapper.json')
+    action = interval([r for r in rows if 5 <= r['time_s'] <= 9])
+    warmup_rows = [r for r in rows if r['time_s'] <= 5]
+    warmup = interval(warmup_rows)
+    warmup['original_layout_and_posture_gate'] = dict(posture=helpers['posture'].get('gates'), layout=helpers['layout'].get('gates'),
+                                                    scope='Preserved legacy helper whole-run gates are also reported; warmup failures are evaluated below only on0..5s samples.')
+    warmup['warmup_geometry_gates'] = dict(neck_3deg=all(abs(r['neck_elevation_deg']) <= 3 for r in warmup_rows),
+        lateral_20mm=all(abs(r['lateral_error_m']) <= .02 for r in warmup_rows),
+        Torso_Chest_total_5deg=all(r[n+'_total_tilt_deg'] <= 5 for r in warmup_rows for n in ('Torso', 'Chest')),
+        Torso_Chest_right_3deg=all(abs(r[n+'_right_tilt_deg']) <= 3 for r in warmup_rows for n in ('Torso', 'Chest')),
+        simultaneous_Chest_RShoulder_after1s_95pct=bool([r for r in warmup_rows if r['time_s'] > 1]) and sum(r['Chest_and_RShoulder_positive'] for r in warmup_rows if r['time_s'] > 1)/max(1, sum(r['time_s'] > 1 for r in warmup_rows)) >= .95)
+    case = config['play_case']
+    press_pass = press['actual_action_detected']
+    strike_pass = strike['six_string_down_pass'] and strike['six_string_up_pass']
+    action_pass = (press_pass if case == 'press' else strike_pass if case == 'strike' else press_pass and strike_pass and strike['all_selected_string_events_press_ready'] if case == 'combined' else False)
+    integrity = helpers['integrity'].get('runs', [{}])[0].get('all_checks', False)
+    gates = dict(completed_9s=bool(report['completed'] and report['physics_steps'] == 2160),
+                 runner_safety=bool(not report['failure'] and not report['cleanup_errors'] and all(report['initial_checks'].values()) and not report['forbidden_calls'] and report['root_fixed'] and report['guitar_free'] and not report['strap_enabled'] and report['training_updates'] == 0),
+                 runner_and_wrapper_inputs_unchanged=bool(report['inputs_unchanged'] and verify(attempt['input_sha256']) and wrapper['inputs_unchanged'] and verify(wrapper['input_sha256'])),
+                 native_integrity=bool(integrity), source_body_center_matches_spec=bool(np.array_equal(np.array(spec['guitar_body_center_G_m']), np.array(source['reference_body_center_G_m']))),
+                 original_5s_prefix_exact=original_prefix['passed'],
+                 baseline_5s_prefix_exact=comparison['prefix']['passed'] if comparison else True,
+                 actual_requested_action=bool(action_pass), action_stability=action['stability_passed'], action_full_support=action['full_support_passed'],
+                 analysis_inputs_unchanged=verify(pins))
+    save(out/'summary.json', dict(run=str(run), case=case, report_completed=report['completed'], failure=report['failure'],
+         actual_last_time_s=rows[-1]['time_s'], missing_action_interval_s=[max(5., rows[-1]['time_s']), 9.] if rows[-1]['time_s'] < 9 else None,
+         gates=gates, action_diagnostic_passed=all(v for k, v in gates.items() if k != 'action_full_support'),
+         full_support_action_passed=all(gates.values()), baseline_is_not_action_success=case == 'baseline',
+         press=press, strike=dict((k, v) for k, v in strike.items() if k not in ('events', 'frames')),
+         action=action, warmup=warmup, original_5s_prefix=original_prefix, baseline_comparison=comparison,
+         physical_guitar_contact_body_names=sorted(physical_guitar_bodies()),
+         raw_string_marker_contact_anomaly_samples=sum(r['string_marker_contact_anomalies'] > 0 for r in rows),
+         legacy_helper_results=helpers, inputs_unchanged=verify(pins),
+         scope='Read-only finite human control evidence. Partial/aborted attempts retain their actual observed range; missing segments cannot pass completion. Stability without a validated requested action is not playing success. Action diagnostic and full Chest/upper-arm support are separate. Original0..5s posture failure remains a failure.'))
+    print('case', case, 'gates', gates, flush=True)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--run', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--baseline', type=Path)
+    args = parser.parse_args()
+    main(args.run.resolve(), args.out.resolve(), args.baseline.resolve() if args.baseline else None)

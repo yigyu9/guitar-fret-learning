@@ -1,0 +1,37 @@
+"""Frozen inputs and name-based restoration for the new105 native diagnostic."""
+import json,hashlib
+from pathlib import Path
+import xml.etree.ElementTree as ET
+import numpy as np
+ROOT=Path(__file__).resolve().parents[2];A=ROOT/'stability_adapter_2';BASE=ROOT/'paper/initial_pose/lower_body_release_v1'
+HUMAN=ROOT/'tab2body/assets/smpl_mpl_hands_body.xml'
+H0=ROOT/'docs/2026-10-12/stability_adapter_2/results/left_palm_boundary_v1/hold_1s/l_wrist_x_minus0125'
+MANIFEST=A/'working_initial_pose_v1/manifest.json'
+LOWER=tuple(s+'_'+p+'_' for s in ('L','R') for p in ('Hip','Knee','Ankle','Toe'))
+def read(p):return json.loads(Path(p).read_text())
+def save(p,v):
+ p=Path(p);p.parent.mkdir(parents=True,exist_ok=True);assert not p.exists(),str(p);p.write_text(json.dumps(v,indent=2,allow_nan=False)+'\n')
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def pin(config=None,extra=()):
+ cfg=read(A/'config.json');g=read(A/'assets/om_body_geometry_v3/manifest.json');paths=set(A.glob('*.py'))|set(Path(__file__).parent.glob('*.py'))|{Path(__file__).with_name('PLAN.md'),MANIFEST,A/'working_initial_pose_v1/static.json',A/'config.json',ROOT/cfg['pose_source'],ROOT/cfg['gain_source'],H0/'states.json',H0/'report.json',A/'assets/om_body_geometry_v3/manifest.json',ROOT/'docs/2026-10-12/stability_adapter_2/results/realistic_guitar_proportions_v1/native_realistic_v2/native_properties.json'}
+ m=read(MANIFEST);paths|={Path(m['native_initial']),Path(m['candidate'])}
+ for xml in (HUMAN,Path(g['asset'])):
+  paths.add(xml);tree=ET.parse(xml);md=tree.find('compiler').get('meshdir','')
+  paths|={(xml.parent/md/e.attrib['file']).resolve() for e in tree.findall('./asset/mesh')}
+ if config:
+  paths.add(Path(config));paths.add(Path(read(config)['candidate']))
+ paths|=set(map(Path,extra));return {str(p.resolve()):sha(p) for p in sorted(paths)}
+def verify(pins):return all(sha(p)==h for p,h in pins.items())
+
+def restore():
+ m=read(MANIFEST);upper=dict(zip(m['joint_names'],m['target81_rad']));r=read(H0/'report.json');state=read(H0/'states.json')[0];names=r['human_joint_names'];assert len(names)==105 and len(set(names))==105
+ lower={n:float(s['pos']) for n,s in zip(names,state['human_dof_states']) if n.startswith(LOWER)};assert len(lower)==24
+ q=np.array([upper[n] if n in upper else lower[n] for n in names],dtype=np.float32).astype(float);expected=read(m['native_initial'])['native_initial_state']
+ candidate={'schema':'sa2_native105_initial_v1','joint_names':names,'q_ref_rad':q.tolist(),'upper81_source':str(MANIFEST),'lower24_source':str(H0),'lower24_q_rad':lower,'lower_deltas_rad':{},'guitar_position_W_m':m['guitar_actor_root_W_m'],'guitar_quaternion_xyzw':m['guitar_quaternion_xyzw'],'expected_initial_state':expected,'support_candidate':str(m['candidate']),'scope':'H0 lower24 restored by name; exact margin_only upper81; native105 transfer requires actual FK/property validation.'}
+ return candidate
+
+def prepare():
+ pins=pin();save(BASE/'inputs/restoration_inputs_before.json',pins);c=restore();p=BASE/'inputs/restored_H0.json';save(p,c)
+ for mode,seconds in [('static',5.),('release',15.)]:save(BASE/'inputs'/('restored_H0_'+mode+'.json'),{'schema':'native105_diagnostic_v1','candidate':str(p),'candidate_sha256':sha(p),'seconds':seconds,'mode':mode,'lower_gain_scale':1.})
+ assert verify(pins);save(BASE/'inputs/restoration_inputs_after.json',{'input_sha256':pins,'inputs_unchanged':True,'upper81_exact':True,'lower24_H0_restored':True,'RL_training':False})
+if __name__=='__main__':prepare()

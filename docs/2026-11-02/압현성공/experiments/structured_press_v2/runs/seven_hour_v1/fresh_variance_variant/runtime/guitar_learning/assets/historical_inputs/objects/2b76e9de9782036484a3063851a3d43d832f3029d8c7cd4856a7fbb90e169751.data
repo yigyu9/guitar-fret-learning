@@ -1,0 +1,43 @@
+"""New arm alignment to free guitar; immutable finite world support and feet reused."""
+import isaacgym
+import argparse
+from pathlib import Path
+from unittest.mock import patch
+from ..lower_body_release_v1 import run_horizontal_v7 as runner, scene_v8, controller_horizontal_v4
+from ..lower_body_release_v1.common import ROOT, BASE, pin, verify, read, save
+from ..seated_foot_support_v1.runtime_v6 import Scene
+from .runtime_v2 import Controller
+
+
+def main(config, out):
+    cfg = read(config)
+    phase = BASE/'grounded_guitar_support_v1'
+    source = Path(cfg['candidate']).parent
+    report = read(cfg['source_report'])
+    assert report['eligible_for_native'] and report['inputs_unchanged'] and verify(read(source/'inputs_before.json'))
+    assert cfg['seconds'] == 5 and cfg['mode'] == 'static'
+    extras = list(Path(__file__).resolve().parent.glob('*.py'))
+    extras += list((ROOT/'stability_adapter_2/seated_foot_support_v1').glob('*.py'))
+    extras += [ROOT/'docs/plans/grounded_guitar_support_20261016.md',
+               BASE/'seated_foot_support_v1/artifact_inventory.json',
+               Path(cfg['source_report']), Path(cfg['upper_target105']), source/'inputs_before.json', ROOT/'docs/plans/grounded_guitar_world_anchor_20261016.md', ROOT/'docs/plans/grounded_guitar_spine_clearance_20261016.md', ROOT/'docs/plans/grounded_guitar_arm_alignment_20261016.md']
+    inputs = pin(config, extra=extras)
+    before = phase/'provenance'/(out.name+'_before.json')
+    save(before, inputs)
+    try:
+        with patch.object(scene_v8, 'Scene', Scene), patch.object(controller_horizontal_v4, 'Controller', Controller):
+            runner.run(config, out)
+    finally:
+        save(out/'support_wrapper.json', dict(input_sha256=inputs, inputs_unchanged=verify(inputs),
+             before_manifest=str(before), actual_scene_class='seated_foot_support_v1.runtime_v6.Scene',
+             controller='grounded_guitar_support_v1.runtime_v2.Controller',
+             scope='Source V3 arm alignment at unchanged source V2 guitar placement. V2 world human support and successful finite feet, original Chest3mm/gains/caps/restrictions retained.'))
+    assert verify(inputs)
+
+
+if __name__ == '__main__':
+    p = argparse.ArgumentParser()
+    p.add_argument('--config', type=Path, required=True)
+    p.add_argument('--out', type=Path, required=True)
+    a = p.parse_args()
+    main(a.config.resolve(), a.out.resolve())

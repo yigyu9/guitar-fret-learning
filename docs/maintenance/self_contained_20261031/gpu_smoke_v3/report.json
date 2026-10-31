@@ -1,0 +1,100 @@
+{
+  "schema": "tab2body.portability_smoke.v1",
+  "project": "/home/ajou/yigyu/3/.runtime/relocated project v3",
+  "original_project": "/home/ajou/yigyu/3",
+  "python": "/home/ajou/miniconda3/envs/rl38/bin/python",
+  "stages": [
+    {
+      "name": "local_runtime",
+      "passed": true,
+      "returncode": 0,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/home/ajou/yigyu/3/.runtime/relocated project v3/scripts/tab2body.py",
+        "--cache-root",
+        "/home/ajou/yigyu/3/.runtime/cache",
+        "prepare"
+      ],
+      "log": "local_runtime.log",
+      "wall_s": 0.5650348279887112
+    },
+    {
+      "name": "inputs",
+      "passed": true,
+      "returncode": 0,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/home/ajou/yigyu/3/.runtime/relocated project v3/scripts/tab2body.py",
+        "--cache-root",
+        "/home/ajou/yigyu/3/.runtime/cache",
+        "run",
+        "-m",
+        "guitar_learning.tool.validation.portable_inputs",
+        "--out",
+        "/home/ajou/yigyu/3/.runtime/relocated project v3/runs/smoke/inputs.json"
+      ],
+      "log": "inputs.log",
+      "wall_s": 0.7650526070065098
+    },
+    {
+      "name": "gpu_probe",
+      "passed": true,
+      "returncode": 0,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/home/ajou/yigyu/3/.runtime/relocated project v3/scripts/tab2body.py",
+        "--cache-root",
+        "/home/ajou/yigyu/3/.runtime/cache",
+        "probe"
+      ],
+      "log": "gpu_probe.log",
+      "wall_s": 1.8163925179978833
+    },
+    {
+      "name": "train",
+      "passed": false,
+      "returncode": 1,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/home/ajou/yigyu/3/.runtime/relocated project v3/scripts/tab2body.py",
+        "--cache-root",
+        "/home/ajou/yigyu/3/.runtime/cache",
+        "run",
+        "-m",
+        "guitar_learning.train",
+        "--size",
+        "small",
+        "--num-envs",
+        "2",
+        "--horizon",
+        "2",
+        "--updates",
+        "1",
+        "--out",
+        "/home/ajou/yigyu/3/.runtime/relocated project v3/runs/smoke/train"
+      ],
+      "log": "train.log",
+      "wall_s": 4.470898769010091
+    },
+    {
+      "name": "resume",
+      "passed": false,
+      "skipped": true,
+      "reason": "prerequisite failed: train"
+    },
+    {
+      "name": "evaluation",
+      "passed": false,
+      "skipped": true,
+      "reason": "prerequisite failed: train"
+    },
+    {
+      "name": "render",
+      "passed": false,
+      "skipped": true,
+      "reason": "prerequisite failed: train"
+    }
+  ],
+  "completed": false,
+  "research_success_claimed": false
+}

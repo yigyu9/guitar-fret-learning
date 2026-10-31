@@ -3,12 +3,12 @@ import argparse
 
 
 def parser():
-    value = argparse.ArgumentParser(description='Fresh single-note fixed-guitar diagnostic; production defaults unchanged')
+    value = argparse.ArgumentParser(description='Fresh single-note fixed-guitar diagnostic with direct position targets')
     sub = value.add_subparsers(dest='command', required=True)
     train = sub.add_parser('train')
     train.add_argument('--teacher', required=True)
-    train.add_argument('--mode', choices=('incremental', 'position'), required=True)
-    train.add_argument('--initial-std', type=float, required=True, help='predeclared mode-specific latent exploration std')
+    train.add_argument('--mode', choices=('position',), default='position')
+    train.add_argument('--initial-std', type=float, default=.01, help='direct-position latent exploration std (default: .01)')
     train.add_argument('--song', default='05_BN2-131-B_solo')
     train.add_argument('--size', choices=('small', 'medium', 'large'), default='large')
     train.add_argument('--num-envs', type=int, default=128)

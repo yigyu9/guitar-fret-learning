@@ -1,0 +1,37 @@
+"""Full original source-shape audit with saved native collision masks."""
+import argparse
+from pathlib import Path
+import numpy as np
+import mujoco
+from .common import ROOT,A,BASE,read,save,pin,verify
+from .upright_source_v1 import full_fk,INITIAL,NATIVE,PLAN
+from .source_geometry_v1 import probe,foot_vertices
+
+
+def main(source,out):
+    out.mkdir(exist_ok=False)
+    paths=[source/n for n in ('candidate.json','predicted_state.json','report.json','support_candidate.json')]
+    pins=pin(extra=paths+[INITIAL,NATIVE/'native_properties.json',PLAN]);save(out/'inputs_before.json',pins)
+    c=read(source/'candidate.json');i=read(INITIAL);state=read(source/'predicted_state.json');names,bodies=i['joint_names'],i['human_body_names'];fk,parents=full_fk(names,bodies,i['native_initial_state'],np.array(i['q_ref105_rad']));poses=fk(np.array(c['q_ref_rad']));asset=Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']);shared=read(A/'config.json');chair=read(ROOT/shared['pose_source'])['params']['chair'];chair['center_xy']=(np.array(chair['center_xy'])+np.array(c['chair_translation_W_m'])[:2]).tolist()
+    model,data,shapes,_=probe(c,bodies,poses,asset,chair);properties=read(NATIVE/'native_properties.json')['actual_shape_properties']
+    def enabled(a,b):
+        if a['actor']==b['actor']=='human' and a['body']==b['body']:return False
+        if a['actor'] not in properties or b['actor'] not in properties:return True
+        af=properties[a['actor']][a['body']];bf=properties[b['actor']][b['body']]
+        return any((x['filter']&y['filter'])==0 for x in af for y in bf)
+    human=[s for s in shapes if s['actor']=='human'];guitar=[s for s in shapes if s['actor']=='guitar'];chairshape=next(s for s in shapes if s['actor']=='chair');rows=[]
+    def measure(a,b):
+        witness=np.zeros(6);gap=float(mujoco.mj_geomDistance(model,data,a['geom_id'],b['geom_id'],.5,witness));return dict(a_actor=a['actor'],a=a['body'],b_actor=b['actor'],b=b['body'],a_geom=a['geom_name'],b_geom=b['geom_name'],gap_m=gap,collision_enabled_by_saved_native_masks=enabled(a,b),witness_W_m=witness.reshape(2,3).tolist())
+    for j,a in enumerate(human):
+        for b in guitar:rows.append(measure(a,b))
+        for b in human[j+1:]:
+            if a['body']!=b['body']:rows.append(measure(a,b))
+        rows.append(measure(a,chairshape))
+    negative=[r for r in rows if r['collision_enabled_by_saved_native_masks'] and r['gap_m']<-.0001 and not (r['a']=='Pelvis' and r['b_actor']=='chair')]
+    feet={n:float(v[:,2].min()) for n,(v,bottom) in foot_vertices(poses).items()};r=read(source/'report.json');m=r['candidate_metrics'];eligibility=dict(local_tilt_reach_gaps=bool(r.get('local_geometry_reach_eligible',False)),no_enabled_source_overlap_over_0p1mm=not negative,feet_initial_source_above_0p5mm=min(feet.values())>=.0005,Chest_gap_under_2mm=.00005<=m['capsules']['Chest']['gap_m']<=.002,right_upper_arm_gap_under_2mm=.00005<=m['capsules']['R_Shoulder']['gap_m']<=.002)
+    save(out/'pairs.json',dict(rows=rows,enabled_negative_pairs=negative,feet_min_source_z_m=feet,eligibility=eligibility,eligible_for_native=all(eligibility.values()),scope='Source MJCF flattened at predicted original105 poses, MuJoCo signed convex queries. Native collision mask union per body; not cooked PhysX penetration certification. Fixed Pelvis-chair existing intersection recorded but excluded from dynamic-pair acceptance.'))
+    save(out/'verification.json',dict(inputs_unchanged=verify(pins)));print(eligibility,'negative pairs',[(x['a'],x['b'],x['gap_m']) for x in negative],flush=True)
+
+
+if __name__=='__main__':
+    parser=argparse.ArgumentParser();parser.add_argument('--source',type=Path,required=True);parser.add_argument('--out',type=Path,required=True);args=parser.parse_args();main(args.source.resolve(),args.out.resolve())

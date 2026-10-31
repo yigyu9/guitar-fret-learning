@@ -1,0 +1,130 @@
+"""CPU score/ledger regressions; geometry values here are test fixtures only."""
+from dataclasses import replace
+from pathlib import Path
+import unittest
+
+from .music import EVENT_DIM, ScoreTask, ScoreTarget, MusicLedger
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def target(name='a', onset=1.0, end=1.0232, press=.5, fret=5, finger=1):
+    return ScoreTarget(name, name, 2, fret, finger, 1, onset, end, press, onset, end)
+
+
+def geometry(task):
+    return {t.target_id: {'delta': (0., 0., 0.), 'velocity': (0., 0., 0.)} for t in task.targets}
+
+
+class MusicTests(unittest.TestCase):
+    def test_short_note_fraction_no_minimum_hold(self):
+        task = ScoreTask((target(),))
+        ledger = MusicLedger(task)
+        # 60 Hz physics intervals clip at both ends of a 23.2 ms note.
+        ledger.update_interval(.99, 1.0066666667, ['a'])
+        ledger.update_interval(1.0066666667, 1.0233333334, ['a'])
+        self.assertAlmostEqual(ledger.progress['a'].held_s, .0232)
+        self.assertAlmostEqual(ledger.progress['a'].dwell_s, 1.0233333334-.99)
+        features, mask, ids = task.tokens(1.024, geometry(task), ledger)
+        self.assertEqual(len(features[0]), EVENT_DIM)
+        self.assertAlmostEqual(features[0][13], 1.)
+        self.assertEqual((mask[0], ids[0]), (True, 'a'))
+
+    def test_two_owner_preparation_never_overwrites_current(self):
+        task = ScoreTask((target(end=1.5), target('future', onset=2., end=2.5, fret=7, finger=2)))
+        ledger = MusicLedger(task)
+        features, mask, ids = task.tokens(1.1, geometry(task), ledger)
+        self.assertEqual(ids[:2], ('a', 'future'))
+        self.assertEqual(features[0][7:9], (1., 0.))
+        self.assertEqual(features[1][7:9], (0., 1.))
+        self.assertEqual((features[0][4:6], features[1][4:6]), ((5., 1.), (7., 2.)))
+
+    def test_preparation_contact_age_is_separate_from_audible_hold(self):
+        task = ScoreTask((target(),))
+        ledger = MusicLedger(task)
+        ledger.update_interval(.8, .9, ['a'])
+        self.assertAlmostEqual(ledger.progress['a'].dwell_s, .1)
+        self.assertEqual(ledger.progress['a'].held_s, 0.)
+        ledger.update_interval(.9, 1.01, ['a'])
+        self.assertAlmostEqual(ledger.progress['a'].dwell_s, .21)
+        self.assertAlmostEqual(ledger.progress['a'].held_s, .01)
+
+    def test_independent_100_does_not_consume_50_opportunity(self):
+        task = ScoreTask((target(),))
+        ledger = MusicLedger(task)
+        self.assertEqual(ledger.crossing('early', .92, 2, 1, ['a']), {.1: 'a'})
+        self.assertEqual(ledger.crossing('exact', 1., 2, 1, ['a']), {.05: 'a'})
+        self.assertEqual(ledger.matches[.1]['a'], 'early')
+        self.assertEqual(ledger.matches[.05]['a'], 'exact')
+        with self.assertRaises(ValueError):
+            ledger.crossing('exact', 1., 2, 1, ['a'])
+
+    def test_one_crossing_one_target_per_tolerance(self):
+        task = ScoreTask((target(), target('b', onset=1.02, end=1.1)))
+        ledger = MusicLedger(task)
+        ledger.crossing('one', 1.01, 2, 1, ['a', 'b'])
+        self.assertEqual(len(ledger.matches[.05]), 1)
+        self.assertEqual(len(ledger.matches[.1]), 1)
+
+    def test_capacity_geometry_and_interval_fail_closed(self):
+        task = ScoreTask((target(), target('b')), capacity=1)
+        with self.assertRaisesRegex(ValueError, 'capacity overflow'):
+            task.tokens(1., geometry(task), MusicLedger(task))
+        task = ScoreTask((target(),))
+        ledger = MusicLedger(task)
+        with self.assertRaises(KeyError):
+            task.tokens(1., {}, ledger)
+        bad = {'a': {'delta': (float('nan'), 0., 0.), 'velocity': (0., 0., 0.)}}
+        with self.assertRaises(ValueError):
+            task.tokens(1., bad, ledger)
+        ledger.update_interval(1., 1.01, ['a'])
+        with self.assertRaises(ValueError):
+            ledger.update_interval(1., 1.02, ['a'])
+        ledger.update_interval(1.01, 1.015, [])
+        self.assertEqual(ledger.progress['a'].dwell_s, 0.)
+        self.assertAlmostEqual(ledger.progress['a'].held_s, .01)
+
+    def test_release_and_history_visible(self):
+        task = ScoreTask((target(),))
+        ledger = MusicLedger(task)
+        ledger.crossing('hit', 1., 2, 1, ['a'])
+        ledger.release('a', 1.024)
+        features, _, _ = task.tokens(1.03, geometry(task), ledger)
+        self.assertEqual(features[0][9:11], (1., 1.))
+        self.assertEqual(features[0][14], 1.)
+        self.assertEqual(task.state(1.03, ledger)[1:4], (1., 1., 1.))
+        self.assertEqual(task.state(1.03, ledger)[5], 1.)
+        # Clock never pauses or clamps to event success.
+        self.assertEqual(task.state(7., ledger)[-1], 7.)
+
+    def test_priority_slots_and_audible_conflict(self):
+        task = ScoreTask((target(end=1.5), target('next', onset=2., end=2.2)))
+        ledger = MusicLedger(task)
+        tokens = task.tokens(1.1, geometry(task), ledger)
+        _, valid, identities = task.priority_tokens(*tokens)
+        self.assertEqual(valid, (True, True))
+        self.assertEqual(identities, ('a', 'next'))
+        with self.assertRaisesRegex(ValueError, 'conflicting audible'):
+            ScoreTask((target(end=1.5), target('other', onset=1.2, end=1.6, fret=7)))
+
+    def test_real_bundle_original_timing_and_explicit_selection(self):
+        bundle = ROOT / 'data/song_bundles/05_BN2-131-B_solo'
+        task = ScoreTask.from_bundle(bundle, stage='B')
+        self.assertEqual(task.provenance['event_ids'], ['event-000000'])
+        t = task.targets[0]
+        self.assertAlmostEqual(t.end_s-t.onset_s, t.source_end_s-t.source_onset_s)
+        slow = ScoreTask.from_bundle(bundle, stage='B', tempo_scale=.5)
+        self.assertAlmostEqual(slow.targets[0].end_s-slow.targets[0].onset_s,
+                               2*(t.source_end_s-t.source_onset_s))
+        self.assertEqual(slow.provenance['timing_mode'], 'tempo_scaled')
+        # Known unsupported notes must not silently disappear from a selected
+        # interval. Find one by the same canonical source used in provenance.
+        from stability_adapter_2.fresh_music_v1.events import load_music_task
+        source = load_music_task(ROOT / 'data/song_bundles/00_SS1-68-E_comp')
+        index = next(e.event_index for e in source.timeline.events if not e.supported)
+        with self.assertRaisesRegex(ValueError, 'unsupported selected event IDs'):
+            ScoreTask.from_bundle(ROOT / 'data/song_bundles/00_SS1-68-E_comp', start_event_index=index)
+
+
+if __name__ == '__main__':
+    unittest.main()

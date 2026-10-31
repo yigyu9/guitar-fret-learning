@@ -1,0 +1,11 @@
+# 03. 왼손 압현
+
+기준일: 2026-10-19. 검증 결과와 다음 단계는 [09](09_curriculum_and_evaluation.md)를 따른다.
+
+왼팔·왼손33축으로 지정된 현·프렛·손가락 목표를 수행한다. 악기 지지 조건은 [06](06_stability_adapter.md)을 따르고, 왼손의 접촉과 신체의 지지 분담은 별도로 측정한다.
+
+압현은 원 접촉 후보와clean 후보를 구분한다. 확인된 높은 프렛·오프렛·배정 오류는 제외하고 부수 접촉·불명확한 경계는 진단으로 남긴다. 목표 거리는 접근 보조 지표이며 압현 성공이 아니다.
+
+공통 구현은 [압현 분류](/home/ajou/yigyu/3/guitar_learning/quality/fretting_quality.py)와 [전곡 측정](/home/ajou/yigyu/3/guitar_learning/song/measurement.py)이다. 이후 [정밀화 경로](/home/ajou/yigyu/3/guitar_learning/transition_refinement/README.md)는 첫2초의 접근·실제 접촉 준비·단음90% 유지·해제를 분리한다. 옛40% 진행 marker는 관측 호환용 진단이며 새 성공 기준이 아니다.
+
+[접촉 회복](/home/ajou/yigyu/3/guitar_learning/contact_recovery/README.md)은 획득·상실·재접촉을 실제240Hz 표본에서 기록하는 평가·교사 자료 수집 경로다. 교사의 회복을 정책 단독 성공으로 집계하지 않는다. 새 회복 자료를 이용한 BC/PPO와 보상 R1/R2는 아직 이 구현의 범위가 아니다.

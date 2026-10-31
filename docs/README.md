@@ -1,11 +1,15 @@
-# 문서 안내 — 2026-10-19
+# 문서를 읽는 입구
 
-[현재 프로젝트 상태](/home/ajou/yigyu/3/CURRENT_STATUS.md)에서현재 조건과확인된결과를읽고, [목적별 문서 목차](/home/ajou/yigyu/3/docs/DOCUMENT_INDEX.md)에서필요한상세문서로이동한다.
+현재 필요한 문서는 [목적별 문서 색인](DOCUMENT_INDEX.md) 한 곳에서 찾는다.
 
-- 신규학습·양손·전곡: [현재 학습 경로와 버전 구분](/home/ajou/yigyu/3/guitar_learning/README.md)
-- 논문본문·주장근거: [논문 안내](/home/ajou/yigyu/3/paper/README.md)
-- 학습기준초기 자세: [035/v14·실용V3](/home/ajou/yigyu/3/paper/initial_pose/current_v3/README.md)
-- 완료된단음 joint실험: [결과·실행법](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_joint_v1/README.md)
-- 전곡 학습: [계획](/home/ajou/yigyu/3/docs/plans/guitar_learning_full_song_20261019.md) · [실제 결과폴더](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_full_song_v1)
-- 과거 연구 계획(2026-10-19): [외부 보관본](</media/ajou/새 볼륨1/Guitar/master_plan_20261019_archived_20261027/README.md>)
-- 논문 PDF·과거 원고: [자료 목록](papers/README.md)
+| 구분 | 위치 | 읽는 기준 |
+| --- | --- | --- |
+| 현재 사용 | [현재 상태](../CURRENT_STATUS.md), [학습 안내](../guitar_learning/README.md), [색인](DOCUMENT_INDEX.md) | 실제 실행과 현재 결과의 기준 |
+| 현재 입력 | [자산 안내](../guitar_learning/assets/README.md), [팀원 전달](TEAM_HANDOFF.md) | 실행 입력과 진단 기록을 구분 |
+| 계획 | [plans](plans/README.md) | 다음 작업·완료 기록·보존 계획을 구분 |
+| 재현용 연구 | [실험 목록](2026-11-02/압현성공/experiments/README.md), 날짜별 폴더 | 당시 소스·계약·성공 기준으로 읽기 |
+| 과거 완료 계획 | [history/plans](history/plans/README.md) | 본문을 보존한 공유 문서 |
+| 보관 원문 | `archive/`, 날짜별 봉인 자료 | 현재 코드로 자동 실행하지 않기 |
+| 정리·삭제 근거 | [maintenance](maintenance/README.md) | 이동·삭제·보존 내역과 검증 |
+
+날짜별 폴더 전체를 현행 매뉴얼로 보거나 오래됐다는 이유로 삭제하지 않는다. 코드·checkpoint·입력 manifest가 참조하는 경로는 보존한다. 외장 링크의 접근 불가는 자료가 불필요하다는 뜻이 아니다.

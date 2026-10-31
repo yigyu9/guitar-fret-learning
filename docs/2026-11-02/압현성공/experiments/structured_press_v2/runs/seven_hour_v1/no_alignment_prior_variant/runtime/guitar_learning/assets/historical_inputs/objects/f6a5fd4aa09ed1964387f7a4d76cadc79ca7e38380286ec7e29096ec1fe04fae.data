@@ -1,0 +1,49 @@
+"""Explicit563 actor/std warm start; value networks and Adam are never imported."""
+import copy
+from pathlib import Path
+import torch
+from ..imitation import dataset_manifest
+from ..imitation_v2 import canonical_contract
+from .environment import validate_pool_task
+
+
+def apply_actor_initialization(model, path, *, kind):
+    if kind != 'ppo' or model.role not in ('left', 'right') or model.frozen_partner:
+        raise ValueError('single-hand563 PPO actor required')
+    path = Path(path).resolve()
+    manifest = dataset_manifest([path])
+    payload = torch.load(path, map_location='cpu', weights_only=False)
+    identity = payload.get('identity', {}) if isinstance(payload, dict) else {}
+    source = canonical_contract(identity.get('architecture'))
+    target = canonical_contract(copy.deepcopy(model.architecture))
+    if (identity.get('schema') != 'guitar_learning_ppo_v1' or type(payload.get('updates')) is not int or
+            payload['updates'] < 1 or not isinstance(source, dict) or source.get('state_dim') != 563 or
+            target.get('state_dim') != 563 or source.get('schema') != 'guitar_specialists39_v1'):
+        raise ValueError('own completed563 quality PPO source required')
+    old, new = source.pop('contract'), target.pop('contract')
+    if source != target:
+        raise ValueError('single-hand architecture/role mismatch')
+    candidates = validate_pool_task(new['task'])
+    if old['task'] not in [row['task'] for row in candidates]:
+        raise ValueError('source fixed task must be an unchanged explicit pool member')
+    old, new = copy.deepcopy(old), copy.deepcopy(new)
+    old.pop('task'); new.pop('task')
+    if old != new:
+        raise ValueError('observation/action/reward/physics/safety contract mismatch')
+    values, expected = payload.get('model'), model.state_dict()
+    if (not isinstance(values, dict) or values.keys() != expected.keys() or any(
+            not isinstance(value, torch.Tensor) or value.shape != expected[key].shape or
+            value.dtype != expected[key].dtype or not torch.isfinite(value).all()
+            for key, value in values.items())):
+        raise ValueError('complete finite own model state with identical shape/dtype required')
+    if dataset_manifest([path]) != manifest:
+        raise RuntimeError('actor source changed while loading')
+    with torch.no_grad():
+        for key, value in values.items():
+            if key.startswith(('actor_encoders.'+model.role+'.', 'actor_heads.'+model.role+'.')):
+                expected[key].copy_(value)
+        selection = model.role_slices[model.role]
+        model.log_std[selection].copy_(values['log_std'][selection])
+    return dict(schema='guitar_learning.quality_pool_actor_transfer.v1', path=str(path),
+        sha256=manifest[str(path)], source_updates=payload['updates'], source_state_dim=563,
+        target_state_dim=563, scope='selected actor/std only; fresh critics/Adam/RNG/update counter; success not inherited')

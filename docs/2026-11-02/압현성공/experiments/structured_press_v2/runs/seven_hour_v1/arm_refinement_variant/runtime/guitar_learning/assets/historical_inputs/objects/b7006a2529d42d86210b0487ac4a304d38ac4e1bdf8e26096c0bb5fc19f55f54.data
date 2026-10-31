@@ -1,0 +1,57 @@
+"""Explicit joint settings; source specialists and gates remain immutable."""
+import copy
+from dataclasses import asdict
+import math
+from pathlib import Path
+
+from .spec import SCHEMA
+
+
+def settings_document(raw):
+    from ..train_parallel import settings_document as base_settings
+    from guitar_learning.timing.timing_curriculum import TimingConfig
+    from guitar_learning.quality.musical_quality import metadata
+    from .transfer import validate_experts
+    if not isinstance(raw, dict):
+        raise ValueError('joint settings object required')
+    value = copy.deepcopy(raw)
+    joint = value.pop('joint', None)
+    experts = value.pop('joint_experts', None)
+    timing = value.pop('timing', None)
+    quality = value.pop('musical_quality', None)
+    specialist = value.pop('specialist', {'role': 'joint'})
+    skill = value.pop('skill', 'timed')
+    if (not isinstance(joint, dict) or set(joint)-{'schema', 'preflight_gate'}
+            or joint.get('schema') != SCHEMA):
+        raise ValueError('explicit supported joint schema required')
+    if 'preflight_gate' in joint:
+        path = joint['preflight_gate']
+        if not isinstance(path, str) or not Path(path).is_absolute():
+            raise ValueError('absolute joint preflight gate path required')
+    if not isinstance(experts, dict) or set(experts) != {'left_settings', 'right_settings'}:
+        raise ValueError('explicit left_settings/right_settings expert paths required')
+    for path in experts.values():
+        if not isinstance(path, str) or not Path(path).is_absolute() or not Path(path).is_file():
+            raise ValueError('existing absolute expert settings paths required')
+    if (not isinstance(specialist, dict) or set(specialist)-{'role', 'left_checkpoint', 'right_checkpoint'}
+            or specialist.get('role') != 'joint'
+            or any(specialist.get(role+'_checkpoint') is not None for role in ('left', 'right'))
+            or skill != 'timed' or not isinstance(timing, dict)
+            or quality not in (None, metadata())):
+        raise ValueError('joint timed quality path rejects legacy experts and changed quality metadata')
+    config = TimingConfig(**timing)
+    if config.pre_roll_s != 3.:
+        raise ValueError('joint retains native0/policy pre-roll3/physical7 seconds')
+    settings = base_settings(value)
+    cost_weight = settings['ppo']['cost_weight']
+    if (isinstance(cost_weight, bool) or not isinstance(cost_weight, (int, float))
+            or not math.isfinite(cost_weight) or cost_weight <= 0):
+        raise ValueError('joint requires positive finite stability cost')
+    if (settings['stage'] != 'B' or settings['start_event_index'] != 0 or settings['tempo_scale'] != 1.
+            or settings['music'] != dict(reward_mode='legacy', goal_event_indices=None)
+            or settings['ppo']['cost_weight'] <= 0):
+        raise ValueError('joint retains first original single note and positive stability cost')
+    settings.update(joint=joint, joint_experts=experts, skill='timed', timing=asdict(config),
+        musical_quality=metadata(), specialist=dict(role='joint', left_checkpoint=None, right_checkpoint=None))
+    validate_experts(settings)
+    return settings

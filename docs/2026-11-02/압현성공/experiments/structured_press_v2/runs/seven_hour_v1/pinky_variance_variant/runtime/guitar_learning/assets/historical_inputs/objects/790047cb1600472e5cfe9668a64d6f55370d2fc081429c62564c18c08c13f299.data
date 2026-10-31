@@ -1,0 +1,126 @@
+"""새 정면 정지/반복 인증 뒤 독립28초 해제를 실행한다."""
+import isaacgym
+import argparse
+import json
+from pathlib import Path
+from unittest.mock import patch
+from ..lower_body_release_v1 import run_horizontal_v7 as runner, scene_v8, controller_horizontal_v4
+from ..lower_body_release_v1.common import ROOT, A, BASE, pin, verify, read, save, sha
+from .. import string_trial_recording_v1 as strings
+from .release_runtime_v1 import Scene, Controller
+from .release_prepare_v2 import validate_reference
+from .recording_v1 import ThinStringTrialRecording
+
+PHASE = BASE/'front_facing_pose_v1'
+PLANS = [ROOT/'docs/plans/front_facing_pose_20261016.md',
+         ROOT/'docs/plans/front_facing_execution_v1_20261016.md', ROOT/'docs/plans/front_facing_release_20261016.md']
+
+
+def compact_native_save(path, value):
+    path = Path(path)
+    if path.name not in ('states240.json', 'contacts240.json', 'efforts240.json', 'targets60.json'):
+        return save(path, value)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('x') as stream:
+        json.dump(value, stream, separators=(',', ':'), allow_nan=False)
+        stream.write('\n')
+
+
+def main(config, out):
+    config, out = Path(config).resolve(), Path(out).resolve()
+    assert out.parent == PHASE and not out.exists()
+    cfg = read(config)
+    assert cfg['seconds'] == 28 and cfg['mode'] == 'static'
+    assert cfg['validation_protocol'] == 'front_facing_prepare5_hold5_withdraw3_free15_v1'
+    assert cfg['preparation_s'] == 5 and cfg['hold_interval_s'] == [5, 10]
+    assert cfg['chest_extra_goal_depth_m'] == .00025
+    source = Path(cfg['candidate']).resolve().parent
+    report_path = Path(cfg['source_report']).resolve()
+    report = read(report_path)
+    assert report['eligible_for_native'] and report['inputs_unchanged']
+    assert verify(read(source/'inputs_before.json'))
+    assert sha(cfg['candidate']) == cfg['candidate_sha256']
+    assert report['source_candidate_sha256'] == cfg['candidate_sha256']
+    posture_path = Path(cfg.get('posture_target_report', cfg['source_report'])).resolve()
+    posture = read(posture_path)
+    assert posture['eligible_for_native_target'] and posture['inputs_unchanged']
+    assert verify(read(posture_path.parent/'inputs_before.json'))
+    assert sha(cfg['upper_target105']) == cfg['upper_target105_sha256'] == posture['target_sha256']
+    assert cfg['candidate_sha256'] == posture['source_candidate_sha256']
+    assert Path(cfg['candidate']).resolve() == Path(posture['source_candidate']).resolve()
+    assert Path(cfg['upper_target105']).resolve() == posture_path.parent/'upper_target105.json'
+    extras = PLANS+[report_path, source/'inputs_before.json', posture_path,
+                    posture_path.parent/'inputs_before.json', Path(cfg['upper_target105']),
+                    Path(read(cfg['candidate'])['support_candidate']), A/'AGENTS.md']
+    for package in ('grounded_guitar_support_v1', 'seated_foot_support_v1', 'front_facing_pose_v1'):
+        extras += list((A/package).glob('*.py'))
+    for kind, eligible, filename in (
+        ('finite_right_goal', 'eligible_for_finite_human_goal', 'right_goal_spec.json'),
+        ('hip_load_bias', 'eligible_for_finite_hip_load_bias', 'hip_load_bias_spec.json')):
+        report_file = Path(cfg[kind+'_report']).resolve()
+        spec_file = Path(cfg[kind+'_spec']).resolve()
+        evidence, spec = read(report_file), read(spec_file)
+        assert evidence[eligible] and evidence['inputs_unchanged']
+        assert verify(read(report_file.parent/'inputs_before.json'))
+        assert sha(spec_file) == cfg[kind+'_spec_sha256'] == evidence['spec_sha256']
+        assert evidence['source_candidate_sha256'] == spec['initial_candidate_sha256'] == cfg['candidate_sha256']
+        assert spec_file == report_file.parent/filename
+        extras += [report_file, spec_file, report_file.parent/'inputs_before.json']
+    assert cfg['hip_load_bias_mode'] == 'finite_constant_native_RHip_load_bias_v1'
+    preflight_path = Path(cfg['release_preflight_report']).resolve()
+    preflight = read(preflight_path)
+    spec_path = Path(cfg['release_spec']).resolve()
+    spec = read(spec_path)
+    assert preflight['eligible_for_native'] and preflight['inputs_unchanged']
+    assert verify(read(preflight_path.parent/'inputs_before.json'))
+    assert sha(spec_path) == cfg['release_spec_sha256'] == preflight['spec_sha256']
+    assert preflight['source_candidate_sha256'] == cfg['candidate_sha256'] == spec['initial_candidate_sha256']
+    reference, repeat = Path(cfg['prepared_reference_run']).resolve(), Path(cfg['prepared_repeat_run']).resolve()
+    certificate = Path(cfg['prepared_repeat_certificate']).resolve()
+    cert, analyses, _, _, baseline = validate_reference(reference, repeat, certificate)
+    assert spec['reference_run'] == str(reference) and spec['repeat_run'] == str(repeat)
+    assert spec['repeat_verification_sha256'] == sha(certificate)
+    assert sha(baseline) == cfg['prepared_static_config_sha256'] == preflight['prepared_static_config_sha256']
+    assert Path(cfg['prepared_static_config']).resolve() == baseline
+    assert all(cfg[k] == v for k,v in read(baseline).items() if k not in ('seconds','validation_protocol'))
+    assert cfg['release_start_s'] == 10 and cfg['full_release_interval_s'] == [13,28]
+    extras += [preflight_path, spec_path, preflight_path.parent/'inputs_before.json', certificate, baseline]+analyses
+    extras += [Path(p) for p in cert['input_sha256']]
+    extras += [Path(p) for p in read(preflight_path.parent/'inputs_before.json')]
+    for run in (reference,repeat):
+        extras += [run/n for n in ('attempt.json','report.json','initial_values.json','native_properties.json','final_state.json','states240.json','contacts240.json','efforts240.json','targets60.json','support_wrapper.json')]
+    extras += list((A/'grounded_guitar_release_v1').glob('*.py'))
+    inputs = pin(config, extra=extras)
+    # 보고서가 소비한 코드·원자료·XML/모든 선언 mesh까지 입력 map에 닫는다.
+    for before in (source/'inputs_before.json', posture_path.parent/'inputs_before.json',
+                   Path(cfg['finite_right_goal_report']).parent/'inputs_before.json',
+                   Path(cfg['hip_load_bias_report']).parent/'inputs_before.json'):
+        for path, expected in read(before).items():
+            assert path not in inputs or inputs[path] == expected
+            inputs[path] = expected
+    assert verify(inputs)
+    before = PHASE/'provenance'/(out.name+'_before.json')
+    save(before, inputs)
+    try:
+        with patch.object(strings, 'StringTrialRecording', ThinStringTrialRecording), \
+             patch.object(scene_v8, 'Scene', Scene), \
+             patch.object(controller_horizontal_v4, 'Controller', Controller), \
+             patch.object(runner, 'save', compact_native_save):
+            runner.run(config, out)
+    finally:
+        save(out/'support_wrapper.json', dict(input_sha256=inputs, inputs_unchanged=verify(inputs),
+            before_manifest=str(before), actual_scene_class='front_facing_pose_v1.release_runtime_v1.Scene',
+            controller='front_facing_pose_v1.release_runtime_v1.Controller',
+            validation_protocol=cfg['validation_protocol'], image_capture_hz=5,
+            camera_matrix_telemetry_hz=30, physical_seconds=28,
+            native_raw_encoding='Compact JSON; all numeric values, fields and array order retained.',
+            scope='새 정면 actual 정지/반복 후 독립 실행: 준비0..5·정지5..10·개방/이동10..13·완전이탈13..28의15초. 고정 Pelvis local−Y 정면을 유한 발 IK에 추가하며 원 gain/cap/rate·Hip 요청·원105채널/영범위8축 유지. 기존 오른팔 affine/Hip bias 수치는 새 자세 미검증 가설로 재사용. 기타 자유·중력ON·스트랩OFF, 상태주입/기타 직접힘/고정/부착/PPO 없음. 예측 heading과 실제 안정성 판정 구분. 이전 성공 연주/해제를 상속하지 않음.'))
+    assert verify(inputs)
+
+
+if __name__ == '__main__':
+    p = argparse.ArgumentParser()
+    p.add_argument('--config', type=Path, required=True)
+    p.add_argument('--out', type=Path, required=True)
+    args = p.parse_args()
+    main(args.config, args.out)

@@ -1,0 +1,81 @@
+"""Actual-pose source geometry of the whole left hand/arm against the free guitar."""
+from pathlib import Path
+import xml.etree.ElementTree as ET
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import A,HUMAN,read
+
+LEFT_PROXIMAL=('L_Thorax','L_Shoulder')
+LEFT_DISTAL=('L_Elbow','L_Wrist')
+
+
+def declared_model_inputs():
+    """Every original XML/declared mesh, including unused geometry declarations."""
+    manifest=A/'assets/om_body_geometry_v3/manifest.json';guitar=Path(read(manifest)['asset'])
+    paths={manifest,HUMAN,guitar}
+    for xml in (HUMAN,guitar):
+        tree=ET.parse(xml);directory=xml.parent/tree.find('compiler').get('meshdir','')
+        paths.update((directory/m.get('file')).resolve() for m in tree.findall('./asset/mesh'))
+    return sorted(paths)
+
+
+def neck_physical_bodies(guitar_names):
+    """Original neck collider and nut/frets, excluding Gbody/string/proxy markers."""
+    guitar=Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset'])
+    return sorted(b.get('name') for b in ET.parse(guitar).findall('./worldbody//body')
+        if b.get('name') in guitar_names and (b.get('name') in ('guitar','G:nut') or b.get('name').startswith('G:fret'))
+        and any(g.get('contype')!='0' and g.get('conaffinity')!='0' for g in b.findall('geom')))
+
+
+class ActualLeftGeometry:
+    """Flatten source geoms at each actual native pose; no FK or calibration."""
+    def __init__(self,initial,properties):
+        import mujoco
+        self.mj=mujoco;self.names=initial['human_body_names'];self.gnames=initial['guitar_body_names']
+        policy=properties['actual_shape_properties'];guitar=Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset'])
+        root=ET.Element('mujoco');ET.SubElement(root,'compiler',angle='degree');assets=ET.SubElement(root,'asset');world=ET.SubElement(root,'worldbody')
+        self.shapes=[];self.body_ids={};fields={'type','size','pos','quat','euler','axisangle','xyaxes','zaxis','fromto','mesh'}
+        for actor,xml,names,states in (('human',HUMAN,self.names,initial['native_initial_state']['human_body_states']),('guitar',guitar,self.gnames,initial['native_initial_state']['guitar_body_states'])):
+            tree=ET.parse(xml);directory=xml.parent/tree.find('compiler').get('meshdir','')
+            for mesh in tree.findall('./asset/mesh'):
+                attrs=dict(mesh.attrib);attrs.update(name=actor+'/'+attrs['name'],file=str((directory/attrs['file']).resolve()));ET.SubElement(assets,'mesh',attrs)
+            for body in tree.findall('./worldbody//body'):
+                name=body.get('name')
+                if actor=='human' and not (name.startswith('LH:') or name in LEFT_DISTAL+LEFT_PROXIMAL):continue
+                if not body.findall('geom'):continue
+                p,r=pose(states[names.index(name)]);label=actor+'/'+name
+                node=ET.SubElement(world,'body',name=label,pos=' '.join(map(str,p)),quat=' '.join(map(str,r.as_quat()[[3,0,1,2]])))
+                filters=sorted({int(v['filter']) for v in policy[actor][name]});assert len(filters)==1,'Nonuniform native shape masks need explicit per-shape correspondence.'
+                for geom_index,geom in enumerate(body.findall('geom')):
+                    attrs={k:v for k,v in geom.attrib.items() if k in fields}
+                    if 'mesh' in attrs:attrs['mesh']=actor+'/'+attrs['mesh']
+                    geom_name='shape_'+str(len(self.shapes));ET.SubElement(node,'geom',attrs,name=geom_name)
+                    self.shapes.append(dict(actor=actor,body=name,source_geom_index=geom_index,geom_name=geom_name,native_filters=filters,xml_collision_enabled=geom.get('contype')!='0' and geom.get('conaffinity')!='0'))
+        self.model=mujoco.MjModel.from_xml_string(ET.tostring(root,encoding='unicode'));self.data=mujoco.MjData(self.model)
+        for shape in self.shapes:
+            shape['geom_id']=mujoco.mj_name2id(self.model,mujoco.mjtObj.mjOBJ_GEOM,shape['geom_name'])
+            key=(shape['actor'],shape['body']);self.body_ids[key]=mujoco.mj_name2id(self.model,mujoco.mjtObj.mjOBJ_BODY,'/'.join(key))
+        self.pairs=[]
+        for h in [s for s in self.shapes if s['actor']=='human']:
+            for g in [s for s in self.shapes if s['actor']=='guitar']:
+                enabled=any((a&b)==0 for a in h['native_filters'] for b in g['native_filters'])
+                self.pairs.append((h,g,bool(enabled and h['xml_collision_enabled'] and g['xml_collision_enabled']),enabled))
+
+    def measure(self,state):
+        for (actor,name),index in self.body_ids.items():
+            bodies=state['human_body_states'] if actor=='human' else state['guitar_body_states'];names=self.names if actor=='human' else self.gnames
+            p,r=pose(bodies[names.index(name)]);self.model.body_pos[index]=p;self.model.body_quat[index]=r.as_quat()[[3,0,1,2]]
+        self.mj.mj_forward(self.model,self.data)
+        active={h['body']:.05 for h,_,_,_ in self.pairs};inactive=dict(active);negative=[];near=[];closest=None
+        for h,g,enabled,mask_enabled in self.pairs:
+            gap=float(self.mj.mj_geomDistance(self.model,self.data,h['geom_id'],g['geom_id'],.05,None));assert np.isfinite(gap)
+            table=active if enabled else inactive;table[h['body']]=min(table[h['body']],gap)
+            row=dict(human=h['body'],guitar=g['body'],human_geom_id=h['geom_id'],guitar_geom_id=g['geom_id'],signed_gap_m=gap,active=enabled,native_filter_enabled=mask_enabled,xml_collision_enabled=h['xml_collision_enabled'] and g['xml_collision_enabled'])
+            if enabled and (closest is None or gap<closest['signed_gap_m']):closest=row
+            if gap< -1e-6:negative.append(row)
+            if enabled and gap<.002:near.append(row)
+        distal=[v for n,v in active.items() if n.startswith('LH:') or n in LEFT_DISTAL]
+        return dict(min_active_all_left_gap_m=min(active.values()),min_active_hand_forearm_gap_m=min(distal),min_inactive_gap_m=min(inactive.values()),by_body_active_min_gap_m=active,by_body_inactive_min_gap_m=inactive,
+            closest_active_pair=closest,active_pairs_below2mm=near,negative_pairs_below_minus1um=negative,
+            source_pair_count=len(self.pairs),active_pair_count=sum(row[2] for row in self.pairs),
+            scope='Actual normalized native body poses only, every LH hand mesh/wrist/forearm plus proximal left-arm source geom, all declared guitar source geoms. XML-disabled visuals and native-filter-disabled overlaps retained separately. Source convex distance cutoff50mm; no future finger FK accuracy or PhysX cooked-clearance claim; original contact/shape policy unchanged. mj_forward performs static geometry updates, no dynamics integration.')

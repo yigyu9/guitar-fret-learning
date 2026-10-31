@@ -1,0 +1,36 @@
+"""Upright source9 trunk/lower retained, free guitar initial placement centred."""
+from pathlib import Path
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from .common import ROOT,A,BASE,HUMAN,read,save,sha,pin,verify
+from .upright_source_v1 import full_fk,make_state,metrics,INITIAL,NATIVE
+from .upright_polytope_v2 import GuitarBoxes
+from stability_adapter_2.initial_pose_noise_v1 import pose
+from stability_adapter_2.om_axilla_source_geometry_v3 import CapsuleBodyDistance
+
+
+def main():
+    source=BASE/'upright_chest_support_v1/source_v9';out=BASE/'upright_chest_support_v1/source_v10';out.mkdir(exist_ok=False);pins=pin(extra=[source/'candidate.json',source/'report.json',INITIAL,NATIVE/'native_properties.json',ROOT/'docs/plans/upright_centered_guitar_20261015.md']);save(out/'inputs_before.json',pins);c=read(source/'candidate.json');i=read(INITIAL);names=i['joint_names'];bodies=i['human_body_names'];q0=np.array(c['q_ref_rad']);q=q0.copy();fk,_=full_fk(names,bodies,c['expected_initial_state'],q0);original=fk(q0);gp0=np.array(c['guitar_position_W_m']);gr0=Rotation.from_quat(c['guitar_quaternion_xyzw']);distance=CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']),HUMAN);boxes=GuitarBoxes(distance);bounds=np.column_stack([i['PD_properties']['lower'],i['PD_properties']['upper']])
+    def guitar(z):return gp0+z[:3],Rotation.from_rotvec(z[3:])*gr0
+    def residual(z):
+        gp,gr=guitar(z);g={n:distance.measure(original,n,gp,gr)['gap_m'] for n in ('Chest','Spine','Torso','R_Hip','L_Hip')};return np.r_[5000*(g['Chest']-.0004),2000*(g['R_Hip']-.0004),200*(g['L_Hip']-.0004),15000*min(g['Spine']-.002,0),15000*min(g['Torso']-.001,0),15000*min(g['L_Hip']-.0001,0),15000*min(g['R_Hip']-.0001,0),20000*min(boxes.measure(original,'Pelvis',gp,gr)-.002,0),2*z[:3],.1*z[3:]]
+    lo=np.r_[[-.08,-.08,-.05],np.deg2rad([-20,-20,-20])];hi=np.r_[[-.02,.08,.05],np.deg2rad([20,20,20])];fits=[]
+    for seed in ([-.03,0,0,0,0,0],[-.06,0,.01,0,.1,0]):
+        fit=least_squares(residual,seed,bounds=(lo,hi),max_nfev=120,diff_step=1e-4,ftol=1e-9,xtol=1e-9);fits.append(fit);print('guitar',fit.cost,fit.x,flush=True)
+    fit=min(fits,key=lambda f:f.cost);gp,gr=guitar(fit.x);hands={}
+    for side in ('R','L'):
+        ix=np.array([j for j,n in enumerate(names) if n.startswith(tuple(side+'_'+b+'_' for b in ('Thorax','Shoulder','Elbow','Wrist')))]);palm=side+'H:palm';op,orr=original[palm];goalp=gp+gr.apply(gr0.inv().apply(op-gp0));goalr=gr*gr0.inv()*orr
+        def arm(v):
+            z=q.copy();z[ix]=v;ps=fk(z);p,r=ps[palm];rows=[1000*(p-goalp),80*(goalr.inv()*r).as_rotvec(),.1*(v-q0[ix])]
+            if side=='R':
+                g=distance.measure(ps,'R_Shoulder',gp,gr)['gap_m'];rows.append(np.array([5000*(g-.0004),15000*min(g-.0001,0),6000*min(distance.measure(ps,'R_Elbow',gp,gr)['gap_m']-.008,0)]))
+            return np.concatenate(rows)
+        l=np.maximum(bounds[ix,0]+1e-6,q0[ix]-1.1);h=np.minimum(bounds[ix,1]-1e-6,q0[ix]+1.1);af=least_squares(arm,np.clip(q[ix],l+1e-8,h-1e-8),bounds=(l,h),max_nfev=150,diff_step=1e-4,ftol=1e-9,xtol=1e-9);q[ix]=af.x;p,r=fk(q)[palm];hands[side]=dict(position_error_m=float(np.linalg.norm(p-goalp)),rotation_error_deg=float(np.rad2deg((goalr.inv()*r).magnitude())));print('hand',side,hands[side],flush=True)
+    q=q.astype(np.float32).astype(float);gp=gp.astype(np.float32).astype(float);ps=fk(q);state=make_state(i['native_initial_state'],bodies,q,ps,gp,gr);m=metrics(ps,distance,gp,gr);support={'right_block_cradle':{'capsule_body':m['capsules'],'upper_arm_witness':m['capsules']['R_Shoulder'],'scope':'Chest and actual whole upper-arm witness, new centred free-guitar initial pose.'}};save(out/'support_candidate.json',support)
+    for j,n in enumerate(names):
+        if j not in i['lower_indices']:c['upper_deltas_rad'][n]=float(c['upper_deltas_rad'].get(n,0.)+q[j]-q0[j])
+    assert np.array_equal(q[i['lower_indices']],q0[i['lower_indices']]) and np.all(q>=bounds[:,0]) and np.all(q<=bounds[:,1]);c.update(q_ref_rad=q.tolist(),expected_initial_state=state,guitar_position_W_m=gp.tolist(),guitar_quaternion_xyzw=gr.as_quat().tolist(),support_candidate=str(out/'support_candidate.json'),scope='source9 trunk/head/lower24 retained; initial free guitar centred and arms refit. Actual source/native validation required.');save(out/'candidate.json',c);save(out/'predicted_state.json',state);valid=all(v['position_error_m']<.005 and v['rotation_error_deg']<2 for v in hands.values()) and all(v['gap_m']>=.00005 for v in m['capsules'].values()) and m['capsules']['Spine']['gap_m']>=.001 and m['capsules']['Chest']['gap_m']<.002 and m['capsules']['R_Shoulder']['gap_m']<.002 and boxes.measure(ps,'Pelvis',gp,gr)>=.0001;save(out/'report.json',dict(local_geometry_reach_eligible=valid,full_collision_audit_complete=False,candidate_metrics=m,hand_metrics=hands,guitar_delta_from_source9_W_m=(gp-gp0).tolist(),Pelvis_source_SAT_gap_m=boxes.measure(ps,'Pelvis',gp,gr),inputs_unchanged=verify(pins),candidate_sha256=sha(out/'candidate.json')));print('valid',valid,'gaps',{n:v['gap_m'] for n,v in m['capsules'].items()},flush=True);assert valid and verify(pins)
+
+
+if __name__=='__main__':main()

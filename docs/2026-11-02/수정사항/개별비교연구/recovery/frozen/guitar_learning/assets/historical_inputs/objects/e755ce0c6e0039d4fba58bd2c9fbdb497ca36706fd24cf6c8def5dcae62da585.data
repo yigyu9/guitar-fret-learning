@@ -1,0 +1,101 @@
+"""Fixed-guitar full-player contracts.
+
+This package deliberately keeps its event layer independent of Isaac Gym so
+bundle validation and timing-supervisor tests can run on a CPU-only machine.
+"""
+
+from .events import (
+    CANONICAL_PLAY_EVENT_SCHEMA,
+    CanonicalEventTimeline,
+    CanonicalPlayEvent,
+    CanonicalSourceFile,
+    CanonicalStrikeProjection,
+    CanonicalStringTarget,
+    SongBundleValidationError,
+    UnsupportedCanonicalEventError,
+    canonical_content_sha256,
+    compile_canonical_play_events,
+    compile_song_bundle_events,
+)
+from .clock import CanonicalEventBatch, CanonicalScoreClock
+from .readiness import (
+    FretReadiness,
+    StrikeReadiness,
+    evaluate_sounding_fret_readiness,
+    evaluate_strike_readiness,
+)
+from .synchronizer import (
+    DeadlineAction,
+    DelayCause,
+    EventOutcome,
+    RuleBasedSynchronizer,
+    SynchronizerDecision,
+    SynchronizerResult,
+)
+from .postprocessing import (
+    FRET_FINGER_ORDER,
+    FRET_FLEXION_ACTION_NAMES,
+    FretSynergyDiagnostics,
+    FretSynergyPostprocessor,
+    SOURCE_ACTION_DIM,
+    SOURCE_POSTPROCESSING_SCHEMA,
+    SourceActuatorHandshake,
+    StrikePickGripPostprocessor,
+    VerifiedSourceQualification,
+    validate_source_actuator_handshake,
+    validate_source_backend_action_alignment,
+)
+from .source_policies import (
+    SOURCE_EXECUTION_CONTEXT_SCHEMA,
+    SOURCE_POLICY_SCHEMA,
+    SOURCE_QUALIFICATION_SCHEMA,
+    FrozenSkillPair,
+    FrozenSourcePolicy,
+    SourceQualification,
+    inspect_source_checkpoint_metadata,
+    load_frozen_skill_pair,
+)
+__all__ = [
+    "CANONICAL_PLAY_EVENT_SCHEMA",
+    "CanonicalEventTimeline",
+    "CanonicalPlayEvent",
+    "CanonicalSourceFile",
+    "CanonicalStrikeProjection",
+    "CanonicalStringTarget",
+    "SongBundleValidationError",
+    "UnsupportedCanonicalEventError",
+    "canonical_content_sha256",
+    "compile_canonical_play_events",
+    "compile_song_bundle_events",
+    "CanonicalEventBatch",
+    "CanonicalScoreClock",
+    "FretReadiness",
+    "StrikeReadiness",
+    "evaluate_sounding_fret_readiness",
+    "evaluate_strike_readiness",
+    "DeadlineAction",
+    "DelayCause",
+    "EventOutcome",
+    "RuleBasedSynchronizer",
+    "SynchronizerDecision",
+    "SynchronizerResult",
+    "FRET_FINGER_ORDER",
+    "FRET_FLEXION_ACTION_NAMES",
+    "FretSynergyDiagnostics",
+    "FretSynergyPostprocessor",
+    "SOURCE_ACTION_DIM",
+    "SOURCE_POSTPROCESSING_SCHEMA",
+    "SourceActuatorHandshake",
+    "StrikePickGripPostprocessor",
+    "VerifiedSourceQualification",
+    "validate_source_actuator_handshake",
+    "validate_source_backend_action_alignment",
+    "SOURCE_EXECUTION_CONTEXT_SCHEMA",
+    "SOURCE_POLICY_SCHEMA",
+    "SOURCE_QUALIFICATION_SCHEMA",
+    "FrozenSkillPair",
+    "FrozenSourcePolicy",
+    "SourceQualification",
+    "inspect_source_checkpoint_metadata",
+    "load_frozen_skill_pair",
+]

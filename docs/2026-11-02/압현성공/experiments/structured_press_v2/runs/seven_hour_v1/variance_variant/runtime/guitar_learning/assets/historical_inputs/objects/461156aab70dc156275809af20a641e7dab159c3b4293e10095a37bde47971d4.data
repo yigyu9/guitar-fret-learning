@@ -1,0 +1,38 @@
+"""Preserved105 scene/control, with explicit final target ownership for play."""
+import isaacgym
+from isaacgym import gymapi
+import numpy as np
+from ..lower_body_release_v1.scene_v8 import Scene as PreservedScene
+from ..lower_body_release_v1.controller_horizontal_v4 import Controller as PreservedController
+from ..initial_pose_noise_v1 import pose
+from .motion_v1 import Motion
+
+
+class Scene(PreservedScene):
+    def __init__(self,cfg):
+        super().__init__(cfg)
+        gp,gr=pose(self.native()['guitar_body_states'][0])
+        eye=gp+gr.apply([0.,-.11,.65]);target=gp+gr.apply([0.,-.11,0.])
+        p=gymapi.CameraProperties();p.width,p.height,p.horizontal_fov=1280,720,55.
+        camera=self.gym.create_camera_sensor(self.env,p)
+        assert camera>=0
+        self.gym.set_camera_location(camera,self.env,gymapi.Vec3(*eye),gymapi.Vec3(*target))
+        self.cameras['playing']=camera;self.camera_spec['playing']=(eye.tolist(),target.tolist())
+
+    def command(self,named):
+        logic=getattr(self,'play_logic',None)
+        if logic is not None:named=logic.apply(named)
+        row=super().command(named)
+        if logic is not None and logic.started:row['play']=logic.info.copy()
+        return row
+
+
+class Controller(PreservedController):
+    def __init__(self,scene):
+        super().__init__(scene)
+        scene.play_logic=Motion(scene,self.fk)
+
+    def targets(self):
+        row=super().targets()
+        row['stage']=self.s.play_logic.stage
+        return row

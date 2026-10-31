@@ -1,0 +1,30 @@
+import unittest
+import numpy as np
+from stability_adapter_2.bounded_arm_hold import BoundedArmHold
+
+
+class HoldTests(unittest.TestCase):
+    def test_cap_rate_and_antiwindup_recovery(self):
+        control=BoundedArmHold(np.zeros(24),np.full(24,-1.),np.full(24,1.))
+        previous=np.zeros(24)
+        for _ in range(1000):
+            target,record=control.update(np.full(24,-1.),1/60)
+            self.assertLessEqual(max(abs(target-previous)),.8/60+1e-12)
+            self.assertLessEqual(max(abs(target)),.3+1e-12)
+            self.assertTrue(all(record['integral_blocked']))
+            previous=target
+        self.assertTrue(np.array_equal(control.integral,np.zeros(24)))
+        target,_=control.update(np.full(24,1.),1/60)
+        self.assertTrue((target<previous).all())
+
+    def test_model_bound_and_reachable_integration(self):
+        control=BoundedArmHold(np.zeros(24),np.full(24,-.05),np.full(24,.05))
+        for _ in range(50):
+            target,_=control.update(np.full(24,-.01),1/60)
+            self.assertLessEqual(max(target),.05)
+        self.assertTrue((control.integral>0).all())
+        with self.assertRaises(ValueError):control.update(np.zeros(24),0)
+        with self.assertRaises(ValueError):control.update(np.full(24,np.nan),1/60)
+
+
+if __name__=='__main__':unittest.main()

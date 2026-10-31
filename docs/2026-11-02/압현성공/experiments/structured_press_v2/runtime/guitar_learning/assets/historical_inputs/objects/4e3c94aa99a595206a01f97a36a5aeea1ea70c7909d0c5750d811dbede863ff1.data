@@ -1,0 +1,47 @@
+"""Independent569-state hand actors and a fresh1132-state central critic."""
+import torch
+from torch import nn
+
+from guitar_learning.training.policy import Encoder
+from guitar_learning.skills.specialist_policy import SpecialistPolicy
+from guitar_learning.tool.experiments.joint.spec import ACTOR_STATE_DIM, HAND_STATE_DIM, STATE_DIM, COORDINATION_FIELDS
+
+
+class JointPolicy(SpecialistPolicy):
+    schema = 'guitar_learning_joint39_v1'
+
+    def __init__(self, state_dim=STATE_DIM, event_dim=24, size='medium', contract=None):
+        if state_dim != STATE_DIM:
+            raise ValueError('joint requires1132-state observation')
+        if not isinstance(contract, dict) or contract.get('observation', {}).get('dimension') != STATE_DIM:
+            raise ValueError('explicit1132-state joint contract required')
+        hands = contract.get('task', {}).get('joint', {}).get('hand_contracts')
+        if not isinstance(hands, dict) or set(hands) != {'left', 'right'}:
+            raise ValueError('both exact source hand contracts required')
+        super().__init__(state_dim, event_dim, size, contract, role='joint', frozen_partner=False)
+        # Only the actor state branch differs; event encoding and actor heads
+        # retain the established architecture and independent parameters.
+        self.actor_encoders = nn.ModuleDict({role: Encoder(ACTOR_STATE_DIM, event_dim,
+                                            self.architecture['fusion']) for role in self.role_slices})
+        self.architecture.update(actor_state_dim=ACTOR_STATE_DIM,
+            actor_views={'left': (0, HAND_STATE_DIM), 'right': (HAND_STATE_DIM, 2*HAND_STATE_DIM)},
+            coordination_fields=tuple(COORDINATION_FIELDS),
+            inactive_action='all39_channels_owned_by_two_trainable_actors',
+            initialization='validated563_actor_with_zero_new_coordination_columns_only')
+
+    def forward(self, state, events, mask, priority_events, priority_mask):
+        self._validate(state, events, mask, priority_events, priority_mask)
+        common = state[:, 2*HAND_STATE_DIM:]
+        means = []
+        for index, role in enumerate(self.role_slices):
+            view = torch.cat((state[:, index*HAND_STATE_DIM:(index+1)*HAND_STATE_DIM], common), -1)
+            means.append(self.actor_heads[role](self.actor_encoders[role](
+                view, events, mask, priority_events, priority_mask)))
+        mean = torch.cat(means, -1)
+        value = self.value_encoder(state, events, mask, priority_events, priority_mask)
+        return dict(mean=mean, log_std=self.log_std.clamp(-5, 2).expand_as(mean),
+            reward_value=self.reward_critic(value).squeeze(-1),
+            cost_value=self.cost_critic(value).squeeze(-1))
+
+    def transfer_actor(self, checkpoint, role):
+        raise ValueError('joint uses validated local BC experts via joint.transfer.apply_experts')

@@ -1,0 +1,178 @@
+"""Phase-1 real free-guitar control bridge; no music reward or trained policy yet."""
+import json
+from pathlib import Path
+import numpy as np
+from ..music_pipeline_v2.control import ACTIVE_NAMES, EXPECTED_NAMES, JointTargetContract
+from ..music_pipeline_v3.control import EXPECTED_NAMES as FULL_EXPECTED_NAMES
+
+
+PREPARATION_STEPS = 22 * 240
+ZERO_RANGE_NAMES = frozenset(side + '_' + part + '_' + axis for side in ('L', 'R') for part in ('Knee', 'Toe') for axis in 'yz')
+
+
+def target_rates(names):
+    lower = tuple(side + '_' + part + '_' for side in ('L', 'R') for part in ('Hip', 'Knee', 'Ankle', 'Toe'))
+    return np.array([.4 if name.startswith(lower) else .1 if name.startswith(('Torso_', 'Spine_', 'Chest_')) else .5 if name.startswith(('Neck_', 'Head_')) else 1.5 if name.startswith(('LH:', 'RH:')) else 3. for name in names])
+
+
+class NativeSession:
+    """Original scene/controller, with only the final post-preparation target owner changed."""
+    def __init__(self, config, out):
+        # Do not import tab2body.env.base: its fixed-guitar state writes are incompatible.
+        import isaacgym
+        from ..front_facing_ready_v1.runtime_v15 import Scene
+        from ..front_facing_ready_v1.runtime_v12 import Controller
+        self.scene = None
+        try:
+            self.scene = Scene({**config, 'attempt_out': str(out)})
+            self.controller = Controller(self.scene)
+        except BaseException:
+            self.close()
+            raise
+
+    def prepare_tick(self):
+        return self.controller.targets()
+
+    def submit_policy_target(self, target):
+        from ..lower_body_release_v1.scene_v8 import Scene as FinalTargetScene
+        scene = self.scene
+        named, diagnostic = self.controller.apply(dict(zip(scene.names, target.tolist())))
+        lower_target = np.array([named[name] for name in scene.names])
+        upper = [i for i in range(105) if i not in scene.lower_indices]
+        if not np.array_equal(lower_target[upper], target[upper]):
+            raise RuntimeError('Foot maintenance modified policy/held upper channels')
+        # Bypass Motion/LH IK and scheduled target corrections. Original final limiter/
+        # native POSITION submission is called once; existing effort controller follows.
+        row = FinalTargetScene.command(scene, named)
+        row['foot_world_target_IK'] = diagnostic
+        row['stage'] = 'policy_handoff'
+        self.controller.target_rows.append(row)
+        return row
+
+    def integrate(self):
+        effort, diagnostic = self.controller.effort()
+        scene = self.scene
+        if not np.isfinite(effort).all() or np.any(np.abs(effort) > scene.pd_properties['effort'] + 1e-6):
+            raise RuntimeError('Original finite effort cap violated')
+        if np.any(effort[scene.zero_indices] != 0) or np.any(effort[scene.position_indices] != 0):
+            raise RuntimeError('Mixed POSITION/effort ownership violated')
+        scene.integrate105(effort)
+        return diagnostic
+
+    def close(self):
+        if self.scene is not None:
+            self.scene.close()
+            self.scene = None
+
+
+class FreeGuitarEnvironment:
+    """reset -> (state, metadata), step(normalized action39) -> (state, metadata).
+
+    One policy step submits one target and performs four original 240-Hz physics
+    steps. Reset constructs a fresh scene and really executes all 22 preparation
+    seconds. This is a policy-handoff variant, not inherited V3 stability success.
+    """
+    def __init__(self, config, out, *, action_half_range_rad, action_names=ACTIVE_NAMES,
+                 smoothing_alpha=.2, session_factory=NativeSession, geometry_fn=None,
+                 sample_callback=None):
+        if tuple(action_names) != ACTIVE_NAMES:
+            raise ValueError('action_names must exactly equal canonical ACTIVE_NAMES order39')
+        half = np.asarray(action_half_range_rad, dtype=float)
+        if half.ndim == 0:
+            half = np.full(39, float(half))
+        if half.shape != (39,) or not np.isfinite(half).all() or np.any(half <= 0):
+            raise ValueError('Explicit action_half_range_rad must be positive finite scalar or39 vector')
+        if not np.isfinite(smoothing_alpha) or not 0 < smoothing_alpha <= 1:
+            raise ValueError('smoothing_alpha must be in (0,1]')
+        self.config = json.loads(Path(config).read_text()) if isinstance(config, (str, Path)) else dict(config)
+        self.out = Path(out)
+        self.half_range = half.copy()
+        self.alpha = float(smoothing_alpha)
+        self.session_factory, self.geometry_fn = session_factory, geometry_fn
+        self.sample_callback = sample_callback
+        self.session = None
+        self.episode = 0
+        self.ready = False
+
+    def reset(self):
+        self.close()
+        folder = self.out / ('episode_%04d' % self.episode)
+        folder.mkdir(parents=True, exist_ok=False)
+        self.episode += 1
+        try:
+            self.session = self.session_factory(self.config, folder)
+            scene = self.session.scene
+            names = tuple(scene.names)
+            if len(names) != 105 or len(set(names)) != 105 or set(names) != FULL_EXPECTED_NAMES:
+                raise ValueError('unique exact canonical native105 joint names required')
+            self.upper = np.array([i for i, name in enumerate(names) if name in EXPECTED_NAMES])
+            if len(self.upper) != 81 or set(names[i] for i in self.upper) != EXPECTED_NAMES:
+                raise ValueError('native105 must contain exact canonical upper81 names')
+            if len(scene.zero_indices) != 8 or np.count_nonzero(scene.lower < scene.upper) != 97:
+                raise ValueError('native105/effective97/zero8 contract violated')
+            actual_zero_names = {names[i] for i in np.flatnonzero(scene.lower == scene.upper)}
+            if actual_zero_names != ZERO_RANGE_NAMES or {names[i] for i in scene.zero_indices} != ZERO_RANGE_NAMES:
+                raise ValueError('exact canonical nominal zero8 names required')
+            if not scene.human_root_fixed or scene.guitar_root_fixed or scene.guitar_gravity_disabled:
+                raise ValueError('fixed human root and free gravity-enabled guitar required')
+            self.original_properties = scene.pd_properties.copy()
+            if self.sample_callback:
+                self.sample_callback(scene, 'preparation')
+            while scene.steps < PREPARATION_STEPS:
+                self.session.prepare_tick()
+                for _ in range(4):
+                    self.session.integrate()
+                    if self.sample_callback:
+                        self.sample_callback(scene, 'preparation')
+            if scene.steps != PREPARATION_STEPS:
+                raise RuntimeError('Preparation must end at actual physics step5280')
+            self.reference105 = scene.target.astype(float).copy()
+            bad = np.flatnonzero((self.reference105 < scene.lower) | (self.reference105 > scene.upper))
+            if len(bad):
+                raise ValueError('Prepared final target outside native bounds: ' + repr([{'name': names[i], 'target': self.reference105[i], 'lower': float(scene.lower[i]), 'upper': float(scene.upper[i])} for i in bad]))
+            self.contract = JointTargetContract(tuple(names[i] for i in self.upper), self.reference105[self.upper], scene.lower[self.upper], scene.upper[self.upper], target_rates(names)[self.upper], half_range_rad=self.half_range, control_hz=60., smoothing_alpha=self.alpha)
+            self.codec_previous = self.contract.reset_targets()
+            self.ready = True
+            return self._snapshot(), {'phase': 'phase1_policy_handoff', 'prepared_physics_step': scene.steps, 'prepared_target105_rad': self.reference105.tolist(), 'target_contract': self.contract.metadata, 'nonpolicy_target_scope': 'upper42 held at final prepared targets; lower24 may change via original finite foot maintenance', 'support_feedback': 'Original finite human Chest/support/gravity/hip-load/SO3 effort feedback remains active; no direct guitar force or state overwrite', 'reward_or_music_training': 'not implemented; no fabricated reward', 'legacy_music_semantics': 'Fret zero DONT_CARE is distinct from musical open-string zero', 'inherited_V3_stability_success': False}
+        except BaseException:
+            self.close()
+            raise
+
+    def _snapshot(self):
+        scene = self.session.scene
+        state = scene.native()
+        geometry_fn = self.geometry_fn
+        if geometry_fn is None:
+            from .geometry_v1 import geometry_snapshot
+            geometry_fn = geometry_snapshot
+        geometry = geometry_fn(state, scene.human_bodies, scene.guitar_bodies)
+        return {'native': state, 'geometry': geometry}
+
+    def step(self, action39):
+        if not self.ready:
+            raise RuntimeError('reset must succeed before step')
+        requested81, final81 = self.contract.targets(action39, self.codec_previous)
+        scene = self.session.scene
+        target = self.reference105.copy()
+        target[self.upper] = final81
+        before = scene.native()
+        row = self.session.submit_policy_target(target)
+        if scene.native() != before:
+            raise RuntimeError('Target submission overwrote physical state')
+        self.codec_previous = final81.copy()
+        efforts, physics_samples = [], []
+        for _ in range(4):
+            efforts.append(self.session.integrate())
+            physics_samples.append(self._snapshot())
+            if self.sample_callback:
+                self.sample_callback(scene, 'policy_handoff')
+        if not np.array_equal(scene.pd_properties, self.original_properties) or scene.forbidden_calls:
+            raise RuntimeError('Original actuator properties or native guard changed')
+        state = physics_samples[-1]
+        return state, {'physics_steps_advanced': 4, 'physics_step': scene.steps, 'action_order': list(ACTIVE_NAMES), 'normalized_action39': np.asarray(action39, dtype=float).tolist(), 'requested_upper81_rad': requested81.tolist(), 'codec_target_upper81_rad': final81.tolist(), 'native_final_target105_rad': scene.target.astype(float).tolist(), 'target_submission': row, 'original_effort_diagnostics': efforts, 'physics_samples240': physics_samples}
+
+    def close(self):
+        self.ready = False
+        if self.session is not None:
+            self.session.close()
+            self.session = None

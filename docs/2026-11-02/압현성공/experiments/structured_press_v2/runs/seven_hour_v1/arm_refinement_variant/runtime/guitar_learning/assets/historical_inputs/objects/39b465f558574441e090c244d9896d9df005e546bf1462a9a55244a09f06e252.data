@@ -1,0 +1,46 @@
+"""새 정면 발 제어를 유지한 채 실제10초에서 유한 왼손 해제를 시작한다."""
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..seated_foot_support_v1.runtime_v6 import Scene as FootScene
+from ..grounded_guitar_support_v1.runtime_v18 import Controller as PreparedController
+from ..grounded_guitar_release_v1.motion_v1 import Motion
+from .runtime_v1 import Controller as FrontController, HEADING_BODIES, horizontal_forward, heading_error_rad
+
+PROTOCOL = 'front_facing_prepare5_hold5_withdraw3_free15_v1'
+
+
+class Scene(FootScene):
+    def command(self, named):
+        motion = getattr(self, 'release_logic', None)
+        if motion is not None:
+            named = motion.apply(named)
+        row = super().command(named)
+        if motion is not None and motion.started:
+            row['left_release'] = motion.info.copy()
+        return row
+
+
+class Controller(FrontController):
+    def __init__(self, scene):
+        # FrontController의 정지 전용 protocol 검사를 우회하지 않고 새 초기화를 명시한다.
+        PreparedController.__init__(self, scene)
+        assert scene.cfg['seconds'] == 28 and scene.cfg['mode'] == 'static'
+        assert scene.cfg['validation_protocol'] == PROTOCOL
+        assert scene.cfg['release_start_s'] == 10 and scene.cfg['full_release_interval_s'] == [13, 28]
+        state = scene.native()
+        poses = {n: pose(b) for n, b in zip(scene.human_bodies, state['human_body_states'])}
+        self.front_reference_W = horizontal_forward(poses['Pelvis'][1])
+        self.front_initial_heading = {n: float(np.rad2deg(heading_error_rad(poses[n][1], self.front_reference_W))) for n in HEADING_BODIES}
+        target = self.fk(self.base_target)
+        self.front_base_heading = {n: float(np.rad2deg(heading_error_rad(target[n][1], self.front_reference_W))) for n in HEADING_BODIES}
+        assert all(abs(v) <= 2. for v in self.front_initial_heading.values())
+        assert all(abs(v) <= 2. for v in self.front_base_heading.values())
+        assert scene.foot_target_logic is self and scene.native() == state
+        scene.release_logic = Motion(scene, self.fk)
+
+    def targets(self):
+        row = super().targets()
+        if self.s.steps >= 2400:
+            row.update(stage=self.s.release_logic.stage, right_world_palm_IK_active=True,
+                release_scope='새 정면 발 apply와 오른팔 world12 IK/유한 인체 task를 유지. 왼팔12와 손가락14 목표만 해제.')
+        return row

@@ -1,0 +1,93 @@
+"""Prospective bilateral actual-pick preparation, separate from frozen strike audit."""
+import argparse
+from pathlib import Path
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import read, save, pin, verify, sha
+from .analyze_v1 import input_pins
+
+
+def geometry(pick, start, end, lane, side):
+    """Current G coordinates; every finite string is interpolated at pickY."""
+    dy = end[:,1]-start[:,1]
+    finite = bool(np.isfinite(pick).all() and np.isfinite(start).all() and np.isfinite(end).all() and np.all(abs(dy)>1e-12))
+    u = (pick[1]-start[:,1])/dy if finite else np.full(6,np.nan)
+    points = start+u[:,None]*(end-start)
+    segment = bool(finite and np.all((u>=0)&(u<=1)))
+    clearance = float(np.min(points[:,2]-pick[2])) if finite else None
+    margin = float(np.min(points[:,0])-pick[0] if side=='down' else pick[0]-np.max(points[:,0])) if finite else None
+    checks = dict(finite=finite,all6_finite_segments=segment,
+        depth1mm=bool(finite and clearance>=.001),outside6_by3mm=bool(finite and margin>=.003),
+        global_zone=bool(-.385<=pick[1]<=-.255),lane12p5mm=bool(abs(pick[1]-lane)<=.0125))
+    return dict(ready=all(checks.values()),checks=checks,pick_G_m=pick.tolist(),
+        string_interpolation_u=u.tolist() if finite else None,
+        interpolated6_G_m=points.tolist() if finite else None,
+        min_depth_m=clearance,outside_all6_margin_m=margin)
+
+
+def consecutive(samples):
+    pairs = []
+    previous = None
+    for row in samples:
+        if row['ready'] and previous is not None and previous['ready'] and row['step']-previous['step']==4:
+            pairs.append([previous['step'],row['step']])
+        previous = row
+    return pairs
+
+
+def evaluate(initial, states, spec, events):
+    names,gnames=initial['human_body_names'],initial['guitar_body_names']
+    intervals = dict(down=(11.1,11.5,1),up=(12.1,12.3,-1))
+    result = {}
+    for side,(lo,hi,direction) in intervals.items():
+        event = next((e for e in events if 10<=e['time_s']<=14 and e['direction']==direction and e['global_zone_allowed'] and e['lane_allowed']),None)
+        samples=[]
+        for row in states:
+            k,t=row['physics_step'],row['time_s']
+            if k%4 or not lo<=t<=hi:
+                continue
+            native=row['state'];gp,gr=pose(native['guitar_body_states'][0])
+            pick=gr.inv().apply(pose(native['human_body_states'][names.index(spec['strike']['marker'])])[0]-gp)
+            start,end=[np.array([gr.inv().apply(pose(native['guitar_body_states'][gnames.index('G:string%d%s'%(n,suffix))])[0]-gp) for n in range(1,7)]) for suffix in ('','_end')]
+            record=geometry(pick,start,end,spec['strike']['lane_G_y_m'],side)
+            record.update(step=k,time_s=t,before_first_release=bool(event is not None and t<event['time_s']))
+            record['ready'] &= record['before_first_release']
+            samples.append(record)
+        pairs=consecutive(samples)
+        result[side]=dict(interval_s=[lo,hi],first_release=event,samples=samples,
+            ready_consecutive60Hz_pairs=pairs,passed=bool(pairs))
+    return dict(sides=result,both_sides_ready=all(s['passed'] for s in result.values()),
+        scope='Actual pick outside all6 finite strings by3mm and at least1mm below each interpolated string, lane12.5mm/globalzone. Two consecutive60Hz actual samples in each predeclared preparation window strictly before its first actual release. Not left-finger pressing or physical string excitation.')
+
+
+def main(run,analysis,out):
+    out.mkdir(exist_ok=False)
+    cfgpath=Path(read(run/'attempt.json')['config']);cfg=read(cfgpath)
+    paths=[analysis/'summary.json',analysis/'strike_evidence.json',analysis/'inputs_before.json']
+    previous=read(analysis/'inputs_before.json')
+    pins=input_pins(run,cfgpath,cfg,None)
+    extra=pin(cfgpath,extra=paths+[Path(p) for p in previous])
+    for mapping in (previous,extra):
+        for p,h in mapping.items():
+            assert p not in pins or pins[p]==h,p
+            pins[p]=h
+    assert verify(pins);save(out/'inputs_before.json',pins)
+    initial=read(run/'initial_values.json');states=read(run/'states240.json')['rows'];spec=read(cfg['play_spec'])
+    summary=read(analysis/'summary.json');events=read(analysis/'strike_evidence.json')['events']
+    result=evaluate(initial,states,spec,events)
+    case=cfg['play_case']
+    gates=dict(actual3361_contiguous=[s['physics_step'] for s in states]==list(range(3361)),
+        same_run_analysis=summary['run']==str(run) and summary['case']==case,
+        action_case=case in ('baseline','strike'),
+        bilateral_preparation=bool(case=='baseline' or result['both_sides_ready']),inputs_unchanged=verify(pins))
+    save(out/'report.json',dict(run=str(run),case=case,passed=all(gates.values()),gates=gates,
+        analysis_summary_sha256=sha(analysis/'summary.json'),analysis_events_sha256=sha(analysis/'strike_evidence.json'),
+        geometric_strike_certificate_also_required=True,readiness=result,input_sha256=pins,inputs_unchanged=verify(pins),
+        scope='Separate prospective addition; does not alter frozen analyze_v1 or reinterpret its gates. Baseline readiness is diagnostic; strike requires both sides. Final success requires both original analyzer and this report.'))
+    print(dict(passed=all(gates.values()),case=case,gates=gates,both_sides_ready=result['both_sides_ready']),flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser()
+    for key in ('run','analysis','out'):p.add_argument('--'+key,type=Path,required=True)
+    args=p.parse_args();main(args.run.resolve(),args.analysis.resolve(),args.out.resolve())

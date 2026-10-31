@@ -1,0 +1,39 @@
+"""Reuse immutable source producers at a newly pinned lower seat height."""
+from pathlib import Path
+from unittest.mock import patch
+from ..lower_body_release_v1.common import ROOT,BASE,read,save,sha,pin,verify
+from . import source_v1,metadata_v2
+
+
+def main():
+    phase=BASE/'seated_foot_support_v1';stage=phase/'source_fit_v3';stage.mkdir(exist_ok=False)
+    package=Path(__file__).resolve().parent
+    plan=ROOT/'docs/plans/seated_foot_support_reach_20261016.md'
+    pins=pin(extra=[package/n for n in ('__init__.py','source_v1.py','metadata_v2.py','source_v3.py')]+[plan])
+    save(phase/'source_v3_generation_before.json',dict(input_sha256=pins,parameters=dict(root_translation_z_m=-.036,staging_phase=str(stage))))
+    with patch.object(source_v1,'PHASE',stage),patch.object(source_v1,'DZ',-.036):source_v1.main()
+    with patch.object(metadata_v2,'PHASE',stage):metadata_v2.main()
+    source=stage/'source_v2';out=phase/'source_v3';out.mkdir(exist_ok=False)
+    direct=[source/n for n in ('candidate.json','predicted_state.json','report.json','support_candidate.json','upper_target105.json','static5.json')]
+    finalpins=pin(extra=direct+[Path(__file__).resolve(),package/'source_v1.py',package/'metadata_v2.py',plan,phase/'source_v3_generation_before.json'])
+    save(out/'inputs_before.json',finalpins)
+    candidate=read(source/'candidate.json');candidate['support_candidate']=str(out/'support_candidate.json')
+    candidate['chair_condition']='Initial world-Y -2.5mm retained; fullheight reduced36mm, bottom remains z0.'
+    report=read(source/'report.json');report['generation_manifest']=str(phase/'source_v3_generation_before.json')
+    report['scope_v3']='V1 source fit and V2 metadata/BOX audit reused in new paths with explicitly pinned DZ=-36mm; prior28mm trials preserved.'
+    for name,value in (('candidate.json',candidate),('predicted_state.json',read(source/'predicted_state.json')),
+                       ('report.json',report),('support_candidate.json',read(source/'support_candidate.json')),
+                       ('upper_target105.json',read(source/'upper_target105.json'))):save(out/name,value)
+    cfg=read(source/'static5.json')
+    cfg.update(candidate=str(out/'candidate.json'),candidate_sha256=sha(out/'candidate.json'),source_report=str(out/'report.json'),
+               upper_target105=str(out/'upper_target105.json'),upper_target105_sha256=sha(out/'upper_target105.json'),
+               foot_support_mode='actual_hip_level_soles_finite_target_v2',
+               lower_initial_adjustment='Source V3 ten leg axes refit; root/guitar and chair top initially -36mm')
+    save(out/'static5.json',cfg)
+    save(phase/'source_v3_generation.json',dict(input_sha256=pins,inputs_unchanged=verify(pins),canonical_inputs_unchanged=verify(finalpins),
+         actual_root_translation_z_m=candidate['root_initial_translation_W_m'][2],candidate=str(out/'candidate.json')))
+    assert candidate['root_initial_translation_W_m']==[0.,0.,-.036] and report['eligible_for_native'] and verify(pins) and verify(finalpins)
+    print(dict(source=str(out),eligible=report['eligible_for_native'],root_translation=candidate['root_initial_translation_W_m']),flush=True)
+
+
+if __name__=='__main__':main()

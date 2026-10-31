@@ -1,0 +1,16 @@
+"""Two independent full-score actors and fresh centralized reward/cost critics."""
+from guitar_learning.skills.specialist_policy import SpecialistPolicy
+
+
+class SongPolicy(SpecialistPolicy):
+    schema = 'guitar_learning_song39_v1'
+
+    def __init__(self,state_dim,event_dim=24,size='medium',contract=None):
+        if (state_dim != 500 or not isinstance(contract,dict)
+                or contract.get('task',{}).get('song',{}).get('schema') != 'guitar_learning.song.v1'):
+            raise ValueError('explicit full-score500-state contract required')
+        super().__init__(state_dim,event_dim,size,contract,role='joint',frozen_partner=False)
+        self.architecture['initialization'] = 'actor common physical columns and event encoders only; new music/history zero; fresh critic and Adam'
+
+    def transfer_actor(self,*args,**kwargs):
+        raise ValueError('full-score initialization requires song.transfer.apply_experts')

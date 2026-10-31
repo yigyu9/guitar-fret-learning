@@ -1,0 +1,69 @@
+"""Full-score settings never silently become a sampled single-note task."""
+import copy
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+from guitar_learning.tool.experiments.song.settings import settings_document
+from guitar_learning.tool.experiments.song import transfer
+
+
+class SongSettingsTests(unittest.TestCase):
+    def raw(self, folder):
+        paths = {}
+        for role in ('left', 'right'):
+            path = Path(folder)/(role+'.json'); path.write_text('{}')
+            paths[role+'_settings'] = str(path)
+        return dict(stage='D', phrase_events=67, song={'schema':'guitar_learning.song.v1'},
+                    joint_experts=paths)
+
+    def test_explicit_score_defaults_and_source_validation(self):
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(transfer, 'validate_experts') as validate:
+            raw = self.raw(folder); before = copy.deepcopy(raw)
+            parsed = settings_document(raw)
+            self.assertEqual(raw, before)
+            self.assertEqual(parsed['stage'], 'D')
+            self.assertEqual(parsed['phrase_events'], 67)
+            self.assertEqual(parsed['song'], dict(schema='guitar_learning.song.v1',
+                pre_roll_s=3., tail_s=.5, window_s=.5, left_fraction=.4))
+            self.assertEqual(parsed['music'], dict(reward_mode='legacy', goal_event_indices=None))
+            self.assertGreater(parsed['ppo']['cost_weight'], 0.)
+            validate.assert_called_once_with(parsed)
+
+    def test_bad_song_timing_and_unknown_keys_rejected(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(transfer, 'validate_experts'):
+            raw = self.raw(folder)
+            invalid = [None, {}, {'schema':'wrong'}, {'unknown':1}, {'window_s':0.},
+                {'window_s':.6}, {'window_s':True}, {'window_s':float('nan')},
+                {'left_fraction':0.}, {'left_fraction':1.1}, {'pre_roll_s':2.},
+                {'tail_s':.1}, {'tail_s':False}]
+            # An explicitly empty song dictionary is accepted with documented defaults.
+            invalid.remove({})
+            for config in invalid:
+                with self.subTest(config=config), self.assertRaises(ValueError):
+                    settings_document(dict(raw, song=config))
+            for field in ('timing', 'joint', 'unexpected'):
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    settings_document(dict(raw, **{field:{}}))
+
+    def test_wrong_selection_sources_or_disabled_safety_rejected(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(transfer, 'validate_experts'):
+            raw = self.raw(folder)
+            changes = [dict(stage='B'), dict(stage='full'), dict(start_event_index=1),
+                dict(tempo_scale=.5), dict(music=dict(reward_mode='dense_v2')),
+                dict(music=dict(goal_event_indices=[0, 1])), dict(ppo=dict(cost_weight=0.)),
+                dict(joint_experts={}),
+                dict(joint_experts=dict(left_settings='relative.json', right_settings='relative2.json'))]
+            for change in changes:
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    settings_document(dict(raw, **change))
+
+    def test_source_rejection_propagates_before_training(self):
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(transfer, 'validate_experts', side_effect=RuntimeError('changed frozen source')):
+            with self.assertRaisesRegex(RuntimeError, 'changed frozen source'):
+                settings_document(self.raw(folder))
+
+
+if __name__ == '__main__': unittest.main()

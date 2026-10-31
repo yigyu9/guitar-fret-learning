@@ -1,6 +1,11 @@
 {
   "entrypoint": "guitar_learning.train",
   "method": "AST imports including conditional/function imports and parent packages; not runtime tracing",
+  "as_of": "2026-10-31",
+  "active_python_count": 295,
+  "static_dependency_count": 33,
+  "definition_count": 561,
+  "runtime_tracing": false,
   "files": [
     {
       "module": "guitar_learning",
@@ -224,166 +229,166 @@
       "module": "guitar_learning.gpu.contact",
       "path": "/home/ajou/yigyu/3/guitar_learning/gpu/contact.py",
       "relative": "gpu/contact.py",
-      "sha256": "0f975bf3b6dde42425bcc7087d8ca85f9ffc7a5035d1167326c0de94b71802d4",
-      "lines": 977,
+      "sha256": "80dd6a5e65ccc6254b1e5fc4d1eae60cc0196c52f820f1dfb6fb83734cb7fe57",
+      "lines": 982,
       "symbols": [
         {
           "name": "surface_target_geometry",
           "kind": "function",
-          "line": 36,
-          "end_line": 93,
+          "line": 37,
+          "end_line": 94,
           "signature": "points, velocities, valid, starts, ends, low, high, strings, fingers, margin=0.002",
           "docstring": "지정 손가락 표면에서 유한한 목표 현·셀 선분까지의 최근접 기하를 구한다.\n\n점·속도는 기타 로컬 [N,10,S,3]이며 thumb2, thumb3, index2, index3, ...,\npinky3 순서다. valid는 [10,S]다. 목표 현 번호는 0부터, 손가락은 검지 1부터\n소지 4까지이며 셀 y 경계는 [N,M]이다. 하중 조건은 적용하지 않는다.\ndelta는 선택 표면에서 선분으로 향한다. 상대속도는 해당 표면점의 실제 상대속도에\n음수를 취한 값이며, 최소 거리나 매번 달라지는 표본 ID의 유한차분이 아니다.\n정확히 동률이면 펼친 body*S+sample 인덱스의 첫 번째를 선택한다."
         },
         {
           "name": "finger_mesh_surface_samples",
           "kind": "function",
-          "line": 96,
-          "end_line": 143,
+          "line": 97,
+          "end_line": 144,
           "signature": "names, directions=64",
           "docstring": "실제 손가락 메시 꼭짓점을 한 번 읽으며 가상의 패드를 만들지 않는다.\n\n고정 구면 방향의 지지 꼭짓점으로 원본 표면의 보수적인 유한 표본을 구성한다.\n표본 사이 간격 때문에 실제 접촉을 놓칠 수 있다."
         },
         {
           "name": "_extract_plane",
           "kind": "function",
-          "line": 146,
-          "end_line": 184,
+          "line": 147,
+          "end_line": 185,
           "signature": "xml_path, expected_sha256",
           "docstring": "두 물리 넥 형상을 읽고 원본 볼록 껍질의 반공간을 유지한다."
         },
         {
           "name": "_validate_targets",
           "kind": "function",
-          "line": 187,
-          "end_line": 208,
+          "line": 188,
+          "end_line": 209,
           "signature": "plane, hulls, starts, ends, low, high, strings",
           "docstring": "CPU에서 한 번, 안쪽으로 줄인 각 유한 선분이 원본 볼록 껍질 안에 있음을 검증한다."
         },
         {
           "name": "load_press_surface",
           "kind": "function",
-          "line": 211,
-          "end_line": 238,
+          "line": 212,
+          "end_line": 239,
           "signature": "strings, frets",
           "docstring": "CPU 목표 목록에서 한 번 추출·검증한 뒤 엄격한 JSON 계약을 반환한다."
         },
         {
           "name": "project_press_strings",
           "kind": "function",
-          "line": 241,
-          "end_line": 251,
+          "line": 242,
+          "end_line": 252,
           "signature": "starts, ends, plane",
           "docstring": "순수 Torch 연산으로 Gz를 투영하며 호출자가 plane[4]를 텐서 장치에 캐시한다."
         },
         {
           "name": "_load_frames",
           "kind": "function",
-          "line": 254,
-          "end_line": 285,
+          "line": 255,
+          "end_line": 286,
           "signature": "bundle",
           "docstring": null
         },
         {
           "name": "_lower_edges",
           "kind": "function",
-          "line": 288,
-          "end_line": 306,
+          "line": 289,
+          "end_line": 307,
           "signature": "reference_y, plane, hulls",
           "docstring": "각 기준 Gy의 연주면에서 원본 볼록 껍질의 최대 Gx를 구한다."
         },
         {
           "name": "load_wrist_region_track",
           "kind": "function",
-          "line": 309,
-          "end_line": 351,
+          "line": 310,
+          "end_line": 352,
           "signature": "bundle, press_surface",
           "docstring": "CPU에서 초기화하며 docs import·reset 손목 오프셋·실시간 상태 변경을 사용하지 않는다."
         },
         {
           "name": "measure_wrist_region",
           "kind": "function",
-          "line": 354,
-          "end_line": 383,
+          "line": 355,
+          "end_line": 384,
           "signature": "wrist_G, timestamp_s, times_s, lower_G_m, upper_G_m",
           "docstring": "검증·캐시된 손목 안내 경로를 호스트 복사 없이 순수 Torch 연산으로 측정한다.\n\n입력은 wrist[N,3], 곡 시각[N], times[T], lower/upper[T,3]이다.\n환경이 정책 준비 시간을 뺀 뒤 이 함수를 호출한다."
         },
         {
           "name": "_clip_polygon",
           "kind": "function",
-          "line": 401,
-          "end_line": 413,
+          "line": 402,
+          "end_line": 414,
           "signature": "polygon, axis, upper",
           "docstring": "원본 표면을 유지하며 3차원 다각형을 coordinate <= upper 영역으로 자른다."
         },
         {
           "name": "_sample_patch",
           "kind": "function",
-          "line": 416,
-          "end_line": 483,
+          "line": 417,
+          "end_line": 484,
           "signature": "triangles, samples=128",
           "docstring": "실제 삼각형을 자른 뒤 면적에 따라 결정론적으로 층화 표집한다."
         },
         {
           "name": "load_fingertip_pad",
           "kind": "function",
-          "line": 486,
-          "end_line": 551,
+          "line": 487,
+          "end_line": 552,
           "signature": "",
           "docstring": "봉인된 준비 자산에서 네 손가락 끝마디의 몸체 로컬 패치를 읽는다.\n\n모든 표본은 메시 크기·형상 변환을 적용한 실제 삼각형 위에 놓인다.\n검증된 -y 마디는 +x 방향 굽힘으로 -z 쪽을 향한다. 패치는 이 모델 안쪽 면과\n인접한 끝마디 하단 면을 사용하며, 피부·손톱을 추정한 해부학적 구분이 아니다."
         },
         {
           "name": "pad_target_geometry",
           "kind": "function",
-          "line": 554,
-          "end_line": 642,
+          "line": 555,
+          "end_line": 643,
           "signature": "points, normals, velocities, valid, starts, ends, low, high, strings, fingers, loaded, plane",
           "docstring": "가장 가까운 유효 끝마디 표면과 모든 표본의 접촉 후보 기하를 측정한다.\n\n입력 points/normals/velocities는 [N,4,P,3], 목표별 출력은 [N,M] 또는 [N,M,3]이다.\n벡터는 모두 기타 로컬 좌표다. 목표 선분은 이미 압현면에 투영되어 있으며,\nlow/high는 축소하지 않은 실제 프렛 셀의 y 경계다. 거리 계산에는 양쪽 프렛\n경계에서 2mm씩 안으로 줄인 유한 선분을 사용한다. 최근접점 선택은 법선·하중과\n독립적이다. 접촉 후보에는 위치·방향을 함께 만족하는 동일 표본 하나와 그 표본이\n속한 끝마디 몸체의 하중이 필요하다."
         },
         {
           "name": "pad_tracking_reward",
           "kind": "function",
-          "line": 645,
-          "end_line": 668,
+          "line": 646,
+          "end_line": 669,
           "signature": "now, onset, end, press, finger, delta, velocity, candidate, actions, alignment, tracking_weight=None, target_mask=None",
           "docstring": "움직임 비용 없는 기존 추종 보상을 계산하고 2cm 이내에서만 방향을 약하게 반영한다."
         },
         {
           "name": "load_thumb_support",
           "kind": "function",
-          "line": 692,
-          "end_line": 771,
+          "line": 693,
+          "end_line": 772,
           "signature": "",
           "docstring": "봉인된 thumb3 패치를 읽고 원본 넥 뒷면 사다리꼴을 한 번 검증한다."
         },
         {
           "name": "_smoothstep",
           "kind": "function",
-          "line": 774,
-          "end_line": 776,
+          "line": 775,
+          "end_line": 777,
           "signature": "value",
           "docstring": null
         },
         {
           "name": "thumb_support_geometry",
           "kind": "function",
-          "line": 779,
-          "end_line": 876,
+          "line": 780,
+          "end_line": 877,
           "signature": "points, normals, valid, center_y, rear_vertices, plane, net_force_guitar=None",
           "docstring": "움직이는 유한 넥 뒷면 영역에 대해 기타 로컬 표본 [N,P,3]을 측정한다.\n\nrear_vertices의 순서는 아래 왼쪽·아래 오른쪽·위 오른쪽·위 왼쪽이다.\n선택한 한 점의 일관된 기하 정보와 초당 [0,.02]의 보상률을 반환한다.\nnet_force_guitar[N,3]는 기타 축으로 표현한 native thumb3 합력이다.\n이를 생략하면 접촉 가산 없이 기하만 측정한다. 이 대리지표는 엄지-넥 몸체쌍이나\n압력을 인증하지 않는다. 무효 기하는 유한한 0과 valid=False로 반환하고 입력은 바꾸지 않는다."
         },
         {
           "name": "pad_contact_cells",
           "kind": "function",
-          "line": 896,
-          "end_line": 918,
+          "line": 897,
+          "end_line": 919,
           "signature": "points, normals, valid, loaded, starts, ends, frets, plane",
           "docstring": "원하는 목표와 독립적으로 실제 끝마디 패드 표본의 접촉 셀을 분류한다."
         },
         {
           "name": "wrong_press_sources",
           "kind": "function",
-          "line": 921,
-          "end_line": 977,
+          "line": 922,
+          "end_line": 982,
           "signature": "*, qualifies, assigned, nearest, source_fingers, surface_count, pad_cells, positive, now, onset, end, press, scope, strings, frets, fingers, fret_count",
           "docstring": "목표별 판정과 10개 몸체·3개 원인으로 제한된 오압현 출처를 반환한다."
         }
@@ -393,8 +398,8 @@
       "module": "guitar_learning.gpu.control",
       "path": "/home/ajou/yigyu/3/guitar_learning/gpu/control.py",
       "relative": "gpu/control.py",
-      "sha256": "0742f2e7916776ea5025d52af55985a6ae31253e297ba4f146945b01163a64d7",
-      "lines": 595,
+      "sha256": "6b46bad3c43d3b19c880e5d81962b73afa35ead72f4741e7c7f3603ead6daec7",
+      "lines": 579,
       "symbols": [
         {
           "name": "conjugate",
@@ -496,7 +501,7 @@
           "name": "BatchedController",
           "kind": "class",
           "line": 176,
-          "end_line": 595,
+          "end_line": 579,
           "signature": "",
           "docstring": null
         },
@@ -504,87 +509,87 @@
           "name": "BatchedController.__init__",
           "kind": "function",
           "line": 177,
-          "end_line": 273,
-          "signature": "self, scene, *, finger_action_mode='incremental'",
+          "end_line": 261,
+          "signature": "self, scene, *, finger_action_mode='position'",
           "docstring": null
         },
         {
           "name": "BatchedController.tensor",
           "kind": "function",
-          "line": 275,
-          "end_line": 276,
+          "line": 263,
+          "end_line": 264,
           "signature": "self, value",
           "docstring": null
         },
         {
           "name": "BatchedController.index",
           "kind": "function",
-          "line": 278,
-          "end_line": 279,
+          "line": 266,
+          "end_line": 267,
           "signature": "self, value",
           "docstring": null
         },
         {
           "name": "BatchedController._load_geometry",
           "kind": "function",
-          "line": 281,
-          "end_line": 337,
+          "line": 269,
+          "end_line": 325,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "BatchedController._load_support",
           "kind": "function",
-          "line": 339,
-          "end_line": 393,
+          "line": 327,
+          "end_line": 381,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "BatchedController.reset",
           "kind": "function",
-          "line": 395,
-          "end_line": 397,
+          "line": 383,
+          "end_line": 385,
           "signature": "self, indices, snapshot",
           "docstring": null
         },
         {
           "name": "BatchedController._lower_fk",
           "kind": "function",
-          "line": 399,
-          "end_line": 407,
+          "line": 387,
+          "end_line": 395,
           "signature": "self, q",
           "docstring": null
         },
         {
           "name": "BatchedController._geometry_jacobian",
           "kind": "function",
-          "line": 409,
-          "end_line": 420,
+          "line": 397,
+          "end_line": 408,
           "signature": "self, body, body_ids, joint_ids, local=None",
           "docstring": null
         },
         {
           "name": "BatchedController._foot_targets",
           "kind": "function",
-          "line": 422,
-          "end_line": 456,
+          "line": 410,
+          "end_line": 444,
           "signature": "self, request",
           "docstring": null
         },
         {
           "name": "BatchedController.targets",
           "kind": "function",
-          "line": 458,
-          "end_line": 485,
+          "line": 446,
+          "end_line": 469,
           "signature": "self, action, snapshot",
           "docstring": null
         },
         {
           "name": "BatchedController.efforts",
           "kind": "function",
-          "line": 487,
-          "end_line": 595,
+          "line": 471,
+          "end_line": 579,
           "signature": "self, snapshot",
           "docstring": null
         }
@@ -594,14 +599,14 @@
       "module": "guitar_learning.gpu.environment",
       "path": "/home/ajou/yigyu/3/guitar_learning/gpu/environment.py",
       "relative": "gpu/environment.py",
-      "sha256": "a2cffcbdc11973f2d9a7f8585601ecb1a81096560dfb023ee4a5095c575e3e4a",
-      "lines": 1643,
+      "sha256": "cb2fe4e077ffd60f0d404c4a5d27abd024424ed13aafd28221f00f53f29ad0f4",
+      "lines": 1642,
       "symbols": [
         {
           "name": "TensorSongEnvironment",
           "kind": "class",
           "line": 98,
-          "end_line": 1643,
+          "end_line": 1642,
           "signature": "",
           "docstring": "제어 tick마다 네 표본을 수집하고 배치 상태를 CPU로 복사하지 않는다.\n\nreset은 측정 상태만 바꾼다. 소유 장면이 먼저 물리 상태를 복원한 뒤 호출한다.\n통상적인 에피소드별 호스트 전송은 종료 에피소드 사전뿐이며 관측·보상·비용은\n모두 텐서로 유지한다."
         },
@@ -889,135 +894,135 @@
           "name": "TensorSongEnvironment.begin_control",
           "kind": "function",
           "line": 861,
-          "end_line": 889,
+          "end_line": 886,
           "signature": "self, actions",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment._record_finger_motion",
           "kind": "function",
-          "line": 891,
-          "end_line": 929,
+          "line": 888,
+          "end_line": 926,
           "signature": "self",
           "docstring": "완료된 제어 tick마다 한 번, 고정 크기 GPU 누적기에 손가락 움직임을 기록한다."
         },
         {
           "name": "TensorSongEnvironment.invalidate_control",
           "kind": "function",
-          "line": 931,
-          "end_line": 942,
+          "line": 928,
+          "end_line": 939,
           "signature": "self, mask",
           "docstring": "잘못된 지지 법선을 해당 행의 물리 실패로 고정한다.\n\n소유자는 이 tick의 경계까지 마지막으로 유효했던 제한된 힘만 사용할 수 있다.\n이 측정 메서드는 토크를 제공하거나 변경하지 않는다. 비유한·미인증 제어기 결과는\n소유자에서 계속 치명적 오류로 처리한다."
         },
         {
           "name": "TensorSongEnvironment._right_potential",
           "kind": "function",
-          "line": 944,
-          "end_line": 961,
+          "line": 941,
+          "end_line": 958,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment._strike",
           "kind": "function",
-          "line": 963,
-          "end_line": 1029,
+          "line": 960,
+          "end_line": 1026,
           "signature": "self, before, now, both",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment.substep",
           "kind": "function",
-          "line": 1031,
-          "end_line": 1175,
+          "line": 1028,
+          "end_line": 1172,
           "signature": "self, snapshot",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment._wrong_history",
           "kind": "function",
-          "line": 1177,
-          "end_line": 1198,
+          "line": 1174,
+          "end_line": 1195,
           "signature": "self, audible",
           "docstring": "오압현 시간과 같은 끝점에서 실제 발음 구간의 원인별 출처를 적분한다."
         },
         {
           "name": "TensorSongEnvironment._surface_history",
           "kind": "function",
-          "line": 1200,
-          "end_line": 1221,
+          "line": 1197,
+          "end_line": 1218,
           "signature": "self, before, now, press",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment._safety",
           "kind": "function",
-          "line": 1223,
-          "end_line": 1239,
+          "line": 1220,
+          "end_line": 1236,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment.end_control",
           "kind": "function",
-          "line": 1241,
-          "end_line": 1318,
+          "line": 1238,
+          "end_line": 1315,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment._focus",
           "kind": "function",
-          "line": 1320,
-          "end_line": 1329,
+          "line": 1317,
+          "end_line": 1326,
           "signature": "self, prepare=False",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment._history",
           "kind": "function",
-          "line": 1331,
-          "end_line": 1365,
+          "line": 1328,
+          "end_line": 1362,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment._events",
           "kind": "function",
-          "line": 1367,
-          "end_line": 1435,
+          "line": 1364,
+          "end_line": 1432,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment.observation",
           "kind": "function",
-          "line": 1437,
-          "end_line": 1530,
+          "line": 1434,
+          "end_line": 1527,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment._episode",
           "kind": "function",
-          "line": 1532,
-          "end_line": 1591,
+          "line": 1529,
+          "end_line": 1590,
           "signature": "self, index, failed",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment._finger_motion_episode",
           "kind": "function",
-          "line": 1593,
-          "end_line": 1628,
+          "line": 1592,
+          "end_line": 1627,
           "signature": "self, index",
           "docstring": null
         },
         {
           "name": "TensorSongEnvironment._finger_metrics",
           "kind": "function",
-          "line": 1630,
-          "end_line": 1643,
+          "line": 1629,
+          "end_line": 1642,
           "signature": "self, index",
           "docstring": null
         }
@@ -1027,8 +1032,8 @@
       "module": "guitar_learning.gpu.episode_diagnostics",
       "path": "/home/ajou/yigyu/3/guitar_learning/gpu/episode_diagnostics.py",
       "relative": "gpu/episode_diagnostics.py",
-      "sha256": "0dd34ef7fd2a1974e00a69e72d5a97861030eae300cf5b30a1d99e015e6ac1b5",
-      "lines": 753,
+      "sha256": "5e549e678aee269da3e6d8501a3e8cb17ac805804e16b281678539493cbf4948",
+      "lines": 893,
       "symbols": [
         {
           "name": "load_thumb_rear_surface",
@@ -1229,6 +1234,62 @@
           "end_line": 753,
           "signature": "self, index",
           "docstring": null
+        },
+        {
+          "name": "FingerControlDiagnostics",
+          "kind": "class",
+          "line": 756,
+          "end_line": 893,
+          "signature": "",
+          "docstring": "완료된 물리 구간만 요약하고 대표 환경의 처음 600 tick만 압축 저장한다.\n\n힘은 제출된 일반화 힘과 native sensor 결과를 구분한다. 센서 값에는 접촉·제약\n효과가 섞일 수 있으므로 모터 토크나 모터 상한 포화로 해석하지 않는다."
+        },
+        {
+          "name": "FingerControlDiagnostics.__init__",
+          "kind": "function",
+          "line": 764,
+          "end_line": 784,
+          "signature": "self, count, names, indices, caps, position_indices, out=None, detail_control_ticks=600",
+          "docstring": null
+        },
+        {
+          "name": "FingerControlDiagnostics.reset",
+          "kind": "function",
+          "line": 786,
+          "end_line": 791,
+          "signature": "self, indices",
+          "docstring": null
+        },
+        {
+          "name": "FingerControlDiagnostics.record",
+          "kind": "function",
+          "line": 793,
+          "end_line": 832,
+          "signature": "self, request, applied, sample, command, environment",
+          "docstring": "request/applied는 같은 60Hz 명령, q/qd/sensor는 완료된 240Hz 끝점이다."
+        },
+        {
+          "name": "FingerControlDiagnostics._targets",
+          "kind": "function",
+          "line": 835,
+          "end_line": 857,
+          "signature": "env",
+          "docstring": null
+        },
+        {
+          "name": "FingerControlDiagnostics.episode",
+          "kind": "function",
+          "line": 859,
+          "end_line": 888,
+          "signature": "self, index",
+          "docstring": null
+        },
+        {
+          "name": "FingerControlDiagnostics.close",
+          "kind": "function",
+          "line": 890,
+          "end_line": 893,
+          "signature": "self",
+          "docstring": null
         }
       ]
     },
@@ -1236,78 +1297,78 @@
       "module": "guitar_learning.gpu.finger_reward",
       "path": "/home/ajou/yigyu/3/guitar_learning/gpu/finger_reward.py",
       "relative": "gpu/finger_reward.py",
-      "sha256": "a281c01c38dd331d03f9240f45c2569404036d98f721bd4d07a86e71a46bcc47",
-      "lines": 367,
+      "sha256": "a3f48bb0551372b1e327c47a79a2f119d6a245b99118da621e8361c7d0e888f4",
+      "lines": 376,
       "symbols": [
         {
           "name": "finger_target_indices",
           "kind": "function",
           "line": 23,
-          "end_line": 50,
-          "signature": "now, onset, end, press, finger, target_mask=None",
+          "end_line": 57,
+          "signature": "now, onset, end, press, finger, target_mask=None, preparation_mask=None",
           "docstring": "indices long[N,4,2]와 valid bool[N,4,2] 사전을 반환하며 무효 인덱스는 -1이다."
         },
         {
           "name": "finger_tracking_reward",
           "kind": "function",
-          "line": 69,
-          "end_line": 98,
+          "line": 76,
+          "end_line": 105,
           "signature": "now, onset, end, press, finger, delta, velocity, candidate, actions, target_mask=None",
           "docstring": "rate[N]와 손가락별 indices/valid/quality[N,4]를 반환한다. 무효 인덱스는 -1이다.\n\nvelocity와 actions는 기존 호출 인터페이스를 유지하지만 보상에는 영향을 주지 않는다.\n행동·관절 목표·입력 텐서를 변경하지 않는다. 현재 시간창에 목표가 없어도\n곡에 등장하는 손가락은 분모에 포함한다."
         },
         {
           "name": "finger_posture_reward",
           "kind": "function",
-          "line": 122,
-          "end_line": 165,
+          "line": 129,
+          "end_line": 172,
           "signature": "now, onset, end, press, finger, palm_quaternion, segment_quaternion",
           "docstring": "실제 굽힘을 측정하고 입력 변경 없이 두 개의 유한한 보상률을 반환한다.\n\n마디 순서는 검지·중지·약지·소지 × finger1/2/3이다. 각도는 원본 몸체 좌표계의\n기하 정의이며 native 구면 관절 자유도 좌표가 아니다. 설정 단계에서 원본 좌표계가\nsource_finger_frame_contract() 검사를 먼저 통과해야 한다."
         },
         {
           "name": "finger_recovery_config",
           "kind": "function",
-          "line": 181,
-          "end_line": 199,
+          "line": 188,
+          "end_line": 206,
           "signature": "value=None",
           "docstring": "명시적으로 검증한 유한한 회복 실험 옵션을 정규화한다."
         },
         {
           "name": "finger_preparation_gate",
           "kind": "function",
-          "line": 238,
-          "end_line": 279,
+          "line": 245,
+          "end_line": 286,
           "signature": "now, onset, end, press, finger, contact, distance, target_mask=None",
           "docstring": "관측과 보상이 공유하는 끝점 기준의 순수 B 대기 허용도를 구한다."
         },
         {
           "name": "finger_preparation_reward",
           "kind": "function",
-          "line": 282,
-          "end_line": 301,
+          "line": 289,
+          "end_line": 310,
           "signature": "now, onset, end, press, finger, palm_quaternion, segment_quaternion, contact, distance, rate_per_s=0.02, target_mask=None",
           "docstring": "제어·음 상태를 바꾸지 않고 손가락별 B 자세 선호 보상을 계산한다."
         },
         {
           "name": "finger_shape_reward",
           "kind": "function",
-          "line": 304,
-          "end_line": 321,
+          "line": 313,
+          "end_line": 330,
           "signature": "now, onset, end, press, finger, angles, valid, rate_per_s=0.0, target_mask=None",
           "docstring": "기존 목표 선택기를 유지하며 선택적 추종 구간 DIP/PIP 자세 선호를 계산한다."
         },
         {
           "name": "_verify_source_frames",
           "kind": "function",
-          "line": 324,
-          "end_line": 349,
+          "line": 333,
+          "end_line": 358,
           "signature": "xml",
           "docstring": "이 네 손가락에만 적용되는 원본 좌표계 정의를 무효화하는 자산 변경을 거부한다."
         },
         {
           "name": "source_finger_frame_contract",
           "kind": "function",
-          "line": 352,
-          "end_line": 367,
+          "line": 361,
+          "end_line": 376,
           "signature": "",
           "docstring": "호출자 설정 시 봉인된 준비 인체 XML을 한 번 검증하며 시뮬레이터는 사용하지 않는다."
         }
@@ -1317,238 +1378,294 @@
       "module": "guitar_learning.gpu.finger_skill_environment",
       "path": "/home/ajou/yigyu/3/guitar_learning/gpu/finger_skill_environment.py",
       "relative": "gpu/finger_skill_environment.py",
-      "sha256": "c407d6e68d81447f5a3a222dba065048f4c689c20fb5cf131f843936fa9d8fdc",
-      "lines": 474,
+      "sha256": "72918148babad6d5abe6bf323895eb78a85a19818ba5f3d41b0a66d96ae86f82",
+      "lines": 658,
       "symbols": [
         {
           "name": "performance_settlement",
           "kind": "function",
-          "line": 29,
-          "end_line": 38,
+          "line": 30,
+          "end_line": 39,
           "signature": "missing, best_streak, required, duration, weights, scope, now, end, paid, settled",
           "docstring": "누락 감점을 단조롭게 지급한 뒤 max(누락, 연속 유지 부족)로 한 번 정산한다."
         },
         {
           "name": "remaining_negative_budget",
           "kind": "function",
-          "line": 41,
-          "end_line": 45,
+          "line": 42,
+          "end_line": 46,
           "signature": "now, onset, end, weights, scope, paid, settled",
           "docstring": "선택되고 미정산인 음의 미관측 오압현 상한과 미지급 수행 부족 상한을 구한다."
         },
         {
           "name": "FingerSkillEnvironment",
           "kind": "class",
-          "line": 48,
-          "end_line": 474,
-          "signature": "TensorSongEnvironment",
+          "line": 49,
+          "end_line": 658,
+          "signature": "",
           "docstring": "J33 공동 학습만 실행하며 선택 구간과 전곡의 보상·종료를 관리한다."
         },
         {
           "name": "FingerSkillEnvironment.__init__",
           "kind": "function",
-          "line": 55,
-          "end_line": 155,
+          "line": 57,
+          "end_line": 181,
           "signature": "self, metadata, *, bundle, song, skill, device='cuda:0', hand='left'",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._allocate",
           "kind": "function",
-          "line": 157,
-          "end_line": 184,
+          "line": 183,
+          "end_line": 217,
           "signature": "self, count",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._reset_scope",
           "kind": "function",
-          "line": 186,
-          "end_line": 226,
+          "line": 219,
+          "end_line": 264,
           "signature": "self, indices",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment.reset",
           "kind": "function",
-          "line": 229,
-          "end_line": 234,
+          "line": 267,
+          "end_line": 275,
           "signature": "self, indices, snapshot",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment.set_evaluation",
           "kind": "function",
-          "line": 236,
-          "end_line": 239,
+          "line": 277,
+          "end_line": 280,
           "signature": "self, enabled=True, full_song=False",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment.set_training_progress",
           "kind": "function",
-          "line": 241,
-          "end_line": 244,
+          "line": 282,
+          "end_line": 285,
           "signature": "self, committed",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._score_time",
           "kind": "function",
-          "line": 246,
-          "end_line": 247,
+          "line": 287,
+          "end_line": 288,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._guide_time",
           "kind": "function",
-          "line": 249,
-          "end_line": 251,
+          "line": 290,
+          "end_line": 292,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._episode_duration",
           "kind": "function",
-          "line": 253,
-          "end_line": 254,
+          "line": 294,
+          "end_line": 295,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._target_scope",
           "kind": "function",
-          "line": 256,
-          "end_line": 257,
+          "line": 297,
+          "end_line": 298,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._preparation_scope",
           "kind": "function",
-          "line": 259,
-          "end_line": 260,
+          "line": 300,
+          "end_line": 301,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._selected_finger_weights",
           "kind": "function",
-          "line": 262,
-          "end_line": 263,
+          "line": 303,
+          "end_line": 304,
           "signature": "self, indices",
           "docstring": null
         },
         {
+          "name": "FingerSkillEnvironment._natural_enabled",
+          "kind": "function",
+          "line": 306,
+          "end_line": 309,
+          "signature": "self, factor",
+          "docstring": null
+        },
+        {
+          "name": "FingerSkillEnvironment._natural_targets",
+          "kind": "function",
+          "line": 311,
+          "end_line": 316,
+          "signature": "self, now",
+          "docstring": "선택 범위의 첫 음 묶음만 초기부터 준비하며 현재 유지 음을 우선한다."
+        },
+        {
+          "name": "FingerSkillEnvironment._finger_targets",
+          "kind": "function",
+          "line": 318,
+          "end_line": 321,
+          "signature": "self, now",
+          "docstring": null
+        },
+        {
+          "name": "FingerSkillEnvironment._focus",
+          "kind": "function",
+          "line": 323,
+          "end_line": 335,
+          "signature": "self, prepare=False",
+          "docstring": null
+        },
+        {
+          "name": "FingerSkillEnvironment._finger_preparation",
+          "kind": "function",
+          "line": 337,
+          "end_line": 348,
+          "signature": "self, now",
+          "docstring": null
+        },
+        {
+          "name": "FingerSkillEnvironment._natural_state",
+          "kind": "function",
+          "line": 350,
+          "end_line": 373,
+          "signature": "self, now",
+          "docstring": "같은 유효 패드 표면점의 높이·접선 오차로 준비 품질을 측정한다."
+        },
+        {
+          "name": "FingerSkillEnvironment.natural_preparation_trace",
+          "kind": "function",
+          "line": 375,
+          "end_line": 411,
+          "signature": "self",
+          "docstring": "기존 상세 추적의 대표 환경에 추가할 준비 정보. 제어에는 사용하지 않는다."
+        },
+        {
           "name": "FingerSkillEnvironment._left_wrong_contacts",
           "kind": "function",
-          "line": 265,
-          "end_line": 281,
+          "line": 413,
+          "end_line": 429,
           "signature": "self, qualifies, assigned, nearest, same_string, in_goal, same_finger, positive, wrong, pad_points, pad_normals",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._surface_potential",
           "kind": "function",
-          "line": 283,
-          "end_line": 294,
+          "line": 431,
+          "end_line": 452,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._safety",
           "kind": "function",
-          "line": 296,
-          "end_line": 309,
+          "line": 454,
+          "end_line": 467,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._running_safety_cost",
           "kind": "function",
-          "line": 311,
-          "end_line": 312,
+          "line": 469,
+          "end_line": 470,
           "signature": "self, rate",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._control_failures",
           "kind": "function",
-          "line": 314,
-          "end_line": 315,
+          "line": 472,
+          "end_line": 473,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._prepare_control_end",
           "kind": "function",
-          "line": 317,
-          "end_line": 325,
+          "line": 475,
+          "end_line": 483,
           "signature": "self, failed",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._apply_failure_cost",
           "kind": "function",
-          "line": 327,
-          "end_line": 340,
+          "line": 485,
+          "end_line": 498,
           "signature": "self, failed",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._reward_components",
           "kind": "function",
-          "line": 342,
-          "end_line": 356,
+          "line": 500,
+          "end_line": 514,
           "signature": "self, components",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._observation_state",
           "kind": "function",
-          "line": 358,
-          "end_line": 362,
+          "line": 516,
+          "end_line": 520,
           "signature": "self, state",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._material_points",
           "kind": "function",
-          "line": 364,
-          "end_line": 368,
+          "line": 522,
+          "end_line": 526,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._diagnose_posture",
           "kind": "function",
-          "line": 370,
-          "end_line": 372,
+          "line": 528,
+          "end_line": 550,
           "signature": "self, posture, pressing, now",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._record_finger_motion",
           "kind": "function",
-          "line": 374,
-          "end_line": 376,
+          "line": 552,
+          "end_line": 554,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._finger_metrics",
           "kind": "function",
-          "line": 378,
-          "end_line": 389,
+          "line": 556,
+          "end_line": 567,
           "signature": "self, index",
           "docstring": null
         },
         {
           "name": "FingerSkillEnvironment._episode",
           "kind": "function",
-          "line": 391,
-          "end_line": 474,
+          "line": 569,
+          "end_line": 658,
           "signature": "self, index, failed",
           "docstring": null
         }
@@ -1558,8 +1675,8 @@
       "module": "guitar_learning.gpu.scene",
       "path": "/home/ajou/yigyu/3/guitar_learning/gpu/scene.py",
       "relative": "gpu/scene.py",
-      "sha256": "a9269cc01b2f3650100476f2cf644131320957a4816d88cdd2310ea52876d962",
-      "lines": 597,
+      "sha256": "a34768f6045b5d3846e9e908c7fb4f219a693860971a6e02fa5f351ba0a0d9e2",
+      "lines": 610,
       "symbols": [
         {
           "name": "_body_row",
@@ -1581,7 +1698,7 @@
           "name": "GpuScene",
           "kind": "class",
           "line": 31,
-          "end_line": 442,
+          "end_line": 449,
           "signature": "",
           "docstring": null
         },
@@ -1589,119 +1706,119 @@
           "name": "GpuScene.__init__",
           "kind": "function",
           "line": 32,
-          "end_line": 319,
+          "end_line": 323,
           "signature": "self, num_envs, hand, device='cuda:0', out=None, *, diagnostic_guitar_mode=None",
           "docstring": null
         },
         {
           "name": "GpuScene.body_state",
           "kind": "function",
-          "line": 322,
-          "end_line": 325,
+          "line": 326,
+          "end_line": 329,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "GpuScene._refresh",
           "kind": "function",
-          "line": 327,
-          "end_line": 341,
+          "line": 331,
+          "end_line": 346,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "GpuScene.snapshot",
           "kind": "function",
-          "line": 343,
-          "end_line": 349,
+          "line": 348,
+          "end_line": 356,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "GpuScene.reset",
           "kind": "function",
-          "line": 351,
-          "end_line": 379,
+          "line": 358,
+          "end_line": 386,
           "signature": "self, indices",
           "docstring": null
         },
         {
           "name": "GpuScene.step",
           "kind": "function",
-          "line": 381,
-          "end_line": 407,
+          "line": 388,
+          "end_line": 414,
           "signature": "self, targets105, efforts105",
           "docstring": null
         },
         {
           "name": "GpuScene.diagnostics",
           "kind": "function",
-          "line": 410,
-          "end_line": 427,
+          "line": 417,
+          "end_line": 434,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "GpuScene._write_audit",
           "kind": "function",
-          "line": 429,
-          "end_line": 434,
+          "line": 436,
+          "end_line": 441,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "GpuScene.close",
           "kind": "function",
-          "line": 436,
-          "end_line": 442,
+          "line": 443,
+          "end_line": 449,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "RigidGuitar",
           "kind": "class",
-          "line": 466,
-          "end_line": 520,
+          "line": 473,
+          "end_line": 533,
           "signature": "",
           "docstring": "하나의 물리 기타 몸체를 원래 질량중심 속도를 갖는 39개 논리 몸체로 확장한다."
         },
         {
           "name": "RigidGuitar.__init__",
           "kind": "function",
-          "line": 468,
-          "end_line": 499,
+          "line": 475,
+          "end_line": 512,
           "signature": "self, contract, device",
           "docstring": null
         },
         {
           "name": "RigidGuitar.expand",
           "kind": "function",
-          "line": 501,
-          "end_line": 520,
+          "line": 514,
+          "end_line": 533,
           "signature": "self, native",
           "docstring": "호스트 전송이나 native 상태 쓰기 없이 [N,human+guitar1+chair,13]을 확장한다.\n\nnative 선형속도는 질량중심 속도다. 따라서 가상 기타 링크마다 원점 대신\n그 링크의 원래 질량중심 위치에서의 속도를 계산한다."
         },
         {
           "name": "_rows",
           "kind": "function",
-          "line": 538,
-          "end_line": 540,
+          "line": 551,
+          "end_line": 553,
           "signature": "shapes",
           "docstring": null
         },
         {
           "name": "left_hand_collision_properties",
           "kind": "function",
-          "line": 543,
-          "end_line": 586,
+          "line": 556,
+          "end_line": 599,
           "signature": "human_shapes",
           "docstring": "공통 왼손 비트를 손가락별로 겹치지 않는 다섯 비트로 바꾼다.\n\n같은 손가락의 마디와 이전에 제외한 손바닥·팔·대리 형상 쌍은 계속 제외한다.\n서로 다른 손가락 마디의 90쌍만 바뀐다. 물리 형상·마찰·오프셋·원본 입력은 유지한다."
         },
         {
           "name": "verify_external_filter_preservation",
           "kind": "function",
-          "line": 589,
-          "end_line": 597,
+          "line": 602,
+          "end_line": 610,
           "signature": "before, after, external_filters",
           "docstring": "native에 전달하기 전에 실제 기타·의자 필터가 보존됐는지 확인한다."
         }
@@ -1711,46 +1828,54 @@
       "module": "guitar_learning.historical_inputs",
       "path": "/home/ajou/yigyu/3/guitar_learning/historical_inputs.py",
       "relative": "historical_inputs.py",
-      "sha256": "0e83eb426902218bfdb5e1295f3fc902057a40b60e6f55c1cadf7584a9a6e065",
-      "lines": 109,
+      "sha256": "31743e87dac13553292d6aceda43704d076477ee9666230ad23037c123cf386a",
+      "lines": 119,
       "symbols": [
+        {
+          "name": "_historical_key",
+          "kind": "function",
+          "line": 20,
+          "end_line": 26,
+          "signature": "source",
+          "docstring": null
+        },
         {
           "name": "_index",
           "kind": "function",
-          "line": 20,
-          "end_line": 24,
+          "line": 30,
+          "end_line": 34,
           "signature": "",
           "docstring": null
         },
         {
           "name": "_checked_sha",
           "kind": "function",
-          "line": 31,
-          "end_line": 35,
+          "line": 41,
+          "end_line": 45,
           "signature": "value",
           "docstring": null
         },
         {
           "name": "fingerprint_paths",
           "kind": "function",
-          "line": 38,
-          "end_line": 74,
+          "line": 48,
+          "end_line": 84,
           "signature": "paths",
           "docstring": "현재 입력의 해시를 구하거나 정확히 보존된 과거 입력 버전을 검증한다.\n\nMapping은 예상 SHA256을 제공하며 원래 키를 유지한다. 등록된 과거\n(경로, SHA) 버전은 내부 자료를 다시 해시한다. 나머지 Mapping 항목은\n현재 파일의 SHA가 정확히 일치해야 한다. 반복 가능한 경로 입력에서는\n현재 경로는 실제 파일을, 옛 경로는 유일하게 봉인된 원본을 사용한다.\n알 수 없는 옛 경로를 외부의 과거 폴더에서 대신 찾지 않는다."
         },
         {
           "name": "evidence_input_pins",
           "kind": "function",
-          "line": 77,
-          "end_line": 104,
+          "line": 87,
+          "end_line": 114,
           "signature": "expected",
           "docstring": "정확한 근거 Mapping에 필요한 실제 파일의 SHA를 반환한다.\n\n실제 경로로 변환한 뒤에도 필요한 원본 SHA를 유지한다. 이후 파일 전수\n검사에서는 실제 읽은 해시를 이 원래 값과 비교해야 한다."
         },
         {
           "name": "evidence_input_paths",
           "kind": "function",
-          "line": 107,
-          "end_line": 109,
+          "line": 117,
+          "end_line": 119,
           "signature": "expected",
           "docstring": "정확한 근거 Mapping을 유지하면서 실제로 사용하는 경로를 반환한다."
         }
@@ -1768,103 +1893,192 @@
       "module": "guitar_learning.native.paths",
       "path": "/home/ajou/yigyu/3/guitar_learning/native/paths.py",
       "relative": "native/paths.py",
-      "sha256": "01546885415e09d9bd4b2dd4aad3f14010ab45fa3f733500e36c674acaa3bb83",
-      "lines": 144,
+      "sha256": "c49b5a31991084898b40bc44a2ddcfa40da5a5a166bd64334d07d52d3384e370",
+      "lines": 200,
       "symbols": [
         {
           "name": "provenance_records",
           "kind": "function",
-          "line": 18,
-          "end_line": 19,
+          "line": 21,
+          "end_line": 22,
           "signature": "",
           "docstring": null
         },
         {
+          "name": "_lexical",
+          "kind": "function",
+          "line": 25,
+          "end_line": 28,
+          "signature": "path",
+          "docstring": "Normalize before mapping, without following archived external symlinks."
+        },
+        {
+          "name": "_internal",
+          "kind": "function",
+          "line": 31,
+          "end_line": 41,
+          "signature": "path",
+          "docstring": null
+        },
+        {
+          "name": "_project_file",
+          "kind": "function",
+          "line": 44,
+          "end_line": 51,
+          "signature": "path",
+          "docstring": "실제 파일을 읽기 전에 프로젝트 밖 경로와 외부 심볼릭 링크를 거부한다."
+        },
+        {
           "name": "_mapping",
           "kind": "function",
-          "line": 23,
-          "end_line": 26,
+          "line": 55,
+          "end_line": 71,
           "signature": "",
           "docstring": null
         },
         {
           "name": "resolve_input_path",
           "kind": "function",
-          "line": 29,
-          "end_line": 38,
+          "line": 74,
+          "end_line": 89,
           "signature": "path",
-          "docstring": "원래의 절대 경로나 프로젝트 상대 입력 경로를 내부 사본으로 대응시킨다."
+          "docstring": "Resolve runtime locations in this project; original identifiers stay stable."
         },
         {
           "name": "original_input_path",
           "kind": "function",
-          "line": 41,
-          "end_line": 44,
+          "line": 92,
+          "end_line": 101,
           "signature": "path",
-          "docstring": "이동한 입력이나 네이티브 모듈의 원래 기록 식별자를 반환한다."
+          "docstring": "Return the immutable original identity of a migrated input or module."
         },
         {
           "name": "rebase_paths",
           "kind": "function",
-          "line": 47,
-          "end_line": 60,
+          "line": 104,
+          "end_line": 115,
           "signature": "value",
-          "docstring": "알려진 입력 경로 값만 바꾸고 검증 근거의 키와 수치 자료는 그대로 둔다."
+          "docstring": "Rebase registered path values, preserving historical keys and all numbers."
         },
         {
           "name": "verify_provenance",
           "kind": "function",
-          "line": 63,
-          "end_line": 72,
+          "line": 118,
+          "end_line": 127,
           "signature": "",
           "docstring": "호출할 때마다 명시된 이전 목록의 해시와 현재 바이트가 일치하는지 검사한다."
         },
         {
           "name": "read",
           "kind": "function",
-          "line": 83,
-          "end_line": 84,
+          "line": 138,
+          "end_line": 139,
           "signature": "path",
           "docstring": null
         },
         {
           "name": "save",
           "kind": "function",
-          "line": 87,
-          "end_line": 91,
+          "line": 142,
+          "end_line": 146,
           "signature": "path, value",
           "docstring": null
         },
         {
           "name": "sha",
           "kind": "function",
-          "line": 94,
-          "end_line": 95,
+          "line": 149,
+          "end_line": 150,
           "signature": "path",
           "docstring": null
         },
         {
           "name": "pin",
           "kind": "function",
-          "line": 98,
-          "end_line": 118,
+          "line": 153,
+          "end_line": 174,
           "signature": "config=None, extra=()",
           "docstring": "현재 실행 입력을 봉인하고 과거 통과 근거의 경로 식별자는 유지한다."
         },
         {
           "name": "verify",
           "kind": "function",
-          "line": 121,
-          "end_line": 126,
+          "line": 177,
+          "end_line": 182,
           "signature": "pins",
           "docstring": "보존된 과거 원본 바이트와 현재 내부로 이전한 구현을 모두 검증한다."
         },
         {
           "name": "restore",
           "kind": "function",
-          "line": 129,
-          "end_line": 144,
+          "line": 185,
+          "end_line": 200,
           "signature": "",
+          "docstring": null
+        }
+      ]
+    },
+    {
+      "module": "guitar_learning.portability",
+      "path": "/home/ajou/yigyu/3/guitar_learning/portability.py",
+      "relative": "portability.py",
+      "sha256": "8f152f8ee000500937f6d404986426afa5a892e7898765219bce9dd3d8f15acc",
+      "lines": 127,
+      "symbols": [
+        {
+          "name": "report_reference",
+          "kind": "function",
+          "line": 17,
+          "end_line": 22,
+          "signature": "path, directory",
+          "docstring": "보고서 디렉토리 기준 참조. 실행 디렉토리 전체를 함께 옮기면 그대로 해석한다."
+        },
+        {
+          "name": "project_path",
+          "kind": "function",
+          "line": 25,
+          "end_line": 37,
+          "signature": "value",
+          "docstring": "project:// 식별자를 현재 checkout에서 찾는다. 루트 탈출은 허용하지 않는다."
+        },
+        {
+          "name": "portable",
+          "kind": "function",
+          "line": 40,
+          "end_line": 61,
+          "signature": "value, *, root=None",
+          "docstring": "실행 계약의 경로 값과 SHA 사전의 경로 키를 같은 식별자로 바꾼다."
+        },
+        {
+          "name": "localize",
+          "kind": "function",
+          "line": 64,
+          "end_line": 72,
+          "signature": "value",
+          "docstring": "저장된 설정을 실행에 사용하기 직전에 현재 프로젝트 경로로 복원한다."
+        },
+        {
+          "name": "settings_digest",
+          "kind": "function",
+          "line": 75,
+          "end_line": 78,
+          "signature": "settings",
+          "docstring": null
+        },
+        {
+          "name": "checkpoint_inputs",
+          "kind": "function",
+          "line": 81,
+          "end_line": 107,
+          "signature": "pins, settings, *, settings_path=None, lineage=()",
+          "docstring": "현재 파일은 모두 검증한 뒤 실행 입력·설정 snapshot·계보로 구분해 저장한다."
+        },
+        {
+          "name": "validate_checkpoint_inputs",
+          "kind": "function",
+          "line": 110,
+          "end_line": 127,
+          "signature": "metadata",
           "docstring": null
         }
       ]
@@ -1881,110 +2095,118 @@
       "module": "guitar_learning.runtime.prepared_reset_v1",
       "path": "/home/ajou/yigyu/3/guitar_learning/runtime/prepared_reset_v1.py",
       "relative": "runtime/prepared_reset_v1.py",
-      "sha256": "f94c39381cc37238ae501712ff75b19e739d35662ccf4bfec6b10e58adf357bf",
-      "lines": 171,
+      "sha256": "94f5772a82db554b45b1c6224cd3b089409c4d5aa96355412b5ee8668a8af7fd",
+      "lines": 195,
       "symbols": [
         {
           "name": "_verified_json",
           "kind": "function",
-          "line": 33,
-          "end_line": 36,
+          "line": 36,
+          "end_line": 39,
           "signature": "path",
           "docstring": null
         },
         {
           "name": "_prepared_input_paths",
           "kind": "function",
-          "line": 40,
-          "end_line": 51,
+          "line": 43,
+          "end_line": 54,
           "signature": "",
           "docstring": "정확히 봉인된 상태·설정과 모델이 선언한 모든 메시의 입력 경로를 찾는다."
         },
         {
           "name": "prepared_input_paths",
           "kind": "function",
-          "line": 54,
-          "end_line": 55,
+          "line": 57,
+          "end_line": 58,
           "signature": "",
           "docstring": null
         },
         {
           "name": "_load_prepared_reset_contract",
           "kind": "function",
-          "line": 59,
-          "end_line": 75,
+          "line": 62,
+          "end_line": 78,
           "signature": "",
           "docstring": null
         },
         {
           "name": "load_prepared_reset_contract",
           "kind": "function",
-          "line": 78,
-          "end_line": 80,
+          "line": 81,
+          "end_line": 83,
           "signature": "",
           "docstring": "프로세스마다 한 번 검증하고 리셋마다 상태·목표의 수정 가능한 독립 사본을 제공한다."
         },
         {
+          "name": "load_gpu_prepared_reset_contract",
+          "kind": "function",
+          "line": 86,
+          "end_line": 104,
+          "signature": "hand",
+          "docstring": "GPU 왼손은 검증한 v9에서 시작하고, 오른손은 원본 준비 상태를 보존한다."
+        },
+        {
           "name": "ControlPhaseView",
           "kind": "class",
-          "line": 83,
-          "end_line": 98,
+          "line": 107,
+          "end_line": 122,
           "signature": "",
           "docstring": "제어 일정의 경과 틱만 보정하며 연결된 네이티브 메서드는 실제 시계를 유지한다."
         },
         {
           "name": "ControlPhaseView.__init__",
           "kind": "function",
-          "line": 85,
-          "end_line": 86,
+          "line": 109,
+          "end_line": 110,
           "signature": "self, scene",
           "docstring": null
         },
         {
           "name": "ControlPhaseView.steps",
           "kind": "function",
-          "line": 89,
-          "end_line": 90,
+          "line": 113,
+          "end_line": 114,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "ControlPhaseView.__getattr__",
           "kind": "function",
-          "line": 92,
-          "end_line": 93,
+          "line": 116,
+          "end_line": 117,
           "signature": "self, name",
           "docstring": null
         },
         {
           "name": "ControlPhaseView.__setattr__",
           "kind": "function",
-          "line": 95,
-          "end_line": 98,
+          "line": 119,
+          "end_line": 122,
           "signature": "self, name, value",
           "docstring": null
         },
         {
           "name": "_assign",
           "kind": "function",
-          "line": 101,
-          "end_line": 106,
+          "line": 125,
+          "end_line": 130,
           "signature": "record, value",
           "docstring": null
         },
         {
           "name": "_state_all",
           "kind": "function",
-          "line": 109,
-          "end_line": 111,
+          "line": 133,
+          "end_line": 135,
           "signature": "",
           "docstring": null
         },
         {
           "name": "_restore_once",
           "kind": "function",
-          "line": 114,
-          "end_line": 171,
+          "line": 138,
+          "end_line": 195,
           "signature": "scene, contract, state_all",
           "docstring": null
         }
@@ -2010,7 +2232,7 @@
           "kind": "class",
           "line": 52,
           "end_line": 53,
-          "signature": "ValueError",
+          "signature": "",
           "docstring": "검수된 곡 번들로 모호하지 않은 G0 시간표를 만들 수 없을 때의 오류다."
         },
         {
@@ -2018,7 +2240,7 @@
           "kind": "class",
           "line": 56,
           "end_line": 57,
-          "signature": "SongBundleValidationError",
+          "signature": "",
           "docstring": "구조는 유효하지만 G0에서 지원하지 않는 동작을 요청한 이벤트의 오류다."
         },
         {
@@ -2789,134 +3011,134 @@
       "module": "guitar_learning.song.finger_phrases",
       "path": "/home/ajou/yigyu/3/guitar_learning/song/finger_phrases.py",
       "relative": "song/finger_phrases.py",
-      "sha256": "246e1cded4279e60ecf440e6d18a3b16f04908915bbefac93e76baea5032126c",
-      "lines": 247,
+      "sha256": "e1757a50dca7781b1354d6302a4cc82bbfcf629c7fa406cf7f191f429146cfe8",
+      "lines": 250,
       "symbols": [
         {
           "name": "_sha",
           "kind": "function",
-          "line": 14,
-          "end_line": 16,
+          "line": 15,
+          "end_line": 17,
           "signature": "document",
           "docstring": null
         },
         {
           "name": "FingerPhrase",
           "kind": "class",
-          "line": 20,
-          "end_line": 32,
+          "line": 21,
+          "end_line": 33,
           "signature": "",
           "docstring": null
         },
         {
           "name": "FingerPhrase.fingers",
           "kind": "function",
-          "line": 31,
-          "end_line": 32,
+          "line": 32,
+          "end_line": 33,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerPhraseCatalog",
           "kind": "class",
-          "line": 36,
-          "end_line": 108,
+          "line": 37,
+          "end_line": 109,
           "signature": "",
           "docstring": null
         },
         {
           "name": "FingerPhraseCatalog.source_sha256",
           "kind": "function",
-          "line": 46,
-          "end_line": 48,
+          "line": 47,
+          "end_line": 49,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerPhraseCatalog._document",
           "kind": "function",
-          "line": 50,
-          "end_line": 58,
+          "line": 51,
+          "end_line": 59,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerPhraseCatalog.recovery_gaps",
           "kind": "function",
-          "line": 61,
-          "end_line": 79,
+          "line": 62,
+          "end_line": 80,
           "signature": "self",
           "docstring": "인위적으로 더한 준비 구간을 제외하고 원곡의 손가락별 양수 간격을 구한다."
         },
         {
           "name": "FingerPhraseCatalog.fingerprint",
           "kind": "function",
-          "line": 82,
-          "end_line": 83,
+          "line": 83,
+          "end_line": 84,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerPhraseCatalog.document",
           "kind": "function",
-          "line": 85,
-          "end_line": 86,
+          "line": 86,
+          "end_line": 87,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "FingerPhraseCatalog.from_document",
           "kind": "function",
-          "line": 89,
-          "end_line": 108,
+          "line": 90,
+          "end_line": 109,
           "signature": "cls, document",
           "docstring": "손상되지 않은 원래 목록만 복원하며 일정을 새로 해석하지 않는다."
         },
         {
           "name": "build_phrase_catalog",
           "kind": "function",
-          "line": 111,
-          "end_line": 192,
+          "line": 112,
+          "end_line": 195,
           "signature": "task, *, preparation_s=3.0, tail_s=0.5, control_hz=60",
           "docstring": "겹침이 더 이어지지 않는 그룹을 유지하고 인접 그룹의 짧은 보기를 추가한다.\n\n음 하나뿐인 그룹은 이웃 그룹과 결합하고 큰 겹침 그룹은 나누지 않는다.\n마지막 종료와 다음 압현 사이에 유효한 로컬 제어 경계가 없으면 보기를\n늘린다. 보기끼리 겹칠 수 있으므로 길이의 합이 아닌 원 음표 ID의 합집합이\n원곡을 한 번씩 포함한다."
         },
         {
           "name": "BalancedPhraseSampler",
           "kind": "class",
-          "line": 195,
-          "end_line": 247,
+          "line": 198,
+          "end_line": 250,
           "signature": "",
           "docstring": "다음 선택 상태를 체크포인트로 복원할 수 있는 손가락 묶음 순환 선택기다."
         },
         {
           "name": "BalancedPhraseSampler.__init__",
           "kind": "function",
-          "line": 197,
-          "end_line": 208,
+          "line": 200,
+          "end_line": 211,
           "signature": "self, catalog",
           "docstring": null
         },
         {
           "name": "BalancedPhraseSampler.next",
           "kind": "function",
-          "line": 210,
-          "end_line": 217,
+          "line": 213,
+          "end_line": 220,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "BalancedPhraseSampler.state_dict",
           "kind": "function",
-          "line": 219,
-          "end_line": 222,
+          "line": 222,
+          "end_line": 225,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "BalancedPhraseSampler.load_state_dict",
           "kind": "function",
-          "line": 224,
-          "end_line": 247,
+          "line": 227,
+          "end_line": 250,
           "signature": "self, state",
           "docstring": null
         }
@@ -3062,7 +3284,7 @@
           "kind": "class",
           "line": 284,
           "end_line": 295,
-          "signature": "ScoreTask",
+          "signature": "",
           "docstring": null
         },
         {
@@ -3159,206 +3381,214 @@
       "module": "guitar_learning.training.finger_skill_runner",
       "path": "/home/ajou/yigyu/3/guitar_learning/training/finger_skill_runner.py",
       "relative": "training/finger_skill_runner.py",
-      "sha256": "8ca3421df365a1565d10facc52d6654bc8dbd0298ed922d2756d6f22e7895f1f",
-      "lines": 649,
+      "sha256": "89d7597271f9c990533aedeb12e19b8541f031ad92195e5741a890722beecfec",
+      "lines": 663,
       "symbols": [
         {
           "name": "_count",
           "kind": "function",
-          "line": 14,
-          "end_line": 17,
+          "line": 15,
+          "end_line": 18,
           "signature": "value, name",
           "docstring": null
         },
         {
           "name": "ExposureSchedule",
           "kind": "class",
-          "line": 20,
-          "end_line": 63,
+          "line": 21,
+          "end_line": 64,
           "signature": "",
           "docstring": "최초 학습에서 정한 노출 전환 문턱을 유지하며, 추가 학습으로 옮기지 않는다."
         },
         {
           "name": "ExposureSchedule.__init__",
           "kind": "function",
-          "line": 25,
-          "end_line": 32,
+          "line": 26,
+          "end_line": 33,
           "signature": "self, planned_transitions, full_song_after=None",
           "docstring": null
         },
         {
           "name": "ExposureSchedule.training_transitions",
           "kind": "function",
-          "line": 35,
-          "end_line": 36,
+          "line": 36,
+          "end_line": 37,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "ExposureSchedule.evaluation_transitions",
           "kind": "function",
-          "line": 39,
-          "end_line": 40,
+          "line": 40,
+          "end_line": 41,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "ExposureSchedule.status",
           "kind": "function",
-          "line": 42,
-          "end_line": 48,
+          "line": 43,
+          "end_line": 49,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "ExposureSchedule.commit",
           "kind": "function",
-          "line": 50,
-          "end_line": 52,
+          "line": 51,
+          "end_line": 53,
           "signature": "self, transitions",
           "docstring": null
         },
         {
           "name": "ExposureSchedule.state_dict",
           "kind": "function",
-          "line": 54,
-          "end_line": 56,
+          "line": 55,
+          "end_line": 57,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "ExposureSchedule.load_state_dict",
           "kind": "function",
-          "line": 58,
-          "end_line": 63,
+          "line": 59,
+          "end_line": 64,
           "signature": "self, state",
           "docstring": null
         },
         {
           "name": "resume_schema",
           "kind": "function",
-          "line": 70,
-          "end_line": 73,
+          "line": 71,
+          "end_line": 74,
           "signature": "settings",
           "docstring": null
         },
         {
           "name": "_validate_joint_settings",
           "kind": "function",
-          "line": 76,
-          "end_line": 85,
+          "line": 77,
+          "end_line": 86,
           "signature": "settings",
           "docstring": null
         },
         {
           "name": "_planned_budget",
           "kind": "function",
-          "line": 88,
-          "end_line": 89,
+          "line": 89,
+          "end_line": 90,
           "signature": "schedule",
           "docstring": null
         },
         {
           "name": "_apply_progress",
           "kind": "function",
-          "line": 92,
-          "end_line": 93,
+          "line": 93,
+          "end_line": 94,
           "signature": "pool, schedule",
           "docstring": null
         },
         {
           "name": "checkpoint_metadata",
           "kind": "function",
-          "line": 96,
-          "end_line": 100,
-          "signature": "settings, schedule, pool, *, input_pins=None, **extra",
+          "line": 97,
+          "end_line": 103,
+          "signature": "settings, schedule, pool, *, input_pins=None, settings_path=None, lineage=(), **extra",
           "docstring": null
         },
         {
           "name": "restore_checkpoint",
           "kind": "function",
-          "line": 103,
-          "end_line": 113,
+          "line": 106,
+          "end_line": 115,
           "signature": "trainer, pool, schedule, checkpoint",
+          "docstring": null
+        },
+        {
+          "name": "_validate_metadata_schema",
+          "kind": "function",
+          "line": 118,
+          "end_line": 122,
+          "signature": "metadata",
           "docstring": null
         },
         {
           "name": "_validate_pins",
           "kind": "function",
-          "line": 116,
-          "end_line": 120,
+          "line": 125,
+          "end_line": 127,
           "signature": "metadata",
           "docstring": null
         },
         {
           "name": "_pins",
           "kind": "function",
-          "line": 123,
-          "end_line": 134,
+          "line": 130,
+          "end_line": 143,
           "signature": "settings, out, extra=()",
           "docstring": null
         },
         {
           "name": "_policy",
           "kind": "function",
-          "line": 137,
-          "end_line": 140,
+          "line": 146,
+          "end_line": 149,
           "signature": "settings, pool",
           "docstring": null
         },
         {
           "name": "_train_phase",
           "kind": "function",
-          "line": 143,
-          "end_line": 429,
+          "line": 152,
+          "end_line": 442,
           "signature": "settings, out, curriculum, *, resume=None, updates=None",
           "docstring": "J 학습을 실행한다. curriculum은 단계 선택기가 아닌 고정 ExposureSchedule이다."
         },
         {
           "name": "_DeterministicPolicy",
           "kind": "class",
-          "line": 432,
-          "end_line": 440,
+          "line": 445,
+          "end_line": 453,
           "signature": "",
           "docstring": null
         },
         {
           "name": "_DeterministicPolicy.__init__",
           "kind": "function",
-          "line": 433,
-          "end_line": 434,
+          "line": 446,
+          "end_line": 447,
           "signature": "self, policy",
           "docstring": null
         },
         {
           "name": "_DeterministicPolicy.__call__",
           "kind": "function",
-          "line": 436,
-          "end_line": 437,
+          "line": 449,
+          "end_line": 450,
           "signature": "self, *inputs",
           "docstring": null
         },
         {
           "name": "_DeterministicPolicy.act",
           "kind": "function",
-          "line": 439,
-          "end_line": 440,
+          "line": 452,
+          "end_line": 453,
           "signature": "self, *inputs",
           "docstring": null
         },
         {
           "name": "evaluate_checkpoint",
           "kind": "function",
-          "line": 443,
-          "end_line": 600,
+          "line": 456,
+          "end_line": 614,
           "signature": "checkpoint, out, *, num_envs=None, scope='full_song', max_batches=1, max_episodes=512, deadline=None",
           "docstring": "완결된 에피소드를 평가하며, 실패와 환경별 고정 분모를 유지한다.\n\n먼저 끝난 환경은 다른 환경이 끝날 때까지 정상적으로 초기화한다.\n해당 환경의 후속 에피소드는 이번 평가 묶음에서 제외하며, 반환 전에 장면을 닫는다."
         },
         {
           "name": "run",
           "kind": "function",
-          "line": 603,
-          "end_line": 649,
+          "line": 617,
+          "end_line": 663,
           "signature": "settings, args",
           "docstring": null
         }
@@ -3368,8 +3598,8 @@
       "module": "guitar_learning.training.launch",
       "path": "/home/ajou/yigyu/3/guitar_learning/training/launch.py",
       "relative": "training/launch.py",
-      "sha256": "1d9116294fefab39220e78ec2fbf27aa66d46c47fb626a5459b814a700bd3803",
-      "lines": 253,
+      "sha256": "3448d6d8b6c0bbd10812b5bef585ff21bf90d2f7323fb00c229b2d84594113de",
+      "lines": 254,
       "symbols": [
         {
           "name": "base_settings_document",
@@ -3383,31 +3613,31 @@
           "name": "build_settings",
           "kind": "function",
           "line": 92,
-          "end_line": 202,
+          "end_line": 203,
           "signature": "hand, *, song=DEFAULT_SONG, updates=100, num_envs=None, device='cuda:0', seed=7, horizon=None, size='medium', physics='auto', checkpoint_every=250, finger_standby_rate=None, finger_shape=False, finger_action_mode=None, learning_family='song'",
           "docstring": "공용 song 설정을 만든 뒤 기본 J 학습의 설정·계약을 덧붙인다.\n\n원곡의 모든 음을 사용하며 수집 길이(horizon)의 끝을 곡 종료로 취급하지 않는다."
         },
         {
           "name": "settings_document",
           "kind": "function",
-          "line": 205,
-          "end_line": 208,
+          "line": 206,
+          "end_line": 209,
           "signature": "hand='left', *, learning_family='finger-skill', **options",
           "docstring": null
         },
         {
           "name": "run",
           "kind": "function",
-          "line": 211,
-          "end_line": 219,
+          "line": 212,
+          "end_line": 220,
           "signature": "settings, args",
           "docstring": null
         },
         {
           "name": "main",
           "kind": "function",
-          "line": 222,
-          "end_line": 249,
+          "line": 223,
+          "end_line": 250,
           "signature": "",
           "docstring": null
         }
@@ -3425,7 +3655,7 @@
           "kind": "class",
           "line": 14,
           "end_line": 39,
-          "signature": "nn.Module",
+          "signature": "",
           "docstring": null
         },
         {
@@ -3449,7 +3679,7 @@
           "kind": "class",
           "line": 42,
           "end_line": 122,
-          "signature": "nn.Module",
+          "signature": "",
           "docstring": "공용 39축 정책 기반. 기본 J 학습은 아래 FingerSkillPolicy를 사용한다."
         },
         {
@@ -3521,7 +3751,7 @@
           "kind": "class",
           "line": 125,
           "end_line": 391,
-          "signature": "nn.Module",
+          "signature": "",
           "docstring": "기존 song 경로의 left/right/joint 정책. 기본 J 학습은 FingerSkillPolicy를 사용한다."
         },
         {
@@ -3593,7 +3823,7 @@
           "kind": "class",
           "line": 401,
           "end_line": 570,
-          "signature": "nn.Module",
+          "signature": "",
           "docstring": "지지 17축과 네 손가락 16축을 모두 학습하는 J 전용 독립 Gaussian 정책."
         },
         {
@@ -3666,214 +3896,222 @@
       "module": "guitar_learning.training.ppo",
       "path": "/home/ajou/yigyu/3/guitar_learning/training/ppo.py",
       "relative": "training/ppo.py",
-      "sha256": "b9e1bbff816b37816f866ff2b40c0f95a8585189742bf5ffbde549dd5112706d",
-      "lines": 579,
+      "sha256": "874223d621bceced38ef3fc50cfbb49e62e0c55c3ac274e714a3cce82efb1359",
+      "lines": 586,
       "symbols": [
         {
           "name": "rollout_evaluation",
           "kind": "function",
-          "line": 16,
-          "end_line": 23,
+          "line": 17,
+          "end_line": 24,
           "signature": "policy, inputs, batch_size=4096",
           "docstring": "토큰 중간값의 메모리 사용을 제한하면서 수집 자료의 모든 출력을 원래 순서대로 유지한다."
         },
         {
           "name": "tensor_summary",
           "kind": "function",
-          "line": 27,
-          "end_line": 34,
+          "line": 28,
+          "end_line": 35,
           "signature": "value",
           "docstring": null
         },
         {
           "name": "MinibatchSummary",
           "kind": "class",
-          "line": 37,
-          "end_line": 64,
+          "line": 38,
+          "end_line": 65,
           "signature": "",
           "docstring": "마지막 미니배치 값 대신 표본 수로 가중한 최적화 단계 통계를 모은다."
         },
         {
           "name": "MinibatchSummary.__init__",
           "kind": "function",
-          "line": 39,
-          "end_line": 45,
+          "line": 40,
+          "end_line": 46,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "MinibatchSummary.add",
           "kind": "function",
-          "line": 48,
-          "end_line": 58,
+          "line": 49,
+          "end_line": 59,
           "signature": "self, samples, **values",
           "docstring": null
         },
         {
           "name": "MinibatchSummary.summary",
           "kind": "function",
-          "line": 60,
-          "end_line": 64,
+          "line": 61,
+          "end_line": 65,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "advantage_diagnostics",
           "kind": "function",
-          "line": 68,
-          "end_line": 82,
+          "line": 69,
+          "end_line": 83,
           "signature": "buffer, ar, ac, combined, normalized, weight, config, *, reward_normalized=None, cost_normalized=None",
           "docstring": null
         },
         {
           "name": "post_update_diagnostics",
           "kind": "function",
-          "line": 86,
-          "end_line": 112,
+          "line": 87,
+          "end_line": 113,
           "signature": "policy, inputs, latent, old_logp, rr, rc, clip_ratio",
           "docstring": null
         },
         {
           "name": "PPOConfig",
           "kind": "class",
-          "line": 116,
-          "end_line": 132,
+          "line": 117,
+          "end_line": 133,
           "signature": "",
           "docstring": null
         },
         {
           "name": "compute_gae",
           "kind": "function",
-          "line": 135,
-          "end_line": 150,
+          "line": 136,
+          "end_line": 151,
           "signature": "reward, value, next_value, terminated, truncated, gamma, gae_lambda",
           "docstring": null
         },
         {
           "name": "gaussian_kl",
           "kind": "function",
-          "line": 153,
-          "end_line": 155,
+          "line": 154,
+          "end_line": 156,
           "signature": "old_mean, old_log_std, mean, log_std",
           "docstring": null
         },
         {
           "name": "policy_advantages",
           "kind": "function",
-          "line": 158,
-          "end_line": 170,
+          "line": 159,
+          "end_line": 171,
           "signature": "reward, cost, weight, mode",
           "docstring": "수집 자료 전체에서 정규화하며, 값이 일정한 성분은 0으로 반영한다."
         },
         {
           "name": "KLGuardError",
           "kind": "class",
-          "line": 173,
-          "end_line": 176,
-          "signature": "RuntimeError",
+          "line": 174,
+          "end_line": 177,
+          "signature": "",
           "docstring": null
         },
         {
           "name": "KLGuardError.__init__",
           "kind": "function",
-          "line": 174,
-          "end_line": 176,
+          "line": 175,
+          "end_line": 177,
           "signature": "self, diagnostic",
           "docstring": null
         },
         {
           "name": "PPOTrainer",
           "kind": "class",
-          "line": 179,
-          "end_line": 383,
+          "line": 180,
+          "end_line": 386,
           "signature": "",
           "docstring": "song 공용 PPO 기반. 기본 J 학습은 DecisionPPOTrainer의 유효 결정 갱신을 쓴다."
         },
         {
           "name": "PPOTrainer.__init__",
           "kind": "function",
-          "line": 183,
-          "end_line": 207,
+          "line": 184,
+          "end_line": 208,
           "signature": "self, policy, config=None",
           "docstring": null
         },
         {
           "name": "PPOTrainer._actor_snapshot",
           "kind": "function",
-          "line": 209,
-          "end_line": 210,
+          "line": 210,
+          "end_line": 211,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "PPOTrainer._actor_restore",
           "kind": "function",
-          "line": 212,
-          "end_line": 216,
+          "line": 213,
+          "end_line": 217,
           "signature": "self, snapshot",
           "docstring": null
         },
         {
           "name": "PPOTrainer.update",
           "kind": "function",
-          "line": 218,
-          "end_line": 235,
+          "line": 219,
+          "end_line": 236,
           "signature": "self, buffer, completed_episodes=()",
           "docstring": null
         },
         {
           "name": "PPOTrainer._update",
           "kind": "function",
-          "line": 237,
-          "end_line": 340,
+          "line": 238,
+          "end_line": 341,
           "signature": "self, buffer, completed_episodes",
           "docstring": "에피소드 행 형식: {cost, valid:True, reason:'terminal'|'terminal_failure'|'timeline_complete'}.\n\n미완료 또는 보호 검사 오류 에피소드는 선택적인 비용 승수를 갱신하지 않는다.\n정규화 설정은 행동 정책의 우위값만 바꾸며, 가치망의 학습 목표는 바꾸지 않는다."
         },
         {
           "name": "PPOTrainer._identity",
           "kind": "function",
-          "line": 342,
-          "end_line": 347,
+          "line": 343,
+          "end_line": 348,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "PPOTrainer.save",
           "kind": "function",
-          "line": 349,
-          "end_line": 362,
+          "line": 350,
+          "end_line": 363,
           "signature": "self, path, metadata=None",
           "docstring": null
         },
         {
           "name": "PPOTrainer.load",
           "kind": "function",
-          "line": 364,
-          "end_line": 383,
+          "line": 365,
+          "end_line": 386,
           "signature": "self, path",
           "docstring": null
         },
         {
           "name": "compute_decision_gae",
           "kind": "function",
-          "line": 386,
-          "end_line": 417,
+          "line": 389,
+          "end_line": 420,
           "signature": "reward, value, next_value, terminated, truncated, duration, valid, gamma, gae_lambda",
           "docstring": null
         },
         {
           "name": "DecisionPPOTrainer",
           "kind": "class",
-          "line": 420,
-          "end_line": 579,
-          "signature": "PPOTrainer",
+          "line": 423,
+          "end_line": 586,
+          "signature": "",
           "docstring": "기본 J 경로: 유효 결정만 모아 actor를 갱신한 뒤 고정 GAE 목표로 critic을 갱신한다."
+        },
+        {
+          "name": "DecisionPPOTrainer._retry_actor_lr",
+          "kind": "function",
+          "line": 427,
+          "end_line": 430,
+          "signature": "self, retry",
+          "docstring": "기존 재시도 감소식을 유지하며 연구 실행에서만 별도로 재정의한다."
         },
         {
           "name": "DecisionPPOTrainer._update",
           "kind": "function",
-          "line": 424,
-          "end_line": 579,
+          "line": 432,
+          "end_line": 586,
           "signature": "self, buffer, completed_episodes",
           "docstring": null
         }
@@ -3883,14 +4121,14 @@
       "module": "guitar_learning.training.rollout",
       "path": "/home/ajou/yigyu/3/guitar_learning/training/rollout.py",
       "relative": "training/rollout.py",
-      "sha256": "fc4b2aa551c70fb15d64a02817626de0a2e058327af9915e5cf773025826d9c8",
-      "lines": 260,
+      "sha256": "1557db1d3a0c792f85bc55a06e181067c801daa1d9995c813caa871bd8860b20",
+      "lines": 295,
       "symbols": [
         {
           "name": "GpuPool",
           "kind": "class",
           "line": 12,
-          "end_line": 124,
+          "end_line": 159,
           "signature": "",
           "docstring": "song 공용 GPU 실행 기반이며, 기본 J 설정이면 FingerSkillEnvironment를 만든다."
         },
@@ -3906,95 +4144,95 @@
           "name": "GpuPool.__init__",
           "kind": "function",
           "line": 21,
-          "end_line": 62,
+          "end_line": 73,
           "signature": "self, settings, out",
           "docstring": null
         },
         {
           "name": "GpuPool.reset",
           "kind": "function",
-          "line": 64,
-          "end_line": 76,
+          "line": 75,
+          "end_line": 89,
           "signature": "self, indices=None",
           "docstring": null
         },
         {
           "name": "GpuPool.step",
           "kind": "function",
-          "line": 78,
-          "end_line": 111,
+          "line": 91,
+          "end_line": 134,
           "signature": "self, actions",
           "docstring": null
         },
         {
           "name": "GpuPool.set_curriculum",
           "kind": "function",
-          "line": 113,
-          "end_line": 115,
+          "line": 136,
+          "end_line": 138,
           "signature": "self, progress",
           "docstring": null
         },
         {
           "name": "GpuPool.set_training_progress",
           "kind": "function",
-          "line": 117,
-          "end_line": 118,
+          "line": 140,
+          "end_line": 141,
           "signature": "self, committed_transitions",
           "docstring": null
         },
         {
           "name": "GpuPool.close",
           "kind": "function",
-          "line": 120,
-          "end_line": 124,
+          "line": 143,
+          "end_line": 159,
           "signature": "self",
           "docstring": null
         },
         {
           "name": "TensorCollector",
           "kind": "class",
-          "line": 127,
-          "end_line": 171,
+          "line": 162,
+          "end_line": 206,
           "signature": "",
           "docstring": "기존 song 경로의 전이 수집기. 종료 관측의 가치를 계산한 뒤 끝난 환경만 초기화한다."
         },
         {
           "name": "TensorCollector.__init__",
           "kind": "function",
-          "line": 129,
-          "end_line": 132,
+          "line": 164,
+          "end_line": 167,
           "signature": "self, policy, pool",
           "docstring": null
         },
         {
           "name": "TensorCollector.collect",
           "kind": "function",
-          "line": 134,
-          "end_line": 171,
+          "line": 169,
+          "end_line": 206,
           "signature": "self, horizon, *, progress_callback=None, transition_callback=None",
           "docstring": null
         },
         {
           "name": "DecisionCollector",
           "kind": "class",
-          "line": 174,
-          "end_line": 260,
+          "line": 209,
+          "end_line": 295,
           "signature": "",
           "docstring": "기본 J 정책을 매 tick 표본화하고 종료 관측의 가치를 초기화 전에 저장한다.\n\n반환 buffer는 [H, N, ...]다. H는 수집 tick 수, N은 병렬 환경 수이며\nPPO 경계에서도 장면·에피소드는 이어지고 buffer만 새로 만든다."
         },
         {
           "name": "DecisionCollector.__init__",
           "kind": "function",
-          "line": 180,
-          "end_line": 190,
+          "line": 215,
+          "end_line": 225,
           "signature": "self, policy, pool, *, gamma=0.99, cost_gamma=1.0",
           "docstring": null
         },
         {
           "name": "DecisionCollector.collect",
           "kind": "function",
-          "line": 193,
-          "end_line": 260,
+          "line": 228,
+          "end_line": 295,
           "signature": "self, horizon, *, progress_callback=None, transition_callback=None, decision_callback=None, policy_version=None",
           "docstring": null
         }
@@ -4020,7 +4258,7 @@
           "kind": "class",
           "line": 37,
           "end_line": 46,
-          "signature": "json.JSONEncoder",
+          "signature": "",
           "docstring": null
         },
         {
@@ -4188,7 +4426,7 @@
           "kind": "class",
           "line": 275,
           "end_line": 276,
-          "signature": "ValueError",
+          "signature": "",
           "docstring": null
         },
         {
@@ -4404,7 +4642,7 @@
           "kind": "class",
           "line": 749,
           "end_line": 750,
-          "signature": "RuntimeError",
+          "signature": "",
           "docstring": null
         },
         {
@@ -4545,5 +4783,6 @@
         }
       ]
     }
-  ]
+  ],
+  "scope_note": "Current AST/source documentation snapshot only; preserved historical validation evidence and checkpoint pins are not rewritten."
 }

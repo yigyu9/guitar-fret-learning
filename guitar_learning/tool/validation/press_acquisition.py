@@ -13,7 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_BUNDLE = ROOT/'data/song_bundles/05_BN2-131-B_solo'
-SCHEMA = 'guitar_learning.press_acquisition.v1'
+SCHEMA = 'guitar_learning.press_acquisition.v2'
 REPRESENTATIVE_ROWS = (0, 4, 8, 12)
 
 
@@ -69,22 +69,19 @@ def action_bounds(contract):
     return active, np.maximum(low, reference-half), np.minimum(high, reference+half)
 
 
-def trajectory_actions(desired, current, reference, low, high, incremental, max_speed=1.):
-    """Invert the existing codec; never assign targets or actual joint state."""
+def trajectory_actions(desired, reference, low, high):
+    """목표각을 준비 기준의 직접 위치 행동으로 역변환한다. 상태는 쓰지 않는다."""
     import torch
-    if (desired.ndim != 2 or desired.shape[-1] != 39 or current.shape != desired.shape or
-            reference.shape != low.shape or low.shape != high.shape or low.shape != (39,) or
-            incremental.shape != (39,) or incremental.dtype != torch.bool or
-            not 0 < max_speed <= 4):
-        raise ValueError('Aligned action39 trajectories and speed in(0,4] required')
-    if not all(bool(torch.isfinite(x).all()) for x in (desired, current, reference, low, high)):
+    if (desired.ndim != 2 or desired.shape[-1] != 39 or
+            reference.shape != low.shape or low.shape != high.shape or low.shape != (39,)):
+        raise ValueError('Aligned action39 trajectories required')
+    if not all(bool(torch.isfinite(x).all()) for x in (desired, reference, low, high)):
         raise ValueError('Finite inverse-codec inputs required')
     if bool(((desired < low-1e-6) | (desired > high+1e-6)).any()):
         raise ValueError('Trajectory exceeds current controller action bounds')
     delta = desired-reference
     span = torch.where(delta >= 0, high-reference, reference-low)
     actions = torch.where(span > 0, delta/span.clamp_min(1e-30), torch.zeros_like(delta))
-    actions[:, incremental] = ((desired-current)*15).clamp(-max_speed/4, max_speed/4)[:, incremental]
     return actions.clamp(-1, 1)
 
 
@@ -165,13 +162,13 @@ def search_geometry(bundle, out, max_nfev=160):
     from scipy.optimize import least_squares
     from scipy.spatial.transform import Rotation
     from types import SimpleNamespace
-    from guitar_learning.runtime.prepared_reset_v1 import load_prepared_reset_contract
+    from guitar_learning.runtime.prepared_reset_v1 import load_gpu_prepared_reset_contract
     from guitar_learning.native.lower_body_release_v1.controller_horizontal_v4 import full_fk
     from guitar_learning.core.control import ACTIVE_NAMES
     from guitar_learning.gpu.contact import load_fingertip_pad
     from guitar_learning.song.task import make_task
     out.mkdir(parents=True, exist_ok=False)
-    contract = load_prepared_reset_contract()
+    contract = load_gpu_prepared_reset_contract('left')
     task = make_task(bundle)
     goals = select_targets(task)
     # Commit the selection and capture row IDs before any search/replay result.
@@ -197,8 +194,9 @@ def search_geometry(bundle, out, max_nfev=160):
     for index, goal in enumerate(goals):
         finger = goal['finger']-1
         finger_name = ('index', 'middle', 'ring', 'pinky')[finger]
-        local = pad['points_local'][finger].astype(float)
-        normals = pad['normals_local'][finger].astype(float)
+        valid = pad['valid'][finger]
+        local = pad['points_local'][finger][valid].astype(float)
+        normals = pad['normals_local'][finger][valid].astype(float)
         # All arm12 channels plus the assigned finger4; other fingers stay at reference.
         channels = [i for i, name in enumerate(ACTIVE_NAMES)
                     if name.startswith('L_') or name.startswith('LH:'+finger_name)]
@@ -254,7 +252,7 @@ def search_geometry(bundle, out, max_nfev=160):
         print('geometry', index, finger_name, goal['physical_string'], goal['fret'],
               rows[-1]['minimum_distance_m'], rows[-1]['geometry_candidate'], flush=True)
     write(out/'candidates.json', dict(schema=SCHEMA, bundle=str(bundle.resolve()),
-        goals=rows, reference105=ref.tolist(), action_indices=active.tolist(),
+        goals=rows, initial_pose=contract['initial_pose'], reference105=ref.tolist(), action_indices=active.tolist(),
         action_lower=lower.tolist(), action_upper=upper.tolist(),
         source_geometry=surface, pad_contract=pad['contract'],
         fk='current source exponential joints calibrated to prepared actual poses/q; no simulator',
@@ -312,7 +310,7 @@ def replay_geometry(geometry, mode, out, device='cuda:0', ramp_s=6., hold_s=2., 
     write(out/'settings.json', settings)
     try:
         scene = GpuScene(16, 'left', device=device, out=out, diagnostic_guitar_mode=mode)
-        control = BatchedController(scene, finger_action_mode='incremental')
+        control = BatchedController(scene, finger_action_mode='position')
         metadata = copy.deepcopy(scene.metadata)
         metadata['action_contract'] = copy.deepcopy(control.contract)
         env = TensorSongEnvironment(metadata, bundle=candidates['bundle'],
@@ -330,7 +328,6 @@ def replay_geometry(geometry, mode, out, device='cuda:0', ramp_s=6., hold_s=2., 
         if (not torch.allclose(control.action_low.cpu(), torch.tensor(candidates['action_lower']), atol=1e-6, rtol=0) or
                 not torch.allclose(control.action_high.cpu(), torch.tensor(candidates['action_upper']), atol=1e-6, rtol=0)):
             raise ValueError('CPU/GPU action bounds differ')
-        incremental = torch.tensor([n.startswith('LH:') for n in ACTIVE_NAMES], device=device)
         alive = np.ones(16, dtype=bool)
         previous = env.candidate[ids, indices].cpu().numpy()
         streak = np.zeros(16); best = np.zeros(16); samples = np.zeros(16, dtype=int)
@@ -390,8 +387,7 @@ def replay_geometry(geometry, mode, out, device='cuda:0', ramp_s=6., hold_s=2., 
                 max_offset = torch.maximum(max_offset, offset.abs().amax(-1))
             desired = nominal+offset
             desired = torch.where(live[:, None], desired, control.target[:, control.active])
-            actions = trajectory_actions(desired, control.target[:, control.active], reference,
-                control.action_low, control.action_high, incremental)
+            actions = trajectory_actions(desired, reference, control.action_low, control.action_high)
             actions[:, 33:] = 0  # frozen partner retains its original residual reference.
             target = control.targets(actions, sample)
             for _ in range(4):
@@ -501,7 +497,7 @@ def render_replay(source, out, row=0):
     from PIL import Image, ImageDraw
     from guitar_learning.native.initial_pose_video60_v1.static_visual_v7 import build_model, set_body_poses, add_strings
     from guitar_learning.tool._rendering import encoder, probe
-    from guitar_learning.runtime.prepared_reset_v1 import load_prepared_reset_contract
+    from guitar_learning.runtime.prepared_reset_v1 import load_gpu_prepared_reset_contract
     if row not in REPRESENTATIVE_ROWS:
         raise ValueError('Only predeclared representative row poses are recorded')
     trace = np.load(source/'poses60.npz', allow_pickle=False)
@@ -512,7 +508,7 @@ def render_replay(source, out, row=0):
         raise ValueError('Contiguous valid pose frames required')
     metadata = json.loads((source/'metadata.json').read_text())
     out.mkdir(parents=True, exist_ok=False)
-    contract = load_prepared_reset_contract()
+    contract = load_gpu_prepared_reset_contract('left')
     model, data, mapping, _ = build_model(contract['initial'])
     renderer = mujoco.Renderer(model, height=720, width=1280)
     hand_camera = dict(distance_m=.5, azimuth_deg=270., elevation_deg=-10.,

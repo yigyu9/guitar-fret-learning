@@ -155,72 +155,6 @@ class GpuControlTests(unittest.TestCase):
         self.assertTrue(torch.equal(controller.target[1], other))
         self.assertTrue(torch.equal(scene.q, snapshot['q']))
 
-    def test_incremental_fingers_accumulate_through_h32_and_zero_holds_target(self):
-        scene, snapshot = fake_scene()
-        controller = BatchedController(scene, finger_action_mode='incremental')
-        ids = controller.incremental_actions
-        native = controller.active[ids]
-        action = torch.zeros(2, 39, dtype=scene.q.dtype)
-        action[0, ids] = torch.linspace(-.2, .2, 21, dtype=scene.q.dtype)
-        action[1, ids] = torch.linspace(.1, -.3, 21, dtype=scene.q.dtype)
-        initial_state = {key: value.clone() for key, value in snapshot.items()}
-        for tick in range(1, 65):
-            target = controller.targets(action, snapshot)
-            expected = controller.reference[native]+tick*(4/60)*action[:, ids]
-            expected = torch.maximum(torch.minimum(expected, scene.upper[native]), scene.lower[native])
-            torch.testing.assert_close(target[:, native], expected, rtol=0, atol=1e-12)
-        held = controller.target[:, native].clone()
-        # Physical lag/disturbance cannot recenter a zero action toward q or q_ref.
-        snapshot['q'][:, native] += .01
-        for _ in range(5):
-            controller.targets(torch.zeros_like(action), snapshot)
-            self.assertTrue(torch.equal(controller.target[:, native], held))
-        snapshot['q'][:, native] -= .01
-        for key, value in initial_state.items():
-            torch.testing.assert_close(snapshot[key], value, rtol=0, atol=1e-15)
-        self.assertTrue(torch.equal(controller.alpha[ids], torch.ones(21, dtype=scene.q.dtype)))
-        self.assertTrue(torch.isin(native, controller.position).all())
-
-    def test_incremental_asymmetric_limits_reverse_immediately_without_windup(self):
-        scene, snapshot = fake_scene()
-        native = torch.tensor([scene.names.index(n) for n in LEFT_HAND_NAMES])
-        scene.lower[native] = scene.reference105[native]-torch.linspace(.013, .071, 21)
-        scene.upper[native] = scene.reference105[native]+torch.linspace(.032, .009, 21)
-        controller = BatchedController(scene, finger_action_mode='incremental')
-        ids = controller.incremental_actions
-        action = torch.zeros(2, 39, dtype=scene.q.dtype)
-        action[0, ids], action[1, ids] = 1, -1
-        for _ in range(12):
-            controller.targets(action, snapshot)
-        self.assertTrue(torch.equal(controller.target[0, native], scene.upper[native]))
-        self.assertTrue(torch.equal(controller.target[1, native], scene.lower[native]))
-        before = controller.target[:, native].clone()
-        action[:, ids] *= -.25
-        controller.targets(action, snapshot)
-        expected = before+(4/60)*action[:, ids]
-        expected = torch.maximum(torch.minimum(expected, scene.upper[native]), scene.lower[native])
-        torch.testing.assert_close(controller.target[:, native], expected, rtol=0, atol=1e-15)
-        self.assertTrue((controller.target[0, native] < before[0]).all())
-        self.assertTrue((controller.target[1, native] > before[1]).all())
-
-    def test_incremental_partial_reset_preserves_other_environment_accumulator_and_state(self):
-        scene, snapshot = fake_scene(num_envs=3)
-        controller = BatchedController(scene, finger_action_mode='incremental')
-        action = torch.full((3, 39), .1, dtype=scene.q.dtype)
-        original = {key: value.clone() for key, value in snapshot.items()}
-        for _ in range(6):
-            controller.targets(action, snapshot)
-        before = controller.target.clone()
-        controller.reset([1], snapshot)
-        self.assertTrue(torch.equal(controller.target[1], controller.reference))
-        self.assertTrue(torch.equal(controller.target[[0, 2]], before[[0, 2]]))
-        native = controller.active[controller.incremental_actions]
-        controller.targets(torch.zeros_like(action), snapshot)
-        self.assertTrue(torch.equal(controller.target[1, native], controller.reference[native]))
-        self.assertTrue(torch.equal(controller.target[[0, 2]][:, native], before[[0, 2]][:, native]))
-        for key, value in original.items():
-            self.assertTrue(torch.equal(snapshot[key], value), key)
-
     def test_other_channels_and_entire_right_path_match_previous_law_exactly(self):
         generator = torch.Generator().manual_seed(7)
         for hand in ('left', 'right'):
@@ -235,26 +169,10 @@ class GpuControlTests(unittest.TestCase):
                 actual = controller.targets(action, snapshot)
                 self.assertTrue(torch.equal(actual[:, unchanged], expected[:, unchanged]), hand)
             self.assertEqual(controller.contract['schema'],
-                'guitar_learning.gpu_finite_control.v3' if hand == 'left' else 'guitar_learning.gpu_finite_control.v2')
+                'guitar_learning.gpu_finite_control.v4' if hand == 'left' else 'guitar_learning.gpu_finite_control.v2')
             if hand == 'right':
                 self.assertNotIn('action_codec', controller.contract)
-                self.assertEqual(controller.incremental_actions.numel(), 0)
-
-    def test_incremental_action_contract_declares_semantics_not_source_identity(self):
-        scene, _ = fake_scene()
-        controller = BatchedController(scene)
-        codec = controller.contract['action_codec']
-        self.assertEqual(codec['schema'], 'guitar_learning.gpu_left_incremental_fingers.v1')
-        self.assertEqual(codec['mode'], 'incremental')
-        self.assertTrue(torch.equal(controller.incremental_actions, controller.finger_actions))
-        self.assertEqual(codec['incremental_joint_names'], list(LEFT_HAND_NAMES))
-        self.assertEqual(codec['incremental_action_indices'], [ACTIVE_NAMES.index(n) for n in LEFT_HAND_NAMES])
-        self.assertEqual(codec['velocity_scale_rad_s'], 4.)
-        self.assertEqual(codec['control_hz'], 60)
-        self.assertEqual(codec['zero_action'], 'hold previous target')
-        self.assertIn('no windup', codec['limit_memory'])
-        self.assertEqual(controller.contract['native_position_count'], 48)
-        self.assertEqual(controller.contract['native_effort_count'], 57)
+                self.assertEqual(controller.finger_actions.numel(), 0)
 
     def test_position_small_constant_action_does_not_integrate_through_h32(self):
         scene, snapshot = fake_scene()
@@ -271,7 +189,6 @@ class GpuControlTests(unittest.TestCase):
         for _ in range(1200):
             target = controller.targets(action, snapshot)
             torch.testing.assert_close(target[:, native], expected, rtol=0, atol=1e-15)
-        self.assertEqual(controller.incremental_actions.numel(), 0)
         self.assertTrue(torch.equal(controller.alpha[ids], torch.ones(21, dtype=scene.q.dtype)))
         for key, value in original.items():
             self.assertTrue(torch.equal(snapshot[key], value), key)
@@ -342,13 +259,15 @@ class GpuControlTests(unittest.TestCase):
         self.assertIn('no integrated action', codec['limit_memory'])
         right_scene, snapshot = fake_scene(hand='right')
         position = BatchedController(right_scene, finger_action_mode='position')
-        incremental = BatchedController(right_scene)
-        self.assertEqual(position.contract, incremental.contract)
+        default = BatchedController(right_scene)
+        self.assertEqual(position.contract, default.contract)
         self.assertEqual(position.finger_actions.numel(), 0)
         action = torch.full((2, 39), .07, dtype=right_scene.q.dtype)
-        self.assertTrue(torch.equal(position.targets(action, snapshot), incremental.targets(action, snapshot)))
-        with self.assertRaisesRegex(ValueError, 'finger_action_mode'):
-            BatchedController(scene, finger_action_mode='velocity')
+        self.assertTrue(torch.equal(position.targets(action, snapshot), default.targets(action, snapshot)))
+        for mode in ('incremental', 'velocity', '', None, True):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, 'finger_action_mode'):
+                BatchedController(scene, finger_action_mode=mode)
+        self.assertEqual(BatchedController(scene).contract, controller.contract)
 
 
 if __name__ == '__main__':

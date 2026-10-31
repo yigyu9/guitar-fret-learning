@@ -16,7 +16,8 @@ def physics_source_paths(root):
     paths = [root/'guitar_learning'/p for p in (
         'gpu/scene.py', 'gpu/control.py', 'gpu/contact.py', 'core/control.py',
         'core/geometry.py', 'runtime/prepared_reset_v1.py', 'runtime/native_session.py',
-        'native/paths.py', 'tool/validation/hand_contact_probe.py')]
+        'native/paths.py', 'tool/validation/hand_contact_probe.py',
+        'tool/validation/press_acquisition.py')]
     return {p for p in paths if p.exists()} | set((root/'guitar_learning/assets/gpu_rigid_guitar_v1').glob('*'))
 
 
@@ -91,6 +92,7 @@ def main():
     import numpy as np
     import torch
     from guitar_learning.core.control import ACTIVE_NAMES, LEFT_HAND_NAMES
+    from guitar_learning.tool.validation.press_acquisition import trajectory_actions
     from guitar_learning.gpu.control import BatchedController
     from guitar_learning.gpu.scene import GpuScene
     from guitar_learning.gpu.control import conjugate, multiply, rotvec
@@ -135,7 +137,7 @@ def main():
         finally:
             gymapi.acquire_gym = original_acquire
             hand_collision.left_hand_collision_properties = original_filters
-        controller = BatchedController(scene, finger_action_mode='incremental')
+        controller = BatchedController(scene, finger_action_mode='position')
         sample = scene.snapshot()
         controller.reset(range(args.num_envs), sample)
         initial_q = sample['q'].clone()
@@ -172,19 +174,32 @@ def main():
             t = (tick+1)/60.
             stage, flex, spread = protocol(t)
             action = torch.zeros(args.num_envs, 39, device=scene.device)
-            action[:, actions[0::4]] = flex
-            action[:, actions[1::4]] = spread
+            # B 구간은 B 목표를 계속 요청한다. 행동 0은 준비 자세로 복귀한다.
+            if t > 9.:
+                desired = controller.reference[controller.active].expand(args.num_envs, -1).clone()
+                desired[:, actions] = goal
+                action = trajectory_actions(desired, controller.reference[controller.active],
+                    controller.action_low, controller.action_high)
+            action[:, actions[0::4]] += flex
+            action[:, actions[1::4]] += spread
             if stage == 'move_B':
                 if move_start is None:
                     move_start = controller.target[:, joints].clone()
                 desired = move_start+(goal[None]-move_start)*smooth_B(t)
-                action[:, actions] = ((desired-controller.target[:, joints])*(60./4.)).clamp(-1, 1)
+                requested = controller.reference[controller.active].expand(args.num_envs, -1).clone()
+                requested[:, actions] = desired
+                action = trajectory_actions(requested, controller.reference[controller.active],
+                    controller.action_low, controller.action_high)
             if tape is not None:
                 stage = 'captured_action_replay'
                 action[:] = torch.as_tensor(tape['action'][tick+1], device=scene.device)
             before = controller.target[:, hand_joints].clone()
-            expected = torch.maximum(torch.minimum(before+action[:, hand_actions]*(4./60.),
-                                                   scene.upper[hand_joints]), scene.lower[hand_joints])
+            clipped = action[:, hand_actions].clamp(-1, 1)
+            ref = controller.reference[hand_joints]
+            requested = ref+torch.where(clipped >= 0,
+                controller.action_high[hand_actions]-ref, ref-controller.action_low[hand_actions])*clipped
+            expected = torch.maximum(torch.minimum(requested, before+4./60.), before-4./60.)
+            expected = torch.maximum(torch.minimum(expected, scene.upper[hand_joints]), scene.lower[hand_joints])
             target = controller.targets(action, sample)
             error = float((target[:, hand_joints]-expected).abs().max())
             max_codec_error = max(max_codec_error, error)
@@ -192,7 +207,7 @@ def main():
                 captured = torch.as_tensor(tape['target'][tick+1, hand_joints], device=scene.device)
                 tape_target_error = max(tape_target_error, float((target[:, hand_joints]-captured).abs().max()))
             if error > 2e-6:
-                raise AssertionError('Incremental target codec disagrees with bounded integration')
+                raise AssertionError('Position target codec disagrees with bounded direct request')
             controls.append(dict(tick=tick+1, stage=stage, action=action[0].cpu().numpy().copy(),
                                  target=target[0].cpu().numpy().copy(), codec_error=error,
                                  physics_step_before=int(sample['physics_step'][0])))

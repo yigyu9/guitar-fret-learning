@@ -1,0 +1,30 @@
+"""Actual active33 position bounds and all81 velocities at each pre-physics tick."""
+from pathlib import Path
+import numpy as np
+from .initial_pose_noise_v1 import read,save,sha
+
+ROOT=Path(__file__).resolve().parents[1]
+P=ROOT/'docs/2026-10-19/stability_adapter_2/results/initial_pose_qualification_v1'
+CASES={'baseline':'native_baseline_v2','static':'native_static_v3','strike':'native_strike_v2','left_cycle':'native_left_cycle_v2','z_plus3mm':'native_z_plus3mm_v2'}
+
+
+def main():
+    out=P/'joint_240hz_audit_v1.json';before=P/'joint_240hz_audit_before_v1.json';assert not out.exists() and not before.exists()
+    paths={Path(__file__).resolve(),Path(__file__).with_name('initial_pose_noise_v1.py')}
+    for name in CASES.values():paths|={P/name/f for f in ['report.json','initial_values.json','final_state.json','media/left_arm_effort_rows.json','media/effort_control_rows.json','media/body_effort_rows.json']}
+    pins={str(f):sha(f) for f in paths};save(before,pins);results={}
+    for case,name in CASES.items():
+        n=P/name;report=read(n/'report.json');initial=read(n/'initial_values.json');final=read(n/'final_state.json');names=initial['joint_names'];steps=report['physics_steps']
+        left=read(n/'media/left_arm_effort_rows.json')['rows'];right=read(n/'media/effort_control_rows.json')['rows'];body=read(n/'media/body_effort_rows.json')['rows']
+        for rows in (left,right,body):assert [r['physics_step'] for r in rows]==list(range(steps))
+        li=left[0]['left_indices'];ri=[i for i,v in enumerate(names) if v.startswith(('R_Thorax','R_Shoulder','R_Elbow','R_Wrist'))];bi=[i for i,v in enumerate(names) if v.startswith(('Torso_','Spine_','Chest_'))];indices=li+ri+bi;assert len(indices)==len(set(indices))==33
+        q=np.c_[[r['q_left_rad'] for r in left],[r['q_right_rad'] for r in right],[r['q_body_rad'] for r in body]]
+        q=np.vstack([q,np.array([s['pos'] for s in final['human_dof_states']])[indices]])
+        low=np.array(initial['PD_properties']['lower'])[indices];high=np.array(initial['PD_properties']['upper'])[indices];excess=np.maximum(np.maximum(low-q,q-high),0);k,j=np.unravel_index(np.argmax(excess),excess.shape)
+        velocity=np.vstack([[r['qdot_all_rad_s'] for r in right],[s['vel'] for s in final['human_dof_states']]]);assert velocity.shape==(steps+1,81) and np.isfinite(velocity).all() and np.isfinite(q).all()
+        vk,vj=np.unravel_index(np.argmax(abs(velocity)),velocity.shape)
+        results[case]={'position_scope':'33 active torso/body/arms, pre-physics0..N-1 plus finalpostN at240Hz; other48 positions not240Hzrecorded','max_active33_limit_overshoot_deg':float(np.rad2deg(excess[k,j])),'position_peak_joint':names[indices[j]],'position_peak_time_s':k/240,'max_all81_speed_rad_s':float(abs(velocity[vk,vj])),'velocity_peak_joint':names[vj],'velocity_peak_time_s':vk/240,'position_samples':len(q),'velocity_samples':len(velocity),'actual_joint_speed_under50':bool(abs(velocity).max()<50)}
+    assert all(sha(f)==h for f,h in pins.items());save(out,{'input_sha256':pins,'inputs_unchanged':True,'cases':results,'scope':'60Hz81-position mainanalysis remains unchanged; supplement active33 position/all81 velocity rawcoverage, not all81position240Hz certification'})
+    print(results,flush=True)
+
+if __name__=='__main__':main()

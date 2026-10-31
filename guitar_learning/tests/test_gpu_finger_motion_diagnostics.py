@@ -51,7 +51,8 @@ class FingerMotionDiagnosticsTests(unittest.TestCase):
             self.assertAlmostEqual(values[field][0], 1/3)
         self.assertAlmostEqual(values['action_mean_abs_change'][0], .5)
         self.assertAlmostEqual(values['action_opposite_sign_fraction'][0], .5)
-        self.assertAlmostEqual(values['limit_outward_command_fraction'][0], 2/3)
+        # 직접 위치 요청은 native 범위 안으로 제한되므로 바깥 방향 누적 명령이 없다.
+        self.assertEqual(values['limit_outward_command_fraction'][0], 0.)
         errors = [high-.2, mid-.1, low-.15]
         self.assertAlmostEqual(values['tracking_error_rms_rad'][0], math.sqrt(sum(e*e for e in errors)/3), places=6)
         self.assertAlmostEqual(values['tracking_error_max_abs_rad'][0], max(abs(e) for e in errors), places=6)
@@ -152,6 +153,85 @@ class FingerMotionDiagnosticsTests(unittest.TestCase):
             metadata['action_contract'][key] = value
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'bounds'):
                 TensorSongEnvironment(metadata, bundle=fixtures.BUNDLE, song=fixtures.SONG, hand='left', device='cpu')
+
+
+class FingerControlDiagnosticsTests(unittest.TestCase):
+    def make(self, out=None, detail_ticks=600):
+        from guitar_learning.gpu.episode_diagnostics import FingerControlDiagnostics
+        return FingerControlDiagnostics(2, ['LH:index1_x', 'LH:index2'],
+            torch.tensor([0, 1]), torch.tensor([2., 3.]), torch.tensor([1]),
+            out, detail_control_ticks=detail_ticks)
+
+    def test_completed_substep_denominators_and_selected_reset(self):
+        from types import SimpleNamespace
+        observer = self.make()
+        observer.reset(torch.tensor([0, 1]))
+        sample = dict(q=torch.tensor([[0., 1.], [0., 1.]]),
+            qd=torch.tensor([[2., 3.], [2., 3.]]),
+            dof_force_sensor=torch.tensor([[7., 8.], [7., 8.]]))
+        for _ in range(128):  # H32 is not an episode reset.
+            observer.record(torch.ones(2, 2)*2, torch.ones(2, 2), sample,
+                            torch.tensor([[2., 0.], [2., 0.]]), SimpleNamespace())
+        row = observer.episode(0)
+        self.assertEqual(row['completed_physics_samples'], 128)
+        self.assertAlmostEqual(row['duration_s'], 128/240)
+        values = row['values']
+        self.assertEqual(values['requested_tracking_error_rad_rms'], [2., 1.])
+        self.assertEqual(values['applied_tracking_error_rad_rms'], [1., 0.])
+        self.assertEqual(values['rate_limit_gap_rad_rms'], [1., 1.])
+        self.assertEqual(values['submitted_effort_cap_fraction'], [1., 0.])
+        self.assertEqual(row['submitted_effort_available'], [True, False])
+        self.assertEqual(values['native_sensor_net_generalized_force_mean_abs_Nm'], [7., 8.])
+        observer.reset(torch.tensor([0]))
+        self.assertEqual(observer.episode(0)['completed_physics_samples'], 0)
+        self.assertEqual(observer.episode(0)['episode_id'], 1)
+        self.assertEqual(observer.episode(1)['completed_physics_samples'], 128)
+        self.assertEqual(observer.episode(1)['episode_id'], 0)
+
+    def test_nonfinite_sensor_is_excluded_without_touching_inputs(self):
+        from types import SimpleNamespace
+        observer = self.make()
+        observer.reset(torch.tensor([0, 1]))
+        sensor = torch.tensor([[float('nan'), 2.], [float('inf'), 3.]])
+        sample = dict(q=torch.zeros(2, 2), qd=torch.zeros(2, 2), dof_force_sensor=sensor)
+        observer.record(torch.zeros(2, 2), torch.zeros(2, 2), sample,
+                        torch.zeros(2, 2), SimpleNamespace())
+        row = observer.episode(0)
+        self.assertEqual(row['sensor_samples'], [0, 1])
+        self.assertEqual(row['values']['native_sensor_net_generalized_force_mean_abs_Nm'], [None, 2.])
+        self.assertTrue(torch.isnan(sensor[0, 0]))
+        self.assertEqual(row['env_id'], 0)
+
+    def test_trace_budget_identity_absent_goals_and_no_state_mutation(self):
+        import gzip
+        import json
+        import tempfile
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as out:
+            observer = self.make(out, detail_ticks=1)
+            observer.reset(torch.tensor([0, 1]))
+            env = SimpleNamespace(action=torch.zeros(2, 2), finger_action_indices=torch.tensor([0, 1]),
+                _score_time=lambda: torch.tensor([-3., -3.]),
+                _finger_targets=lambda now: dict(indices=torch.full((2, 4, 2), -1),
+                                                valid=torch.zeros(2, 4, 2, dtype=torch.bool)))
+            sample = dict(q=torch.zeros(2, 2), qd=torch.ones(2, 2))
+            for tick in range(6):
+                if tick == 2:
+                    observer.reset(torch.tensor([0]))
+                observer.record(torch.zeros(2, 2), torch.zeros(2, 2), sample,
+                                torch.zeros(2, 2), env)
+            self.assertIsNone(observer.stream)
+            with gzip.open(str(observer.path), 'rt') as stream:
+                rows = [json.loads(line) for line in stream]
+            self.assertEqual(len(rows), 4)
+            self.assertEqual([r['episode_id'] for r in rows], [0, 0, 1, 1])
+            self.assertEqual([r['episode_physics_step'] for r in rows], [1, 2, 1, 2])
+            self.assertTrue(all(not t['target_present'] and t['target_index'] is None
+                                for r in rows for t in r['targets']))
+            self.assertIsNone(rows[0]['native_sensor_net_generalized_force_Nm'])
+            self.assertEqual(float(sample['q'].abs().sum()), 0.)
+            self.assertEqual(float(sample['qd'].sum()), 4.)
+            self.assertEqual(observer.episode(0)['completed_physics_samples'], 4)
 
 
 if __name__ == '__main__':

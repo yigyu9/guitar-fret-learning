@@ -11,6 +11,7 @@ from guitar_learning.gpu.environment import TensorSongEnvironment
 from guitar_learning.gpu.episode_diagnostics import LeftEpisodeDiagnostics
 from guitar_learning.gpu.episode_diagnostics import SkillEpisodeDiagnostics
 from guitar_learning.gpu.control import apply
+from guitar_learning.gpu.finger_reward import finger_target_indices
 from guitar_learning.song.finger_phrases import build_phrase_catalog, BalancedPhraseSampler
 
 
@@ -47,12 +48,20 @@ def remaining_negative_budget(now, onset, end, weights, scope, paid, settled):
 
 class FingerSkillEnvironment(TensorSongEnvironment):
     """J33 공동 학습만 실행하며 선택 구간과 전곡의 보상·종료를 관리한다."""
-    allowed_finger_action_modes = ('incremental',)
+    allowed_finger_action_modes = ('position',)
     phase = 'J'
     exploration = 'independent'
     hold_ticks = 1
+    natural_preparation = None
 
     def __init__(self, metadata, *, bundle, song, skill, device='cuda:0', hand='left'):
+        if self.natural_preparation is not None:
+            config = self.natural_preparation
+            if (not isinstance(config, dict) or set(config) != {'schema', 'condition'} or
+                    config['schema'] != 'guitar_learning.natural_preparation.v3' or
+                    config['condition'] not in ('E0', 'E1', 'E2', 'E3', 'E4')):
+                raise ValueError('explicit natural_preparation.v3 E0..E4 required')
+            self.natural_preparation = copy.deepcopy(config)
         if (hand != 'left' or skill.get('schema') != 'guitar_learning.finger_skill.v3' or
                 skill.get('phase') != self.phase or skill.get('exploration') != self.exploration or
                 type(skill.get('hold_ticks')) is not int or skill['hold_ticks'] != self.hold_ticks or
@@ -65,8 +74,8 @@ class FingerSkillEnvironment(TensorSongEnvironment):
         self.committed_transitions = 0
         self._initial_scope_reset = True
         self.training_scope = 'scheduled'
-        if song.get('finger_action_mode', 'incremental') not in self.allowed_finger_action_modes:
-            raise ValueError('Finger-skill family uses incremental fingers')
+        if song.get('finger_action_mode', 'position') not in self.allowed_finger_action_modes:
+            raise ValueError('Finger-skill family uses position fingers')
         if song.get('pre_roll_s') != 3.:
             raise ValueError('Finger-skill family uses the agreed3s policy preparation')
         super().__init__(metadata, bundle=bundle, song=song, hand=hand, device=device)
@@ -153,6 +162,23 @@ class FingerSkillEnvironment(TensorSongEnvironment):
         self.contract['diagnostics']['inactive_legacy_reward_reference'] = dict(
             scope='measurement provenance only; these legacy reward formulas are not optimized',
             contracts=inactive)
+        if self.natural_preparation is not None:
+            spec = dict(**self.natural_preparation,
+                early_observation=self._natural_enabled('observation'),
+                early_standby_release=self._natural_enabled('standby'),
+                hover_approach=self._natural_enabled('hover'),
+                first_goal='earliest press in selected view, simultaneous goals retained',
+                later_preparation_s=2., hover_height_m=[.004, .008],
+                lateral_tolerance_m=.003, descent_s=.20,
+                potential='(1-quintic)*hoverPhi+quintic*unchanged_surfacePhi; same .03m scale',
+                observation='unchanged dimensions; exposure independent from reward mask',
+                standby_observation='legacy availability gate retained for matched comparisons; actual payout uses separate standby_reward_gate',
+                control='no action override, motion cost, stage lock or contact-ledger change')
+            self.contract['reward']['natural_preparation'] = spec
+            self.contract['diagnostics']['natural_preparation'] = copy.deepcopy(spec)
+            if self._natural_enabled('hover'):
+                reward['surface_learning']['potential'] = spec['potential']
+                reward['simplified']['approach'] = 'gamma*nextPhi-Phi; natural_preparation.v3 hover/surface blend; terminal nextPhi0'
 
     def _allocate(self, count):
         super()._allocate(count)
@@ -182,6 +208,13 @@ class FingerSkillEnvironment(TensorSongEnvironment):
         self.note['performance_settled'] = torch.zeros(count, self.M, dtype=torch.bool, device=self.device)
         self.episode_reward_terms = {key: torch.zeros(count, device=self.device) for key in REWARD_TERMS}
         self.reward_window = {key: torch.zeros((), dtype=torch.float64, device=self.device) for key in REWARD_TERMS}
+        if self.natural_preparation is not None:
+            self.natural_seconds = torch.zeros(count, 4, 4, dtype=torch.float64, device=self.device)
+            self.natural_previous_wrist = torch.zeros(count, 3, device=self.device)
+            self.natural_wrist_speed = torch.zeros(count, device=self.device)
+            self.natural_ready_run = torch.zeros(count, 4, dtype=torch.float64, device=self.device)
+            self.natural_ready_longest = self.natural_ready_run.clone()
+            self.natural_previous_target = torch.full((count, 4), -1, dtype=torch.long, device=self.device)
 
     def _reset_scope(self, indices):
         full = (self.evaluation_full_song if self.evaluation else
@@ -224,6 +257,11 @@ class FingerSkillEnvironment(TensorSongEnvironment):
                       self.wrist_failure, self.wrist_severe_failure, self.failure_paid,
                       self.termination_remaining_time_cost, self.termination_note_budget):
             value[indices] = 0
+        if self.natural_preparation is not None:
+            self.natural_seconds[indices] = 0
+            self.natural_ready_run[indices] = 0
+            self.natural_ready_longest[indices] = 0
+            self.natural_previous_target[indices] = -1
 
 
     def reset(self, indices, snapshot):
@@ -231,6 +269,9 @@ class FingerSkillEnvironment(TensorSongEnvironment):
         indices = torch.as_tensor(indices, dtype=torch.long, device=self.device)
         self.skill_diagnostics.reset(indices, self.score_offset, self.duration_ticks,
             *self._material_points(), self.focus_mask)
+        if self.natural_preparation is not None:
+            self.natural_previous_wrist[indices] = self.local_bodies[indices, self.wrist_index]
+            self.natural_wrist_speed[indices] = 0
         return observation
 
     def set_evaluation(self, enabled=True, full_song=False):
@@ -262,6 +303,113 @@ class FingerSkillEnvironment(TensorSongEnvironment):
     def _selected_finger_weights(self, indices):
         return self.finger_weights.gather(1, indices)
 
+    def _natural_enabled(self, factor):
+        conditions = dict(observation=('E1', 'E4'), standby=('E2', 'E4'), hover=('E3', 'E4'))
+        return (self.natural_preparation is not None and
+                self.natural_preparation['condition'] in conditions[factor])
+
+    def _natural_targets(self, now):
+        """선택 범위의 첫 음 묶음만 초기부터 준비하며 현재 유지 음을 우선한다."""
+        first = self.press.expand(self.N, -1).masked_fill(~self.focus_mask, torch.inf).amin(-1)
+        initial = self.focus_mask & (self.press[None] == first[:, None])
+        return finger_target_indices(now, self.onset, self.end, self.press, self.finger,
+                                     self.focus_mask, preparation_mask=initial)
+
+    def _finger_targets(self, now):
+        if self._natural_enabled('observation'):
+            return self._natural_targets(now)
+        return super()._finger_targets(now)
+
+    def _focus(self, prepare=False):
+        if not self._natural_enabled('observation'):
+            return super()._focus(prepare)
+        now = self._score_time()
+        targets = self._natural_targets(now)
+        indices = targets['indices'][..., 0].clamp_min(0)
+        valid = targets['valid'][..., 0]
+        start = self.press if prepare else self.onset
+        current = valid & (start[indices] <= now[:, None])
+        current_rank = (self.end[indices]+self.tie_rank[indices]*1e-12).masked_fill(~current, torch.inf)
+        future_rank = (start[indices]+self.tie_rank[indices]*1e-12).masked_fill(~valid, torch.inf)
+        slot = torch.where(current.any(-1), current_rank.argmin(-1), future_rank.argmin(-1))
+        return indices.gather(1, slot[:, None]).squeeze(-1), valid.any(-1)
+
+    def _finger_preparation(self, now):
+        posture = super()._finger_preparation(now)
+        if self._natural_enabled('standby'):
+            preparing = self._natural_targets(now)['valid'][..., 0]
+            # 기존 gate는 관측에도 들어간다. E2에서는 보상용 gate만 분리해
+            # 관측 노출·대기 상태 입력·접근 가중치가 함께 바뀌는 것을 막는다.
+            reward_gate = torch.where(preparing, 0., posture['gate'])
+            posture['standby_reward_gate'] = reward_gate
+            posture['per_finger_rate'] = self.finger_recovery['standby_rate_per_s']*reward_gate*posture['quality']/4
+            posture['rate'] = posture['per_finger_rate'].sum(-1)
+            # E2는 대기 보상만 바꾼다. 기존 접근 가중치는 별도로 보존한다.
+        return posture
+
+    def _natural_state(self, now):
+        """같은 유효 패드 표면점의 높이·접선 오차로 준비 품질을 측정한다."""
+        targets = self._natural_targets(now)
+        selected = targets['indices'][..., 0].clamp_min(0)
+        valid = targets['valid'][..., 0]
+        delta = self.surface_delta.gather(1, selected[..., None].expand(-1, -1, 3))
+        height = self.surface_height.gather(1, selected)
+        alignment = self.surface_alignment.gather(1, selected).clamp(0, 1)
+        normal = self.press_plane[:3]/torch.linalg.vector_norm(self.press_plane[:3])
+        tangent = delta+height[..., None]*normal
+        line = self.ends[:, self.string]-self.starts[:, self.string]
+        line = line-(line*normal).sum(-1, keepdim=True)*normal
+        unit = line/torch.linalg.vector_norm(line, dim=-1, keepdim=True).clamp_min(1e-12)
+        unit = unit.gather(1, selected[..., None].expand(-1, -1, 3))
+        along = (tangent*unit).sum(-1)
+        lateral = torch.linalg.vector_norm(tangent-along[..., None]*unit, dim=-1)
+        height_error = torch.relu(.004-height)+torch.relu(height-.008)
+        distance = torch.sqrt(along.square()+torch.relu(lateral-.003).square()+height_error.square())
+        u = ((now[:, None]-(self.press[selected]-.20))/.20).clamp(0, 1)
+        blend = u.pow(3)*(10+u*(-15+6*u))
+        ready = valid & (height >= .004) & (height <= .008) & (lateral <= .003) & (along.abs() <= 1e-6) & (alignment >= .1)
+        return dict(indices=targets['indices'][..., 0], valid=valid, selected=selected,
+            height=height, lateral=lateral, along=along, alignment=alignment,
+            distance=distance, blend=blend, ready=ready)
+
+    def natural_preparation_trace(self):
+        """기존 상세 추적의 대표 환경에 추가할 준비 정보. 제어에는 사용하지 않는다."""
+        now = self._score_time()
+        state = self._natural_state(now)
+        posture = self._finger_preparation(now)
+        exposed = self._finger_targets(now)['valid'][0, :, 0]
+        rows = []
+        for finger in range(4):
+            valid = bool(state['valid'][0, finger])
+            index = int(state['selected'][0, finger])
+            row = dict(finger=finger+1, target_id=self.task.targets[index].target_id if valid else None,
+                observation_exposed=bool(exposed[finger]), preparation_valid=valid,
+                standby_weight=float(posture.get('standby_reward_gate', posture['gate'])[0, finger]),
+                observed_standby_gate=float(posture['gate'][0, finger]),
+                standby_rate_per_s=float(posture['per_finger_rate'][0, finger]),
+                tracking_weight=float(valid) if self._natural_enabled('hover') else
+                    float(posture['tracking_weight'][0, finger]))
+            if valid:
+                row.update(audible=bool(self.onset[index] <= now[0] < self.end[index]),
+                    onset_s=float(self.onset[index]), press_s=float(self.press[index]),
+                    end_s=float(self.end[index]), sample_index=int(self.surface_sample[0, index]),
+                    height_m=float(state['height'][0, finger]),
+                    lateral_error_m=float(state['lateral'][0, finger]),
+                    along_cell_excess_m=float(state['along'][0, finger]),
+                    normal_cos=float(state['alignment'][0, finger]),
+                    hover_distance_m=float(state['distance'][0, finger]),
+                    descent_blend=float(state['blend'][0, finger]),
+                    reference_height_m=float(.006*(1-state['blend'][0, finger])),
+                    ready=bool(state['ready'][0, finger]),
+                    candidate=bool(self.candidate[0, index]),
+                    assigned_body_loaded=bool(self.surface_body_loaded[0, index]))
+            rows.append(row)
+        return dict(**self.natural_preparation, fingers=rows,
+            wrist_excess_m=self.guide['delta'][0].tolist(),
+            wrist_speed_m_s=float(self.natural_wrist_speed[0]),
+            approach_potential_endpoint=float(self._surface_potential()[0]),
+            potential_scope='state quality only; approach reward settled at60Hz with terminal nextPhi0')
+
     def _left_wrong_contacts(self, qualifies, assigned, nearest, same_string,
                              in_goal, same_finger, positive, wrong, pad_points, pad_normals):
         cells = pad_contact_cells(pad_points, pad_normals, self.pad_valid,
@@ -282,6 +430,16 @@ class FingerSkillEnvironment(TensorSongEnvironment):
 
     def _surface_potential(self):
         now = self._score_time()
+        if self._natural_enabled('hover'):
+            state = self._natural_state(now)
+            selected = state['selected']
+            distance = self.surface_distance.gather(1, selected)
+            near = (1-distance/.02).clamp(0, 1)
+            surface = torch.exp(-distance/.03)*(1-.2*near*(1-state['alignment']))
+            hover_near = (1-state['distance']/.02).clamp(0, 1)
+            hover = torch.exp(-state['distance']/.03)*(1-.2*hover_near*(1-state['alignment']))
+            value = torch.lerp(hover, surface, state['blend'].to(hover.dtype))
+            return (state['valid']*self._selected_finger_weights(selected)*value).sum(-1).to(distance.dtype)
         targets = self._finger_targets(now)
         selected = targets['indices'][..., 0].clamp_min(0)
         valid = targets['valid'][..., 0]
@@ -370,6 +528,26 @@ class FingerSkillEnvironment(TensorSongEnvironment):
     def _diagnose_posture(self, posture, pressing, now):
         super()._diagnose_posture(posture, pressing, now)
         self.skill_diagnostics.physics(self._local_time(), now, posture, pressing)
+        if self.natural_preparation is not None:
+            wrist = self.local_bodies[:, self.wrist_index]
+            self.natural_wrist_speed.copy_(torch.linalg.vector_norm(wrist-self.natural_previous_wrist, dim=-1)*240.)
+            self.natural_previous_wrist.copy_(wrist)
+            state = self._natural_state(now)
+            selected = state['selected']
+            preparing = state['valid'] & (now[:, None] < self.press[selected])
+            before_descent = now[:, None] < self.press[selected]-.20
+            known = self._finger_targets(now)['valid'][..., 0]
+            values = torch.stack((preparing,
+                preparing & before_descent & state['ready'],
+                preparing & known & ~state['ready'] & (self.natural_wrist_speed[:, None] < .005),
+                preparing & self.candidate.gather(1, selected)), -1)
+            self.natural_seconds += values/240.
+            ready = preparing & before_descent & state['ready']
+            same = state['indices'] == self.natural_previous_target
+            self.natural_ready_run = torch.where(ready,
+                torch.where(same, self.natural_ready_run, 0.)+1/240., 0.)
+            self.natural_ready_longest = torch.maximum(self.natural_ready_longest, self.natural_ready_run)
+            self.natural_previous_target.copy_(state['indices'])
 
     def _record_finger_motion(self):
         super()._record_finger_motion()
@@ -390,6 +568,12 @@ class FingerSkillEnvironment(TensorSongEnvironment):
 
     def _episode(self, index, failed):
         result = super()._episode(index, failed)
+        if self.natural_preparation is not None:
+            result['natural_preparation'] = dict(**self.natural_preparation,
+                columns=['preparation_s', 'ready_before_descent_s', 'unready_slow_wrist_s', 'early_candidate_s'],
+                per_finger_seconds=self.natural_seconds[index].cpu().tolist(),
+                longest_continuous_ready_before_descent_s=self.natural_ready_longest[index].cpu().tolist(),
+                scope='actual240Hz samples per completed episode; failures retained; ready time is cumulative, not continuous dwell')
         mask = self.focus_mask[index]
         count = int(mask.sum().item())
         now = float(self._local_time()[index])

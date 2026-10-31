@@ -1,0 +1,218 @@
+"""Manual joints/guitar placement and switchable native physics."""
+import argparse
+from datetime import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+import time
+import sys
+import xml.etree.ElementTree as ET
+import numpy as np
+from .lab import Lab
+from .model import body_pose, body_fields, joint_group
+
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT = ROOT / 'docs/2026-10-19/stability_adapter_2/results/right_arm_wrap_upright_v1/native_wrap55_static/initial_values.json'
+OUTPUT = ROOT / 'docs/2026-10-19/stability_adapter_2/results/manual_pose_lab_v1/sessions'
+
+
+def sha(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+class Window:
+    def __init__(self, lab, out, api):
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+        self.tk, self.ttk, self.messagebox = tk, ttk, messagebox
+        self.lab, self.out, self.api = lab, out, api
+        self.root = tk.Tk()
+        self.root.title('기타·휴머노이드 수동 테스트')
+        self.root.geometry('620x760')
+        self.closed, self.syncing, self.collision, self.camera, self.axis = False, False, False, 0, 0
+        self.index = 0
+        self.centre_G = np.array(lab.scene.geometry['body_envelope_center_G_m'])
+        self.mode_text = tk.StringVar()
+        ttk.Label(self.root, textvariable=self.mode_text, font=('', 13)).pack(pady=8)
+        row = ttk.Frame(self.root); row.pack()
+        self.physics = ttk.Button(row, text='물리 ON', command=lambda: self.guard(self.toggle)); self.physics.pack(side='left', padx=4)
+        ttk.Button(row, text='환경 초기화', command=lambda: self.guard(self.reset)).pack(side='left', padx=4)
+        ttk.Button(row, text='현재 초기값 저장', command=lambda: self.guard(self.save)).pack(side='left', padx=4)
+        ttk.Label(self.root, text='OFF: 배치 편집  |  ON: 중력·충돌 + 관절 목표 유지\nRoot·하체 고정 / 스트랩 없음 / 기존 안정화 controller 없음').pack(pady=8)
+        frame = ttk.LabelFrame(self.root, text='휴머노이드 관절'); frame.pack(fill='x', padx=12, pady=4)
+        self.group = ttk.Combobox(frame, state='readonly', values=list(dict.fromkeys(joint_group(n) for n in lab.names)))
+        self.group.pack(fill='x'); self.group.set('오른팔'); self.group.bind('<<ComboboxSelected>>', lambda e:self.populate())
+        self.joints = ttk.Combobox(frame, state='readonly'); self.joints.pack(fill='x'); self.joints.bind('<<ComboboxSelected>>', lambda e:self.select_joint())
+        self.angle = tk.DoubleVar()
+        self.slider = tk.Scale(frame, orient='horizontal', variable=self.angle, resolution=.1, command=lambda value:self.joint_changed(value))
+        self.slider.pack(fill='x')
+        row = ttk.Frame(frame); row.pack(fill='x')
+        ttk.Button(row, text='−0.5°', command=lambda:self.guard(lambda:self.nudge_joint(-.5))).pack(side='left')
+        ttk.Spinbox(row, textvariable=self.angle, from_=-360, to=360, increment=.1, width=12).pack(side='left', padx=6)
+        ttk.Button(row, text='입력각 적용', command=lambda:self.guard(lambda:self.joint_changed(self.angle.get()))).pack(side='left')
+        ttk.Button(row, text='+0.5°', command=lambda:self.guard(lambda:self.nudge_joint(.5))).pack(side='left', padx=6)
+        self.joint_status = tk.StringVar(); ttk.Label(frame, textvariable=self.joint_status).pack(pady=4)
+        frame = ttk.LabelFrame(self.root, text='기타 바디 중심 이동·회전 — 물리 OFF에서 편집'); frame.pack(fill='x', padx=12, pady=8)
+        self.position = [tk.DoubleVar() for _ in range(3)]
+        self.rotation = [tk.DoubleVar() for _ in range(3)]
+        self.guitar_widgets = []
+        for values, label, step in ((self.position, '세계 위치(m)', .005), (self.rotation, '기준 대비 세계 XYZ 회전(°)', 1.)):
+            ttk.Label(frame, text=label).pack(anchor='w')
+            for axis, variable in enumerate(values):
+                row = ttk.Frame(frame); row.pack(fill='x')
+                ttk.Label(row, text='XYZ'[axis], width=3).pack(side='left')
+                for amount in (-step, step):
+                    button = ttk.Button(row, text='%+.3g'%amount, command=lambda v=variable,a=amount:self.guard(lambda:self.nudge_guitar(v,a)))
+                    button.pack(side='left', padx=3); self.guitar_widgets.append(button)
+                entry = ttk.Entry(row, textvariable=variable, width=16); entry.pack(side='left', padx=8); self.guitar_widgets.append(entry)
+        button = ttk.Button(frame, text='기타 입력값 적용', command=lambda:self.guard(self.apply_guitar)); button.pack(pady=4); self.guitar_widgets.append(button)
+        self.status = tk.StringVar(); ttk.Label(self.root, textvariable=self.status).pack(pady=6)
+        ttk.Label(self.root, text='시뮬레이션 창: Space 물리 전환 / R 초기화 / C 카메라 / G 충돌형상\nF1~F3 이동축 · F4~F6 회전축 / J·L −·+ / S 저장 / Esc 종료\n마우스 카메라 조작은 Isaac Gym viewer 기본 조작을 사용합니다.').pack(pady=4)
+        self.root.protocol('WM_DELETE_WINDOW', self.close)
+        props = api.CameraProperties(); props.width, props.height = 1280, 720
+        self.viewer = lab.scene.gym.create_viewer(lab.scene.sim, props)
+        if self.viewer is None:
+            self.root.destroy(); raise RuntimeError('Isaac Gym viewer를 만들 수 없습니다.')
+        for key in ('SPACE','R','C','G','F1','F2','F3','F4','F5','F6','J','L','S','ESCAPE'):
+            lab.scene.gym.subscribe_viewer_keyboard_event(self.viewer, getattr(api,'KEY_'+key), key)
+        self.populate(); self.sync(); self.set_camera()
+
+    def guard(self, action):
+        try: action()
+        except (ValueError, RuntimeError) as error:
+            self.messagebox.showerror('입력 확인', str(error)); self.sync()
+
+    def populate(self):
+        names = [n for n in self.lab.names if joint_group(n)==self.group.get()]
+        self.joints['values'] = names; self.joints.set(names[0]); self.select_joint()
+
+    def select_joint(self):
+        self.index = self.lab.names.index(self.joints.get())
+        self.syncing = True
+        self.slider.config(from_=float(np.degrees(self.lab.scene.lower[self.index])), to=float(np.degrees(self.lab.scene.upper[self.index])) )
+        self.angle.set(float(np.degrees(self.lab.scene.target[self.index])))
+        self.syncing = False
+
+    def joint_changed(self, value):
+        if not self.syncing:
+            self.guard(lambda:self.lab.set_joint(self.index, float(value)))
+
+    def nudge_joint(self, amount):
+        value = self.angle.get()+amount
+        self.lab.set_joint(self.index, value); self.angle.set(value)
+
+    def sync(self):
+        centre, angles = body_fields(*self.lab.pose(), self.lab.start_r, self.centre_G)
+        for variables, values in ((self.position,centre),(self.rotation,angles)):
+            for variable,value in zip(variables,values): variable.set(round(float(value),6))
+        self.select_joint()
+        self.physics.config(text='물리 OFF · 편집' if self.lab.running else '물리 ON · 실행')
+        for widget in self.guitar_widgets: widget.config(state='disabled' if self.lab.running else 'normal')
+
+    def toggle(self): self.lab.toggle(); self.sync()
+    def reset(self): self.lab.reset(); self.sync()
+    def apply_guitar(self):
+        p,q = body_pose([v.get() for v in self.position], [v.get() for v in self.rotation], self.lab.start_r, self.centre_G)
+        self.lab.set_guitar(p,q)
+    def nudge_guitar(self, variable, amount): variable.set(variable.get()+amount); self.apply_guitar()
+    def save(self):
+        path=self.out/('initial_%s.json'%datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
+        self.lab.save(path); self.messagebox.showinfo('저장 완료',str(path))
+
+    def set_camera(self):
+        eye,target = (((.9,1.8,1.15),(-.06,0,.68)) if self.camera==0 else ((-.05,.72,.89),(-.105,.095,.735)))
+        self.lab.scene.gym.viewer_camera_look_at(self.viewer,self.lab.scene.env,self.api.Vec3(*eye),self.api.Vec3(*target))
+
+    def handle(self, key):
+        if key=='SPACE': self.toggle()
+        elif key=='R': self.reset()
+        elif key=='C': self.camera=1-self.camera; self.set_camera()
+        elif key=='G': self.collision=not self.collision
+        elif key=='S': self.save()
+        elif key=='ESCAPE': self.close()
+        elif key.startswith('F'): self.axis=int(key[1:])-1
+        elif key in ('J','L'):
+            if self.lab.running: raise RuntimeError('기타 편집 전에 물리 OFF로 전환하세요.')
+            variables=self.position if self.axis<3 else self.rotation
+            self.nudge_guitar(variables[self.axis%3],(-1 if key=='J' else 1)*(.005 if self.axis<3 else 1.))
+
+    def tick(self):
+        if self.closed: return
+        env=self.lab.scene
+        if env.gym.query_viewer_has_closed(self.viewer): self.close(); return
+        start=time.monotonic()
+        try:
+            for event in env.gym.query_viewer_action_events(self.viewer):
+                if event.value>0: self.guard(lambda key=event.action:self.handle(key))
+            if self.closed: return
+            self.lab.advance()
+            env.gym.step_graphics(env.sim); env.gym.draw_viewer(self.viewer,env.sim,self.collision)
+            from ..native_contacts import read_contacts, body_names
+            contacts=read_contacts(env.gym,env.env,body_names(env.gym,env.env)) if env.steps else []
+            actual=env.gym.get_actor_dof_states(env.env,env.human,self.api.STATE_ALL)['pos'][self.index]
+            self.mode_text.set('물리 ON — 실행 중' if self.lab.running else '물리 OFF — 정지·편집')
+            self.joint_status.set('실제 %.2f° / 목표 %.2f°'%(np.degrees(actual),np.degrees(env.target[self.index])))
+            self.status.set('경과 %.3fs / 접촉 %d개 (현재 physics endpoint)'%(env.steps/240,len(contacts)))
+        except Exception as error:
+            self.messagebox.showerror('실행 중단',str(error)); self.close(); return
+        self.root.after(max(1,round((1/30-(time.monotonic()-start))*1000)),self.tick)
+
+    def close(self):
+        if not self.closed:
+            self.closed=True; self.lab.running=False
+            self.lab.scene.gym.destroy_viewer(self.viewer); self.root.destroy()
+
+    def run(self): self.tick(); self.root.mainloop()
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--initial',type=Path,default=DEFAULT)
+    parser.add_argument('--out',type=Path)
+    parser.add_argument('--check-steps',type=int,default=None,help='headless native verification; no viewer')
+    args=parser.parse_args()
+    if args.check_steps is not None and args.check_steps<1: parser.error('--check-steps must be positive')
+    if args.check_steps is None and not os.environ.get('DISPLAY'):
+        parser.error('그래픽 데스크톱의 터미널에서 실행하세요. 현재 DISPLAY가 없습니다.')
+    out=args.out or OUTPUT/datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    out.mkdir(parents=True,exist_ok=False)
+    from .scene import Scene, gymapi, GEOMETRY, MASS, read
+    from ..build_fixed_lower_asset import ASSET, MANIFEST, REFERENCE
+    shared=read(ROOT/'stability_adapter_2/config.json')
+    inputs=[args.initial,GEOMETRY,MASS,ASSET,MANIFEST,REFERENCE/'report.json',REFERENCE/'states.json',ROOT/'stability_adapter_2/config.json']
+    inputs += [ROOT/shared[key] for key in ('pose_source','gain_source')]
+    inputs += [Path(p) for p in read(MANIFEST)['input_sha256']]
+    inputs += sorted(Path(__file__).parent.glob('*.py'))
+    for module in list(sys.modules.values()):
+        file=getattr(module,'__file__',None)
+        if file and Path(file).suffix=='.py' and str(Path(file).resolve()).startswith(str(ROOT/'stability_adapter_2')+'/'):
+            inputs.append(Path(file))
+    for asset in (ASSET,Path(read(GEOMETRY)['asset'])):
+        inputs.append(asset)
+        xml=ET.parse(asset).getroot()
+        meshdir=(asset.parent/xml.find('compiler').get('meshdir','.')).resolve()
+        inputs += [(meshdir/m.get('file')).resolve() for m in xml.findall('./asset/mesh')]
+    hashes={str(p.resolve()):sha(p) for p in inputs}
+    (out/'inputs_before.json').write_text(json.dumps(hashes,indent=2)+'\n')
+    scene=None; window=None
+    try:
+        scene=Scene(graphics=args.check_steps is None); lab=Lab(scene,read(args.initial),gymapi)
+        if args.check_steps is None:
+            window=Window(lab,out,gymapi); window.run()
+        else:
+            before=scene.bodies(scene.guitar); lab.advance(8)
+            assert scene.steps==0 and np.array_equal(before,scene.bodies(scene.guitar))
+            lab.toggle(); lab.advance(args.check_steps)
+            assert scene.steps==args.check_steps
+            lab.toggle(); lab.reset()
+            assert scene.steps==0
+            lab.save(out/'reset_initial.json')
+            (out/'native_check.json').write_text(json.dumps({'passed':True,'physics_steps_tested':args.check_steps,'physics_off_no_steps':True,'reset_zero_time':True,'strap_enabled':False,'root_lower_fixed':True,'guitar_free':not scene.guitar_root_fixed,'guitar_mass_kg':scene.guitar_mass},indent=2)+'\n')
+        assert all(sha(p)==h for p,h in hashes.items())
+        (out/'session.json').write_text(json.dumps({'initial':str(args.initial.resolve()),'input_sha256':hashes,'inputs_unchanged':True,'physics_mode':'native POSITION PD with finite model caps; not the experiment support controller','output_directory':str(out.resolve())},ensure_ascii=False,indent=2)+'\n')
+    finally:
+        if window is not None and not window.closed: window.close()
+        if scene is not None: scene.close()
+
+
+if __name__=='__main__': main()

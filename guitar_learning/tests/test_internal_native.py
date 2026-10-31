@@ -51,7 +51,7 @@ class InternalNativeTests(unittest.TestCase):
         self.assertTrue(common.verify(pins))
 
     def test_provenance_rehashes_current_bytes_and_rejects_tampering(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir=ROOT) as folder:
             current = Path(folder)/'native.py'
             current.write_text('original bytes\n')
             manifest = Path(folder)/'manifest.json'

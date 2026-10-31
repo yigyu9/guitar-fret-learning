@@ -1,0 +1,91 @@
+"""One persistent free-guitar scene across the complete score and PPO rollouts."""
+import copy
+from unittest.mock import patch
+import numpy as np
+from guitar_learning.core import training_environment
+from guitar_learning.core.training_environment import TrainingEnvironment
+from guitar_learning.quality.actionable_preparation_environment import PersistentContactEnvironment
+from guitar_learning.runtime.persistent_environment import _CONSTRUCTION_LOCK
+from .task import make_task
+from .measurement import SongMeasurement
+from .metrics import SongLedger, HISTORY_FIELDS, HISTORY_SCALES, metadata
+
+
+class SongEnvironment(TrainingEnvironment):
+    def __init__(self, *args, song, **kwargs):
+        self.song_config = copy.deepcopy(song); self.song_ledger = None
+        self.role = 'joint'; self.frozen_partner = False
+        super().__init__(*args, preparation_seconds=0., **kwargs)
+
+    def reset(self):
+        self.song_ledger = None
+        def measurement(*args, **kwargs):
+            return SongMeasurement(*args, window_s=self.song_config['window_s'], **kwargs)
+        with _CONSTRUCTION_LOCK, patch.object(training_environment, 'TaskMeasurement', measurement):
+            _, info = super().reset()
+        self.song_ledger = SongLedger(self.task, self.last_measured,
+            window_s=self.song_config['window_s'], left_fraction=self.song_config['left_fraction'])
+        obs = self.contract['observation']
+        obs['fields'] += ['song.'+field for field in HISTORY_FIELDS]
+        obs['scales'] += list(HISTORY_SCALES); obs['dimension'] += len(HISTORY_FIELDS)
+        self.contract['task']['song'] = dict(self.song_config, measurement='clean multi-target contact; continuous native geometric strike rearm')
+        self.contract['task']['specialist'] = dict(role='joint', schema='guitar_learning.song.v1', frozen_partner=False)
+        self.contract['reward'] = dict(song=metadata(), shared_terms=['action_change','terminal_failure'],
+            cost_rate=self.contract['reward']['cost_rate'],cost_integration=self.contract['reward']['cost_integration'])
+        info['training_contract'] = self.contract
+        self._song_info(info, False)
+        return self._observation(), info
+
+    def _observation(self):
+        value = TrainingEnvironment._observation(self)
+        if self.song_ledger is not None:
+            history = np.asarray(self.song_ledger.history(), dtype=float)
+            value['state'] = np.r_[value['state'], np.clip(history/np.asarray(HISTORY_SCALES),-10,10)].astype(np.float32)
+        return value
+
+    def _song_info(self, info, completed):
+        summary = self.song_ledger.summary(completed=completed)
+        info['song'] = summary
+        compact = {key:copy.deepcopy(value) for key,value in summary.items() if key not in ('targets','per_note','events')}
+        info['musical_quality'] = dict(schema='guitar_learning.song.v1',role='joint',
+            stage_success=summary['stage_success'], provisional_success=summary['provisional_success'],song=compact)
+        if 'episode' in info:
+            info['episode']['song'] = copy.deepcopy(summary)
+            info['episode']['musical_quality'] = copy.deepcopy(info['musical_quality'])
+
+    def step(self, action):
+        try:
+            _, base_reward, terminated, truncated, info = TrainingEnvironment.step(self, action)
+            rows = info['physics_measurements']; samples = info['native_control']['physics_samples240']
+            if len(rows) != 4 or len(samples) != 4:
+                raise ValueError('exact four native samples per song control tick required')
+            additions = {}
+            for row,sample in zip(rows,samples):
+                if row['physics_step'] != sample['native']['physics_step']:
+                    raise ValueError('same native sample required for song reward')
+                terms = self.song_ledger.update(row['music'],sample)
+                row['song_reward_terms'] = terms
+                if row['stability']['failure_reasons']:
+                    self.song_ledger.invalidate(row['stability']['failure_reasons'])
+            if info['failure_reasons']:
+                self.song_ledger.invalidate(info['failure_reasons'])
+                for row in rows:
+                    row['song_reward_terms'] = {key:min(0.,value) for key,value in row['song_reward_terms'].items()}
+            for row in rows:
+                for key,value in row['song_reward_terms'].items(): additions[key] = additions.get(key,0.)+value
+            terms = {key:info['reward_terms'][key] for key in ('action_change','terminal_failure')}
+            terms.update(additions); reward = float(sum(terms.values()))
+            if not np.isfinite(reward): raise ValueError('finite full-score reward required')
+            self.total_reward += reward-base_reward; info['reward_terms'] = terms
+            self._song_info(info, bool(terminated and info['termination_reason']=='timeline_complete'))
+            if 'episode' in info: info['episode']['reward'] = self.total_reward
+            return self._observation(),reward,terminated,truncated,info
+        except BaseException:
+            self.finished = True
+            raise
+
+
+def build_environment(config,out,*,bundle,song,**kwargs):
+    task = make_task(bundle,pre_roll_s=song['pre_roll_s'],tail_s=song['tail_s'])
+    with _CONSTRUCTION_LOCK, patch.object(training_environment,'ContactEnvironment',PersistentContactEnvironment):
+        return SongEnvironment(config,out,task=task,song=song,**kwargs)

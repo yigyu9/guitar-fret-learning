@@ -1,0 +1,111 @@
+"""Stream one complete deterministic score attempt with final source/safety audit."""
+import argparse
+import copy
+import gzip
+import json
+import os
+from pathlib import Path
+import random
+import time
+
+
+def evaluate(settings,args):
+    import isaacgym
+    import numpy as np
+    import torch
+    from ..imitation_io import CONFIG,BUNDLE,pin_inputs_with_evidence,verify_inputs
+    from ..recording import write
+    from ..parallel import FIELDS
+    from ..persistent_session import PersistentHeadlessPreparedSession
+    from ..monitoring import available_memory_bytes,LowMemoryError
+    from ..ppo import PPOTrainer,PPOConfig
+    from .environment import build_environment
+    from .policy import SongPolicy
+    from .transfer import validate_experts,apply_experts
+    from .worker import compact
+    out=args.out.resolve();out.mkdir(parents=True,exist_ok=False)
+    evidence=validate_experts(settings);checkpoint=args.run.resolve()/'final.pt' if args.run else None
+    pins=pin_inputs_with_evidence([args.settings.resolve(),*([checkpoint] if checkpoint else [])], evidence['source_pins'])
+    write(out/'inputs_before.json',pins);write(out/'settings.json',settings)
+    started=time.monotonic();env=None;episode=None;primary=None;failure=None;cleanup=None
+    flags=False;forbidden=[];unchanged=False;steps=0;horizon=None
+    def guard(start=False):
+        if available_memory_bytes() < (8. if start else 6.)*1024**3:raise LowMemoryError('song evaluation memory guard')
+        if time.monotonic()-started>1800.:raise TimeoutError('song evaluation1800s guard')
+    def encode(value):
+        if isinstance(value,np.ndarray):return value.tolist()
+        if isinstance(value,np.generic):return value.item()
+        raise TypeError(type(value).__name__)
+    try:
+        guard(True);torch.set_num_threads(1)
+        random.seed(settings['seed']);np.random.seed(settings['seed']);torch.manual_seed(settings['seed'])
+        env=build_environment(CONFIG,out/'environment',bundle=BUNDLE,song=settings['song'],session_factory=PersistentHeadlessPreparedSession)
+        observation,reset=env.reset();write(out/'reset.json',reset);write(out/'training_contract.json',env.contract)
+        model=SongPolicy(len(observation['state']),size=settings['size'],contract=env.contract).to(settings['device'])
+        if checkpoint:
+            trainer=PPOTrainer(model,PPOConfig(**settings['ppo']));trainer.load(checkpoint)
+            initialization=dict(mode='strict_PPO',optimizer_updates=trainer.updates,checkpoint=str(checkpoint))
+        else:initialization=apply_experts(model,settings)
+        write(out/'initialization.json',initialization);model.eval()
+        horizon=round(env.task.duration_s*60)
+        with gzip.open(out/'transitions.jsonl.gz','xt',compresslevel=1) as trace:
+            for tick in range(horizon):
+                if tick%60==0:guard()
+                inputs=[torch.as_tensor(observation[key],device=settings['device']).unsqueeze(0) for key in FIELDS]
+                with torch.no_grad():action=model.act(*inputs,deterministic=True)['action'][0].cpu().numpy()
+                observation,reward,terminated,truncated,info=env.step(action);steps+=1
+                trace.write(json.dumps(dict(tick=tick,action=action,reward=reward,info=compact(env,info,action),
+                    physics_measurements=info['physics_measurements'],
+                    native_last_sample=info['native_control']['physics_samples240'][-1]['native']),default=encode,allow_nan=False)+'\n')
+                if (tick+1)%60==0:
+                    print('[song evaluate] tick=%d/%d left=%d right=%d coupled=%d/%d'%(tick+1,horizon,
+                        info['song']['left_success_count'],info['song']['right_success_count'],
+                        info['song']['coupled_hit_count'],info['song']['target_count']),flush=True)
+                if terminated or truncated:episode=copy.deepcopy(info['episode']);break
+        guard()
+    except BaseException as error:
+        primary=error;failure=dict(type=type(error).__name__,message=str(error))
+    finally:
+        if env is not None:
+            try:
+                session=env.control.session
+                if session is not None:
+                    scene=session.scene;forbidden=copy.deepcopy(scene.forbidden_calls)
+                    flags=bool(scene.human_root_fixed and not scene.guitar_root_fixed and not scene.guitar_gravity_disabled
+                        and np.array_equal(scene.pd_properties,env.control.original_properties))
+            except BaseException as error:
+                cleanup=dict(type=type(error).__name__,message=str(error))
+                if primary is None:primary=error
+            try:env.close()
+            except BaseException as error:
+                cleanup=dict(type=type(error).__name__,message=str(error))
+                if primary is None:primary=error
+        try:unchanged=verify_inputs(pins)
+        except BaseException as error:
+            if failure is None:failure=dict(type=type(error).__name__,message=str(error))
+            if primary is None:primary=error
+    result=dict(schema='guitar_learning.song_evaluation.v1',completed=bool(episode and failure is None and cleanup is None),
+        kind='strict_PPO' if checkpoint else 'fixed_feature_initialization',episode=episode,steps=steps,
+        full_safe_timeline=bool(episode and episode.get('valid') is True and episode['reason']=='timeline_complete'
+            and steps==horizon and episode.get('steps')==horizon
+            and abs(episode.get('task_time_s',-1)-horizon/60.)<1e-9
+            and episode['song']['safety_invalidated'] is False
+            and flags and not forbidden and unchanged and failure is None and cleanup is None),
+        source_unchanged=unchanged,physical_flags_ok=flags,forbidden_calls=forbidden,failure=failure,cleanup_error=cleanup,
+        elapsed_wall_s=time.monotonic()-started,scope='same full score only; clean native contact and geometric strike, no sound certification')
+    write(out/'result.json',result)
+    if primary is not None:raise primary
+    return result
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--settings',type=Path,required=True);parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--run',type=Path);args=parser.parse_args()
+    for key in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS'):os.environ[key]='1'
+    import isaacgym
+    from .settings import settings_document
+    evaluate(settings_document(json.loads(args.settings.read_text())),args)
+
+
+if __name__=='__main__':main()

@@ -20,7 +20,8 @@ FINGER_TARGET_CONTRACT = dict(
     scope='shared reward/observation target selection; no control or note-state mutation')
 
 
-def finger_target_indices(now, onset, end, press, finger, target_mask=None):
+def finger_target_indices(now, onset, end, press, finger, target_mask=None,
+                          preparation_mask=None):
     """indices long[N,4,2]와 valid bool[N,4,2] 사전을 반환하며 무효 인덱스는 -1이다."""
     n, m = now.numel(), onset.numel()
     if (now.shape != (n,) or any(t.shape != (m,) for t in (onset, end, press, finger)) or
@@ -38,7 +39,13 @@ def finger_target_indices(now, onset, end, press, finger, target_mask=None):
     else:
         assigned = assigned[None]
     audible = assigned & ((onset <= now[:, None]) & (now[:, None] < end))[:, None]
-    preparing = assigned & ((press-2 <= now[:, None]) & (now[:, None] < end))[:, None]
+    preparation_window = (press-2 <= now[:, None]) & (now[:, None] < end)
+    if preparation_mask is not None:
+        if preparation_mask.shape != (n, m) or preparation_mask.dtype != torch.bool:
+            raise ValueError('preparation_mask must be bool[N,M]')
+        # 추가 준비 노출도 끝난 음을 되살리거나 손가락/작업 배정을 바꾸지 않는다.
+        preparation_window |= preparation_mask & (now[:, None] < end)
+    preparing = assigned & preparation_window[:, None]
     current = end.expand(n, 4, m).masked_fill(~audible, torch.inf).argmin(-1)
     upcoming = onset.expand(n, 4, m).masked_fill(~preparing, torch.inf).argmin(-1)
     first = torch.where(audible.any(-1), current, upcoming)
@@ -200,14 +207,14 @@ def finger_recovery_config(value=None):
 
 
 FINGER_PREPARATION_CONTRACT = dict(
-    schema='guitar_learning.gpu_finger_preparation_rate.v5',
+    schema='guitar_learning.gpu_finger_preparation_rate.v6',
     measurement_schema=FINGER_COORDINATION_CONTRACT['schema'],
     reference='user-selected static B; flexion preference only, never a joint target or required waypoint',
     reference_input_degrees=B_PREPARATION_INPUT_DEGREES,
     reference_spread_degrees=B_PREPARATION_SPREAD_DEGREES,
     reference_geometric_degrees=B_PREPARATION_ANGLES_DEGREES,
-    half_band_degrees=15., outside_scale_degrees=30.,
-    quality='1/(1+sum((relu(abs(actual-reference)-15deg)/30deg)^2)); invalid fingers zero',
+    half_band_degrees=[30., 15., 15.], outside_scale_degrees=30.,
+    quality='1/(1+sum((relu(abs(actual-reference)-[30,15,15]deg)/30deg)^2)); invalid fingers zero',
     gate='score-only per-finger active union; release grace0.05s then0.1s fade; next press preparation0.35s with0.1s fade; short gaps direct, medium gaps partial recovery',
     preparation_s=.35, fade_s=.1, release_grace_s=.05, relevant_preparation_s=2.,
     gap_s=[.25, .6], medium_preparation='min(0.35,0.4*gap)',
@@ -290,7 +297,9 @@ def finger_preparation_reward(now, onset, end, press, finger, palm_quaternion,
     gated = finger_preparation_gate(now, onset, end, press, finger, contact, distance, target_mask)
     angles = measured['angles']
     reference = angles.new_tensor(B_PREPARATION_ANGLES_DEGREES)*math.pi/180.
-    outside = torch.relu((angles-reference).abs()-math.radians(15.))
+    # 뿌리 관절은 더 넓게 허용하고 가운데·끝 관절의 약한 권고는 유지한다.
+    half_band = angles.new_tensor(FINGER_PREPARATION_CONTRACT['half_band_degrees'])*math.pi/180.
+    outside = torch.relu((angles-reference).abs()-half_band)
     quality = (1+outside.square().sum(-1)/math.radians(30.)**2).reciprocal()
     usable = measured['valid'].all(-1)
     quality = torch.where(usable, quality, 0.)

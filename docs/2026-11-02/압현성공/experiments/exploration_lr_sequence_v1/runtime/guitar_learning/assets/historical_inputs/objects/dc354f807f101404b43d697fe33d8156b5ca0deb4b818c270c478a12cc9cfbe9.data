@@ -1,0 +1,41 @@
+"""Trial reset and reloading exported manual values."""
+import json
+from pathlib import Path
+import tempfile
+import unittest
+import numpy as np
+from types import SimpleNamespace
+from .lab_v2 import Lab
+from .test_lab import FakeScene
+
+
+def make_lab(initial=None):
+    scene=FakeScene()
+    initial=initial or {'joint_names':scene.names,'native_initial_state':{
+        'human_dof_states':[{'pos':.2} for _ in range(81)],
+        'guitar_body_states':[{'pose':{'p':dict(zip('xyz',[.1,.2,1.])), 'r':dict(zip('xyzw',[0,0,0,1]))}}]}}
+    return Lab(scene,initial,SimpleNamespace(STATE_ALL=3))
+
+
+class TrialTests(unittest.TestCase):
+    def test_reset_repeats_edited_trial(self):
+        lab=make_lab(); lab.set_joint(0,20);lab.set_guitar([1,2,3],[0,0,0,1])
+        q=lab.scene.target.copy(); lab.toggle();lab.advance(8);lab.reset()
+        self.assertFalse(lab.running);self.assertEqual(lab.scene.steps,0)
+        np.testing.assert_allclose(lab.pose()[0],[1,2,3])
+        np.testing.assert_array_equal(lab.scene.dofs['pos'],q)
+    def test_original_reset_separate_from_trial(self):
+        lab=make_lab();lab.set_joint(0,20);lab.set_guitar([1,2,3],[0,0,0,1]);lab.toggle();lab.advance(8)
+        lab.reset_original()
+        np.testing.assert_allclose(lab.pose()[0],lab.start_p)
+        np.testing.assert_array_equal(lab.scene.dofs['pos'],lab.start_q)
+    def test_export_reopen(self):
+        lab=make_lab();lab.set_joint(2,15);lab.set_guitar([.5,.4,2],[0,0,1,0])
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'pose.json'; saved=lab.save(path); reopened=make_lab(json.loads(path.read_text()))
+            np.testing.assert_allclose(reopened.pose()[0],saved['position_W_m'])
+            np.testing.assert_allclose(abs(reopened.pose()[1]@np.array(saved['quaternion_xyzw'])),1)
+            np.testing.assert_array_equal(reopened.scene.target,saved['joint_angles_rad'])
+
+
+if __name__=='__main__':unittest.main()

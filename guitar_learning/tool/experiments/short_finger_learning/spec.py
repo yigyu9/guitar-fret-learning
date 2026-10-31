@@ -9,7 +9,7 @@ from guitar_learning.core.control import ACTIVE_NAMES, LEFT_ARM_NAMES
 from guitar_learning.training.training_log_io import digest
 from guitar_learning.song.finger_phrases import FingerPhrase, build_phrase_catalog
 
-SCHEMA = 'guitar_learning.short_finger_learning.v2'
+SCHEMA = 'guitar_learning.short_finger_learning.v3'
 TEACHER_SCHEMA = 'short_finger_teacher.v2'
 
 
@@ -77,8 +77,8 @@ def subset(task, teacher):
 def diagnostic_spec(task, teacher, mode, initial_std):
     validate_wrist_pose(teacher)
     from .wrist import WRIST_CONTROL
-    if mode not in ('incremental', 'position'):
-        raise ValueError('Explicit incremental/position mode required')
+    if mode != 'position':
+        raise ValueError('Direct position mode required')
     if not math.isfinite(initial_std) or not math.exp(-5) <= initial_std <= 1:
         raise ValueError('Explicit initial latent std in[exp(-5),1] required (policy clamp)')
     _, _, view = subset(task, teacher)

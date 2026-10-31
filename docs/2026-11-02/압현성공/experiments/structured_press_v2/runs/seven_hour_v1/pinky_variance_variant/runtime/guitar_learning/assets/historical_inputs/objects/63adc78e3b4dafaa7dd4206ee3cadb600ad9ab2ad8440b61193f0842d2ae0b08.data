@@ -1,0 +1,105 @@
+"""Same free-guitar episode; three full-body cameras and read-only contact witnesses."""
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from .initial_pose_noise_v1 import read, save, sha, pose
+
+ROOT = Path(__file__).resolve().parents[1]
+P = ROOT/'docs/2026-10-19/stability_adapter_2/results/contact_three_view_v1'
+REFERENCE = ROOT/'docs/2026-10-19/stability_adapter_2/results/chest_left_grip_cycle_v1/native_v1'
+CAMERAS = {
+    'whole_body': {'view': 'front', 'eye': [0,3.1,.80], 'target': [0,0,.72]},
+    'hands': {'view': 'right_side', 'eye': [3.1,0,.80], 'target': [0,0,.72]},
+    'chest_arm_close': {'view': 'top', 'eye': [0,.05,2.9], 'target': [0,0,.45]},
+}
+
+
+def group(name):
+    if name.startswith('LH:thumb'): return 'left_thumb'
+    if name.startswith('LH:'): return 'left_hand'
+    return {'Chest':'chest', 'R_Shoulder':'right_upper_arm', 'R_Hip':'right_thigh', 'L_Hip':'left_thigh'}.get(name,'other')
+
+
+def run():
+    from . import run_chest_left_grip_cycle_v1 as runner
+    from . import right_block_body_effort_v5 as support
+    from .environment import gymapi
+    from .run_joint_hold import native_state
+    from .native_contacts import body_names, read_contacts
+    Parent = support.EffortRecording
+
+    class Recording(Parent):
+        def __init__(self, env, out):
+            super().__init__(env, out)
+            before = native_state(env)
+            self.contact_frames = []
+            self.contact_names = body_names(env.gym, env.env)
+            for name, spec in CAMERAS.items():
+                props = gymapi.CameraProperties()
+                props.width, props.height, props.horizontal_fov = 1280, 720, 55.
+                camera = env.gym.create_camera_sensor(env.env, props)
+                if camera < 0: raise RuntimeError('three-view camera creation failed')
+                env.gym.set_camera_location(camera, env.env, gymapi.Vec3(*spec['eye']), gymapi.Vec3(*spec['target']))
+                env.cameras[name] = camera
+            assert native_state(env) == before
+
+        def capture(self):
+            from .chest_left_grip_cycle_v1 import trajectory
+            before = native_state(self.env)
+            super().capture()
+            body = {'human/'+n:s for n,s in zip(self.env.human_bodies,before['human_body_states'])}
+            body.update({'guitar/'+n:s for n,s in zip(self.env.guitar_bodies,before['guitar_body_states'])})
+            points = []
+            for c in read_contacts(self.env.gym,self.env.env,self.contact_names):
+                a,b = c['body0_name'], c['body1_name']
+                if not ((a.startswith('guitar/') and b.startswith('human/')) or (b.startswith('guitar/') and a.startswith('human/'))): continue
+                world = []
+                for index, name in enumerate((a,b)):
+                    p,r = pose(body[name])
+                    local = np.array([c['localPos%d'%index][k] for k in 'xyz'])
+                    world.append(p+r.apply(local))
+                human = b if a.startswith('guitar/') else a
+                gi = 0 if a.startswith('guitar/') else 1
+                if not np.isfinite(world).all(): raise RuntimeError('nonfinite contact feature')
+                points.append({'human_body':human[6:], 'guitar_body':(a,b)[gi][7:], 'group':group(human[6:]),
+                               'point_W_m':world[gi].tolist(), 'human_point_W_m':world[1-gi].tolist(),
+                               'pair_feature_gap_m':float(np.linalg.norm(world[0]-world[1])),
+                               'positive_lambda':bool(c['lambda']>0), 'raw_contact':c})
+            matrices = {}
+            for key, spec in CAMERAS.items():
+                camera = self.env.cameras[key]
+                matrices[spec['view']] = {'native_key':key,
+                    'view_matrix':np.asarray(self.env.gym.get_camera_view_matrix(self.env.sim,self.env.env,camera)).tolist(),
+                    'projection_matrix':np.asarray(self.env.gym.get_camera_proj_matrix(self.env.sim,self.env.env,camera)).tolist()}
+            assert native_state(self.env) == before
+            self.contact_frames.append({'physics_step':self.env.steps, 'time_s':self.env.steps/240,
+                                        'stage':trajectory(self.env.steps/240)[0],
+                                        'points':points, 'cameras':matrices, 'states_unchanged':True})
+
+        def encode(self):
+            save(self.out/'contact_view_frames.json', {'frames':self.contact_frames, 'camera_config':CAMERAS,
+                'scope':'post-physics normal-force contact features excluding thickness; body-origin localPos transformed with normalized native pose; no simulator writes; raw lambda not calibrated N'})
+            return super().encode()
+
+    with patch.object(support,'EffortRecording',Recording):
+        runner.main()
+
+
+if __name__ == '__main__':
+    import isaacgym
+    from .chest_left_grip_cycle_v1 import main as cycle
+    paths = [Path(__file__).resolve(), ROOT/'stability_adapter_2/CONTACT_THREE_VIEW_PLAN_V1.md',
+             REFERENCE/'report.json', REFERENCE/'trace.json', REFERENCE/'actual_contacts.json',
+             REFERENCE/'initial_values.json', REFERENCE.parent/'config_v1.json',
+             ROOT/'isaacgym/docs/api/python/struct_py.html']
+    inputs = {str(f):sha(f) for f in paths}
+    assert not (P/'view_inputs_before.json').exists(), 'use a new phase/version; preserve prior inputs'
+    assert not (P/'reproduction.json').exists(), 'preserve the prior reproduction record'
+    save(P/'view_inputs_before.json',inputs)
+    cycle(run)
+    same = all(sha(f)==h for f,h in inputs.items())
+    current = P/'native_v1'
+    comparisons = {name:read(current/name)==read(REFERENCE/name) for name in ('trace.json','actual_contacts.json','initial_values.json')}
+    save(P/'reproduction.json',{'input_sha256':inputs,'inputs_unchanged':same,'reference':str(REFERENCE),
+                              'exact':comparisons,'scope':'same physics and control episode; only native camera graphics changed'})
+    if not same or not all(comparisons.values()): raise RuntimeError('reference preservation/reproduction check failed')

@@ -1,0 +1,105 @@
+# 자유 기타 학습
+
+현재 환경·측정·학습·평가 코드는 이 패키지에서 관리한다. 새 손별 학습은 아래 기본 실행에서 시작한다. 연구 범위·실험별 성과는 [master_plan](/home/ajou/yigyu/3/master_plan/README.md)을 따른다. 상태 차원이나 파일 버전이 같아도 목표·보상·입력 SHA가 다른 checkpoint를 혼용하지 않는다.
+
+## 새 손별 학습 시작
+
+`guitar_learning.train`은 새 손별 정책으로 PPO를 시작한다. 왼손은 압현·유지·해제, 오른손은 타현을 학습하며 목표는 검수된 `data/song_bundles/05_BN2-131-B_solo`의 첫 음이다. 선택하지 않은 손의 정책 행동은0이다. 시작 전에 BC·전문가 모델이나 과거 성공 평가4회를 준비할 필요가 없다.
+
+프로젝트 루트에서 Isaac Gym Preview4가 설치된 `rl38` 환경을 사용한다. 먼저 실행 환경을 설정한다.
+
+```bash
+cd /home/ajou/yigyu/3
+export PATH=/home/ajou/miniconda3/envs/rl38/bin:$PATH
+export LD_LIBRARY_PATH=/home/ajou/miniconda3/envs/rl38/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export PYTHONPATH=/home/ajou/yigyu/3/isaacgym/python:/home/ajou/yigyu/3${PYTHONPATH:+:$PYTHONPATH}
+export PYTHONDONTWRITEBYTECODE=1
+```
+
+학습할 손을 골라 아래 명령 중 하나를 실행한다. `--out`은 아직 존재하지 않는 새 출력 경로로 지정한다.
+
+```bash
+python -m guitar_learning.train --hand left --out /home/ajou/yigyu/3/docs/2026-10-20/left_training_01
+python -m guitar_learning.train --hand right --out /home/ajou/yigyu/3/docs/2026-10-20/right_training_01
+```
+
+기본값은 환경2개·PPO100업데이트·수집 길이420·`--device auto`·seed7·medium 모델이다. `auto`는 CUDA를 사용할 수 있으면 `cuda:0`, 그렇지 않으면 CPU를 선택하며 실제 선택 장치를 `settings.json`에 저장한다. 필요하면 `--num-envs`, `--updates`, `--horizon`, `--device auto/cpu/cuda:0`, `--seed`, `--size`로 바꾼다. `--device cuda:0`를 명시하면 CUDA를 사용할 수 없을 때 CPU로 바꾸지 않고 오류로 종료한다. 매 에피소드는 합의한035/v14 준비 상태를 정확히 복원하고 첫 tick부터 정책이 행동한다. 별도 native 대기 없이 정책 준비3초를 포함한 총7초를 수집하며563상태·39행동·실제240Hz 접촉/안전 측정을 사용한다.
+
+실행 설정은 출력의 `settings.json`에 자동 저장한다. 자산·현재 소스 SHA와 물리 안전 조건은 내부에서 검사한다. 같은 계약의 checkpoint를 이어 학습하려면 기존 실행과 같은 손·설정으로 새 출력 경로를 지정하고 `--resume /절대경로/checkpoint.pt`를 추가한다. checkpoint의 관측·행동·목표·보상·물리·PPO 계약은 strict하게 비교하고, 현재 실행 입력의 SHA는 별도로 기록·검사한다.
+
+## 전문 실험과 이전 실행 재현
+
+2026-10-20 기준. 실험 수치·완료 여부는 [master_plan의 검증 결과](/home/ajou/yigyu/3/master_plan/09_curriculum_and_evaluation.md)와 연결된 원자료를 따른다. 루트 CURRENT_STATUS의 첫 전곡 V1 요약을 최신 실행 경로 전체의 결과로 해석하지 않는다.
+
+| 목적 | 진입점 | 계약·범위 |
+|---|---|---|
+| 접촉 회복 평가·교사 수집 | `guitar_learning.contact_recovery.run evaluate/collect` | 상태500·왼손33/전체39. native 원자료·240Hz 회복 기록. 새 PPO를 시작하지 않음 |
+| 회복 자료 감사·내보내기 | `guitar_learning.contact_recovery.dataset_v2` | 실제 회복·원 음악·안전·교사 보정이 감사된 행만 채택 |
+| 왼손 정밀화 평가·PPO | `guitar_learning.transition_refinement_runtime_v2.run eval/train` | 상태500·오른손0. 새 보상·탐색·시연 자료·초기 평가4회와 runtime 감사 |
+| 전곡 보상 V2 | `guitar_learning.song_reward_v2.train/evaluate` | 전곡67음·500상태·33+6행동·정책 준비3초·1969tick |
+| 단음 양손 기준 경로 | `guitar_learning.joint.train/evaluate` | 상태1132·Actor 각569·33+6행동 |
+| 초기 전문가 생성·검증 | `guitar_learning.local_skills` | 이전563상태 품질 경로. 이후 초기화 검증이 일부 함수를 재사용 |
+| 입력 생성·검수·진단 | `guitar_learning.tool` | [도구별 명령](tool/README.md) 참조 |
+
+실제 명령·설정·전제는 [회복](contact_recovery/README.md), [정밀화 runtime V2](transition_refinement_runtime_v2/README.md), [전곡 V2](song_reward_v2/README.md), [양손 단음](joint/README.md) 문서를 따른다. 기존 결과는 해당 원입력 또는 명시적 이전 절차에서 재현한다. 파일 정리만으로 기존 checkpoint의 계약 불일치를 허용하지 않는다.
+
+## 코드 구조와 공용 기반
+
+| 위치 | 역할 |
+|---|---|
+| [contact_recovery](contact_recovery/README.md) | 현행 접촉 획득·상실·회복 진단과 교사 자료 수집. 새 BC/PPO 학습과 구분 |
+| [transition_refinement_runtime_v2](transition_refinement_runtime_v2/README.md) | 왼손 정밀화 평가·학습의 JSON 계약과 runtime 감사 |
+| [transition_refinement](transition_refinement/README.md) | 실제 접촉 준비·유지·해제 보상과 시연 rehearsal PPO |
+| [transition](transition/README.md) | 단음 A/B·겹친 준비·두 음 전환, 교사·BC·원자료 감사의 공통 기반 |
+| [song_reward_v2](song_reward_v2/README.md) | 전곡의 보상 V2·이전·평가·학습 |
+| [song](song/README.md)·[joint](joint/README.md) | 전곡·양손 단음의 공통 실행과 초기화 검증. 이후 경로가 재사용 |
+| [local_skills](local_skills/README.md) | 초기 손별 시연·전문가 검증. 이후 모델 이전이 사용하는 기반 포함 |
+| [core](core) | 공통 환경·관측·제어·접촉 측정·안전 |
+| [runtime](runtime) | native 세션·준비 상태·장면 재사용과 에피소드 reset |
+| [training](training) | 정책·PPO·병렬 수집·기록·로그·보고서 |
+| [skills](skills)·[imitation](imitation) | 손별 단계·전문가 실행과 행동 모방 기반 |
+| [timing](timing)·[quality](quality) | 시간창·정책 준비·손별 음악 품질 기반 |
+| [native](native)·[assets](assets) | 실제 장면·제어·접촉·렌더와 모델·mesh·자세·설정 |
+| [score](score) | 검수한 곡 입력 읽기·정본화·계획 검증 |
+| [tool](tool/README.md) | 곡 등록·데이터/타현 계획 생성·감사·시각화·운영 도구 |
+| [docs](docs) | 단계별 학습 계약·로그 안내·구현 계보 문서 |
+| [tests](tests) | 물리·학습·자료·checkpoint 계약의 회귀 검사 |
+| [archive](archive/README.md) | 이전 소스·실험·검사의 원형과 원래 경로/SHA. 실행 입력으로 import하지 않음 |
+
+루트에는 `train.py`·`environment.py`·`music_task.py`·`historical_inputs.py`·`train_parallel.py`와 안내 파일을 두고 공통 구현은 위 역할별 디렉토리에 모았다. `train_parallel.py`와 이전 환경 버전도 현재 재사용된다. `environment.py`는 기초 접촉 probe용 facade이며 모든 학습의 대표 진입점이 아니다. 구버전 접미사만으로 공용 코드를 삭제하지 않는다.
+
+2026-10-20 재배치 후 이전 루트 실행 명령도 새 모듈 경로를 사용한다. 예를 들어 `guitar_learning.training.train_persistent`, `guitar_learning.skills.train_specialists`, `guitar_learning.imitation.train_imitation_ppo_v2`, `guitar_learning.quality.train_musical_quality`다. 각 단계 문서의 명령을 따르며 과거 실행의 원래 경로·SHA는 보존한다. 기존 checkpoint의 strict 입력 검증과 명시적 이전 조건은 그대로 유지한다.
+
+## 물리와 입력 계약
+
+Root 고정·하체 유한 제어·105입력/97비영 범위/8원 영범위를 유지한다. 정책 행동은 왼손33+오른손6이며 왼손 과제에서는 오른손 정책 행동이0이다. 기타는 자유 강체·중력ON·스트랩OFF이고 직접 보조 힘·부착·실행 중 상태 덮어쓰기를 사용하지 않는다. 가슴 접촉 지속은 성공의 필수조건이 아니다. 물리240Hz·정책60Hz와 실제 표본 기반 음악/안전 판정을 유지한다. 원 gain·관절/속도 제한·안전 종료·실제 접촉/기하 판정을 바꾸지 않는다.
+
+초기 자세는 기존035/v14를 기준으로 하며 현재 자산은 내부 `assets/`에서 읽는다. 준비·정착·정책 pre-roll은 경로별 설정을 따른다. 과거 정착2초 규칙을 native0초인 전곡·전환 경로에 자동 적용하지 않는다. 자세 연구의 새 후보도 학습에 자동 적용되지 않는다.
+
+`assets/native_provenance.json`은 원본과 현재 SHA를 구분한다. `historical_inputs.py`와 실행하지 않는 `assets/historical_inputs/` 원문은 기존 gate·checkpoint의 정확한 입력을 검증한다. 내부화·정리 전 원문 검증을 현재 실행 소스의 검증과 섞지 않는다. 외부 Isaac Gym, `data/song_bundles`, 기존 `docs`·`paper`의 checkpoint와 증거는 계속 필요하다.
+
+Actor 초기값 이전과 strict resume를 구분한다. 새 목표·보상·탐색·자료 계약에는 명시적 이전·검증이 필요하다. 이미 성공한 초기 모델이나 교사 자료를 새 정책의 성공으로 상속하지 않는다. 정밀화 단음의90% 유지와 전곡의 원 유지 기준·strict50/100ms는 별도 계약이다.
+
+## 실행과 검사
+
+프로젝트 루트 `/home/ajou/yigyu/3`에서 Isaac Gym Preview4가 설치된 `rl38` 환경을 사용한다. native 진입점은 Isaac을 NumPy·Torch보다 먼저 import한다. 실제 설정과 새 출력 디렉토리를 지정하고 기존 실행 결과를 덮어쓰지 않는다.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 /home/ajou/miniconda3/envs/rl38/bin/python -B -m unittest discover -s guitar_learning/tests -t . -v
+```
+
+`settings.json`·`training_contract.json`·`inputs_before.json`은 실행 계약, `transitions.jsonl.gz`는 전이, `episodes.jsonl`은 실제 에피소드 종료다. `learning_metrics.jsonl`, 최종 `report.json`, native/runtime 감사와 checkpoint를 함께 확인한다. sampled/logged/durable/committed/discarded와 완주·음악·안전·런타임 실패를 구분한다. 상세는 [LOGGING](docs/LOGGING.md)을 따른다.
+
+저장 모델의 strict load는 같은 관측·행동·목표·보상·물리·PPO 계약에서만 허용한다. 접촉 후보·기하 타현·음악 성공·안전 완주·정상 실행 완료를 각각 보고한다.
+
+## 이전 단계 문서
+
+[TRAINING](docs/TRAINING.md), [SPECIALIST_TRAINING](docs/SPECIALIST_TRAINING.md), [SKILL_CURRICULUM](docs/SKILL_CURRICULUM.md), [IMITATION_TRAINING](docs/IMITATION_TRAINING.md), [TIMING_TRAINING](docs/TIMING_TRAINING.md), [ACTIONABLE_PREPARATION](docs/ACTIONABLE_PREPARATION.md), [MUSICAL_QUALITY](docs/MUSICAL_QUALITY.md)는 단계별 계약·구현 근거다. 그 안의 과거 실행 설정이나 성공을 최신 과제에 자동 상속하지 않는다. [CODE_LINEAGE](docs/CODE_LINEAGE.md)는 원구현의 역사적 대응을 설명한다.
+
+구형 프로젝트 여섯 디렉토리는 [legacy 보관소](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/README.md)에 있다. 구조 정리 전 소스는 [20261019_before_structure_cleanup](archive/20261019_before_structure_cleanup/manifest.json)에 보존했다.
+
+2026-10-19 구조 정리의 도구 이전·보관 범위·동등성 검증은 [정리 결과](/home/ajou/yigyu/3/docs/2026-10-19/guitar_learning_structure_cleanup_v1/README.md)에 기록했다.
+
+2026-10-20 역할별 파일 이동표·경로 검증은 [재배치 기록](/home/ajou/yigyu/3/docs/2026-10-20/guitar_learning_role_layout_v1/README.md)에 기록했다.
+
+새 기본 손별 실행의 단기 학습·저장·재개 확인은 [실행 결과](/home/ajou/yigyu/3/docs/2026-10-20/guitar_learning_simple_start_v1/README.md)에 기록한다.

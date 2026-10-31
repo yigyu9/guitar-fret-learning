@@ -4,6 +4,7 @@
 """
 import json
 import hashlib
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -12,49 +13,103 @@ NATIVE = Path(__file__).resolve().parent
 ASSETS = NATIVE.parent / 'assets'
 A = ASSETS / 'stability_adapter_2'
 PROVENANCE = ASSETS / 'native_provenance.json'
+# Historical identities are immutable labels, never external runtime locations.
+HISTORICAL_ROOT = Path('/home/ajou/yigyu/3')
 
 
 @lru_cache(maxsize=1)
 def provenance_records():
-    return tuple(json.loads(PROVENANCE.read_text())['files'])
+    return tuple(json.loads(_project_file(PROVENANCE).read_text())['files'])
+
+
+def _lexical(path):
+    """Normalize before mapping, without following archived external symlinks."""
+    path = Path(path)
+    return Path(os.path.abspath(os.fspath(path if path.is_absolute() else ROOT / path)))
+
+
+def _internal(path):
+    path = Path(path)
+    if path.is_absolute():
+        if path == ROOT or ROOT in path.parents:
+            return _project_file(path)
+        # Accept the preceding manifest format while resolving inside this copy.
+        try:
+            path = path.relative_to(HISTORICAL_ROOT)
+        except ValueError:
+            return _project_file(path)
+    return _project_file(ROOT / path)
+
+
+def _project_file(path):
+    """실제 파일을 읽기 전에 프로젝트 밖 경로와 외부 심볼릭 링크를 거부한다."""
+    path = Path(path).resolve()
+    try:
+        path.relative_to(ROOT.resolve())
+    except ValueError:
+        raise ValueError('Runtime input resolves outside project: ' + str(path))
+    return path
 
 
 @lru_cache(maxsize=1)
 def _mapping():
-    forward = {str(Path(row['original']).resolve()): Path(row['internal']) for row in provenance_records()}
-    reverse = {str(path.resolve()): Path(original) for original, path in forward.items()}
+    forward, reverse = {}, {}
+    for row in provenance_records():
+        original, internal = Path(row['original']), _internal(row['internal'])
+        forward[str(original)] = internal
+        for alias in row.get('aliases', []):
+            forward[alias] = internal
+            try:
+                forward[str(ROOT / Path(alias).relative_to(HISTORICAL_ROOT))] = internal
+            except ValueError:
+                pass
+        try:
+            forward[str(ROOT / original.relative_to(HISTORICAL_ROOT))] = internal
+        except ValueError:
+            pass
+        reverse[str(_lexical(internal))] = original
     return forward, reverse
 
 
 def resolve_input_path(path):
-    """원래의 절대 경로나 프로젝트 상대 입력 경로를 내부 사본으로 대응시킨다."""
-    path = Path(path)
-    path = (ROOT / path).resolve() if not path.is_absolute() else path.resolve()
+    """Resolve runtime locations in this project; original identifiers stay stable."""
+    path = _lexical(path)
     internal = _mapping()[0].get(str(path))
     if internal is not None:
-        return internal
-    if any((ROOT / name) in path.parents for name in ('tab2body', 'stability_adapter_2')):
-        raise FileNotFoundError('Legacy runtime input has no internal copy: ' + str(path))
-    return path
+        return _project_file(internal)
+    for root in (ROOT, HISTORICAL_ROOT):
+        if any((root / name) in path.parents for name in ('tab2body', 'stability_adapter_2')):
+            raise FileNotFoundError('Legacy runtime input has no internal copy: ' + str(path))
+    if path == ROOT or ROOT in path.parents:
+        return _project_file(path)
+    try:
+        path = ROOT / path.relative_to(HISTORICAL_ROOT)
+    except ValueError:
+        pass
+    return _project_file(path)
 
 
 def original_input_path(path):
-    """이동한 입력이나 네이티브 모듈의 원래 기록 식별자를 반환한다."""
-    path = Path(path).resolve()
-    return _mapping()[1].get(str(path), path)
+    """Return the immutable original identity of a migrated input or module."""
+    path = _lexical(path)
+    original = _mapping()[1].get(str(path))
+    if original is not None:
+        return original
+    try:
+        return HISTORICAL_ROOT / path.relative_to(ROOT)
+    except ValueError:
+        return path
 
 
 def rebase_paths(value):
-    """알려진 입력 경로 값만 바꾸고 검증 근거의 키와 수치 자료는 그대로 둔다."""
+    """Rebase registered path values, preserving historical keys and all numbers."""
     if isinstance(value, dict):
         return {key: rebase_paths(item) for key, item in value.items()}
     if isinstance(value, list):
         return [rebase_paths(item) for item in value]
     if isinstance(value, str):
         if value.startswith('/') or value.startswith(('tab2body/', 'stability_adapter_2/', 'paper/', 'docs/')):
-            path = Path(value)
-            original = (ROOT / path).resolve() if not path.is_absolute() else path.resolve()
-            resolved = _mapping()[0].get(str(original))
+            resolved = _mapping()[0].get(str(_lexical(value)))
             if resolved is not None:
                 return str(resolved)
     return value
@@ -63,10 +118,10 @@ def rebase_paths(value):
 def verify_provenance():
     """호출할 때마다 명시된 이전 목록의 해시와 현재 바이트가 일치하는지 검사한다."""
     import hashlib
-    manifest = json.loads(PROVENANCE.read_text())
+    manifest = json.loads(_project_file(PROVENANCE).read_text())
     records = manifest['files'] + manifest.get('generated_files', [])
     for row in records:
-        path = Path(row['internal'])
+        path = _internal(row['internal'])
         if hashlib.sha256(path.read_bytes()).hexdigest() != row['internal_sha256']:
             raise ValueError('Internal native provenance SHA mismatch: ' + str(path))
     return {'verified_files': len(records), 'manifest': str(PROVENANCE)}
@@ -108,9 +163,10 @@ def pin(config=None, extra=()):
             paths.add(resolve_input_path(candidate))
     historical = []
     for path in extra:
-        lexical = Path(os.path.abspath(os.fspath(path)))
-        if any((ROOT / name) in lexical.parents for name in ('tab2body', 'stability_adapter_2')):
-            historical.append(str(lexical))
+        lexical = _lexical(path)
+        if any((root / name) in lexical.parents for root in (ROOT, HISTORICAL_ROOT)
+               for name in ('tab2body', 'stability_adapter_2')):
+            historical.append(str(original_input_path(lexical)))
         else:
             paths.add(resolve_input_path(path))
     pins = {str(path.resolve()): sha(path) for path in sorted(paths)}

@@ -1,0 +1,154 @@
+"""Six prospective distal-only soft-orientation candidates; source geometry only."""
+import argparse
+import copy
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from scipy.spatial.transform import Rotation
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import ROOT,A,BASE,HUMAN,read,save,pin,verify,sha
+from ..lower_body_release_v1.controller_horizontal_v4 import full_fk
+from .motion_v1 import pick_goal,command_gate
+from .motion_v2 import solve_pick_oriented,palm_goal_G
+
+PLAN=ROOT/'docs/plans/front_facing_strike_clearance_20261016.md'
+RAW=('states240.json','contacts240.json','efforts240.json','targets60.json','initial_values.json','native_properties.json','final_state.json','attempt.json','report.json','support_wrapper.json')
+
+
+class HandProbe:
+    """Original XML meshes at FK poses; source convex distances, not PhysX cooking."""
+    def __init__(self,state,bodies,gnames,policy):
+        import mujoco
+        self.mj=mujoco
+        guitar=Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset'])
+        root=ET.Element('mujoco');ET.SubElement(root,'compiler',angle='degree')
+        assets=ET.SubElement(root,'asset');world=ET.SubElement(root,'worldbody');self.shapes=[]
+        fields={'type','size','pos','quat','euler','axisangle','xyaxes','zaxis','fromto','mesh'}
+        for actor,xml,names,states in [('human',HUMAN,bodies,state['human_body_states']),('guitar',guitar,gnames,state['guitar_body_states'])]:
+            tree=ET.parse(xml);compiler=tree.find('compiler');meshdir=xml.parent/compiler.get('meshdir','')
+            for mesh in tree.findall('./asset/mesh'):
+                attrs=dict(mesh.attrib);attrs.update(name=actor+'/'+attrs['name'],file=str((meshdir/attrs['file']).resolve()));ET.SubElement(assets,'mesh',attrs)
+            for body in tree.findall('./worldbody//body'):
+                name=body.get('name');moving=name.startswith('RH:') or name in ('R_Elbow','R_Wrist')
+                if actor=='human' and not moving:continue
+                geoms=body.findall('geom')
+                if not geoms:continue
+                p,r=pose(states[names.index(name)])
+                node=ET.SubElement(world,'body',name=actor+'/'+name,pos=' '.join(map(str,p)),quat=' '.join(map(str,r.as_quat()[[3,0,1,2]])))
+                masks=sorted({int(v['filter']) for v in policy[actor][name]})
+                assert len(masks)==1,'Body source/native shape correspondence needs explicit nonuniform mask mapping.'
+                for geom in geoms:
+                    attrs={k:v for k,v in geom.attrib.items() if k in fields}
+                    if 'mesh' in attrs:attrs['mesh']=actor+'/'+attrs['mesh']
+                    label='shape_'+str(len(self.shapes));ET.SubElement(node,'geom',attrs,name=label)
+                    self.shapes.append(dict(actor=actor,body=name,geom_name=label,native_filters=masks,
+                        xml_collision_enabled=geom.get('contype')!='0' and geom.get('conaffinity')!='0'))
+        self.model=mujoco.MjModel.from_xml_string(ET.tostring(root,encoding='unicode'));self.data=mujoco.MjData(self.model)
+        for shape in self.shapes:shape['geom_id']=mujoco.mj_name2id(self.model,mujoco.mjtObj.mjOBJ_GEOM,shape['geom_name'])
+        self.hids={n:mujoco.mj_name2id(self.model,mujoco.mjtObj.mjOBJ_BODY,'human/'+n) for n in bodies if n.startswith('RH:') or n in ('R_Elbow','R_Wrist')}
+        self.hids={n:j for n,j in self.hids.items() if j>=0}
+        self.pairs=[]
+        for h in [s for s in self.shapes if s['actor']=='human']:
+            for g in [s for s in self.shapes if s['actor']=='guitar']:
+                mask_enabled=any((x&y)==0 for x in h['native_filters'] for y in g['native_filters'])
+                self.pairs.append((h,g, bool(mask_enabled and h['xml_collision_enabled'] and g['xml_collision_enabled']),mask_enabled))
+
+    def measure(self,poses):
+        for n,j in self.hids.items():
+            p,r=poses[n];self.model.body_pos[j]=p;self.model.body_quat[j]=r.as_quat()[[3,0,1,2]]
+        self.mj.mj_forward(self.model,self.data)
+        minima={'active':.05,'inactive':.05};negative=[];nearest=None
+        for h,g,enabled,mask_enabled in self.pairs:
+            gap=float(self.mj.mj_geomDistance(self.model,self.data,h['geom_id'],g['geom_id'],.05,None))
+            assert np.isfinite(gap)
+            category='active' if enabled else 'inactive'
+            if gap<minima[category]:
+                minima[category]=gap
+                if enabled:nearest=dict(human=h['body'],guitar=g['body'],human_geom_id=h['geom_id'],guitar_geom_id=g['geom_id'],gap_m=gap)
+            if gap< -1e-6:
+                negative.append(dict(human=h['body'],guitar=g['body'],human_geom_id=h['geom_id'],guitar_geom_id=g['geom_id'],gap_m=gap,
+                    native_filter_enabled=mask_enabled,xml_collision_enabled=h['xml_collision_enabled'] and g['xml_collision_enabled'],active=enabled))
+        return dict(min_active_signed_gap_m=minima['active'],min_inactive_signed_gap_m=minima['inactive'],nearest_active_pair=nearest,
+            negative_pairs_below_minus1um=negative,no_active_negative_below_minus1um=not any(r['active'] for r in negative))
+
+
+def sample_candidate(spec,times,fk,query,distal,lower,upper,qref,gp,gr,probe):
+    seed=query[distal].copy();rows=[];other=np.setdiff1d(np.arange(105),distal)
+    for time in times:
+        goal=pick_goal(float(time),np.array(spec['initial_pick_G_m']),np.array(spec['strike']['waypoints_G_m']))
+        orient=gr*palm_goal_G(spec,float(time))
+        fitted,error64,nfev=solve_pick_oriented(fk,query,distal,lower,upper,qref,gp+gr.apply(goal),orient,seed)
+        seed=fitted[distal].astype(np.float32).astype(float);trial=query.copy();trial[distal]=seed;ps=fk(trial)
+        error=float(np.linalg.norm(ps['RH:pick'][0]-(gp+gr.apply(goal))))
+        geometry=probe.measure(ps)
+        rows.append(dict(time_s=float(time),pick_goal_G_m=goal.tolist(),q6_rad=seed.tolist(),pick_IK_error_m=error,pick_IK_float64_error_m=error64,pick_IK_nfev=int(nfev),
+            palm_soft_orientation_error_rad=float((orient.inv()*ps['RH:palm'][1]).magnitude()),
+            strict_float32_bounds_qref_principal=command_gate(seed,lower[distal],upper[distal],qref[distal]),
+            other99_source_query_q_exact=bool(np.array_equal(trial[other],query[other])),**geometry))
+    gates=dict(samples_complete=len(rows)==len(times),source_pick2mm=all(r['pick_IK_error_m']<=.002 for r in rows),
+        float32_strict_original_qref1_principal160=all(r['strict_float32_bounds_qref_principal'] for r in rows),
+        other99_exact=all(r['other99_source_query_q_exact'] for r in rows),
+        no_active_negative_below_minus1um=all(r['no_active_negative_below_minus1um'] for r in rows))
+    return rows,gates
+
+
+def main(reference,specpath,out):
+    reference,specpath,out=(Path(p).resolve() for p in (reference,specpath,out));out.mkdir(exist_ok=False)
+    original=read(specpath);cfgpath=Path(read(reference/'attempt.json')['config']);cfg=read(cfgpath)
+    certificate=Path(original['repeat_verification_path']);oldreport=specpath.parent/'report.json'
+    paths=[PLAN,specpath,oldreport,specpath.parent/'inputs_before.json',certificate,cfgpath,A/'AGENTS.md']+[reference/n for n in RAW]
+    for package in ('front_facing_strike_v1','front_facing_pose_v1','grounded_guitar_support_v1','grounded_guitar_play_v1','seated_foot_support_v1'):
+        paths+=list((A/package).glob('*.py'))
+    paths+=[Path(cfg[k]) for k in ('candidate','source_report','upper_target105','posture_target_report','finite_right_goal_spec','finite_right_goal_report','hip_load_bias_spec','hip_load_bias_report')]
+    maps=[read(specpath.parent/'inputs_before.json'),read(certificate)['input_sha256'],read(reference/'attempt.json')['input_sha256'],read(reference/'support_wrapper.json')['input_sha256']]
+    maps+=[read(Path(cfg[k]).parent/'inputs_before.json') for k in ('source_report','posture_target_report','finite_right_goal_report','hip_load_bias_report')]
+    paths += [Path(p) for mapping in maps for p in mapping]
+    inputs=pin(cfgpath,extra=paths)
+    for mapping in maps:
+        for p,h in mapping.items():assert p not in inputs or inputs[p]==h,p;inputs[p]=h
+    assert verify(inputs);save(out/'inputs_before.json',inputs)
+    initial=read(reference/'initial_values.json');state=read(reference/'final_state.json');names=initial['joint_names'];bodies=initial['human_body_names']
+    assert state['physics_step']==2400 and original['reference_run']==str(reference) and original['source_candidate_sha256']==cfg['candidate_sha256']
+    qref=np.array(initial['q_ref105_rad']);query=np.array([v['pos'] for v in state['human_dof_states']]);last=read(reference/'targets60.json')['rows'][-1]
+    assert last['physics_step_before']==2396
+    proximal=np.array(original['proximal_latch']['indices105']);query[proximal]=np.array(last['final105_rad'])[proximal]
+    assert query[proximal].tolist()==original['proximal_latch']['final6_rad']
+    distal=np.array(original['joint_indices105']);lower,upper=(np.array(initial['PD_properties'][k]) for k in ('lower','upper'))
+    fk=full_fk(SimpleNamespace(names=names,q_ref=qref,human_bodies=bodies),initial['native_initial_state'])
+    gp,gr=pose(state['guitar_body_states'][0]);palmG=gr.inv()*pose(state['human_body_states'][bodies.index('RH:palm')])[1]
+    policy=read(reference/'native_properties.json')['actual_shape_properties'];probe=HandProbe(state,bodies,initial['guitar_body_names'],policy)
+    candidates=[];specs={}
+    for depth in (.004,.0025):
+        for angle in (0.,-5.,-10.):
+            candidate=copy.deepcopy(original);candidate['clearance_solver_v2']=dict(depth_m=depth,palm_G_reference_xyzw=palmG.as_quat().tolist(),rotation_G_y_deg=angle,orientation_weight=10,qref_weight=.1,continuity_weight=.1,orientation_ramp_s=[10,10.8])
+            waypoints=np.array(candidate['strike']['waypoints_G_m']);waypoints[:,2]+=.004-depth;candidate['strike']['waypoints_G_m']=waypoints.tolist()
+            label='depth'+str(round(depth*10000))+'_Gy'+str(int(angle));specs[label]=candidate
+            rows,gates=sample_candidate(candidate,np.linspace(10,14,41),fk,query,distal,lower,upper,qref,gp,gr,probe)
+            item=dict(id=label,depth_m=depth,rotation_G_y_deg=angle,gates=gates,passed=all(gates.values()),samples=rows,
+                min_active_signed_gap_m=min(r['min_active_signed_gap_m'] for r in rows),max_pick_error_m=max(r['pick_IK_error_m'] for r in rows))
+            candidates.append(item);print(dict(candidate=label,passed=item['passed'],gates=gates,min_gap_m=item['min_active_signed_gap_m'],max_pick_error_m=item['max_pick_error_m']),flush=True)
+    selected=None;dense=[];selectedrows=[];densegates={}
+    for c in sorted([c for c in candidates if c['passed']],key=lambda c:(abs(c['rotation_G_y_deg']),abs(c['depth_m']-.004))):
+        rows,gates=sample_candidate(specs[c['id']],np.linspace(10,14,241),fk,query,distal,lower,upper,qref,gp,gr,probe)
+        dense.append(dict(id=c['id'],gates=gates,passed=all(gates.values()),samples=rows))
+        if all(gates.values()):selected=c;selectedrows=rows;densegates=gates;break
+    assert verify(inputs)
+    selectedpath=out/'selected_spec.json'
+    if selected:save(selectedpath,specs[selected['id']])
+    report=dict(eligible_for_native=selected is not None,inputs_unchanged=verify(inputs),input_sha256=inputs,
+        selected_candidate_id=selected['id'] if selected else None,selected_spec_path=str(selectedpath) if selected else None,selected_spec_sha256=sha(selectedpath) if selected else None,
+        original_spec_path=str(specpath),original_spec_sha256=sha(specpath),old_spec_path=str(specpath),old_spec_sha256=sha(specpath),reference_run=str(reference),
+        source_candidate_sha256=cfg['candidate_sha256'],candidates41=candidates,dense_candidates241=dense,
+        selected41=selected['samples'] if selected else [],selected41_gates=selected['gates'] if selected else {},selected241=selectedrows,selected241_gates=densegates,
+        source_query_proximal_latch=original['proximal_latch'],source_shapes=probe.shapes,source_pair_count=len(probe.pairs),
+        active_source_pair_count=sum(p[2] for p in probe.pairs),physics_steps=0,
+        scope='Original105HUMAN XML and all declared meshes; initial native calibration unchanged, actual10 other99 query with proximal2396 submitted latch. AllRH/forearm meshes vs all guitar source geoms queried; XML-disabled visuals/native-filter-disabled pairs retained diagnostically, native body masks asserted uniform. Original same-hand selfcollision policy unchanged, no selfcollision recertification. MuJoCo source convex signed gaps are not PhysX cooked penetration depths or dynamic support certificates. Two-ball hand pose rank5:3position plus soft orientation only, qref and previous-command regularizers. No finger/shoulder commands, gain/assets/state/guitar manipulation.')
+    save(out/'report.json',report)
+    print(dict(eligible_for_native=report['eligible_for_native'],selected_candidate_id=report['selected_candidate_id'],inputs_unchanged=verify(inputs)),flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser()
+    for key in ('reference','spec','out'):p.add_argument('--'+key,type=Path,required=True)
+    args=p.parse_args();main(args.reference,args.spec,args.out)

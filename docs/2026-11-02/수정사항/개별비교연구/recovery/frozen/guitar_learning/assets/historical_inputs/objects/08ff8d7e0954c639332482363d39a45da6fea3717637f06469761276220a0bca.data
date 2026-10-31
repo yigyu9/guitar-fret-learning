@@ -1,0 +1,85 @@
+"""Joint loading must validate before mutation and leave guitar state untouched."""
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, patch
+import numpy as np
+from .lab_v3 import Lab
+from .run_v4 import Window
+from .test_lab import FakeScene
+
+
+def make_lab():
+    scene=FakeScene()
+    initial={'joint_names':scene.names,'native_initial_state':{
+        'human_dof_states':[{'pos':.2}for _ in scene.names],
+        'guitar_body_states':[{'pose':{'p':dict(zip('xyz',[.1,.2,1])), 'r':dict(zip('xyzw',[0,0,0,1]))}}]}}
+    return Lab(scene,initial,SimpleNamespace(STATE_ALL=3))
+
+
+class JointLoadTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.path=Path(self.temp.name)/'joints.json';self.lab=make_lab()
+    def tearDown(self):self.temp.cleanup()
+    def write(self,data):self.path.write_text(json.dumps(data));return self.path
+    def valid(self):return {'joint_names':self.lab.names,'joint_angles_rad':np.linspace(-.4,.4,81).tolist()}
+    def test_saved_file_roundtrip(self):
+        self.lab.set_joint(2,15);saved=self.lab.save(self.path);self.lab.set_joint(2,20)
+        self.lab.load_joints(self.path)
+        np.testing.assert_array_equal(self.lab.scene.target,saved['joint_angles_rad'])
+    def test_reordered_names(self):
+        value=self.valid();expected=value['joint_angles_rad'].copy()
+        value['joint_names']=value['joint_names'][::-1];value['joint_angles_rad']=value['joint_angles_rad'][::-1]
+        self.lab.load_joints(self.write(value));np.testing.assert_allclose(self.lab.scene.target,expected,atol=1e-7)
+    def test_named_map_and_native_format(self):
+        values=self.valid()['joint_angles_rad']
+        for payload in ({'joint_angles_rad':dict(zip(self.lab.names,values))},
+                        {'joint_names':self.lab.names,'native_initial_state':{'human_dof_states':[{'pos':q}for q in values]}}):
+            self.lab.load_joints(self.write(payload));np.testing.assert_allclose(self.lab.scene.target,values,atol=1e-7)
+    def test_running_load_stops_and_preserves_entire_guitar(self):
+        self.lab.toggle();self.lab.advance(8);before=self.lab.scene.states.copy();writes=self.lab.scene.writes['guitar']
+        value=self.valid();self.lab.load_joints(self.write(value))
+        self.assertFalse(self.lab.running);self.assertEqual(self.lab.scene.steps,0)
+        np.testing.assert_array_equal(before,self.lab.scene.states)
+        self.assertEqual(writes,self.lab.scene.writes['guitar'])
+        np.testing.assert_allclose(self.lab.scene.dofs['pos'],value['joint_angles_rad'],atol=1e-7)
+        self.assertTrue(np.all(self.lab.scene.dofs['vel']==0))
+    def test_loaded_trial_reset_and_original(self):
+        value=self.valid();self.lab.load_joints(self.write(value));self.lab.set_joint(0,10);self.lab.reset()
+        np.testing.assert_allclose(self.lab.scene.target,value['joint_angles_rad'],atol=1e-7)
+        self.lab.reset_original();np.testing.assert_array_equal(self.lab.scene.target,self.lab.start_q)
+    def test_invalid_files_do_not_mutate(self):
+        bad=[]
+        for field,value in [('joint_names',self.lab.names[:-1]),('joint_names',[self.lab.names[0]]*81),
+                            ('joint_names',['unknown']+self.lab.names[1:]),('joint_angles_rad',[0]*80),
+                            ('joint_angles_rad',[float('nan')]+[0]*80),('joint_angles_rad',[float('inf')]+[0]*80),
+                            ('joint_angles_rad',[2]+[0]*80),('joint_angles_rad',[True]+[0]*80),
+                            ('joint_angles_rad',['0']+[0]*80),('joint_angles_rad',[10**400]+[0]*80)]:
+            payload=self.valid();payload[field]=value;bad.append(payload)
+        bad += [[], {}, {'joint_names':self.lab.names,'native_initial_state':{'human_dof_states':[{}]*81}}]
+        self.lab.toggle()
+        for value in bad:
+            with self.subTest(value=str(value)[:100]):
+                self.write(value);before=(self.lab.scene.target.copy(),self.lab.scene.dofs.copy(),self.lab.scene.states.copy(),dict(self.lab.scene.writes))
+                with self.assertRaises(ValueError):self.lab.load_joints(self.path)
+                self.assertTrue(self.lab.running)
+                for old,new in zip(before[:3],(self.lab.scene.target,self.lab.scene.dofs,self.lab.scene.states)):np.testing.assert_array_equal(old,new)
+                self.assertEqual(before[3],self.lab.scene.writes)
+    def test_bad_json_and_missing_file(self):
+        self.path.write_text('{')
+        with self.assertRaises(ValueError):self.lab.load_joints(self.path)
+        with self.assertRaises(ValueError):self.lab.load_joints(self.path.with_name('missing.json'))
+    def test_file_dialog_cancel(self):
+        window=Window.__new__(Window);window.root=None;window.lab=Mock();window.sync=Mock()
+        with patch('tkinter.filedialog.askopenfilename',return_value=''):window.load_joints()
+        window.lab.load_joints.assert_not_called();window.sync.assert_not_called()
+    def test_file_dialog_success_refreshes_ui(self):
+        window=Window.__new__(Window);window.root=None;window.lab=self.lab;window.sync=Mock();window.messagebox=Mock()
+        self.write(self.valid())
+        with patch('tkinter.filedialog.askopenfilename',return_value=str(self.path)):window.load_joints()
+        window.sync.assert_called_once();window.messagebox.showinfo.assert_called_once()
+
+
+if __name__=='__main__':unittest.main()

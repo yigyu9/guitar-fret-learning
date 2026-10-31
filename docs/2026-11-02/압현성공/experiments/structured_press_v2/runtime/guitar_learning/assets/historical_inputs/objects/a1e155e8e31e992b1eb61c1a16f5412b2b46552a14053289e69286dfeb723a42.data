@@ -1,0 +1,83 @@
+"""Recalculate old full-scene raw coordinate observations without native rerun."""
+import csv
+import xml.etree.ElementTree as ET
+from pathlib import Path
+import numpy as np
+from scipy.spatial.transform import Rotation
+from .common import BASE, HUMAN, save, sha, verify
+
+
+def read(path):
+    import json
+    return json.loads(Path(path).read_text())
+
+
+def rotation(body):
+    return Rotation.from_quat([body['pose']['r'][k] for k in 'xyzw'])
+
+
+def angular(body):
+    return np.array([body['vel']['angular'][k] for k in 'xyz'])
+
+
+def run():
+    out=BASE/'diagnosis_v2/raw_coordinate_analysis_v1'
+    out.mkdir(exist_ok=False)
+    paths=[Path(__file__).resolve(),Path(__file__).with_name('common.py'),HUMAN]
+    runs=['native_lower_position_gain1_static_v1','native_lower_position_gain10_static_v1']
+    for name in runs:
+        paths += [BASE/'native'/name/f for f in ('initial_values.json','states240.json','efforts240.json','contacts240.json','targets60.json')]
+    pins={str(p):sha(p) for p in paths}
+    save(out/'inputs_before.json',pins)
+    xml=ET.parse(HUMAN)
+    parents={c.get('name'):p.get('name') for p in xml.iter('body') for c in p.findall('body')}
+    summary=[]
+    for name in runs:
+        folder=BASE/'native'/name
+        initial=read(folder/'initial_values.json')
+        states=read(folder/'states240.json')['rows']
+        contacts=read(folder/'contacts240.json')['rows']
+        targets=read(folder/'targets60.json')['rows']
+        efforts=read(folder/'efforts240.json')['rows']
+        names=initial['joint_names'];bodies=initial['human_body_names']
+        qref=np.array(initial['q_ref105_rad'])
+        q=np.array([[d['pos'] for d in r['state']['human_dof_states']] for r in states])
+        qd=np.array([[d['vel'] for d in r['state']['human_dof_states']] for r in states])
+        position=initial['position_indices']
+        assert all(np.array_equal(np.array(t['final105_rad'])[position],np.array(t['native105_position_readback_rad'])[position]) for t in targets)
+        assert np.all(np.array([e['submitted105_Nm'] for e in efforts])[:,initial['lower_indices']]==0)
+        first=[]
+        for i in initial['lower_indices']:
+            first.append(dict(joint=names[i],q0_rad=float(q[0,i]),target_rad=targets[0]['final105_rad'][i],q1_rad=float(q[1,i]),delta_q1_rad=float(q[1,i]-q[0,i]),qd1_native_rad_s=float(qd[1,i]),lower_rad=initial['PD_properties']['lower'][i],upper_rad=initial['PD_properties']['upper'][i],generalized_sensor1_Nm=states[1]['native105_dof_force_sensor_Nm'][i],explicit_effort0_Nm=efforts[0]['submitted105_Nm'][i]))
+        rows=[]
+        for body in xml.iter('body'):
+            n=body.get('name');parent=parents.get(n);joints=body.findall('joint')
+            if n not in bodies or parent not in bodies or len(joints)!=3:continue
+            ix=[names.index(j.get('name')) for j in joints]
+            basis=np.column_stack([np.fromstring(j.get('axis'),sep=' ') for j in joints])
+            b0=states[0]['state']['human_body_states'][bodies.index(n)]
+            p0=states[0]['state']['human_body_states'][bodies.index(parent)]
+            zero=Rotation.from_rotvec(basis@qref[ix]).inv()*(rotation(p0).inv()*rotation(b0))
+            for step,r in enumerate(states[1:],1):
+                b=r['state']['human_body_states'][bodies.index(n)]
+                p=r['state']['human_body_states'][bodies.index(parent)]
+                relative=rotation(p).inv()*rotation(b)
+                predicted=Rotation.from_rotvec(basis@q[step,ix])*zero
+                observed=angular(b)-angular(p)
+                child_pred=rotation(b).apply(basis@qd[step,ix])
+                parent_pred=rotation(p).apply(basis@qd[step,ix])
+                rows.append(dict(step=step,body=n,pose_expmap_error_rad=float((predicted.inv()*relative).magnitude()),child_frame_angular_error_rad_s=float(np.linalg.norm(child_pred-observed)),parent_frame_angular_error_rad_s=float(np.linalg.norm(parent_pred-observed))))
+        with (out/(name+'_coordinate_samples.csv')).open('w',newline='') as f:
+            writer=csv.DictWriter(f,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+        first_lower_contacts=[c for c in contacts[1]['contacts'] if any(any(part in c[k] for part in ('Hip','Knee','Ankle','Toe')) for k in ('body0_name','body1_name'))]
+        summary.append(dict(run=name,first_step=first,first_step_lower_contacts=first_lower_contacts,
+                            spherical_pose_max_error_rad=max(r['pose_expmap_error_rad'] for r in rows),
+                            first_step_child_angular_errors={r['body']:r['child_frame_angular_error_rad_s'] for r in rows if r['step']==1},
+                            first_step_parent_angular_errors={r['body']:r['parent_frame_angular_error_rad_s'] for r in rows if r['step']==1},
+                            checks=dict(target_readback_exact=True,lower_explicit_effort_zero=True),
+                            scope='Pose reconstruction uses initial calibrated constant zero rotation and tests every later sample. Native qd compared to relative angular velocity in child vs parent frame; no claim qd equals dq/dt. Sensors are generalized forces, not pure motor torque.'))
+    save(out/'summary.json',summary)
+    save(out/'verification.json',dict(inputs_unchanged=verify(pins)))
+
+
+if __name__=='__main__':run()

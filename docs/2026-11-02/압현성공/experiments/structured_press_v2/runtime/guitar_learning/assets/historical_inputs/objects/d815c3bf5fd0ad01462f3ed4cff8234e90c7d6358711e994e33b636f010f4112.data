@@ -1,0 +1,154 @@
+"""Replay the first saved native local-policy evaluation; no policy or physics."""
+import argparse
+import gzip
+import json
+from guitar_learning.native.paths import original_input_path
+from pathlib import Path
+
+from ..render_timing_video_v1 import encoder, probe, INITIAL, FONT
+from guitar_learning.native.initial_pose_video60_v1.replay_v6 import sha, save
+from guitar_learning.native.initial_pose_video60_v1.static_visual_v7 import (
+    asset_paths, build_model, set_body_poses, add_strings)
+
+ROOT = Path(__file__).resolve().parents[2]
+PHASE = ROOT/'docs/2026-10-12/stability_adapter_2/results/guitar_learning_local_skills_v1'
+
+
+def first_episode(path):
+    """Decode only episode0, one JSON-array element at a time."""
+    decoder = json.JSONDecoder()
+    with gzip.open(path, 'rt') as stream:
+        buffer = stream.read(65536).lstrip()
+        if not buffer.startswith('['):
+            raise ValueError('saved evaluation array required')
+        buffer = buffer[1:]
+        for tick in range(420):
+            while not buffer.strip():
+                chunk = stream.read(65536)
+                if not chunk: raise ValueError('incomplete saved evaluation array')
+                buffer += chunk
+            buffer = buffer.lstrip()
+            if tick:
+                if not buffer.startswith(','): raise ValueError('evaluation array separator missing')
+                buffer = buffer[1:]
+            while True:
+                buffer = buffer.lstrip()
+                try:
+                    row, end = decoder.raw_decode(buffer)
+                    break
+                except json.JSONDecodeError:
+                    chunk = stream.read(65536)
+                    if not chunk:
+                        raise ValueError('incomplete saved evaluation row')
+                    buffer += chunk
+            buffer = buffer[end:]
+            if row['episode'] != 0 or row['tick'] != tick:
+                raise ValueError('complete consecutive first episode required')
+            samples = row['native_physics_samples240']
+            if [s['native']['physics_step'] for s in samples] != list(range(4*tick+1, 4*tick+5)):
+                raise ValueError('original240Hz samples must be continuous from policy time0')
+            time_s = row['physics_measurements'][-1]['music']['task_time_s']
+            if abs(time_s-(tick+1)/60.) > 1e-8:
+                raise ValueError('saved policy clock mismatch')
+            yield tick, time_s, samples[-1]['native']
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--out', required=True, type=Path)
+    args = parser.parse_args()
+    import mujoco
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+
+    out = args.out.resolve(); out.mkdir(parents=True, exist_ok=False)
+    initial = json.loads(INITIAL.read_text())
+    assets = set().union(*(asset_paths(Path(a['path'])) for a in initial['loaded_assets']))
+    sources = assets | {INITIAL, FONT, Path(__file__).resolve(),
+        ROOT/'guitar_learning/render_timing_video_v1.py',
+        ROOT/'guitar_learning/native/initial_pose_video60_v1/static_visual_v7.py',
+        ROOT/'guitar_learning/native/initial_pose_video60_v1/replay_v6.py'}
+    results = {}
+    for role in ('left', 'right'):
+        run = PHASE/(role+'_policy_evaluation_v1')
+        result = json.loads((run/'musical_quality_result.json').read_text())
+        gate = json.loads((run/'local_skill_gate.json').read_text())
+        pins = json.loads((run/'inputs_before.json').read_text())
+        checkpoint = Path(result['checkpoint'])
+        if (result['role'] != role or not result['completed'] or not result['source_unchanged']
+                or len(result['episodes']) != 4 or not gate['passed']
+                or any(not e['musical_quality']['stage_success'] or e['steps'] != 420
+                       or e['reason'] != 'timeline_complete' for e in result['episodes'])
+                or any(pins.get(str(original_input_path(p))) != sha(p) for p in assets | {INITIAL, checkpoint})):
+            raise ValueError('final successful policy-only evaluation and exact source visuals required')
+        sources.update(run/name for name in ('musical_quality_result.json', 'local_skill_gate.json',
+            'evaluation_metrics.json', 'settings.json', 'inputs_before.json', 'transitions.json.gz'))
+        sources.add(checkpoint); results[role] = result
+    pinned = {str(p): sha(p) for p in sorted(sources)}
+    save(out/'inputs_before.json', pinned)
+    (out/'renderer_source.py').write_text(Path(__file__).read_text())
+    model, data, mapping, xml = build_model(initial)
+    (out/'source_visual.xml').write_text(xml)
+    font = ImageFont.truetype(str(FONT), 24); small = ImageFont.truetype(str(FONT), 18)
+    renderer = mujoco.Renderer(model, height=720, width=1280)
+    close = mujoco.MjvCamera(); close.type = mujoco.mjtCamera.mjCAMERA_FREE
+    close.lookat[:] = (0., 0., .95); close.distance = 1.25
+    close.azimuth = 270.; close.elevation = 0.
+    processes = []
+    combined = encoder(out/'front_combined_60fps.mp4'); processes.append(combined)
+    upper = encoder(out/'front_upper_body_60fps.mp4'); processes.append(upper)
+    reports = {}
+    try:
+        for role in ('left', 'right'):
+            if role == 'right':
+                card = Image.new('RGB', (1280, 720), (22, 27, 34)); draw = ImageDraw.Draw(card)
+                draw.text((280, 310), '오른손의 별도 평가로 전환합니다', font=font, fill='white')
+                draw.text((280, 355), '양손을 동시에 실행한 장면이 아닙니다', font=font, fill='white')
+                for _ in range(60):
+                    combined.stdin.write(card.tobytes()); upper.stdin.write(card.tobytes())
+            run = PHASE/(role+'_policy_evaluation_v1')
+            individual = encoder(out/('front_'+role+'_60fps.mp4')); processes.append(individual)
+            frames = []
+            for tick, time_s, state in first_episode(run/'transitions.json.gz'):
+                readback = set_body_poses(model, data, mapping, state)
+                before = (data.xpos.copy(), data.xquat.copy())
+                ends = [[[state['guitar_body_states'][initial['guitar_body_names'].index(name)]['pose']['p'][a]
+                    for a in 'xyz'] for name in ('G:string%d'%i, 'G:string%d_end'%i)] for i in range(1, 7)]
+                for camera, targets, view in (('front', (individual, combined), 'whole'),
+                                               (close, (upper,), 'upper')):
+                    renderer.update_scene(data, camera=camera); add_strings(renderer.scene, np.asarray(ends))
+                    image = Image.fromarray(renderer.render()); draw = ImageDraw.Draw(image)
+                    draw.rectangle((0, 0, 1280, 70), fill=(22, 27, 34))
+                    label = '왼손: 압현 유지 후 해제' if role == 'left' else '오른손: 한 번 타현 후 분리'
+                    draw.text((20, 6), '%s | 정책 시각 %.3f초' % (label, time_s), font=font, fill='white')
+                    draw.text((20, 42), '최신 학습 정책 · 손별 평가1회차 · 실제 기록 재생 · 무음', font=small, fill=(215, 224, 233))
+                    raw = image.tobytes()
+                    for process in targets: process.stdin.write(raw)
+                    if tick in (251, 389): image.save(out/('preview_%s_%s_%03d.png'%(role, view, tick)))
+                if not (np.array_equal(before[0], data.xpos) and np.array_equal(before[1], data.xquat) and data.time == 0.):
+                    raise ValueError('rendering changed poses or advanced simulation')
+                frames.append(dict(frame=tick, policy_time_s=time_s, physics_step=state['physics_step'], pose_readback=readback))
+                if tick % 120 == 0: print('render', role, tick, '/420', flush=True)
+            individual.stdin.close()
+            if individual.wait() != 0: raise RuntimeError('individual encoding failed')
+            reports[role] = dict(source=str(run), checkpoint=results[role]['checkpoint'], episode=0,
+                frames=frames, media=probe(out/('front_'+role+'_60fps.mp4'), 420))
+        for process in (combined, upper):
+            process.stdin.close()
+            if process.wait() != 0: raise RuntimeError('combined encoding failed')
+        media = {name: probe(out/name, 900) for name in ('front_combined_60fps.mp4', 'front_upper_body_60fps.mp4')}
+        if any(sha(p) != digest for p, digest in pinned.items()): raise ValueError('saved inputs changed')
+        save(out/'report.json', dict(completed=True, inputs_unchanged=True, new_physics_steps=0,
+            renderer='source visual meshes at exact saved native world body poses',
+            scope='two separate first policy evaluation episodes, not joint performance or a new physics evaluation',
+            native_preparation_s=0., policy_duration_per_hand_s=7., source_hz=240, fps=60,
+            separate_trial_card_frames=60, roles=reports, combined=media,
+            cameras=dict(whole='source fixed front camera', upper=dict(lookat=[0.,0.,.95], distance=1.25, azimuth=270., elevation=0.))))
+        print('Saved front and upper-body videos; new physics steps0', flush=True)
+    finally:
+        for process in processes:
+            if process.poll() is None: process.kill(); process.wait()
+        renderer.close()
+
+
+if __name__ == '__main__': main()

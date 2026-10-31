@@ -1,0 +1,58 @@
+# 왼손 개선 개별·조합 비교 연구
+
+상태: **완료**. 최종 상태는 `status.json`의 `completed=true`, `phase=complete`다. 아래 자동 진행 절과 복구 설명은 당시 실행 방법이며 현재 실행 중인 프로세스가 아니다. 유효한9조건의 학습·평가를 마쳤고, 준비 조건 원실행과 L+E 중단 실행은 실패 기록으로 구분했다. 연구 결과는 [RESULTS.md](RESULTS.md), 선택 근거는 [selection.json](selection.json), 추천 설정은 [recommended_recipe.json](recommended_recipe.json)을 따른다. 생산 기본값은 이 연구만으로 자동 변경하지 않았다.
+
+기존 [진행 기록](progress.md)·[기계 판독 기록](progress.json)·[복구 기록](recovery/RECOVERY.md)은 당시 상태와 실행 근거로 보존한다. 현재 연구 단계는 [프로젝트 현황](/home/ajou/yigyu/3/CURRENT_STATUS.md)과 [목표 전환 v2](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/experiments/target_transition_v2/README.md)를 따른다.
+
+## 사용자 확인 없이 자동 진행
+
+기준군 → 단독5조건 → 사전 지정2조합 → 개선 후보 조합 → 새 seed의 기준군/선택 후보 확인 → 종합 보고서·추천 설정 기록을 사용자 확인 없이 순서대로 진행한다. 각 조건의 학습이 끝나면 평가를 실행하고, 평가가 끝나면 수치·그래프를 갱신한 뒤 다음 조건으로 넘어간다.
+
+일반적인 개별 조건 실행 실패는 이유를 남기고 해당 조건을 제외해 다음 조건으로 진행한다. 기준군 실패, 소스 변경, 결과/집계 무결성 오류는 비교를 신뢰할 수 없으므로 중단 사유를 status.json에 남긴다. 미완료나 실패를 개선 결과로 간주하지 않는다. 개선이 재현되지 않으면 채택하지 않았다는 결론도 기록한다.
+
+이 순차 실행은 현재 시작한 연구 프로세스에서 수행하며 채팅 답변이나 사용자 확인을 기다리는 단계가 없다. 최신 단계는 status.json, 조건별 결과는 runs/<조건>/experiment.json, 누적 분석은 RESULTS.md와performance.png, 최종 선택은 selection.json 및 확인된 경우 recommended_recipe.json에 남긴다.
+
+## 비교 조건
+
+모든 본 실험은 **large / 1024환경 / H32 / 200업데이트 / seed7**이다. 조건당6,553,600전이를 수집하고 동일 전곡128환경의 결정적 정책으로 평가한다. 물리·관절 범위·실패 문턱·실제 압현 판정·원래 실패 비용은 유지한다. 짧은 예산의25%(50회) 이후 새 reset부터 전곡으로 넘어가는 일정도 모든 조건에서 같다. 따라서 과거8시간 실행의 절대 성과와 직접 비교하지 않고 이번 기준군과 비교한다.
+
+| 순서 | 조건 | 바꾸는 부분 |
+| --- | --- | --- |
+| 1 | 기준군 | 모두 OFF |
+| 2 | L | 학습률 재시도 완화·안정 시 회복 |
+| 3 | E | 비엄지16축 탐색 초기0.10·하한0.07 |
+| 4 | N | 보상/비용 advantage 분리 정규화 |
+| 5 | P | 통상 준비1초 전·전환0.2초 |
+| 6 | G | 근접 기하 안내 최대70% |
+| 7 | L+E | 정책 갱신과 탐색의 상호작용 |
+| 8 | P+G | 더 이른 준비와 접촉 자세 안내의 상호작용 |
+
+두 조합은 단독 개선이 없더라도 상호작용을 확인하기 위해 사전 지정했다. 이후 개선 후보의 요인을 합친 조합이 기존에 없다면 한 번 더 비교한다. 모두를 무조건 합쳐 기본 설정으로 채택하지 않는다. GPU에서 모든 옵션을 켠2회 실행은 저장·확률·평가 연결만 확인하는 작동 검사이며 성과 비교에 포함하지 않는다.
+
+## 후보 선택과 확인
+
+- 1순위는 실패 환경까지 포함한 전곡 평균 달성 음이다. 최초 접촉·약지/소지 달성·실제 관절 움직임도 보고한다.
+- 초기 선별 기준은 기준군보다평균0.25음 이상 증가하고,128환경 중 조기 종료 증가가2회 이내인 경우다. 이것은 탐색용 운영 기준이며 통계적 유의성 기준은 아니다.
+- 선택 후보와 기준군을 **새 seed17에서 같은200회** 학습해 확인한다. 새 seed에서도 같은 선별 기준을 만족하는지 본다.
+- 두 seed에서 확인되면 `recommended_recipe.json`에 재현 가능한 연구용 추천 설정을 저장한다. 단기200회·두 seed의 초기 근거이며 장기 수렴이나 다른 곡의 우위를 의미하지 않는다.
+- 기본 학습 설정은 연구 중 유지한다. 추천 설정의 기본 경로 반영은 결과·검수와 호환성 검증을 확인한 뒤 진행한다. 추천이 재현되지 않으면 채택하지 않고 그 사실을 기록한다.
+
+## 구현·검증
+
+연구 도구는 [finger_ablation.py](/home/ajou/yigyu/3/guitar_learning/tool/experiments/finger_ablation.py), 정책·최적화는 [finger_ablation_learning.py](/home/ajou/yigyu/3/guitar_learning/tool/experiments/finger_ablation_learning.py), 준비·접근 환경은 [finger_ablation_contact.py](/home/ajou/yigyu/3/guitar_learning/tool/experiments/finger_ablation_contact.py)다. 연구 전용 프로세스의 factory만 명시적으로 연결하고 종료 시 복원한다.
+
+연구 설정은 모델 identity·환경 계약·settings에 저장하며, 평가도 저장본의 정확한 설정으로 수행한다. 입력 SHA와 strict load를 완화하지 않는다. 기존 코드의 변경은 PPO 학습률 재시도 수식을 그대로 유지하는 override 지점 추출뿐이다. 변경 전 활성281개 원문은 [보관 manifest](/home/ajou/yigyu/3/guitar_learning/archive/20261029_before_finger_ablation_v1/manifest.json)에 있다.
+
+- CPU 관련42개 검사 통과(3.705초). 변경OFF 수치 동등성·실패 rollback·엄격 저장/복원·분포·게이트·동일 표본 기하를 확인했다.
+- 독립 CPU17개 검사 및 코드 검수 통과. [검수](REVIEW.md).
+- 실제 GPU에서 기준군2회·전체 옵션2회 학습/저장과 전체 옵션 전곡4환경 strict 평가를 통과했다. 이2회 검사는 성능 비교가 아니다. [작동 검증](verification.json).
+- 원연구 287개 Python과 연구 실행·집계 도구의 SHA를 봉인했다. 재개 후에는 격리 사본과 고정 입력·도구의 변경을 검사하고, 변경되면 중단한다. 기존 자료는 보존한다.
+
+실행·분석 도구는 `tools/`, 연구 조건별 학습·평가는 `runs/`, 기술 작동 검사는 `smoke/`에 모은다. 본 실험의 단계별 결과를 `RESULTS.md`, `analysis_summary.json`, `performance.png`로 갱신한다. 학습률 감소·회복이 실제 발동했는지도 기록하며, 발동하지 않은 짧은 실험으로 그 기능이 효과 없다고 단정하지 않는다.
+
+계획: [PLAN.md](PLAN.md). 이번 연구는 제안값을 최적값으로 전제하지 않고 각 요인·조합의 실제 결과를 확인한다.
+
+
+## 2026-10-31 저장 기록 정리
+
+완료된 구형 비교 학습의 `train/J/episodes.jsonl`, `decisions.jsonl.gz`, `transitions.jsonl.gz` 27개(5.75GiB)를 정리했다. 최종·초기 모델, 중간 체크포인트, 평가 에피소드, `learning_metrics.jsonl`, 손가락 진단, 설정·계약, 기존 분석·그래프·영상은 보존했다. 실패 실행의 원시 로그도 보존했다. 삭제한 학습 원시 시점에 대한 새로운 상세 재분석은 불가능하며, 기존 요약과 체크포인트 평가는 가능하다. 정확한 삭제 목록·검증은 [정리 기록](/home/ajou/yigyu/3/docs/maintenance/project_cleanup_20261031/REPORT.md)을 따른다.

@@ -1,0 +1,45 @@
+"""Continuous source sampling of six-joint pick IK; no physical simulation."""
+import argparse
+from pathlib import Path
+import xml.etree.ElementTree as ET
+import numpy as np
+from .initial_pose_noise_v1 import read,save,sha,pose
+from .upper_arm_static_geometry_v1 import ROOT,ASSET,calibrated_upper_fk
+from .realistic_guitar_geometry_v1 import source_scene
+from .elbow_wrist_strike_source_v1 import solve_pick
+from .run_elbow_wrist_ready_v7 import desired_point
+from .environment_contract_v1 import EnvironmentContract
+
+def main():
+    import mujoco
+    from .initial_overlap import build_probe
+    parser=argparse.ArgumentParser();parser.add_argument('--config',type=Path,required=True);parser.add_argument('--initial',type=Path,required=True);parser.add_argument('--out',type=Path,required=True);args=parser.parse_args()
+    assert not args.out.exists();c=EnvironmentContract(args.config);g=read(ROOT/'stability_adapter_2/assets/om_body_geometry_v3/manifest.json');asset=Path(g['asset'])
+    paths={Path(__file__).resolve(),args.config,args.initial,ASSET,asset,ROOT/'stability_adapter_2/config.json',ROOT/'stability_adapter_2/assets/om_body_geometry_v3/manifest.json'}|set((ROOT/'stability_adapter_2').glob('*.py'))|set(map(Path,c.inputs))|set(map(Path,g['input_sha256']))
+    for f in (ASSET,asset):
+        xml=ET.parse(f).getroot();md=(f.parent/xml.find('compiler').get('meshdir')).resolve();paths|={(md/m.get('file')).resolve() for m in xml.findall('./asset/mesh')}
+    pins={str(p.resolve()):sha(p) for p in paths};save(args.out.with_name(args.out.stem+'_before.json'),pins)
+    b=read(args.initial);state=b['native_initial_state'];q0=np.array(b['q_ref_rad']);names=b['joint_names'];bodies=b['human_body_names'];gp,gr=pose(state['guitar_body_states'][0]);fk,parents=calibrated_upper_fk(names,bodies,state,q0)
+    idx=np.array([names.index(n+'_'+a) for n in ('R_Elbow','R_Wrist') for a in 'xyz']);other=np.array([i for i in range(81) if i not in idx]);initial=gr.inv().apply(fk(q0)['RH:pick'][0]-gp)
+    model,data,shapes=build_probe(source_scene(state,bodies,asset));human=[s for s in shapes if s['actor']=='human'];guitar=[s for s in shapes if s['actor']=='guitar'];ids={n:mujoco.mj_name2id(model,mujoco.mjtObj.mjOBJ_BODY,'human/'+n) for n in bodies}
+    moving=lambda n:n in ('R_Elbow','R_Wrist') or n.startswith('RH:')
+    def adjacent(a,b):
+        chain=[]
+        while a in parents:chain.append(a);a=parents[a]
+        chain.append(a);steps=0
+        while b not in chain and b in parents:steps+=1;b=parents[b]
+        return b in chain and steps+chain.index(b)<=2
+    pairs=[(h,g) for h in human if moving(h['body']) for g in guitar]+[(h,g) for i,h in enumerate(human) for g in human[i+1:] if (moving(h['body']) or moving(g['body'])) and not adjacent(h['body'],g['body']) and not(h['body'].startswith('RH:') and g['body'].startswith('RH:'))]
+    rows=[];previous=q0[idx]
+    for time in np.linspace(2,5,61):
+        goal=desired_point(time,initial,np.array(c.config['six_joint_strike_waypoints_G_m']));q,error,_=solve_pick(fk,q0,idx,c.lower,c.upper,q0,gp+gr.apply(goal),previous);previous=q[idx];poses=fk(q)
+        for n,i in ids.items():
+            if i>=0:p,r=poses[n];model.body_pos[i]=p;model.body_quat[i]=r.as_quat()[[3,0,1,2]]
+        mujoco.mj_forward(model,data);negative=[];min_gap=.05
+        for h,g in pairs:
+            gap=float(mujoco.mj_geomDistance(model,data,h['geom_id'],g['geom_id'],.05,None));min_gap=min(gap,min_gap)
+            if gap< -1e-6:negative.append({'a':h['body'],'b':g['body'],'signed_gap_m':gap})
+        assert np.array_equal(q[other],q0[other]);rows.append({'time_s':float(time),'error_m':error,'q6_rad':q[idx].tolist(),'ball_max_deg':float(np.rad2deg(np.linalg.norm(q[idx].reshape(2,3),axis=1)).max()),'minimum_gap_m':min_gap,'negative_pairs':negative})
+    assert all(sha(p)==h for p,h in pins.items());save(args.out,{'input_sha256':pins,'passed':all(r['error_m']<=.002 and r['ball_max_deg']<160 and not r['negative_pairs'] for r in rows),'rows':rows,'scope':'61 static-source IK samples over2–5s, distal human/guitar/nonadjacenthuman signed-gap proxy, not cooked continuous native clearance or music success'})
+    print('path passed',all(r['error_m']<=.002 and not r['negative_pairs'] for r in rows),'min mm',min(r['minimum_gap_m'] for r in rows)*1000)
+if __name__=='__main__':main()

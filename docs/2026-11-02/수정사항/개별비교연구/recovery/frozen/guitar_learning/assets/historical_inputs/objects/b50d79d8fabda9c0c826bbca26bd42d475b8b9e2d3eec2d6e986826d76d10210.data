@@ -1,0 +1,41 @@
+"""Real Strike metadata and altered-input rejection without native physics."""
+import unittest,tempfile
+from pathlib import Path
+from types import SimpleNamespace
+import torch
+from stability_adapter_2.dual_strike_contract_guard_v1 import verify_strike_inputs,verify_strike_view
+ROOT=Path(__file__).resolve().parents[2]
+CP=ROOT/'strike/training/runs/20260920_Jazz1_sync_baseline/checkpoints/strike_010000.pt'
+GOAL=ROOT/'data/song_bundles/02_Jazz1-200-B_solo/training/strike_plan.json'
+GRIP=ROOT/'strike/02_physical_control/pick-grip-reference.json'
+
+
+class StrikeContractGuardTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):cls.checkpoint=torch.load(CP,map_location='cpu',weights_only=True)
+
+    def test_actual_inputs_and_recorded_native_order(self):
+        payload=verify_strike_inputs(self.checkpoint,GOAL,GRIP)
+        import json
+        native=json.loads((ROOT/'docs/2026-10-12/stability_adapter_2/results/dual_music_runtime_v1/pair100_v4/source_contract.json').read_text())
+        self.assertEqual(native['Strike_names'],payload['control']['controlled_dof_names'])
+
+    def test_changed_goal_or_grip_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bad=Path(folder)/'changed.json';bad.write_text('{}')
+            for g,r in ((bad,GRIP),(GOAL,bad)):
+                with self.assertRaises(ValueError):verify_strike_inputs(self.checkpoint,g,r)
+
+    def test_changed_contract_digest_rejected(self):
+        import copy
+        bad=copy.deepcopy(self.checkpoint);bad['checkpoint_contract']['payload']['task']='fret'
+        with self.assertRaises(ValueError):verify_strike_inputs(bad,GOAL,GRIP)
+
+    def test_permuted_channels_or_observation_layout_rejected(self):
+        p=verify_strike_inputs(self.checkpoint,GOAL,GRIP)
+        for names,obs in ((list(reversed(p['control']['controlled_dof_names'])),p['config']['observation_manifest']),
+                          (p['control']['controlled_dof_names'],list(reversed(p['config']['observation_manifest'])))):
+            with self.assertRaises(ValueError):verify_strike_view(p,SimpleNamespace(controlled_dof_names=names,observation_manifest=obs))
+
+
+if __name__=='__main__':unittest.main()

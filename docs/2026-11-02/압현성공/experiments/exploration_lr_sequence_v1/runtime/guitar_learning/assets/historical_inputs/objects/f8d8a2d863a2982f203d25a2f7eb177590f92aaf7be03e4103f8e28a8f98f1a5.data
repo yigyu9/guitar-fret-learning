@@ -1,0 +1,64 @@
+"""Named human joint targets for a single-finger press and virtual-pick sweep."""
+import numpy as np
+from scipy.optimize import least_squares
+from ..initial_pose_noise_v1 import pose
+from ..elbow_wrist_strike_source_v1 import solve_pick
+from ..lower_body_release_v1.common import read, save
+from pathlib import Path
+
+
+def interpolate(t, times, points):
+    k=min(max(np.searchsorted(times,t,side='right')-1,0),len(times)-2)
+    u=np.clip((t-times[k])/(times[k+1]-times[k]),0.,1.)
+    return (1-u)*points[k]+u*points[k+1]
+
+
+def solve_finger(fk,q,indices,lower,upper,qref,goal,start):
+    lo=lower[indices]+1e-6;hi=upper[indices]-1e-6
+    def residual(v):
+        trial=q.copy();trial[indices]=v
+        return np.r_[1000*(fk(trial)['LH:index3'][0]-goal),.1*(v-qref[indices])]
+    fit=least_squares(residual,np.clip(start,lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=35,ftol=1e-8,xtol=1e-8,gtol=1e-8)
+    trial=q.copy();trial[indices]=fit.x
+    return fit.x,float(np.linalg.norm(fk(trial)['LH:index3'][0]-goal))
+
+
+class Motion:
+    def __init__(self,scene,fk):
+        self.s=scene;self.fk=fk;self.spec=read(scene.cfg['play_spec']);self.case=scene.cfg['play_case']
+        self.finger=np.array([scene.names.index(n) for n in ('LH:index1_x','LH:index1_z','LH:index2','LH:index3')])
+        self.distal=np.array([scene.names.index(n+'_'+a) for n in ('R_Elbow','R_Wrist') for a in 'xyz'])
+        self.stage='settle';self.info={};self.started=False
+
+    def apply(self,named):
+        s=self.s;t=s.steps/240
+        if t<5:
+            return named
+        state=s.native();q=np.array([r['pos'] for r in state['human_dof_states']]);gp,gr=pose(state['guitar_body_states'][0])
+        if not self.started:
+            self.initial_finger=gr.inv().apply(pose(state['human_body_states'][s.human_bodies.index('LH:index3')])[0]-gp)
+            self.initial_pick=gr.inv().apply(pose(state['human_body_states'][s.human_bodies.index('RH:pick')])[0]-gp)
+            save(Path(s.cfg['attempt_out'])/'play_reference.json',dict(time_s=t,state=state,initial_finger_G_m=self.initial_finger.tolist(),initial_pick_G_m=self.initial_pick.tolist(),spec=self.spec))
+            self.started=True
+        original=np.array([named[n] for n in s.names]);request=original.copy();changed=[]
+        press=self.case in ('press','combined');strike=self.case in ('strike','combined')
+        self.stage=('baseline_hold' if self.case=='baseline' else 'playing') if t<8.5 else 'observe'
+        self.info=dict(case=self.case,press_enabled=press,strike_enabled=strike)
+        if press:
+            target=np.array(self.spec['press']['target_G_m']);hover=target+np.array([0.,0.,.008]);down=target-np.array([0.,0.,.004])
+            goal=interpolate(t,[5,5.8,6.3,8,8.5,9],np.array([self.initial_finger,hover,down,down,hover,hover]))
+            values,error=solve_finger(self.fk,q,self.finger,s.lower,s.upper,s.q_ref,gp+gr.apply(goal),s.target[self.finger].astype(float))
+            if not np.isfinite(values).all() or error>.003:raise RuntimeError('press finite finger IK 3mm hard gate')
+            request[self.finger]=values;changed.extend(self.finger);self.info.update(press_goal_G_m=goal.tolist(),press_IK_error_m=error)
+        if strike:
+            points=np.array(self.spec['strike']['waypoints_G_m'])
+            goal=interpolate(t,[5,5.8,6.1,6.5,7.1,7.3,7.9,8.1,8.5],np.vstack([self.initial_pick,points[0],points[1],points[1],points[2],points[2],points[3],points[3],points[4]]))
+            fitted,error,nfev=solve_pick(self.fk,q,self.distal,s.lower,s.upper,s.q_ref,gp+gr.apply(goal),s.target[self.distal].astype(float))
+            values=fitted[self.distal]
+            if not np.isfinite(values).all() or error>.002 or np.any(np.linalg.norm(values.reshape(2,3),axis=1)>=np.deg2rad(160)):
+                raise RuntimeError('strike finite distal IK/principal 2mm hard gate')
+            request[self.distal]=values;changed.extend(self.distal);self.info.update(pick_goal_G_m=goal.tolist(),pick_IK_error_m=error,pick_IK_nfev=nfev)
+        mask=np.ones(105,dtype=bool);mask[changed]=False
+        assert np.array_equal(request[mask],original[mask])
+        self.info['other_base_request_channels_exact']=True
+        return dict(zip(s.names,request.tolist()))

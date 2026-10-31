@@ -140,6 +140,27 @@ class PreparedResetTests(unittest.TestCase):
         self.assertNotEqual(second['state']['human_dof_states'][0]['pos'], 999.)
         self.assertNotEqual(second['target105'][0], 999.)
 
+    def test_gpu_left_uses_v9_while_original_and_right_are_preserved(self):
+        original = reset.load_prepared_reset_contract()
+        left = reset.load_gpu_prepared_reset_contract('left')
+        pose = json.loads(reset.LEFT_INITIAL_POSE.read_text())
+        self.assertEqual(left['state'], pose['state'])
+        np.testing.assert_array_equal(left['target105'], pose['target105_rad'])
+        self.assertEqual(reset.load_gpu_prepared_reset_contract('right')['state'], original['state'])
+        self.assertEqual(reset.load_prepared_reset_contract()['state'], original['state'])
+        self.assertIn(reset.LEFT_INITIAL_POSE, reset.prepared_input_paths())
+        self.assertEqual(left['source_sha256'][str(reset.LEFT_INITIAL_POSE.resolve())], reset.LEFT_INITIAL_POSE_SHA256)
+        left['state']['human_dof_states'][0]['pos'] = 999.
+        self.assertNotEqual(reset.load_gpu_prepared_reset_contract('left')['state']['human_dof_states'][0]['pos'], 999.)
+
+    def test_gpu_left_rejects_modified_pose_before_loading_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'pose.json'
+            path.write_text('{}')
+            with patch.object(reset, 'LEFT_INITIAL_POSE', path):
+                with self.assertRaisesRegex(ValueError, 'Left initial pose SHA mismatch'):
+                    reset.load_gpu_prepared_reset_contract('left')
+
     def test_real_source_contract_hashes_model_inputs_and_cache(self):
         first = reset.load_prepared_reset_contract()
         self.assertEqual(first['state']['physics_step'], 5280)

@@ -1,4 +1,4 @@
-"""Small diagnostic subclasses; production defaults remain unchanged."""
+"""직접 목표각 제어를 사용하는 단음 진단 환경·정책·유한 손목 안내."""
 import copy
 import math
 import torch
@@ -17,8 +17,6 @@ from guitar_learning.gpu.control import apply, conjugate, multiply
 
 
 class ShortEnvironment(FingerSkillEnvironment):
-    allowed_finger_action_modes = ('incremental', 'position')
-
     def __init__(self, metadata, *, bundle, song, skill, device='cuda:0', hand='left'):
         spec = copy.deepcopy(song['short_learning'])
         if spec.get('schema') != SCHEMA or spec['mode'] != song['finger_action_mode']:
@@ -62,7 +60,7 @@ class ShortEnvironment(FingerSkillEnvironment):
 
 
 class ShortPolicy(FingerSkillPolicy):
-    schema = 'guitar_learning.short_finger_policy.v2'
+    schema = 'guitar_learning.short_finger_policy.v3'
 
     def __init__(self, *, contract, size='small'):
         spec = contract['task']['short_learning']
@@ -119,8 +117,6 @@ class ShortPool(GpuPool):
                  (self.teacher_final > self.controller.action_high)).any()):
             self.close()
             raise ValueError('Teacher target exceeds actual controller bounds')
-        self.incremental_mask = torch.zeros_like(self.learn_mask)
-        self.incremental_mask[self.controller.incremental_actions] = True
 
     def reset(self, indices=None):
         result = super().reset(indices)
@@ -171,9 +167,8 @@ class ShortPool(GpuPool):
         fraction = ((self.environment._local_time()+1/60)/self.spec['teacher']['ramp_s']).clamp(0, 1).to(actions.dtype)
         desired = self.teacher_reference+fraction[:, None]*(self.teacher_final-self.teacher_reference)
         desired = self._wrist_feedback(desired, fraction)
-        teacher = trajectory_actions(desired, self.controller.target[:, self.controller.active],
-            self.teacher_reference, self.controller.action_low, self.controller.action_high,
-            self.incremental_mask, max_speed=4.)
+        teacher = trajectory_actions(desired, self.teacher_reference,
+            self.controller.action_low, self.controller.action_high)
         self.last_policy_action = actions.detach().clone()
         self.last_executed_action = torch.where(self.learn_mask[None], actions, teacher)
         self.last_executed_action[:, 33:] = 0

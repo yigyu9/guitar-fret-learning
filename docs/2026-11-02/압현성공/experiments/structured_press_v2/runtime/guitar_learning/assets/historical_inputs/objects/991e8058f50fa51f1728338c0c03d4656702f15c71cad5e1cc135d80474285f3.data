@@ -1,0 +1,83 @@
+# 병렬 학습과 장기 시작 설정
+
+손별 성공을 먼저 확보하는 현재 실행 경로는 [SPECIALIST_TRAINING.md](/home/ajou/yigyu/3/guitar_learning/docs/SPECIALIST_TRAINING.md)의 `train_specialists`다. 기존 persistent 병렬 수집·자원 보호·PPO 저장을 재사용하며 독립 Actor와 단계별 보상을 적용한다. 아래 공유 Actor 설정은 비교·재현용으로 보존한다.
+
+현재 시작 권장은 **N8/GPU/medium/H256/batch2048/actor_lr3e-5/initial_std exp(-3)**다. 이전16환경 실행에서 host 메모리 부족과 worker timeout이 발생했다. 학습 worker가 직접 OOM kill됐거나 학습 자체가 무한 누수였다는 증거는 없다. [원실행 분석](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_long_B_16env_analysis_v1/README.md)은 그대로 보존한다.
+
+실제8환경단기학습·중단복구·pool검증과최종127검사결과는 [이번 개선 기록](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_reliability_music_v1/README.md)에있다. 연주성능개선은확인되지않았다.
+
+## 설정 선택
+
+| 파일 | 용도 |
+| --- | --- |
+| [long_B_8env_dense_v2.json](/home/ajou/yigyu/3/guitar_learning/tool/training/configs/long_B_8env_dense_v2.json) | 새 정책 시작 권장. 첫 음 고정, 조기 왼손·기타 상대 오른손 접근 보상 추가 |
+| [long_B_8env_safe_v1.json](/home/ajou/yigyu/3/guitar_learning/tool/training/configs/long_B_8env_safe_v1.json) | 기존 legacy 보상·고정 첫 음 유지. 이전 checkpoint 재개용 |
+| [long_B_8env_pool_v2.json](/home/ajou/yigyu/3/guitar_learning/tool/training/configs/long_B_8env_pool_v2.json) | 선택 옵션. 새 보상에 명시한 event 0~4 단음 pool 추가 |
+| [long_B_16env_v1.json](/home/ajou/yigyu/3/guitar_learning/tool/training/configs/long_B_16env_v1.json) | 과거 비교·실패 재현 설정. 현재 권장 아님 |
+
+공통값은 독립 CPU PhysX8개, 물리240Hz/정책60Hz, 카메라OFF, 준비2초, medium 1,931,600 parameters,39정책 출력이다. 하체는 외부 유한 제어를 유지한다. rollout은256×8=2048, minibatch256/epochs2, actor/value lr3e-5/3e-4, gamma0.99/cost_gamma1/GAE0.95, PPO clip0.2/gradient clip0.5, KL상한0.02와 최대3회 재시도를 유지한다. std exp(-3)는 정규화된 tanh 이전 Gaussian 값이며 관절각0.05rad와 다르다.
+
+예산은 추가256업데이트/최대524288전이, soft wall28800초다. 시간 한도는 업데이트 경계에서 확인하므로 마지막 수집만큼 초과하거나256회 전에 끝날 수 있다. 5업데이트마다 checkpoint와 정상 종료 final.pt를 저장한다. 8시간 완주·메모리 누수 부재·연주 수렴을 보장하는 값은 아니다.
+
+## 음악 목표와 새 보상
+
+기본은 `05_BN2-131-B_solo`의 stageB/event0:2번 현7프렛 약지, down 타현이다. `music.goal_event_indices=null`이면 예전처럼 고정 목표다. 명시 목록이면 각 worker가 `seed+worker_id`로 shuffle하고 한 cycle에 모든 후보를 한 번씩 사용한다. pool `[0,1,2,3,4]`는2현7프렛/2현5프렛/3현7프렛/3현6프렛/3현4프렛이다. 자동 curriculum이나 전체 곡 학습은 아니다. 미지원 이벤트는 조용히 생략하지 않고 거부한다.
+
+pool의 공통 task contract는 후보 전체와 provenance를 포함한다. `remaining_s/held_total_s/elapsed_s` 상태는 pool 최대 음 길이로 실제 관측과 계약을 함께 정규화한다. 개별 음의 종료 시각과 이벤트 토큰은 원목표를 유지한다. 실제 선택은 reset 감사의 `episode_task.json`과 transition의 `episode_task`에 따로 남긴다. 재시작은 새 native episode와 새 sampler cycle에서 시작하며 진행 중 solver/sampler 위치를 복원하지 않는다.
+
+`dense_v2`는 기존 success/hold/release/safety에 손대지 않고 실제240Hz 표본으로 다음 보상을 더한다.
+
+- 왼손: task 시작부터 press 시각 전까지 초당0.2×exp(-(d/0.03m)^2). d는 말단 body 원점과 프렛 목표 거리로, 실제 손가락 pad 간격·압력과 다르다. 기존 press~onset 접근 보상은 유지한다.
+- 오른손: 움직이는 기타 좌표계의 선택 현, y=-0.32m, 현 아래8mm를 지나는 짧은 경로를 사용한다. onset 전후80ms 동안 현 법선 방향 ±6mm를 이동한다. 초당0.2×exp(-(d/0.05m)^2), sweep 중 올바른 방향 이동은 최대 초당0.1을 추가한다. 실제 현 선분과 down/up 방향을 사용하며 목표 관절이나 기타 상태를 강제로 바꾸지 않는다.
+
+실제 초기 우손 거리는 약49.74mm였다. 최초20mm Gaussian 범위에서는 신호가 매우 약해50mm로 넓혔다. 최대보상과경로는같고초기도달신호는강해지지만근접위치·시간의정밀한구분은약해진다. 초기탐색용설정이며거리감소·방향·실제성공을따로평가한다.
+
+이 값은 학습 신호다. 실제 음악 성공은 기존 접촉 후보와 타현 통과·시간·방향 조건으로만 판정한다. 접근 보상 증가를 연주 성공으로 보고하면 안 된다. 새 보상이나 pool은 checkpoint 계약을 바꾸므로 legacy checkpoint를 강제로 재개하지 않는다.
+
+## 새 정책 시작
+
+권장 진입점은 `guitar_learning.tool.training.train_persistent`다. sim/env/asset을 매 episode 다시 만들던 경로를 분리하고, worker마다 같은 장면과 제어기를 유지한다. episode 경계에서 준비 상태·속도·목표와 제어/음악/안정성 이력만 초기화한 뒤 실제 준비 2초를 수행한다. 기타 상태 쓰기는 reset 경계에만 허용한다. Root 고정·유한 하체 제어·자유 기타 조건과 관측/행동/보상/PPO 계약은 유지한다. [구현·검증·한계](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_persistent_reset_v1/README.md).
+
+이미 실행 중인 `train_parallel` 프로세스는 기존 소스와 동작을 그대로 유지한다. 다음 실행부터 아래 진입점을 사용한다. 이전 실행기는 장면 재생성 대조·재현용으로 보존한다.
+
+프로젝트 루트에서 아직 없는 출력 경로를 지정한다.
+
+```bash
+cd /home/ajou/yigyu/3
+PATH=/home/ajou/miniconda3/envs/rl38/bin:$PATH \
+LD_LIBRARY_PATH=/home/ajou/miniconda3/envs/rl38/lib \
+PYTHONDONTWRITEBYTECODE=1 \
+/home/ajou/miniconda3/envs/rl38/bin/python -m guitar_learning.tool.training.train_persistent \
+  --settings /home/ajou/yigyu/3/guitar_learning/tool/training/configs/long_B_8env_dense_v2.json \
+  --out /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_long_B_8env_dense_v2_persistent
+```
+
+기존10업데이트 모델을 그대로 재개하려면 `--settings`를 `long_B_8env_safe_v1.json`의 절대 경로로 바꾸고 아래 옵션을 붙인다.
+
+```bash
+--resume /home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_long_B_16env_20261018_100545/checkpoint_000009.pt
+```
+
+resume은 모델·optimizer·난수 상태를 엄격하게 복원하고 새 물리 episode를 준비한다. 입력/제어/보상/목표 contract와 PPO 설정·CUDA topology가 맞아야 한다. 출력의 checkpoint/update 번호는 이번 실행 내 번호이며 checkpoint 내부 trainer.updates는 누적값이다. 실패 복구도 같은 설정에서 `--resume .../failure_last_valid.pt`로 진행한다.
+
+## 진행과 실패 확인
+
+터미널에는10초마다 phase/update/tick/RAM/pending worker가 출력된다. 최초 자산 준비·reset·수집·PPO update를 구분한다. 다음 파일은 실행 중 확인할 수 있다.
+
+| 파일 | 내용 |
+| --- | --- |
+| `status.json` | 원자적으로 교체되는 최신 상태 |
+| `resources.jsonl` | 5초 자원 기록. host MemAvailable, 부모·자식 현재 RSS/PSS와 lifetime RSS peak 구분 |
+| `events.jsonl` | phase 전환, 저메모리 감지, 실패, 종료 |
+| `update_*.json` | 완료 batch의 PPO/KL/lr/episode cost/reward/수집 시간 |
+| `transitions.jsonl.gz` |60Hz compact 음악·보상·기타/발 편차·실패·목표·접근 proxy |
+| `worker_*/audit_episode_*/` | reset 실제 상태/물성/계약과 첫 tick의 실제4개240Hz 표본 |
+| `report.json` | 최종 절차/입력/worker 검사, 실패와 복구 checkpoint, 폐기된 부분 수집 |
+
+새 재사용 실행기는 `worker_*/environment/episode_*/persistent_reset.json`에 경계의 상태 복원 오차와 native 생성 횟수를, `persistent_lifecycle.json`에 마지막 종료를 기록한다. `persistent_audit.json`은 이 근거를 대조한다. 원 실행기의 최종 결과는 정확한 바이트 그대로 `core_report.json`에 보존하고, **최종 판정은 lifecycle 검사를 포함하는 `report.json`**으로 한다. `status.json`은 원 실행기의 진행 상태이므로 최종 lifecycle 판정을 포함하지 않는다.
+
+MemAvailable<4GiB면 `memory_guard`로 중단한다. 5초 주기로 저메모리를 latch하고 Pool의 짧은 대기 poll/제어 tick/업데이트 경계에서 예외로 처리한다. 부모가 느린 worker를 기다려도 감시와 heartbeat는 계속된다. worker 비정상 종료는 PID/exitcode와 함께 즉시 진단하고, 살아 있지만 응답 없는 경우300초 timeout을 유지한다.
+
+오류·Ctrl-C 때 새 모델 초기화를 마쳤거나 strict resume에 성공해 `recovery_eligible=True`인 경우에만 `failure_last_valid.pt`에 마지막 유효 PPO/optimizer 상태를 저장한다. strict resume 검증에 실패하면 복구 파일을 만들지 않고 `resume_not_validated`로 보고한다. 미완료 rollout은 학습하지 않고 폐기한다. `stopped`는 `memory_guard/worker_timeout/worker_failed/interrupted/error`를 구분한다. 저장 실패도 보고하므로 파일 존재와 report를 함께 확인한다. OS SIGKILL·급격한 RAM 고갈·전원 차단 자체를 복구 저장으로 막을 수는 없다.
+
+`report.completed`는 실행 절차와 입력/제어 검사를 통과했다는 뜻이다. 타현 매칭·목표 접촉 유지·실패·비용을 함께 확인해야 한다. 현재 음악 수렴, 전체 곡, 실제 압력·진동·음향은 검증되지 않았다.

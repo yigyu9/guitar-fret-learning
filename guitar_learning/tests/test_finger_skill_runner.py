@@ -12,6 +12,7 @@ from guitar_learning.training import finger_skill_runner as runner
 from guitar_learning.training.launch import settings_document
 from guitar_learning.training.ppo import DecisionPPOTrainer, PPOConfig
 from guitar_learning.tests.test_finger_decisions import TinyDecisionPolicy
+from guitar_learning.portability import portable, settings_digest, PATH_SCHEMA
 
 
 def settings():
@@ -45,6 +46,8 @@ class JointRunnerTests(unittest.TestCase):
         self.assertFalse(hasattr(runner, 'FingerSkillCurriculum'))
         self.assertFalse(hasattr(runner, '_transfer'))
         self.assertFalse(hasattr(runner, 'phase_budgets'))
+        self.assertEqual(report['portable_checkpoint_ref'],
+                         dict(base='report_directory', path='J/final.pt'))
 
     def test_resume_preserves_original_quarter_and_allows_additional_updates(self):
         active = settings()
@@ -54,7 +57,9 @@ class JointRunnerTests(unittest.TestCase):
             root = Path(tmp)
             checkpoint = root/'prior.pt'
             torch.save(dict(metadata=dict(schema=runner.RESUME_SCHEMA, settings=active,
-                input_pins={}, curriculum=schedule.state_dict())), checkpoint)
+                settings_sha256=settings_digest(active),
+                input_contract=dict(schema=PATH_SCHEMA, required={}, lineage=[], run_settings=None),
+                curriculum=schedule.state_dict())), checkpoint)
             active = copy.deepcopy(active)
             active['updates'] = 1
             active['finger_skill'].update(planned_transitions=6, full_song_after=1)
@@ -111,11 +116,12 @@ class JointRunnerTests(unittest.TestCase):
         active = settings()
         active['ppo']['advantage_normalization'] = 'separate'
         with self.assertRaises(ValueError): runner._validate_joint_settings(active)
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp)/'source.py'
-            source.write_text('changed')
-            with self.assertRaisesRegex(ValueError, 'sources changed'):
-                runner._validate_pins(dict(input_pins={str(source): '0'*64}))
+        with self.assertRaisesRegex(ValueError, 'sources changed'):
+            active = portable(settings())
+            runner._validate_pins(dict(schema=runner.RESUME_SCHEMA, settings=active,
+                settings_sha256=settings_digest(active), input_contract=dict(schema=PATH_SCHEMA,
+                required={'project://guitar_learning/training/ppo.py': '0'*64},
+                lineage=[], run_settings=None)))
 
 
 if __name__ == '__main__':

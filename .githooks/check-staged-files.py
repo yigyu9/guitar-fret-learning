@@ -8,7 +8,7 @@ import sys
 from storage_policy import is_external_link_target
 
 MIB = 1024 * 1024
-ALLOWED = {"data", "docs", "guitar_learning", "isaacgym", "paper", "tab2fingermapping", ".githooks"}
+ALLOWED = {"data", "docs", "guitar_learning", "isaacgym", "paper", "tab2fingermapping", ".githooks", "scripts"}
 
 def git(*args, **kwargs):
     return subprocess.check_output(["git", *args], **kwargs)
@@ -39,7 +39,8 @@ def main():
         parts = PurePosixPath(name).parts
         if len(parts) > 1 and parts[0] not in ALLOWED:
             errors.append(f"Outside GitHub scope: {name}")
-        if any("archive" in part.lower() for part in parts[:-1]):
+        if (any("archive" in part.lower() for part in parts[:-1])
+                and parts[:2] != ("guitar_learning", "assets")):
             errors.append(f"Archive directory: {name}")
         if mode == b"120000":
             target = os.fsdecode(git("cat-file", "blob", oid.decode()))

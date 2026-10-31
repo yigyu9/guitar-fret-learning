@@ -9,6 +9,7 @@ import traceback
 from guitar_learning.training import training_log_io as json_io
 from guitar_learning.training.training_log_io import write, digest, project_source_paths, active_source_paths
 from guitar_learning.training.training_log_io import EpisodeWriter, CheckpointRecorder, episode_summary, TRANSITION_SCHEMA, METRICS_SCHEMA
+from guitar_learning.portability import ROOT, portable, localize, settings_digest, checkpoint_inputs, validate_checkpoint_inputs, report_reference
 
 
 def _count(value, name):
@@ -64,7 +65,7 @@ class ExposureSchedule:
 
 
 SCHEMA = 'guitar_learning.finger_skill_run.v2'
-RESUME_SCHEMA = 'guitar_learning.finger_skill_resume.v3'
+RESUME_SCHEMA = 'guitar_learning.finger_skill_resume.v4'
 
 
 def resume_schema(settings):
@@ -93,17 +94,18 @@ def _apply_progress(pool, schedule):
     pool.set_training_progress(schedule.committed_transitions)
 
 
-def checkpoint_metadata(settings, schedule, pool, *, input_pins=None, **extra):
-    return dict(schema=resume_schema(settings), settings=copy.deepcopy(settings),
+def checkpoint_metadata(settings, schedule, pool, *, input_pins=None, settings_path=None, lineage=(), **extra):
+    return dict(schema=resume_schema(settings), settings=portable(settings),
+        settings_sha256=settings_digest(settings),
         curriculum=schedule.state_dict(), sampler=pool.environment.sampler.state_dict(),
-        input_pins=copy.deepcopy(input_pins or {}),
+        input_contract=checkpoint_inputs(input_pins or {}, settings,
+                                        settings_path=settings_path, lineage=lineage),
         resume_scope='J model/Adam/RNG/exposure/sampler; fresh prepared episodes', **extra)
 
 
 def restore_checkpoint(trainer, pool, schedule, checkpoint):
     metadata = trainer.load(checkpoint)
-    if not isinstance(metadata, dict) or metadata.get('schema') != RESUME_SCHEMA:
-        raise ValueError('J-only finger-skill checkpoint metadata required')
+    _validate_metadata_schema(metadata)
     _validate_joint_settings(metadata['settings'])
     _validate_pins(metadata)
     schedule.load_state_dict(metadata['curriculum'])
@@ -113,11 +115,16 @@ def restore_checkpoint(trainer, pool, schedule, checkpoint):
     return metadata
 
 
+def _validate_metadata_schema(metadata):
+    if not isinstance(metadata, dict) or metadata.get('schema') != RESUME_SCHEMA:
+        raise ValueError('J-only portable finger-skill resume.v4 required; legacy checkpoints '
+                         'have absolute input paths and/or different source/control contracts; '
+                         'use their preserved original checkout, not implicit conversion')
+
+
 def _validate_pins(metadata):
-    changed = [path for path, value in metadata.get('input_pins', {}).items()
-               if not Path(path).is_file() or digest(path) != value]
-    if changed:
-        raise ValueError('checkpoint input sources changed: '+str(changed[:8]))
+    _validate_metadata_schema(metadata)
+    validate_checkpoint_inputs(metadata)
 
 
 def _pins(settings, out, extra=()):
@@ -126,7 +133,9 @@ def _pins(settings, out, extra=()):
     root = Path(__file__).resolve().parents[2]
     sources = active_source_paths(root/'guitar_learning')
     sources.update((root/'guitar_learning/assets').rglob('*.json'))
-    sources.update((root/'guitar_learning/assets/gpu_rigid_guitar_v1').glob('*.xml'))
+    # Include explicit visual meshes as well as XML/manifest in strict saves.
+    sources.update(path for path in (root/'guitar_learning/assets/gpu_rigid_guitar_v1').rglob('*')
+                   if path.is_file())
     sources.update(path for path in Path(settings['song_training']['bundle']).rglob('*') if path.is_file())
     sources.update(prepared_input_paths())
     sources.update(extra)
@@ -153,7 +162,7 @@ def _train_phase(settings, out, curriculum, *, resume=None, updates=None):
     # 입력을 봉인하고 결과 파일을 만든 뒤, J 모델·환경을 생성한다.
     out = Path(out)
     out.mkdir(parents=True, exist_ok=False)
-    write(out / 'settings.json', settings)
+    write(out / 'settings.json', portable(settings))
     pins = _pins(settings, out, [Path(value).resolve() for value in (resume,) if value])
     write(out / 'inputs_before.json', pins)
     random.seed(settings['seed'])
@@ -233,6 +242,8 @@ def _train_phase(settings, out, curriculum, *, resume=None, updates=None):
             curriculum,
             pool,
             input_pins=pins,
+            settings_path=out/'settings.json',
+            lineage=[resume] if resume else (),
             requested_run_budget_transitions=updates * settings['horizon'] * settings['num_envs'] if updates is not None else None,
             original_phase_budget=_planned_budget(curriculum),
             exposure_transitions=copy.deepcopy(committed_exposure),
@@ -399,6 +410,8 @@ def _train_phase(settings, out, curriculum, *, resume=None, updates=None):
             stopped=stopped,
             phase=settings['finger_skill']['phase'],
             settings=settings,
+            recorded_project_root=str(ROOT),
+            portable_checkpoint_ref=report_reference(out/'final.pt', out) if failure is None else None,
             optimizer_updates=trainer.updates if trainer else 0,
             updates_in_run=used_updates,
             transitions=journal.stats['committed'],
@@ -460,10 +473,9 @@ def evaluate_checkpoint(checkpoint, out, *, num_envs=None, scope='full_song', ma
     checkpoint, out = (Path(checkpoint).resolve(), Path(out).resolve())
     payload = torch.load(checkpoint, map_location='cpu', weights_only=False)
     metadata = payload.get('metadata')
-    if not isinstance(metadata, dict) or metadata.get('schema') != resume_schema(metadata.get('settings', {})):
-        raise ValueError('own finger-skill checkpoint metadata required')
+    _validate_metadata_schema(metadata)
     _validate_pins(metadata)
-    settings = copy.deepcopy(metadata['settings'])
+    settings = localize(metadata['settings'])
     _validate_joint_settings(settings)
     if num_envs is not None:
         if type(num_envs) is not int or not 1 <= num_envs <= 1024:
@@ -472,7 +484,7 @@ def evaluate_checkpoint(checkpoint, out, *, num_envs=None, scope='full_song', ma
     requested_max_episodes = max_episodes
     max_episodes = max(max_episodes, settings['num_envs'])
     out.mkdir(parents=True, exist_ok=False)
-    write(out / 'settings.json', settings)
+    write(out / 'settings.json', portable(settings))
     pins = _pins(settings, out, [checkpoint])
     write(out / 'inputs_before.json', pins)
     monitor = Monitor(out, min_available_memory_gib=settings['min_available_memory_gib'])
@@ -539,6 +551,8 @@ def evaluate_checkpoint(checkpoint, out, *, num_envs=None, scope='full_song', ma
         report = dict(
             schema='guitar_learning.finger_skill_evaluation.v1',
             checkpoint=str(checkpoint),
+            portable_checkpoint_ref=report_reference(checkpoint, out),
+            recorded_project_root=str(ROOT),
             checkpoint_sha256=digest(checkpoint),
             phase=policy.phase,
             scope=scope,
@@ -618,15 +632,14 @@ def run(settings, args):
         if resume:
             payload = torch.load(resume, map_location='cpu', weights_only=False)
             metadata = payload.get('metadata', {})
-            if metadata.get('schema') != RESUME_SCHEMA:
-                raise ValueError('J-only finger-skill resume metadata required')
+            _validate_metadata_schema(metadata)
             _validate_joint_settings(metadata['settings'])
             _validate_pins(metadata)
             saved = metadata['curriculum']['config']
             schedule = ExposureSchedule(saved['planned_transitions'], saved['full_song_after'])
             schedule.load_state_dict(metadata['curriculum'])
         spec.update(schedule.config)
-        write(out/'settings.json', settings)
+        write(out/'settings.json', portable(settings))
         result = _train_phase(settings, out/'J', schedule, resume=resume, updates=settings['updates'])
         stages.append(result)
         current_checkpoint = result['checkpoint']
@@ -637,9 +650,10 @@ def run(settings, args):
         raise
     finally:
         if not (out/'settings.json').exists():
-            write(out/'settings.json', settings)
+            write(out/'settings.json', portable(settings))
         report = dict(schema=SCHEMA, completed=failure is None and stopped == 'updates_complete',
             stopped=stopped, settings=settings, final_phase='J', final_checkpoint=current_checkpoint,
+            portable_checkpoint_ref=report_reference(current_checkpoint, out), recorded_project_root=str(ROOT),
             stages=stages, curriculum=schedule.state_dict(), failure=failure,
             budgets_are_raw_control_transitions=True, training_transitions=schedule.committed_transitions,
             exposure_transitions=stages[-1]['report'].get('exposure_transitions') if stages else None,

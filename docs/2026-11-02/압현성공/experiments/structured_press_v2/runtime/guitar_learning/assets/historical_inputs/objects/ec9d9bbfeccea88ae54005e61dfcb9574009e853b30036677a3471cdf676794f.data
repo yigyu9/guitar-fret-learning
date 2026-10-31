@@ -1,0 +1,20 @@
+"""Extend the preserved strike trial in actual physics, without changing its motion."""
+import isaacgym
+import argparse
+from pathlib import Path
+from . import run_initial_pose_search_v3 as native
+from .initial_pose_noise_v1 import read,save,sha
+
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--config',type=Path,required=True);parser.add_argument('--out',type=Path,required=True);args=parser.parse_args()
+    plan=Path(__file__).with_name('INITIAL_POSE_LONG_VIDEO_PLAN_V1.md')
+    paths={Path(__file__).resolve(),Path(native.__file__),plan,args.config.resolve(),args.config.parent.parent/'margin_only_audit.json'}
+    pins={str(p):sha(p) for p in paths};before=args.out.parent/'long_inputs_before.json';assert not before.exists();save(before,pins)
+    assert read(args.config)['diagnostic_seconds']==15
+    native.main()
+    assert all(sha(p)==h for p,h in pins.items())
+    save(args.out.parent/'long_input_verification.json',{'input_sha256':pins,'inputs_unchanged':True})
+
+
+if __name__=='__main__':main()

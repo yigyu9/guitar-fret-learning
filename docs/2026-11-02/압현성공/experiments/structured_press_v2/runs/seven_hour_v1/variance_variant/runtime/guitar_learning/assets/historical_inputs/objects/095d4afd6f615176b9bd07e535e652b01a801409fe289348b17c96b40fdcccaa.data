@@ -1,0 +1,51 @@
+"""CPU native check of loading while running; no desktop or stability claim."""
+import json
+import hashlib
+from pathlib import Path
+import numpy as np
+from .scene import Scene, gymapi, read
+from .lab_v3 import Lab
+
+ROOT=Path(__file__).resolve().parents[2]
+A=Path(__file__).resolve().parent
+D=ROOT/'docs/2026-10-19/stability_adapter_2/results/manual_pose_lab_v1/load_joint_values_v1/native_check'
+PREVIOUS=D.parent.parent/'upright_default_v1/native_check/session.json'
+
+
+def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def main():
+    D.mkdir(exist_ok=False)
+    original=read(A/'upright_initial_v1.json')
+    q=np.array(original['joint_angles_rad'],dtype=np.float32);q[0]+=np.float32(.01)
+    incoming={'joint_names':original['joint_names'][::-1],'joint_angles_rad':q[::-1].astype(float).tolist()}
+    with (D/'incoming_joints.json').open('x')as f:json.dump(incoming,f,indent=2)
+    previous=read(PREVIOUS)['input_sha256']
+    assert all(sha(p)==h for p,h in previous.items())
+    inputs={str(p):sha(p) for p in [PREVIOUS,A/'upright_initial_v1.json',A/'LOAD_JOINT_VALUES_PLAN_V1.md',D/'incoming_joints.json']+sorted(A.glob('*.py'))+sorted(A.glob('open*.sh'))}
+    inputs.update(previous)
+    with (D/'inputs_before.json').open('x')as f:json.dump(inputs,f,indent=2)
+    scene=Scene(graphics=False)
+    try:
+        lab=Lab(scene,original,gymapi);lab.toggle();lab.advance(8)
+        guitar=scene.bodies(scene.guitar);fixed=scene.bodies(scene.human)[:9].copy()
+        lab.load_joints(D/'incoming_joints.json')
+        assert not lab.running and scene.steps==0
+        actual=scene.gym.get_actor_dof_states(scene.env,scene.human,gymapi.STATE_ALL)
+        assert np.array_equal(actual['pos'],q) and np.all(actual['vel']==0)
+        assert np.array_equal(guitar,scene.bodies(scene.guitar))
+        assert np.array_equal(fixed,scene.bodies(scene.human)[:9])
+        lab.set_joint(0,float(np.degrees(q[0]))+.5);lab.reset()
+        assert np.array_equal(scene.gym.get_actor_dof_states(scene.env,scene.human,gymapi.STATE_ALL)['pos'],q)
+        assert all(sha(p)==h for p,h in inputs.items())
+        report={'passed':True,'input_sha256':inputs,'inputs_unchanged':True,'physics_steps_before_load':8,
+                'loaded_81_native_angles_exact':True,'native_joint_velocities_zero':True,'physics_off_after_load':True,
+                'guitar_full_state_before_after_load_exact':True,'fixed_root_lower_state_exact':True,
+                'reset_to_loaded_joint_values':True,'desktop_gui_verified':False}
+        with (D/'checks.json').open('x')as f:json.dump(report,f,ensure_ascii=False,indent=2)
+        print({k:v for k,v in report.items()if k!='input_sha256'})
+    finally:scene.close()
+
+
+if __name__=='__main__':main()

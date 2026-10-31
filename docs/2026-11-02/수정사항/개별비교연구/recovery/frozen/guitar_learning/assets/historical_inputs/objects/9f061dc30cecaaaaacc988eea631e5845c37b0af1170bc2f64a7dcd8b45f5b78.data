@@ -1,0 +1,135 @@
+"""Native support pose candidates with a common guitar-relative left-hand protocol."""
+import isaacgym
+import argparse
+import traceback
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from scipy.spatial.transform import Rotation
+from .initial_pose_noise_v1 import read, save, sha, pose
+from .upper_arm_static_geometry_v1 import calibrated_upper_fk
+
+ROOT=Path(__file__).resolve().parents[1];A=ROOT/'stability_adapter_2'
+P=ROOT/'docs/2026-10-19/stability_adapter_2/results/initial_pose_search_v1'
+CAMERAS={'whole_body':('front',[0,3.1,.80],[0,0,.72]),'hands':('right_side',[3.1,0,.80],[0,0,.72]),'top':('top',[0,.05,2.9],[0,0,.45])}
+
+
+def run(cfg,out):
+    from . import dual_music_scene_v1 as dual
+    from .left_near_scene_v3 import scene_class
+    from . import right_block_body_effort_v5 as support
+    from .environment import gymapi
+    from .environment_contract_v1 import EnvironmentContract
+    from .run_joint_hold import native_state
+    from .native_contacts import body_names,read_contacts
+    from .build_fixed_lower_asset import LOWER_BODIES
+    from .realistic_guitar_geometry_v1 import source_scene,source_audit
+    import xml.etree.ElementTree as ET
+    out.mkdir(parents=True,exist_ok=False);contract=EnvironmentContract(cfg);mode=contract.config['qualification_mode'];seconds=contract.config['diagnostic_seconds']
+    reference=ROOT/'docs/2026-10-19/stability_adapter_2/results/contact_three_view_v1/native_v1'
+    paths=set(map(Path,read(reference/'attempt.json')['input_sha256']))|set(A.glob('*.py'))|set(map(Path,contract.inputs))|{A/'INITIAL_POSE_SEARCH_PLAN_V1.md',P/'search_v2/inputs_before.json',cfg.parent.parent/(cfg.parent.name+'_audit.json'),A/'INITIAL_POSE_SEARCH_GEOMETRY_ADDENDUM_V1.md',reference/'attempt.json'}
+    pins={str(f):sha(f) for f in sorted(paths)};save(out/'attempt.json',{'input_sha256':pins})
+    scene=recorder=None;failure=None;contacts=[];states=[];controls=[];frames=[];videos={};initial_checks={}
+    try:
+        with patch.object(dual,'EnvironmentContract',lambda:EnvironmentContract(cfg)):scene=scene_class()(seconds)
+        initial=native_state(scene);names=scene.names;bodies=scene.human_bodies
+        fixed=[bodies.index(n) for n in ('Pelvis',)+LOWER_BODIES];zero_velocity=all(x['vel']==0 for x in initial['human_dof_states']) and all(all(v==0 for f in b['vel'].values() for v in f.values()) for k in ('human_body_states','guitar_body_states') for b in initial[k])
+        predicted=contract.candidate['predicted_human_poses'];errors=[]
+        for n,b in zip(bodies,initial['human_body_states']):
+            p,r=pose(b);pred=predicted[n];errors.append([float(np.linalg.norm(p-np.array(pred['p']))),float((Rotation.from_quat(pred['q']).inv()*r).magnitude())])
+        gerrors=[]
+        for b,pred in zip(initial['guitar_body_states'],contract.candidate['predicted_guitar_body_states']):
+            bp,br=pose(b);pp,pr=pose(pred);gerrors.append([float(np.linalg.norm(bp-pp)),float((pr.inv()*br).magnitude())])
+        parents={c.get('name'):b.get('name') for b in ET.parse(A/'assets/humanoid_fixed_lower.xml').iter('body') for c in b.findall('body')}
+        geometry=read(A/'assets/om_body_geometry_v3/manifest.json');audit=source_audit(source_scene(initial,bodies,geometry['asset']),parents)
+        q=np.array([x['pos'] for x in initial['human_dof_states']]);initial_checks={'zero_velocity':zero_velocity,'q_ref_exact':bool(np.array_equal(q,contract.q_ref)),'limits':bool(np.all(q>=contract.lower) and np.all(q<=contract.upper)),'human_FK':bool(np.max(errors,axis=0)[0]<.001 and np.max(errors,axis=0)[1]<.001),'guitar_FK':bool(np.max(gerrors,axis=0)[0]<3e-6 and np.max(gerrors,axis=0)[1]<1e-5),'source_clear':audit['source_clear']}
+        save(out/'initial_verification.json',{'checks':initial_checks,'source_audit':audit,'human_FK_errors':errors,'guitar_FK_errors':gerrors})
+        save(out/'initial_values.json',{'native_initial_state':initial,'joint_names':names,'human_body_names':bodies,'guitar_body_names':scene.guitar_bodies,'q_ref_rad':contract.q_ref.tolist(),'PD_properties':{k:scene.pd_properties[k].tolist() for k in scene.pd_properties.dtype.names}})
+        save(out/'native_properties.json',scene.mass_properties);assert all(initial_checks.values())
+        for key,(_,eye,target) in CAMERAS.items():
+            props=gymapi.CameraProperties();props.width,props.height,props.horizontal_fov=1280,720,55.
+            camera=scene.gym.create_camera_sensor(scene.env,props);assert camera>=0
+            scene.gym.set_camera_location(camera,scene.env,gymapi.Vec3(*eye),gymapi.Vec3(*target));scene.cameras[key]=camera
+        props=gymapi.CameraProperties();props.width,props.height=1280,960
+        appearance=scene.gym.create_camera_sensor(scene.env,props);assert appearance>=0
+        scene.cameras['OM_appearance']=appearance  # Inherited geometry-focus helper; not one of the three recorded cameras.
+        scene.left_near_track_hold=False;recorder=support.EffortRecording(scene,out/'media')
+        recorder.views=recorder.strap.views=tuple(CAMERAS)
+        for recording in (recorder,recorder.strap):(recording.out/'frames/top').mkdir(parents=True,exist_ok=False)
+        previous_observe=scene.after_physics;mapping=body_names(scene.gym,scene.env)
+        def observe(owner):
+            previous_observe(owner);before=native_state(owner);rows=read_contacts(owner.gym,owner.env,mapping)
+            contacts.append({'physics_step':owner.steps,'time_s':owner.steps/240,'contacts':rows,'guitar_state':before['guitar_body_states'][0]})
+            assert native_state(owner)==before
+        scene.after_physics=observe
+        previous_control=scene.right_effort_controller;efforts=[]
+        def control():
+            values=previous_control();assert np.isfinite(values).all() and np.all(abs(values)<=scene.pd_properties['effort']+1e-6)
+            efforts.append({'physics_step':scene.steps,'submitted81_Nm':values.astype(float).tolist()});return values
+        scene.right_effort_controller=control
+        def sample():
+            s=native_state(scene);assert all(s['human_body_states'][i]==initial['human_body_states'][i] for i in fixed)
+            q=np.array([v['pos'] for v in s['human_dof_states']]);qd=np.array([v['vel'] for v in s['human_dof_states']]);gp,gr=pose(s['guitar_body_states'][0]);p0,r0=pose(initial['guitar_body_states'][0])
+            assert np.isfinite(np.r_[q,qd,gp,gr.as_quat()]).all() and abs(qd).max()<50
+            states.append({'physics_step':scene.steps,'position_W_m':gp.tolist(),'quaternion_xyzw':gr.as_quat().tolist(),'q_rad':q.tolist(),'qdot_rad_s':qd.tolist()})
+            if np.linalg.norm(gp-p0)>.20 or np.rad2deg((r0.inv()*gr).magnitude())>35:raise RuntimeError('guitar safety displacement')
+        def capture():
+            s=native_state(scene);recorder.capture();body={'human/'+n:b for n,b in zip(bodies,s['human_body_states'])};body.update({'guitar/'+n:b for n,b in zip(scene.guitar_bodies,s['guitar_body_states'])});points=[]
+            from .run_contact_three_view_v1 import group
+            for c in read_contacts(scene.gym,scene.env,mapping):
+                a,b=c['body0_name'],c['body1_name']
+                if not((a.startswith('human/') and b.startswith('guitar/')) or(b.startswith('human/') and a.startswith('guitar/'))):continue
+                gi=0 if a.startswith('guitar/') else 1;world=[]
+                for j,n in enumerate((a,b)):
+                    bp,br=pose(body[n]);world.append(bp+br.apply([c['localPos%d'%j][k] for k in 'xyz']))
+                hn=(a,b)[1-gi][6:];points.append({'point_W_m':world[gi].tolist(),'group':group(hn),'positive_lambda':c['lambda']>0,'human_body':hn,'pair_feature_gap_m':float(np.linalg.norm(world[0]-world[1])),'raw_contact':c})
+            matrices={view:{'native_key':key,'view_matrix':np.asarray(scene.gym.get_camera_view_matrix(scene.sim,scene.env,scene.cameras[key])).tolist(),'projection_matrix':np.asarray(scene.gym.get_camera_proj_matrix(scene.sim,scene.env,scene.cameras[key])).tolist()} for key,(view,_,_) in CAMERAS.items()}
+            stage='static' if mode not in ('left_cycle','strike') else __import__('stability_adapter_2.chest_left_grip_cycle_v1',fromlist=['trajectory']).trajectory(scene.steps/240)[0] if mode=='left_cycle' else 'EW6_strike'
+            frames.append({'physics_step':scene.steps,'time_s':scene.steps/240,'stage':stage,'points':points,'cameras':matrices,'states_unchanged':native_state(scene)==s});assert native_state(scene)==s
+        sample();capture();action=contract.neutral_action()
+        for _ in range(round(seconds*60)):
+            _,info=scene.step(action);controls.append(info);sample()
+            if scene.steps%8==0:capture()
+            if scene.steps%240==0:print(mode,scene.steps/240,'seconds',flush=True)
+    except BaseException as e:
+        failure={'type':type(e).__name__,'message':str(e),'traceback':traceback.format_exc()};print(failure['traceback'],flush=True)
+    finally:
+        steps=scene.steps if scene else 0;forbidden=list(scene.forbidden_calls) if scene else []
+        if scene:save(out/'final_state.json',native_state(scene));scene.close()
+        if recorder:
+            try:videos=recorder.encode()
+            except BaseException as e:
+                if failure is None:failure={'type':type(e).__name__,'message':str(e),'traceback':traceback.format_exc()}
+        unchanged=all(sha(f)==h for f,h in pins.items())
+        for name,value in [('trace.json',states),('controls.json',controls),('actual_contacts.json',{'rows':contacts}),('contact_frames.json',{'frames':frames}),('final_efforts.json',{'rows':locals().get('efforts',[]),'scope':'actual final human81 command after all inherited stages'})]:save(out/name,value)
+        save(out/'report.json',{'completed':failure is None and unchanged and not forbidden and steps==round(seconds*240),'failure':failure,'physics_steps':steps,'control_steps':len(controls),'physics_seconds':steps/240,'inputs_unchanged':unchanged,'forbidden_calls':forbidden,'initial_checks':initial_checks,'videos':videos,'config':str(cfg),'mode':mode,'strap_enabled':False,'checkpoints_connected':False,'training_updates':0})
+    if failure or not unchanged or forbidden:raise RuntimeError(failure or 'input/guard violation')
+
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--config',type=Path,required=True);parser.add_argument('--out',type=Path,required=True);args=parser.parse_args();cfg=args.config.resolve();mode=read(cfg)['qualification_mode']
+    if mode=='left_cycle':
+        from . import chest_left_grip_cycle_v1 as cycle
+        values=cycle.VALUES.copy();values[:2]=[0,read(cfg)['search_initial_release_fraction'],0]
+        def wrapped():
+            from . import left_near_scene_v3 as module
+            from .run_joint_hold import native_state
+            parent_factory=module.support.factory
+            def factory(recording,enabled):
+                Parent=parent_factory(recording,enabled)
+                class Scene(Parent):
+                    def step(self,action):
+                        if not hasattr(self,'cycle_rows'):
+                            state=native_state(self);self.cycle_rows=[];self.cycle_fk,_=calibrated_upper_fk(self.names,self.human_bodies,state,self.contract.q_ref)
+                            self.cycle_arm=np.array([i for i,n in enumerate(self.names) if n.startswith(('L_Thorax','L_Shoulder','L_Elbow','L_Wrist'))]);self.cycle_hand=np.array([i for i,n in enumerate(self.names) if n.startswith('LH:')])
+                            self.cycle_point=np.array(self.contract.config['search_left_anchor_G_m']);self.cycle_rotation=Rotation.from_quat(self.contract.config['search_left_rotation_G_xyzw'])
+                        return super().step(action)
+                return Scene
+            with patch.object(module.support,'factory',factory):run(cfg,args.out.resolve())
+        with patch.object(cycle,'VALUES',values):cycle.main(wrapped)
+    else:
+        from . import run_elbow_wrist_ready_v7 as strike
+        from . import run_right_body_approach_v1 as runner
+        with patch.object(runner,'main',lambda:run(cfg,args.out.resolve())):strike.main()
+
+if __name__=='__main__':main()

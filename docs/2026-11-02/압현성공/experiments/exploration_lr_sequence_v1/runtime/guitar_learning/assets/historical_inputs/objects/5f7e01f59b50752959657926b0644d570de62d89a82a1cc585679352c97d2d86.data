@@ -1,0 +1,70 @@
+"""CPU wiring checks with real score/reference and synthetic physics inputs.
+
+Zero target errors, velocities, rewards and costs below are fixtures, not
+measurements or evidence of guitar performance.
+"""
+import json
+from pathlib import Path
+import unittest
+import numpy as np
+import torch
+from .control import JointTargetContract
+from .music import ScoreTask, MusicLedger, EVENT_DIM, EVENT_FIELDS, STATE_FIELDS
+from .policy import Policy
+from .ppo import PPOTrainer, PPOConfig
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class IntegrationTests(unittest.TestCase):
+    def test_real_score_to_policy_optimizer_and_81_targets(self):
+        torch.manual_seed(23)
+        reference = json.loads((ROOT/'stability_adapter_2/chest_upperarm_pose_test_v1/initial.json').read_text())
+        control = JointTargetContract(reference['joint_names'], reference['q_ref_rad'],
+            reference['PD_properties']['lower'],
+            reference['PD_properties']['upper'], np.full(81, 1.),
+            half_range_rad=np.full(39, .1))  # Test scales, not final native settings.
+        for stage in ('B', 'C', 'D'):
+            task = ScoreTask.from_bundle(ROOT/'data/song_bundles/05_BN2-131-B_solo', stage=stage)
+            ledger = MusicLedger(task)
+            geometry = {t.target_id: dict(delta=(0., 0., 0.), velocity=(0., 0., 0.)) for t in task.targets}
+            states, events, masks, priorities, pmasks = [], [], [], [], []
+            for now in np.linspace(task.targets[0].onset_s-.04, task.targets[0].onset_s+.04, 8):
+                token, mask, identities = task.tokens(float(now), geometry, ledger)
+                priority, pmask, _ = task.priority_tokens(token, mask, identities)
+                states.append(np.concatenate((control.q_ref, np.zeros(81), control.q_ref,
+                                               control.reset_targets(), task.state(float(now), ledger))))
+                events.append(token); masks.append(mask); priorities.append(priority); pmasks.append(pmask)
+            state = torch.tensor(np.array(states), dtype=torch.float32)
+            event = torch.tensor(events, dtype=torch.float32)
+            mask = torch.tensor(masks, dtype=torch.bool)
+            priority = torch.tensor(priorities, dtype=torch.float32)
+            pmask = torch.tensor(pmasks, dtype=torch.bool)
+            identity = dict(control=control.metadata, event_fields=EVENT_FIELDS, state_fields=STATE_FIELDS,
+                            physical_fields='fixture q81,qdot81,qref81,previous_target81', score=task.provenance)
+            model = Policy(state.shape[-1], EVENT_DIM, hidden_dim=16, contract=identity)
+            trainer = PPOTrainer(model, PPOConfig(actor_lr=1e-6, epochs=1, target_kl=.02))
+            with torch.no_grad():
+                out = model.act(state, event, mask, priority, pmask)
+            data = dict(state=state[:, None], events=event[:, None], mask=mask[:, None],
+                        priority_events=priority[:, None], priority_mask=pmask[:, None],
+                        latent=out['latent'][:, None], logp=out['logp'][:, None],
+                        old_mean=out['mean'][:, None], old_log_std=out['log_std'][:, None].clone(),
+                        reward_value=out['reward_value'][:, None], cost_value=out['cost_value'][:, None],
+                        next_reward_value=torch.zeros(8, 1), next_cost_value=torch.zeros(8, 1),
+                        reward=torch.arange(8.).reshape(8, 1)/10, cost=torch.zeros(8, 1),
+                        terminated=torch.zeros(8, 1, dtype=torch.bool), truncated=torch.zeros(8, 1, dtype=torch.bool))
+            data['truncated'][-1] = True
+            before = model.actor_heads[0].weight.detach().clone()
+            result = trainer.update(data)
+            self.assertLessEqual(result['analytic_kl'], .02)
+            self.assertFalse(torch.equal(before, model.actor_heads[0].weight))
+            old = control.reset_targets()
+            for action in out['action'].numpy():
+                _, old = control.targets(action, old)
+                np.testing.assert_array_equal(old[control.held_indices], control.q_ref[control.held_indices])
+            self.assertEqual(len(task.targets), {'B': 1, 'C': 2, 'D': 8}[stage])
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,66 @@
+"""Seven bounded support geometries; common guitar-relative hand task and margins."""
+import copy
+from pathlib import Path
+import xml.etree.ElementTree as ET
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from .initial_pose_noise_v1 import read,save,sha,pose
+from .environment_contract_v1 import EnvironmentContract
+from .upper_arm_static_geometry_v1 import ROOT,ASSET,calibrated_upper_fk,state_from_fk
+from .realistic_guitar_geometry_v1 import source_scene,source_audit
+from .om_axilla_source_geometry_v3 import CapsuleBodyDistance
+from .elbow_wrist_strike_source_v1 import solve_pick
+from .left_neck_near_geometry_v1 import FACETS
+from .left_neck_three_face_geometry_v1 import measurements
+
+A=ROOT/'stability_adapter_2';D=ROOT/'docs/2026-10-19/stability_adapter_2';P=D/'results/initial_pose_search_v1'
+CFG=D/'results/chest_left_grip_cycle_v1/config_v1.json';B=D/'results/contact_three_view_v1/native_v1'
+SPECS=[('margin_only',0,0),('roll_m2',-2,0),('roll_p2',2,0),('torso_m2',0,-2),('torso_p2',0,2),('roll_p2_torso_m2',2,-2),('roll_m2_torso_p2',-2,2)]
+
+
+def main():
+    out=P/'search_v1';out.mkdir(parents=True,exist_ok=False);c=EnvironmentContract(CFG);b=read(B/'initial_values.json');state=b['native_initial_state'];names=b['joint_names'];bodies=b['human_body_names'];q0=np.array(b['q_ref_rad']);fk,parents=calibrated_upper_fk(names,bodies,state,q0)
+    geometry=read(A/'assets/om_body_geometry_v3/manifest.json');asset=Path(geometry['asset']);paths=set(map(Path,read(B/'attempt.json')['input_sha256']))|set(A.glob('*.py'))|set(map(Path,c.inputs))|{CFG,B/'initial_values.json',B/'attempt.json',FACETS,A/'INITIAL_POSE_SEARCH_PLAN_V1.md'}
+    for file in (ASSET,asset):
+        xml=ET.parse(file).getroot();md=(file.parent/xml.find('compiler').get('meshdir')).resolve();paths|={(md/m.get('file')).resolve() for m in xml.findall('./asset/mesh')}
+    pins={str(f):sha(f) for f in sorted(paths)};save(out/'inputs_before.json',pins)
+    gp0,gr0=pose(state['guitar_body_states'][0]);wp0,wr0=fk(q0)['L_Wrist'];anchor=gr0.inv().apply(wp0-gp0);rotation_G=gr0.inv()*wr0;release=np.array([.070,.080,0]);distance=CapsuleBodyDistance(asset,ASSET)
+    left=np.array([i for i,n in enumerate(names) if n.startswith(('L_Thorax','L_Shoulder','L_Elbow','L_Wrist'))]);chest=np.array([names.index('Chest_'+a) for a in 'xyz']);shoulder=np.array([names.index('R_Shoulder_'+a) for a in 'xyz']);distal=np.array([names.index(n+'_'+a) for n in ('R_Elbow','R_Wrist') for a in 'xyz'])
+    margin=np.full(81,np.deg2rad(1.))
+    for i,n in enumerate(names):
+        if n.startswith(('L_Thorax_y','L_Thorax_z','R_Thorax_y','R_Thorax_z')):margin[i]=np.deg2rad(2.)
+        if n=='L_Wrist_y':margin[i]=np.deg2rad(5.)
+    station=c.candidate['left_neck_near']['station_G_m'];front=c.candidate['left_neck_near']['front_z_G_m'];facets=read(FACETS)['facets'];points=np.array(c.config['six_joint_strike_waypoints_G_m']);rows=[]
+    for label,roll_deg,torso_deg in SPECS:
+        q=q0.copy();q[names.index('Torso_z')]+=np.deg2rad(torso_deg);q[names.index('R_Thorax_x')]=np.deg2rad(-2.5);q[names.index('R_Thorax_y')]=np.deg2rad(-8.)
+        gr=gr0*Rotation.from_rotvec([0,np.deg2rad(roll_deg),0])
+        lo=np.r_[np.full(3,-.010),np.full(3,-np.deg2rad(3)),np.full(3,-np.deg2rad(7))];hi=-lo
+        def support_fit(v):
+            t=q.copy();t[chest]+=v[3:6];t[shoulder]+=v[6:9];ps=fk(t);gp=gp0+v[:3];g={n:distance.measure(ps,n,gp,gr)['gap_m'] for n in ('Chest','R_Shoulder','R_Hip','L_Hip','R_Elbow','Torso','Spine')}
+            return np.r_[[10000*(g[n]-.0002) for n in ('Chest','R_Shoulder','R_Hip')],[12000*min(g[n]-.0002,0) for n in ('L_Hip','Torso','Spine')],5000*min(g['R_Elbow']-.010,0),10*v[:3],.2*v[3:]]
+        fit=least_squares(support_fit,np.zeros(9),bounds=(lo,hi),max_nfev=60,diff_step=1e-4,ftol=1e-8);gp=(gp0+fit.x[:3]).astype(np.float32).astype(float);q[chest]+=fit.x[3:6];q[shoulder]+=fit.x[6:9]
+        ll=np.maximum(c.lower[left]+margin[left],q0[left]-.7);lh=np.minimum(c.upper[left]-margin[left],q0[left]+.7);goal=gp+gr.apply(anchor+.15*release);goalr=gr*rotation_G
+        def wrist_fit(v):
+            t=q.copy();t[left]=v;p,r=fk(t)['L_Wrist'];return np.r_[1200*(p-goal),100*(goalr.inv()*r).as_rotvec(),.05*(v-q0[left])]
+        lf=least_squares(wrist_fit,np.clip(q[left],ll+1e-8,lh-1e-8),bounds=(ll,lh),max_nfev=80,ftol=1e-9);q[left]=lf.x
+        q,ew_error,_=solve_pick(fk,q,distal,c.lower+margin,c.upper-margin,q,gp+gr.apply(points[0]),q[distal]);q=q.astype(np.float32).astype(float);ps=fk(q)
+        caps={n:distance.measure(ps,n,gp,gr) for n in ('Chest','R_Thorax','R_Shoulder','R_Elbow','R_Hip','L_Hip','Torso','Spine')};faces=measurements(ps,gp,gr,station,front,facets);pred=state_from_fk(state,bodies,q,fk)
+        for s,orig in zip(pred['guitar_body_states'],state['guitar_body_states']):
+            p,r=pose(orig);p=gp+gr.apply(gr0.inv().apply(p-gp0));r=gr*gr0.inv()*r;s['pose']={'p':dict(zip('xyz',p.tolist())),'r':dict(zip('xyzw',r.as_quat().tolist()))}
+        audit=source_audit(source_scene(pred,bodies,asset),parents);samples=[];previous=q[distal]
+        for target in np.vstack([points,(points[1]+points[2])/2]):
+            t,error,_=solve_pick(fk,q,distal,c.lower,c.upper,q,gp+gr.apply(target),previous);previous=t[distal];samples.append({'target_G_m':target.tolist(),'error_m':error,'forearm_gap_m':distance.measure(fk(t),'R_Elbow',gp,gr)['gap_m'],'ball_max_deg':float(np.rad2deg(np.linalg.norm(t[distal].reshape(2,3),axis=1)).max())})
+        pp,pr=ps['L_Wrist'];actual_margin=np.minimum(q-c.lower,c.upper-q);owned=np.r_[left,[names.index('R_Thorax_'+a) for a in 'xyz'],shoulder,distal];fixed=[i for i,n in enumerate(names) if ':' in n or n.startswith(('Neck_','Head_'))]
+        eligible=bool(audit['source_clear'] and all(.00003<caps[n]['gap_m']<.0015 for n in ('Chest','R_Shoulder','R_Hip')) and min(caps[n]['gap_m'] for n in ('L_Hip','Torso','Spine'))>.00003 and caps['R_Elbow']['gap_m']>.010 and np.linalg.norm(pp-goal)<.002 and (goalr.inv()*pr).magnitude()<.02 and faces['LH:palm']['normal_up_W']>0 and np.all(actual_margin[owned]>=margin[owned]-2e-7) and np.array_equal(q[fixed],q0[fixed]) and all(x['error_m']<.002 and x['forearm_gap_m']>.00005 and x['ball_max_deg']<160 for x in samples))
+        row={'label':label,'accepted_for_native':eligible,'roll_localY_deg':roll_deg,'Torso_z_delta_deg':torso_deg,'source_audit':audit,'capsule_body':caps,'proximal_upper_arm30_witness':caps['R_Shoulder'],'proximal_upper_arm65_witness':caps['R_Shoulder'],'source_faces':faces,'initial_L_wrist_error_m':float(np.linalg.norm(pp-goal)),'initial_L_wrist_rotation_error_rad':float((goalr.inv()*pr).magnitude()),'minimum_arm_margin_deg':float(np.rad2deg(actual_margin[owned].min())),'left_wrist_y_margin_deg':float(np.rad2deg(actual_margin[names.index('L_Wrist_y')])),'EW_samples':samples,'G_translation_W_m':(gp-gp0).tolist(),'q_delta_rad':{n:float(q[i]-q0[i]) for i,n in enumerate(names) if abs(q[i]-q0[i])>1e-7},'scope':'source proposal and discrete reach checks, not cooked/continuous contact certification'}
+        save(out/(label+'_audit.json'),row);rows.append(row);print(label,'eligible',eligible,'clear',audit['source_clear'],'wristmm',row['initial_L_wrist_error_m']*1000,'margin',row['minimum_arm_margin_deg'],'gapsmm',{n:round(caps[n]['gap_m']*1000,3) for n in ('Chest','R_Shoulder','R_Hip')},flush=True)
+        if eligible:
+            folder=out/label;folder.mkdir();candidate=copy.deepcopy(c.candidate);candidate.update(joint_angles_rad=q.tolist(),position_W_m=gp.tolist(),quaternion_xyzw=gr.as_quat().tolist(),predicted_human_poses={n:{'p':p.tolist(),'q':r.as_quat().tolist()} for n,(p,r) in ps.items()},predicted_guitar_body_states=pred['guitar_body_states'],right_block_cradle=row,body_side_lean_axilla=row,initial_pose_search=row)
+            candidate['left_neck_near']={**candidate['left_neck_near'],'face_measurements':faces,'source_audit':audit,'scope':'fresh near placement measurements; not requiring physical palm contact or claiming3facegrip'};save(folder/'candidate.json',candidate)
+            for mode,seconds in [('static',5.),('left_cycle',16.),('strike',5.)]:
+                cfg={**c.config,'initial_candidate':str(folder/'candidate.json'),'initial_candidate_sha256':sha(folder/'candidate.json'),'diagnostic_seconds':seconds,'qualification_mode':mode,'six_joint_strike_enabled':mode=='strike','search_left_anchor_G_m':anchor.tolist(),'search_left_rotation_G_xyzw':rotation_G.as_quat().tolist(),'search_initial_release_fraction':.15}
+                save(folder/('config_'+mode+'.json'),cfg)
+    assert all(sha(f)==h for f,h in pins.items());save(out/'report.json',{'input_sha256':pins,'inputs_unchanged':True,'rows':rows,'selected_source_labels':[r['label'] for r in rows if r['accepted_for_native']],'common_left_A_wrist_G_m':anchor.tolist(),'common_left_rotation_G_xyzw':rotation_G.as_quat().tolist(),'native_runs':0})
+
+if __name__=='__main__':main()

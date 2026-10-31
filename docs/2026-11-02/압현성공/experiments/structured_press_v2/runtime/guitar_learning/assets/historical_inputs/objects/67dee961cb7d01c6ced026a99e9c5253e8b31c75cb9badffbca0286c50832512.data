@@ -1,0 +1,48 @@
+"""Audit Cartesian release onset independently of rate-limited joint commands."""
+import argparse
+from pathlib import Path
+import numpy as np
+from .common import A, read, save, sha, verify
+from stability_adapter_2.initial_pose_noise_v1 import pose
+
+
+def main(static, release, out):
+    out.mkdir(exist_ok=False)
+    files = [Path(__file__).resolve(), Path(__file__).with_name('common.py'),
+             A/'initial_pose_noise_v1.py', release/'initial_values.json']
+    for run in (static, release):
+        files += [run/n for n in ('states240.json', 'contacts240.json',
+                                  'efforts240.json', 'targets60.json', 'report.json')]
+    pins = {str(p): sha(p) for p in files}
+    save(out/'inputs_before.json', pins)
+    values = [[read(run/n)['rows'] for n in ('states240.json', 'contacts240.json',
+                                            'efforts240.json', 'targets60.json')]
+              for run in (static, release)]
+    a, b = values
+    initial = read(release/'initial_values.json')
+    sample = next(s for s in b[0] if s['physics_step']==480)
+    target = next(t for t in b[3] if t['physics_step_before']==480)
+    gp, gr = pose(sample['state']['guitar_body_states'][0])
+    wp, wr = pose(sample['state']['human_body_states'][initial['human_body_names'].index('L_Wrist')])
+    goal = np.array(target['goal_wrist_W_m']) if target.get('goal_wrist_W_m') is not None else gp+gr.apply(target['goal_wrist_G_m'])
+    oldgp, oldgr = pose(b[0][0]['state']['guitar_body_states'][0])
+    prefix = dict(states_and_sensors_through_2s_exact=a[0][:481]==b[0][:481],
+                  contacts_through_2s_exact=a[1][:481]==b[1][:481],
+                  efforts_before_2s_exact=a[2][:480]==b[2][:480],
+                  submitted_target_arrays_before_2s_exact=[t['final105_rad'] for t in a[3][:120]]==[t['final105_rad'] for t in b[3][:120]])
+    save(out/'report.json', dict(static=str(static), release=str(release), prefix=prefix,
+         release_onset_s=2., actual_wrist_W_m=wp.tolist(), requested_goal_W_m=goal.tolist(),
+         onset_Cartesian_goal_position_error_m=float(np.linalg.norm(goal-wp)),
+         guitar_root_shift_at_onset_m=float(np.linalg.norm(gp-oldgp)),
+         release_reference_mode=target.get('release_reference_mode', 'initial_guitar_local_anchor_following_current_guitar'),
+         inputs_unchanged=verify(pins),
+         scope='Requested Cartesian IK goal at onset; submitted joint targets remain rate limited. Exact common prefix compares all native states, sensors, contacts, efforts and submitted arrays, excluding the new target at t=2s.'))
+
+
+if __name__=='__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--static', type=Path, required=True)
+    parser.add_argument('--release', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    args = parser.parse_args()
+    main(args.static.resolve(), args.release.resolve(), args.out.resolve())

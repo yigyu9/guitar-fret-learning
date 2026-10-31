@@ -1,0 +1,45 @@
+{
+  "verdict": "PASS",
+  "scope": "Detached attempt02 supervisor only; no change to training algorithm, source seal, fit checkpoint, or prior interrupted run",
+  "findings": [],
+  "reviewed_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_release_reference_learning_v4/execution_attempts/launch_attempt02.py": "c46a947869409ee272348565e03836ced2ae71299d369e758ca3a0931ba40177",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_release_reference_learning_v4/preparation_seal.json": "afaf1e7110725bbc5f4cec7a740629a8ea2017fc6557bfffd65f4495fc77e652",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_release_reference_learning_v4/inputs/settings.json": "b23fc2894a8de15f3ca321ddc443c1b41a9799ec5dd99dc3200b453686275f34",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_release_reference_learning_v4/runs/fit/fit.pt": "fec870e99f3b79ebe8f65175ddc24634a799476fb6f416d4c5940458911fe051",
+    "/home/ajou/yigyu/3/docs/2026-10-27/guitar_learning_failure_diagnosis_v1/05_verified_fixes/index_release_reference_learning_v4/execution_attempts/attempt01_interrupted.json": "7d4699b358ece37897e7077bcb8bcfc1525e5f8e112dda79180f1aa09c5f6201"
+  },
+  "checks": {
+    "ROOT_correct_project_root": true,
+    "current_master521_source_pins_match": true,
+    "exact_same_fit_checkpoint_update0_new_out_ppo_attempt02": true,
+    "original_attempt01_7partial_artifact_SHAs_unchanged": true,
+    "launch_and_log_open_exclusive_prevent_duplicate_Popen": true,
+    "mocked_returncode0_and_SIGTERMnegative15_to143": true,
+    "Popen_exact_argv_cwd_stdin_DEVNULL_and_wait": true,
+    "proc_stat_start_ticks_index_correct_and_PID_recorded": true,
+    "source_checkpoint_self_SHA_recorded_before_and_rechecked_after": true,
+    "nine_environment_whitelist_values_exact_to_child_env": true,
+    "target_output_and_launchrecord_absent_at_review": true
+  },
+  "resolved_before_approval": [
+    {
+      "file": "launch_attempt02.py",
+      "issue": "Launch record lacked the explicitly requested environment whitelist.",
+      "resolution": "Root added nine execution-relevant allowlisted keys; independent stdlib mock confirms values exactly match child env without logging the whole inherited environment."
+    }
+  ],
+  "review_tests": {
+    "interpreter": "/home/ajou/miniconda3/envs/rl38/bin/python",
+    "python": "3.8.20",
+    "native_runs": 0,
+    "actual_Popen_children": 0,
+    "method": "Main body executed only in temporary fixture directories with mocked subprocess.Popen; actual source and run directories untouched."
+  },
+  "limitations": [
+    "This review does not establish who sent SIGTERM to attempt01 or prove interactive process lifetime caused it.",
+    "A detached launch is not completion; monitor child PID together with start_ticks and inspect exit/source/learning reports.",
+    "Attempt02 restarts from fit update0; attempt01 update49 transitions must not be concatenated or called resumed work.",
+    "Launcher terminal status does not itself prove Python scene-close; actual child learning_report remains authoritative."
+  ]
+}

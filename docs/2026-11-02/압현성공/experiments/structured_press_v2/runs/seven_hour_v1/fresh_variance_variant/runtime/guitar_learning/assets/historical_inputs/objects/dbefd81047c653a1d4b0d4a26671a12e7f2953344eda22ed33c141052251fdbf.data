@@ -1,0 +1,120 @@
+"""The evaluation migration only accepts the fixed source relocation."""
+import copy
+import io
+import unittest
+from unittest.mock import patch
+
+from guitar_learning.tool.experiments.contact_recovery import checkpoint_provenance as migration
+
+
+def contracts():
+    old = dict(observation=dict(dimension=500, fields=['observed']),
+        action=dict(dimension=39, minimum=-1., maximum=1.),
+        reward=dict(hold=.5), termination=dict(physics_hz=240),
+        task=dict(targets=[dict(string=2, fret=7, onset_s=2., end_s=2.5)],
+            provenance=dict(provenance=migration.expected_provenance(), mode='single_a')))
+    current = copy.deepcopy(old)
+    current['task']['provenance']['provenance'] = migration.expected_provenance(current=True)
+    return old, current
+
+
+class ProvenanceContractTests(unittest.TestCase):
+    def test_accepts_only_provenance_relocation_and_detaches_output(self):
+        old, current = contracts()
+        old_before, current_before = copy.deepcopy(old), copy.deepcopy(current)
+        result = migration.relocated_contract(old, current)
+        self.assertEqual(result, current)
+        result['task']['provenance']['provenance'][0]['bytes'] = 0
+        self.assertEqual(old, old_before)
+        self.assertEqual(current, current_before)
+
+    def test_rejects_data_path_sha_size_and_extra_entries(self):
+        old, current = contracts()
+        for change in ('path', 'sha256', 'bytes', 'extra'):
+            bad = copy.deepcopy(current)
+            rows = bad['task']['provenance']['provenance']
+            if change == 'extra': rows.append(dict(path='/tmp/extra.py', sha256='a'*64, bytes=1))
+            elif change == 'path': rows[0]['path'] = '/tmp/copied_data.json'
+            elif change == 'sha256': rows[0]['sha256'] = 'a'*64
+            else: rows[0]['bytes'] += 1
+            with self.assertRaises(ValueError): migration.relocated_contract(old, bad)
+
+    def test_rejects_unknown_source_path_and_changed_current_source_bytes(self):
+        old, current = contracts()
+        for field, value in (('path', '/tmp/events.py'), ('sha256', 'a'*64), ('bytes', 1)):
+            bad = copy.deepcopy(current)
+            rows = bad['task']['provenance']['provenance']
+            next(row for row in rows if '/score/events.py' in row['path'])[field] = value
+            with self.assertRaises(ValueError): migration.relocated_contract(old, bad)
+
+    def test_rejects_unknown_historical_provenance(self):
+        old, current = contracts()
+        old['task']['provenance']['provenance'][-1]['sha256'] = 'b'*64
+        with self.assertRaises(ValueError): migration.relocated_contract(old, current)
+
+    def test_rejects_target_action_reward_observation_and_termination_changes(self):
+        old, current = contracts()
+        for field, mutate in (
+            ('task', lambda x: x['targets'][0].__setitem__('fret', 8)),
+            ('action', lambda x: x.__setitem__('dimension', 40)),
+            ('reward', lambda x: x.__setitem__('hold', .6)),
+            ('observation', lambda x: x['fields'].append('new')),
+            ('termination', lambda x: x.__setitem__('physics_hz', 120))):
+            bad = copy.deepcopy(current)
+            mutate(bad[field])
+            with self.assertRaises(ValueError): migration.relocated_contract(old, bad)
+
+    def test_historical_and_live_files_verify_exactly(self):
+        migration.verify_provenance_bytes(migration.expected_provenance(), migration.expected_provenance(True))
+
+    def test_live_and_historical_byte_count_mutation_rejected(self):
+        old, current = migration.expected_provenance(), migration.expected_provenance(True)
+        bad_old = copy.deepcopy(old); bad_old[0]['bytes'] += 1
+        with self.assertRaises(ValueError): migration.verify_provenance_bytes(bad_old, current)
+        bad = copy.deepcopy(current); bad[0]['bytes'] += 1
+        with self.assertRaises(ValueError): migration.verify_provenance_bytes(old, bad)
+
+    def test_unsupported_checkpoint_rejected_before_audit_or_load(self):
+        import tempfile
+        from pathlib import Path
+        import torch
+        with tempfile.TemporaryDirectory() as temp, patch.object(torch, 'load') as checker:
+            source = Path(temp)/'unsupported.pt'; source.write_bytes(b'unknown checkpoint')
+            with self.assertRaisesRegex(ValueError, 'reference B32'):
+                migration.migrate(source, Path(temp)/'capture', Path(temp)/'out')
+            checker.assert_not_called()
+            self.assertFalse((Path(temp)/'out').exists())
+
+
+class PayloadPreservationTests(unittest.TestCase):
+    def test_tensor_optimizer_rng_and_other_fields_survive_roundtrip(self):
+        import numpy as np
+        import torch
+        old, current = contracts()
+        payload = dict(identity=dict(architecture=dict(contract=old), config=dict(lr=.001)),
+            model=dict(weight=torch.tensor([1., 2.], dtype=torch.float32)),
+            actor_optimizer=dict(state={1:dict(exp_avg=torch.tensor([.2, .3]), step=torch.tensor(4.))}),
+            value_optimizer=dict(state={2:dict(exp_avg_sq=torch.tensor([.4], dtype=torch.float64))}),
+            torch_rng=torch.get_rng_state(), numpy_rng=np.random.get_state(),
+            python_rng=(3, (1, 2, 3), None), cuda_rng=[torch.tensor([1, 2], dtype=torch.uint8)],
+            updates=32, metadata=dict(origin='reference'), cost_weight=1.)
+        changed = dict(payload, identity=copy.deepcopy(payload['identity']))
+        changed['identity']['architecture']['contract'] = migration.relocated_contract(old, current)
+        stream = io.BytesIO(); torch.save(changed, stream); stream.seek(0)
+        loaded = torch.load(stream, map_location='cpu', weights_only=False)
+        self.assertTrue(migration.exact_payload_equal(changed, loaded))
+        loaded['identity']['architecture']['contract']['task']['provenance']['provenance'] = migration.expected_provenance()
+        self.assertTrue(migration.exact_payload_equal(payload, loaded))
+        loaded['actor_optimizer']['state'][1]['exp_avg'][0] = .9
+        self.assertFalse(migration.exact_payload_equal(payload, loaded))
+
+    def test_tensor_dtype_and_rng_mutations_detected(self):
+        import numpy as np
+        import torch
+        self.assertFalse(migration.exact_payload_equal(torch.zeros(2), torch.zeros(2, dtype=torch.float64)))
+        self.assertFalse(migration.exact_payload_equal(np.array([1, 2]), np.array([2, 1])))
+        self.assertFalse(migration.exact_payload_equal(dict(updates=32), dict(updates=33)))
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,42 @@
+# 학습 입력 도구
+
+현재 곡 번들의 등록·학습 입력 생성·검수·타임라인 렌더는 이 디렉토리에서 실행한다. 과거 실행 코드나 보관 디렉토리를 불러오지 않는다. 오디오·탭·운지 추론 파이프라인은 기존 `tab2fingermapping`에 남아 있으며, JAMS에서 운지를 생성하는 fret 도구도 그 운지 모듈을 사용한다.
+
+프로젝트 루트에서 다음 순서로 실행한다. 입력은 사람이 검수한 Stage1 결과이며, 아래 `<song_id>`를 실제 곡 이름으로 바꾼다.
+
+```bash
+python -m guitar_learning.tool.register_song_bundle <song_id> --stage1 /path/to/reviewed_stage1
+python -m guitar_learning.tool.build_fret_training_data --fingering data/song_bundles/<song_id>/mapping/fingering.json --audio data/song_bundles/<song_id>/source/audio.wav --out data/song_bundles/<song_id>/training/fret_training.json
+python -m guitar_learning.tool.build_strike_training_data data/song_bundles/<song_id>/mapping/fingering.json --out data/song_bundles/<song_id>/training/strike_training.json
+python -m guitar_learning.tool.build_strike_plan data/song_bundles/<song_id>/training/strike_training.json --out data/song_bundles/<song_id>/training/strike_plan.json
+python -m guitar_learning.tool.register_song_bundle <song_id>
+python -m guitar_learning.tool.audit_strike_goal_quality --bundle data/song_bundles/<song_id> --format both
+python -m guitar_learning.tool.render_timeline data/song_bundles/<song_id>/mapping/fingering.json data/song_bundles/<song_id>/preview/fingering.png data/song_bundles/<song_id>/training/strike_training.json
+python -m guitar_learning.tool.register_song_bundle <song_id>
+```
+
+파일을 생성하거나 렌더를 갱신한 뒤 등록 명령을 다시 실행해 manifest의 SHA를 갱신한다. 기존에 다른 내용이 등록된 파일은 원래 규칙대로 `--replace`가 있어야 덮어쓴다. 모든 도구는 `--help`와 `python guitar_learning/tool/<도구>.py` 직접 실행도 지원한다.
+
+| 파일 | 역할 |
+| --- | --- |
+| `register_song_bundle.py` | 검수한 Stage1 파일 복사, 곡 식별자·manifest·입력 SHA 기록 |
+| `build_fret_training_data.py` | JAMS 또는 운지 JSON에서 압현 목표와 손 위치 목표 생성 |
+| `build_strike_training_data.py` | 운지 onset을 60Hz 타현 입력으로 변환; 현 순서 1회 반전 |
+| `build_strike_plan.py` | 방향·strum 그룹·전이 여유를 포함한 고정 타현 계획 생성 |
+| `audit_strike_goal_quality.py` | 운지→타현→계획 일치, 전이·검수 근거 점검 |
+| `render_timeline.py` | 누름·타현·strum 그룹 타임라인 PNG; matplotlib 필요 |
+| `song_bundles.py` | 현행 `data/song_bundles` 경로와 곡 식별자 검증 |
+| `_strike_goal_compiler.py` | 오프라인 계획 생성에 필요한 원본 stdlib compiler |
+| `_strike_goals.py` | Torch 없는 원본 타현 입력 검증 부분 |
+
+타임라인의 재준비 2프레임·follow-through 1프레임·초기 허용 오차 100ms는 원래 렌더에 사용되던 기본값이다. 필요하면 CLI로 명시한다. 이 도구의 기준은 현재 학습 환경의 물리 판정과 별개다. 기존 JSON schema 이름은 입력 호환성을 위해 유지했다.
+
+`score/`는 현행 학습의 읽기·정본화 경로이며, 여기의 `_strike_goal_compiler.py`는 새 계획을 만드는 오프라인 도구다. 원본과 이전 경로·SHA·수정 내용은 `provenance.json`에 기록했다. 보관본은 실행 입력으로 사용하지 않는다.
+
+검사:
+
+```bash
+python -m unittest guitar_learning.tests.test_tool_migration -v
+```
+
+검사는 임시 곡 등록부터 현행 정본 입력 구성까지, 7곡 원본 compiler JSON 일치, 잘못된 입력 거부, 타임라인 strum 표시, 직접/모듈 실행, 과거 디렉토리·Torch·Isaac Gym 접근 차단을 확인한다. 실제 곡 번들을 수정하지 않는다.

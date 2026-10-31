@@ -1,0 +1,97 @@
+"""Export audited corrective rows; never train from raw perturbation captures."""
+import copy
+import json
+from pathlib import Path
+
+
+def export(captures, out, *, expected_contract=None):
+    """Write a new filtered dataset only after all native/runtime/source gates.
+
+    The output has a separate filename/schema and cannot be mistaken for the
+    old fixed240-row imitation capture. This function performs no BC or PPO.
+    """
+    import numpy as np
+    from guitar_learning.training.parallel import FIELDS
+    from guitar_learning.imitation.imitation import dataset_manifest
+    from guitar_learning.training.recording import write, digest
+    from guitar_learning.tool.experiments.contact_recovery.audit import audit_capture
+
+    folders = [Path(path).resolve() for path in captures]
+    if not folders or len(set(folders)) != len(folders):
+        raise ValueError('nonempty unique finalized capture directories required')
+    output = Path(out).resolve()
+    if output.exists(): raise FileExistsError(str(output))
+    audited = [audit_capture(folder) for folder in folders]
+    contract = copy.deepcopy(expected_contract if expected_contract is not None else audited[0]['contract'])
+    if any(evidence['contract'] != contract for evidence in audited):
+        raise ValueError('all filtered rows require the exact same native contract')
+    selected = [evidence['selected_indices'] for evidence in audited]
+    if not sum(map(len, selected)):
+        raise ValueError('no native-audited post-probe corrective recovery rows; raw cases remain baseline/failure evidence')
+    combined_pins = {}
+    for evidence in audited:
+        for path, sha in evidence['source_pins'].items():
+            if path in combined_pins and combined_pins[path] != sha:
+                raise ValueError('conflicting source evidence pins')
+            combined_pins[path] = sha
+    arrays = {name:np.concatenate([evidence['arrays'][name][indices]
+                for evidence,indices in zip(audited,selected) if indices], axis=0)
+              for name in (*FIELDS, 'action', 'task_time_s')}
+    if dataset_manifest(combined_pins) != combined_pins:
+        raise RuntimeError('source inputs changed before filtered dataset export')
+    output.mkdir(parents=True, exist_ok=False)
+    write(output/'contract.json', contract)
+    np.savez_compressed(output/'filtered_demonstration.npz', **arrays)
+    sources = [dict(folder=str(folder), source_indices=indices,
+        source_pins=copy.deepcopy(evidence['source_pins']),
+        recovery=copy.deepcopy(evidence['recovery']),
+        teacher_replayed=evidence['teacher_replayed'],
+        reward_replayed=evidence['refinement_reward_replayed'])
+        for folder,evidence,indices in zip(folders,audited,selected)]
+    if dataset_manifest(combined_pins) != combined_pins:
+        raise RuntimeError('source inputs changed during filtered dataset export; no manifest published')
+    manifest = dict(schema='guitar_learning.contact_recovery_dataset.v1',
+        completed=True, row_count=len(arrays['action']), sources=sources,
+        artifacts=dict(contract_sha256=digest(output/'contract.json'),
+                       filtered_demonstration_sha256=digest(output/'filtered_demonstration.npz')),
+        selection='native-safe corrective teacher commands strictly after the last probe override; override rows excluded',
+        success_scope='full original musical/contact/safety gates plus actual loss/recovery and checked runtime; teacher-assisted data only',
+        training_performed=False)
+    write(output/'manifest.json', manifest)
+    return manifest
+
+
+def main():
+    import argparse
+    import os
+    import sys
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--capture', type=Path, action='append', required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    args = parser.parse_args()
+    output = args.out.resolve()
+    audit_path = output.parent/(output.name+'_runtime_json_audit.json')
+    if output.exists() or audit_path.exists():
+        raise FileExistsError('new dataset and runtime audit paths required')
+    for key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+        os.environ[key] = '1'
+    # IsaacGym must precede the serializer's NumPy and the auditors' Torch.
+    import isaacgym
+    from guitar_learning.tool.experiments.transition_refinement_runtime_v2.activation import activated
+    from guitar_learning.tool.experiments.transition_refinement_runtime_v2.observer import Observer
+    from guitar_learning.tool.experiments.transition_refinement_runtime_v2.audit import publish
+    observer = Observer()
+    completed = False
+    try:
+        with activated(observer):
+            result = export(args.capture, output)
+            completed = result.get('completed') is True
+            print('[contact recovery export] rows=%d out=%s'%(result['row_count'], output), flush=True)
+    finally:
+        publish(observer, audit_path, completed=completed, mode='export',
+                out=output, primary=sys.exc_info()[1])
+
+
+if __name__ == '__main__':
+    main()

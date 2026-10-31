@@ -124,7 +124,7 @@ R/F/J one-hot 3열과 `finger_skill.planned_ticks` 1열은 제거했다. 따라�
 
 PPO는 수집한 관측과 latent를 다시 평가해 좋은 선택의 확률을 높이고 나쁜 선택의 확률을 낮춘다. 물리를 실행하거나 reward를 새로 만들지는 않는다. 현재 runner는 `DecisionPPOTrainer`를 쓰며 이 클래스가 `PPOTrainer`의 생성자, 실패 롤백, 저장·불러오기를 상속한다.
 
-[PPOConfig:116](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:116)의 기본값에 `launch.py`가 일부를 덮어쓴 **최종 현재 설정**은 다음과 같다.
+[PPOConfig:117](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:117)의 기본값에 `launch.py`가 일부를 덮어쓴 **최종 현재 설정**은 다음과 같다.
 
 | 항목 | 현재 값 | 뜻 |
 | --- | ---: | --- |
@@ -146,7 +146,7 @@ PPO는 수집한 관측과 latent를 다시 평가해 좋은 선택의 확률을
 
 ### `compute_decision_gae`: duration을 고려한 미래 평가
 
-[compute_decision_gae:386](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:386)는 `[D,N]` reward/value/next_value/종료/duration/valid를 받는다. valid가 False인 padding은 계산하지 않는다. 환경별 유효 결정은 앞에서부터 빈틈없는 prefix여야 한다.
+[compute_decision_gae:389](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:389)는 `[D,N]` reward/value/next_value/종료/duration/valid를 받는다. valid가 False인 padding은 계산하지 않는다. 환경별 유효 결정은 앞에서부터 빈틈없는 prefix여야 한다.
 
 결정 길이를 `d`라 할 때:
 
@@ -164,13 +164,13 @@ advantage = delta + (gamma×lambda)^d × 다음 advantage × (episode 끝 아님
 
 ### `policy_advantages`: 보상과 비용이 만나는 한 곳
 
-[policy_advantages:158](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:158)는 현재 모드에서 `combined=reward_advantage−1×cost_advantage`를 만든 뒤 수집 자료 전체 평균·표준편차로 정규화한다. 미니배치마다 별도 정규화하지 않는다. 분산이 0이면 1e-8 분모 보호를 적용해 일정한 성분이 학습을 밀지 않도록 한다.
+[policy_advantages:159](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:159)는 현재 모드에서 `combined=reward_advantage−1×cost_advantage`를 만든 뒤 수집 자료 전체 평균·표준편차로 정규화한다. 미니배치마다 별도 정규화하지 않는다. 분산이 0이면 1e-8 분모 보호를 적용해 일정한 성분이 학습을 밀지 않도록 한다.
 
 예를 들어 reward 우위 3, cost 우위 5인 선택은 결합 우위 -2다. 보상만 크다고 강화되는 것이 아니다. `joint`는 두 원래 우위의 상대 규모를 보존한 채 차감한다. 비기본 `separate`는 reward와 cost를 각각 표준화하고 차감한 뒤 다시 정규화한다. 이 둘은 동일하지 않으며 현재 v3 실행은 joint를 강제한다. 가치망 정답에는 actor 우위 정규화를 적용하지 않는다.
 
 ### `DecisionPPOTrainer._update`의 실제 순서
 
-[DecisionPPOTrainer:420](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:420)에서 읽기 시작한다.
+[DecisionPPOTrainer:423](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:423)에서 읽기 시작한다.
 
 1. `config=self.config`, `batch=detach한 buffer`로 읽기 쉬운 지역명을 붙이고 reward와 cost의 GAE/return을 각각 계산한다.
 2. `valid.sum()`으로 실제 결정을 세고 2개 미만이면 거부한다. 관측·latent·old 분포에서 유효 슬롯만 꺼내 `[M,...]`로 만든다. padding 관측은 정책에 평가시키지 않는다.
@@ -197,7 +197,7 @@ critic은 `0.5×(보상가치 MSE+비용가치 MSE)`를 최소화한다. actor�
 
 actor 미니배치 갱신 직전 모델 파라미터와 actor Adam 상태를 snapshot한다. 갱신 후 **해당 미니배치만이 아니라 모든 유효 결정**에서 정책을 다시 계산하고 analytic KL 평균을 검사한다. 0.02 이하·유한이면 승인한다. 초과하면 모델과 Adam을 직전 상태로 복구하고 학습률을 줄여 같은 미니배치를 재시도한다. 최초 시도와 최대 3회 재시도가 가능하다.
 
-최대 횟수까지 실패하면 [KLGuardError:173](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:173)가 발생한다. 상위 [PPOTrainer.update:218](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:218)는 **update 전체 이전**의 모델·두 Adam·비용 승수·update 카운터·Torch/CUDA난수 상태를 복원하고 예외를 다시 전달한다. critic 계산 중 오류도 같은 전체 롤백을 거친다. 실패한 절반짜리 update를 성공한 checkpoint로 만들지 않기 위한 장치다.
+최대 횟수까지 실패하면 [KLGuardError:174](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:174)가 발생한다. 상위 [PPOTrainer.update:219](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:219)는 **update 전체 이전**의 모델·두 Adam·비용 승수·update 카운터·Torch/CUDA난수 상태를 복원하고 예외를 다시 전달한다. critic 계산 중 오류도 같은 전체 롤백을 거친다. 실패한 절반짜리 update를 성공한 checkpoint로 만들지 않기 위한 장치다.
 
 KL 재시도 중 허용된 축소 학습률은 이후 미니배치에도 남을 수 있다. gradient 0.5 제한은 적용 전 norm을 측정한 뒤 gradient를 clip하므로 로그의 `actor_grad_norm`이 0.5보다 클 수 있다. 그 숫자만으로 제한이 작동하지 않았다고 결론내리면 안 된다.
 
@@ -205,12 +205,12 @@ KL 재시도 중 허용된 축소 학습률은 이후 미니배치에도 남을 
 
 | 심볼 | 하는 일과 해석 |
 | --- | --- |
-| [rollout_evaluation:16](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:16) | 전체 관측을 최대 4096개씩 나누어 정책 출력을 합친다. 토큰 중간값 때문에 GPU 메모리가 급증하는 것을 줄이며 gradient 없이 계산한다. |
-| [tensor_summary:27](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:27) | 배열을 펼쳐 double로 집계하고 count/nonfinite/mean/std/min/max를 반환한다. 유한한 표본이 없으면 통계는 None이다. |
-| [MinibatchSummary:37](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:37) | optimizer 단계별 평균을 표본 수로 가중한다. steps와 sample_visits를 구분한다. 2epoch이면 자료 방문 수가 고유 결정 수보다 많다. |
-| [advantage_diagnostics:68](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:68) | 일반 PPO 경로의 원시·결합·정규화 우위와 TD오차를 기록한다. 현재 DecisionPPO는 하단에서 유효 결정 기준 진단을 별도로 만든다. |
-| [post_update_diagnostics:86](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:86) | 일반 PPO의 갱신 후 확률비·행동 포화·std·가치망 설명분산을 계산한다. 현재 DecisionPPO의 진단 필드와 완전히 같지는 않다. |
-| [gaussian_kl:153](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:153) | 일반 PPO 용 39차원 정규분포 KL 평균. 현재 DecisionPPO는 정책의 활성 축·탐색기저를 아는 `analytic_kl`을 쓴다. |
+| [rollout_evaluation:17](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:17) | 전체 관측을 최대 4096개씩 나누어 정책 출력을 합친다. 토큰 중간값 때문에 GPU 메모리가 급증하는 것을 줄이며 gradient 없이 계산한다. |
+| [tensor_summary:28](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:28) | 배열을 펼쳐 double로 집계하고 count/nonfinite/mean/std/min/max를 반환한다. 유한한 표본이 없으면 통계는 None이다. |
+| [MinibatchSummary:38](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:38) | optimizer 단계별 평균을 표본 수로 가중한다. steps와 sample_visits를 구분한다. 2epoch이면 자료 방문 수가 고유 결정 수보다 많다. |
+| [advantage_diagnostics:69](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:69) | 일반 PPO 경로의 원시·결합·정규화 우위와 TD오차를 기록한다. 현재 DecisionPPO는 하단에서 유효 결정 기준 진단을 별도로 만든다. |
+| [post_update_diagnostics:87](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:87) | 일반 PPO의 갱신 후 확률비·행동 포화·std·가치망 설명분산을 계산한다. 현재 DecisionPPO의 진단 필드와 완전히 같지는 않다. |
+| [gaussian_kl:154](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:154) | 일반 PPO 용 39차원 정규분포 KL 평균. 현재 DecisionPPO는 정책의 활성 축·탐색기저를 아는 `analytic_kl`을 쓴다. |
 
 DecisionPPO의 최상위 `actor_loss`, `reward_value_loss`, `cost_value_loss`는 **마지막 미니배치 값**이다. epoch 전체 평균을 보려면 `diagnostics.minibatches.*.sample_weighted_mean`을 본다. `analytic_kl`은 마지막 승인 시점의 전체 자료 KL이며, `max_attempted_kl`에는 거부한 시도도 포함될 수 있다.
 
@@ -218,17 +218,17 @@ DecisionPPO의 최상위 `actor_loss`, `reward_value_loss`, `cost_value_loss`는
 
 ### 생성·저장·복원을 제공하는 `PPOTrainer`
 
-[PPOTrainer.__init__:183](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:183)는 학습률·확률 범위·정수 예산·유한값을 검사하고 actor/value Adam을 따로 만든다. [_actor_snapshot / _actor_restore:209](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:209)는 미니배치 KL 재시도의 복구 단위다. `update`는 위에서 설명한 전체 트랜잭션의 외곽이며 자식 클래스의 `_update`를 호출한다.
+[PPOTrainer.__init__:184](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:184)는 학습률·확률 범위·정수 예산·유한값을 검사하고 actor/value Adam을 따로 만든다. [_actor_snapshot / _actor_restore:210](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:210)는 미니배치 KL 재시도의 복구 단위다. `update`는 위에서 설명한 전체 트랜잭션의 외곽이며 자식 클래스의 `_update`를 호출한다.
 
-[_identity:342](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:342)는 trainer schema·정책 architecture·전체 입력/제어 계약·PPO설정을 식별자로 묶는다. 기본 joint 정규화 필드는 직렬화에서 생략하지만 로드 비교의 의미가 느슨해지는 것은 아니다. `DecisionPPOTrainer`는 자기 schema를 오버라이드하므로 일반 PPO checkpoint와 구분된다.
+[_identity:343](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:343)는 trainer schema·정책 architecture·전체 입력/제어 계약·PPO설정을 식별자로 묶는다. 기본 joint 정규화 필드는 직렬화에서 생략하지만 로드 비교의 의미가 느슨해지는 것은 아니다. `DecisionPPOTrainer`는 자기 schema를 오버라이드하므로 일반 PPO checkpoint와 구분된다.
 
-[save:349](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:349)는 모델, 두 optimizer, 비용 가중치, update 수, 메타데이터, Python/NumPy/Torch/CUDA 난수 상태를 저장한다. 임시 파일에 먼저 쓴 뒤 하드링크로 목표 이름을 만들므로 기존 동일 파일명을 덮어쓰지 않는다. 디스크 동기화와 SHA 명세는 호출측 `CheckpointRecorder`가 덧붙인다.
+[save:350](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:350)는 모델, 두 optimizer, 비용 가중치, update 수, 메타데이터, Python/NumPy/Torch/CUDA 난수 상태를 저장한다. 임시 파일에 먼저 쓴 뒤 하드링크로 목표 이름을 만들므로 기존 동일 파일명을 덮어쓰지 않는다. 디스크 동기화와 SHA 명세는 호출측 `CheckpointRecorder`가 덧붙인다.
 
-[load:364](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:364)는 identity 전체 일치, 모델 유한값, CUDA 난수 장치 수 일치를 확인하고 모델/optimizer/난수/카운터를 복원한다. 물리 시뮬레이터의 현재 몸 위치나 진행 중 에피소드 원장은 payload에 없다. 일정·sampler·소스 SHA검사는 runner 메타데이터 복원 단계가 담당한다. 따라서 이 함수 하나만 호출했다고 현재 학습의 모든 재개 검증이 끝난 것은 아니다.
+[load:365](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:365)는 identity 전체 일치, 모델 유한값, CUDA 난수 장치 수 일치를 확인하고 모델/optimizer/난수/카운터를 복원한다. 물리 시뮬레이터의 현재 몸 위치나 진행 중 에피소드 원장은 payload에 없다. 일정·sampler·소스 SHA검사는 runner 메타데이터 복원 단계가 담당한다. 따라서 이 함수 하나만 호출했다고 현재 학습의 모든 재개 검증이 끝난 것은 아니다.
 
 ### 일반 `compute_gae`와 `_update`가 남아 있는 이유
 
-[compute_gae:135](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:135)는 고정 1tick 전이 `[T,N]`용이며 duration/valid가 없다. [PPOTrainer._update:237](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:237)는 이 형식의 기존 수집기와 정책을 학습한다. 현재 기본은 DecisionCollector와 DecisionPPO를 쓰므로 이 구현을 현재 자료형에 그대로 끼우면 안 된다. 현재 J 수집기는 매 60Hz tick마다 한 결정을 만들어 duration=1·valid=True인 자료를 넣는다. DecisionPPO의 일반 duration/padding 지원이 남아 있어도 현재 환경에 행동 유지 옵션이 있다는 뜻은 아니다. 이 구분과 정책 자체의 활성 33축 KL 계산 때문에 buffer 형식을 확인한 뒤 연결해야 한다.
+[compute_gae:136](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:136)는 고정 1tick 전이 `[T,N]`용이며 duration/valid가 없다. [PPOTrainer._update:238](/home/ajou/yigyu/3/guitar_learning/training/ppo.py:238)는 이 형식의 기존 수집기와 정책을 학습한다. 현재 기본은 DecisionCollector와 DecisionPPO를 쓰므로 이 구현을 현재 자료형에 그대로 끼우면 안 된다. 현재 J 수집기는 매 60Hz tick마다 한 결정을 만들어 duration=1·valid=True인 자료를 넣는다. DecisionPPO의 일반 duration/padding 지원이 남아 있어도 현재 환경에 행동 유지 옵션이 있다는 뜻은 아니다. 이 구분과 정책 자체의 활성 33축 KL 계산 때문에 buffer 형식을 확인한 뒤 연결해야 한다.
 
 ## 3. 실제 소스를 볼 때 따라갈 질문
 

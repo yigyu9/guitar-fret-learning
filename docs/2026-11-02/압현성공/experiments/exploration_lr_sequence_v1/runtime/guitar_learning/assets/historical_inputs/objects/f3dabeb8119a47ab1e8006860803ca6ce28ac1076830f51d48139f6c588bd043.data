@@ -1,0 +1,53 @@
+import json
+from pathlib import Path
+import unittest
+import numpy as np
+
+from stability_adapter_2.control import control_indices, compose_targets
+from stability_adapter_2.strap import cable_forces
+
+
+class ControlTests(unittest.TestCase):
+    def setUp(self):
+        pose = json.loads((Path(__file__).resolve().parents[2]/'tab2body/assets/seated_pose.json').read_text())
+        self.names = list(reversed(pose['joints_isaac']))
+        self.main, self.torso = control_indices(self.names)
+        self.initial = np.zeros(len(self.names), dtype=np.float32)
+        self.lo, self.hi = self.initial-1, self.initial+1
+
+    def test_named_ownership_and_limits(self):
+        self.assertEqual(len(self.main), 66)
+        self.assertEqual(len(self.torso), 9)
+        self.assertEqual(sum(self.names[i].startswith('L_Thorax') for i in self.main), 3)
+        self.assertEqual(sum(self.names[i].startswith('R_Thorax') for i in self.main), 3)
+        target = compose_targets(self.initial, self.main, np.full(66, 2.), self.lo, self.hi)
+        np.testing.assert_array_equal(target[self.torso], self.initial[self.torso])
+        self.assertEqual(np.count_nonzero(target), 66)
+        self.assertTrue((target <= self.hi).all())
+
+    def test_old_layout_and_invalid_actions_rejected(self):
+        for offsets in [np.zeros(33), np.zeros(75), np.full(66, np.nan)]:
+            with self.assertRaises(ValueError):
+                compose_targets(self.initial, self.main, offsets, self.lo, self.hi)
+        with self.assertRaises(ValueError):
+            control_indices([n for n in self.names if n != 'R_Thorax_x'])
+
+
+class StrapTests(unittest.TestCase):
+    def test_routed_force_and_moment_conservation(self):
+        points = np.array([[0.,0.,0.],[0.,1.,1.],[1.,1.,0.]])
+        forces, tension, length, _ = cable_forces(points, np.zeros_like(points), 2., 10., 2., 300.)
+        self.assertGreater(tension, 0)
+        np.testing.assert_allclose(forces.sum(0), 0, atol=1e-12)
+        np.testing.assert_allclose(np.cross(points,forces).sum(0), 0, atol=1e-12)
+        self.assertAlmostEqual(length, 2*np.sqrt(2))
+
+    def test_slack_and_tension_cap(self):
+        points = np.array([[0.,0.,0.],[1.,0.,0.]])
+        velocities = np.array([[0.,0.,0.],[100.,0.,0.]])
+        self.assertEqual(cable_forces(points, velocities, 2., 6000., 120., 300.)[1], 0)
+        self.assertEqual(cable_forces(points, velocities, .5, 6000., 120., 300.)[1], 300)
+
+
+if __name__ == '__main__':
+    unittest.main()

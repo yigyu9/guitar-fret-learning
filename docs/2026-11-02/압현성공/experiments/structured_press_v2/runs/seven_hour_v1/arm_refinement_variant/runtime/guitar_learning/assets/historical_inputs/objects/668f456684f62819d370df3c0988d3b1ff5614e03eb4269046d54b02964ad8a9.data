@@ -1,0 +1,68 @@
+"""Correct EFFORT target audit; preserve the original analysis and all native data."""
+import argparse
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from ..lower_body_release_v1.common import read, save
+from . import analyze_v1 as previous
+
+_ORIGINAL_OWNERSHIP = previous.ownership
+
+
+def ownership(run, initial, properties, targets):
+    legacy = _ORIGINAL_OWNERSHIP(run, initial, properties, targets)
+    if not legacy['checks']['latch_present']:
+        return legacy
+    checks = dict(legacy['checks'])
+    legacy_getter_gate = checks.pop('prox_requested_final_readback_exact')
+    names = initial['joint_names']
+    prox = [j for j,n in enumerate(names) if n.startswith(('R_Thorax_','R_Shoulder_'))]
+    before = [r for r in targets if r['physics_step_before'] < 2400]
+    after = [r for r in targets if r['physics_step_before'] >= 2400]
+    held = np.array(before[-1]['final105_rad'])[prox]
+    checks['prox_are_original_effort6'] = bool(len(prox)==6 and set(prox)<=set(initial['effort_indices']) and not set(prox)&set(initial['position_indices']))
+    checks['prox_requested_final_exact'] = all(np.array_equal(np.array(r[key])[prox],held) for r in after for key in ('requested105_rad','final105_rad'))
+    states = {r['physics_step']:r['state'] for r in read(run/'states240.json')['rows']}
+    efforts = [r for r in read(run/'efforts240.json')['rows'] if r['physics_step_before'] >= 2400]
+    checks['full960_post_efforts'] = [r['physics_step_before'] for r in efforts] == list(range(2400,3360))
+    K = np.array(initial['control_K105_Nm_rad'])[prox]
+    D = np.array(initial['control_D105_Nms_rad'])[prox]
+    errors = []
+    checks['prox_PD_uses_latched_target'] = bool(efforts)
+    for row in efforts:
+        k = row['physics_step_before']
+        if k not in states:
+            checks['prox_PD_uses_latched_target'] = False
+            continue
+        q = np.array([v['pos'] for v in states[k]['human_dof_states']])[prox]
+        qd = np.array([v['vel'] for v in states[k]['human_dof_states']])[prox]
+        expected = K*(held-q)-D*qd
+        actual = np.array(row['scalar_PD105_Nm'])[prox]
+        error = float(np.max(abs(actual-expected)))
+        errors.append(error)
+        checks['prox_PD_uses_latched_target'] &= bool(np.isfinite(actual).all() and error<=1e-10)
+    getter_delta = max(float(np.max(abs(np.array(r['native105_position_readback_rad'])[prox]-held))) for r in after)
+    return dict(checks={k:bool(v) for k,v in checks.items()},passed=all(checks.values()),
+        original_analysis_ownership=legacy,original_getter_requirement_passed=legacy_getter_gate,
+        unused_effort_position_getter_max_abs_delta_rad=getter_delta,
+        max_proximal_PD_reconstruction_error_Nm=max(errors) if errors else None,
+        checked_post_effort_rows=len(efforts),source_step=2396,
+        scope='EFFORT6 requested/final targets and every submitted PD term are reconstructed from actual q/qd and original K/D. Native POSITION target getter is normative only for POSITION48; its EFFORT values are retained as diagnostics. Original v1 failure is preserved; no physical threshold or native data changes.')
+
+
+def main(run, out, baseline=None):
+    with patch.object(previous, 'ownership', ownership):
+        previous.main(run,out,baseline)
+    assert previous.ownership is _ORIGINAL_OWNERSHIP
+    save(out/'analysis_revision.json',dict(version='analyze_v2',physics_rerun=False,
+        correction='Remove unsupported EFFORT position-getter equality; replace with exact requested/final latch and actual-state PD reconstruction.',
+        original_analysis_preserved=True,physical_gates_unchanged=True))
+
+
+if __name__ == '__main__':
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--run',type=Path,required=True)
+    parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--baseline',type=Path)
+    args=parser.parse_args()
+    main(args.run.resolve(),args.out.resolve(),args.baseline.resolve() if args.baseline else None)

@@ -1,0 +1,88 @@
+import copy
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from stability_adapter_2.run_batch import manifest, run_batch, save
+
+HASHES = {'runtime':'fixed-hash'}
+INPUT = {'control_steps':6,'trials':[
+    {'id':name,'initial_settings':{'joint_angles_rad':{},'strap_rest_length_m':1.}}
+    for name in ('H0','H1')]}
+
+
+class BatchTests(unittest.TestCase):
+    def fake_trial(self, command, **kwargs):
+        directory = Path(command[command.index('--out')+1])
+        report = {'completed':True,'checks':{'input':True},'control_steps':6,
+            'source_sha256':HASHES,'initial_settings':json.loads((directory/'settings.json').read_text())}
+        save(directory/'report.json',report)
+        return SimpleNamespace(returncode=0)
+
+    def test_manifest_requires_explicit_lengths_unique_ids_and_integer_steps(self):
+        for value in ({'control_steps':True,'trials':INPUT['trials']},
+                      {'control_steps':6,'trials':[INPUT['trials'][0]]*2},
+                      {'control_steps':6,'trials':[{'id':'../H0','initial_settings':{}}]},
+                      {'control_steps':6,'trials':[{'id':'H0','initial_settings':{}}]}):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                manifest(value)
+
+    @patch('stability_adapter_2.run_batch.source_hashes',return_value=HASHES)
+    def test_partial_resume_skips_completed_and_rejects_changes(self, hashes):
+        with tempfile.TemporaryDirectory() as temporary, patch(
+                'stability_adapter_2.run_batch.subprocess.run',side_effect=self.fake_trial) as child:
+            out=Path(temporary)
+            first=run_batch(out,INPUT,max_trials=1)
+            report=out/first['completed']['H0']['report']
+            original=report.read_bytes(),report.stat().st_mtime_ns
+            final=run_batch(out,INPUT,resume=True)
+            self.assertEqual(len(final['completed']),2)
+            self.assertEqual(child.call_count,2)
+            self.assertEqual((report.read_bytes(),report.stat().st_mtime_ns),original)
+            changed=copy.deepcopy(INPUT)
+            changed['trials'][0]['initial_settings']['strap_rest_length_m']=1.01
+            with self.assertRaises(ValueError):
+                run_batch(out,changed,resume=True)
+            hashes.return_value={'runtime':'changed'}
+            with self.assertRaises(ValueError):
+                run_batch(out,INPUT,resume=True)
+            hashes.return_value=HASHES
+            report.write_text(report.read_text()+' ')
+            with self.assertRaises(ValueError):
+                run_batch(out,INPUT,resume=True)
+            self.assertEqual(child.call_count,2)
+
+    @patch('stability_adapter_2.run_batch.source_hashes',return_value=HASHES)
+    def test_partial_attempt_preserved_and_report_commit_recovered(self, hashes):
+        with tempfile.TemporaryDirectory() as temporary, patch(
+                'stability_adapter_2.run_batch.subprocess.run',side_effect=self.fake_trial) as child:
+            out=Path(temporary)
+            state=run_batch(out,INPUT,max_trials=0)
+            old=out/'H0/attempt_0001'
+            old.mkdir(parents=True)
+            (old/'run.log').write_text('partial raw evidence')
+            state['attempts'].append({'trial_id':'H0','path':'H0/attempt_0001','status':'running'})
+            save(out/'checkpoint.json',state)
+            # Also preserve an orphan directory made just before a checkpoint commit.
+            (out/'H0/attempt_0002').mkdir()
+            state=run_batch(out,INPUT,max_trials=1,resume=True)
+            self.assertEqual(state['attempts'][0]['status'],'interrupted')
+            self.assertEqual((old/'run.log').read_text(),'partial raw evidence')
+            self.assertEqual(state['completed']['H0']['report'],'H0/attempt_0003/report.json')
+            # Model a parent interruption after the second child's report committed.
+            second=out/'H1/attempt_0001'
+            second.mkdir(parents=True)
+            save(second/'settings.json',manifest(INPUT)['trials'][1]['initial_settings'])
+            self.fake_trial(['--out',str(second)])
+            state['attempts'].append({'trial_id':'H1','path':'H1/attempt_0001','status':'running'})
+            save(out/'checkpoint.json',state)
+            recovered=run_batch(out,INPUT,resume=True)
+            self.assertEqual(len(recovered['completed']),2)
+            self.assertEqual(child.call_count,1)
+
+
+if __name__ == '__main__':
+    unittest.main()

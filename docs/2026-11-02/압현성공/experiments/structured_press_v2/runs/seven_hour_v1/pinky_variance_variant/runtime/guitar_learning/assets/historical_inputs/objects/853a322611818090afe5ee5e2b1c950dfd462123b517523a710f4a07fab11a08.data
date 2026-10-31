@@ -1,0 +1,42 @@
+"""Read-only physical-guitar contact counts for actual body support."""
+import argparse
+import math
+from pathlib import Path
+from ..lower_body_release_v1.common import A, read, save, pin, verify
+from ..seated_foot_support_v1.analyze_v6 import physical_guitar_bodies
+
+BODIES=('Torso','Spine','Chest','R_Thorax','R_Shoulder','R_Elbow','L_Hip','R_Hip','L_Wrist')
+
+
+def main(run,out):
+    out.mkdir(exist_ok=False)
+    inputs=pin(extra=[Path(__file__).resolve(),A/'seated_foot_support_v1/analyze_v6.py',run/'contacts240.json',run/'report.json'])
+    save(out/'inputs_before.json',inputs)
+    rows=read(run/'contacts240.json')['rows']; report=read(run/'report.json')
+    assert report['completed'] and report['physics_steps']==2400
+    assert [r['physics_step'] for r in rows]==list(range(2401))
+    assert all(r['time_s']==r['physics_step']/240 for r in rows)
+    physical=physical_guitar_bodies(); samples=[]
+    for row in rows:
+        counts={n:0 for n in BODIES}
+        for contact in row['contacts']:
+            value=float(contact['lambda']);assert math.isfinite(value)
+            if value<=0:continue
+            a,b=contact['body0_name'],contact['body1_name']
+            for name in BODIES:
+                if (a=='human/'+name and b in physical) or (b=='human/'+name and a in physical): counts[name]+=1
+        samples.append(dict(step=row['physics_step'],time_s=row['time_s'],positive_contacts=counts))
+    windows={}
+    for label,lo,hi in [('startup',0,1),('preparation',0,5),('hold',5,10)]:
+        selected=[r for r in samples if lo<=r['time_s']<=hi]
+        assert len(selected)==round((hi-lo)*240)+1
+        windows[label]=dict(samples=len(selected),fraction={name:sum(r['positive_contacts'][name]>0 for r in selected)/len(selected) for name in BODIES})
+    unchanged=verify(inputs);assert unchanged
+    save(out/'report.json',dict(passed=True,run=str(run),windows=windows,inputs_unchanged=unchanged,
+         scope='Positive finite actual contact lambda with physical guitar bodies, not a force/load in Newtons. Windows include both endpoints: t0 is included in startup/preparation, and t5 is shared by preparation and hold. Spine/thigh contacts supplement Chest/upper-arm evidence; this count audit is not overall stability acceptance.'))
+    print(windows['hold'],flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--run',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
+    a=p.parse_args();main(a.run.resolve(),a.out.resolve())

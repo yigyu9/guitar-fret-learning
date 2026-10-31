@@ -1,0 +1,117 @@
+"""Synthetic consecutive240Hz score boundaries; no native dynamics claim."""
+import unittest
+from guitar_learning.music_task import ScoreTarget, ScoreTask
+from guitar_learning.tool.experiments.song.metrics import SongLedger, HISTORY_FIELDS, HISTORY_SCALES
+
+
+def target(identity='a', onset=0., end=.1, string=0, direction=1):
+    return ScoreTarget(identity, identity, string, 5, 1, direction, onset, end,
+                       max(0., onset-.05), onset, end)
+
+
+def sample(step, targets, clean=True, crossings=(), wrong=False):
+    valid = clean if isinstance(clean, dict) else {t.target_id: clean for t in targets}
+    return dict(physics_step=step, task_time_s=step/240.,
+        targets={t.target_id: dict(candidate=valid[t.target_id],
+            fretting_quality=dict(status='correct' if valid[t.target_id] else 'wrong' if wrong else 'missing'))
+            for t in targets}, crossings=list(crossings),
+        geometry={t.target_id: dict(delta=[0., 0., 0.]) for t in targets},
+        summary=dict(matched50=0, matched100=0, wrong_crossings=0, missed_strict=0))
+
+
+def crossing(step, identity='hit', at=None, string=1, direction=1):
+    return dict(crossing_id=identity, task_time_s=step/240. if at is None else at,
+        string_number=string, direction=direction, valid=True, reason_flags=[])
+
+
+class SongMetricsTests(unittest.TestCase):
+    def test_short_23ms_note_clipped_hold_and_once_success(self):
+        targets = (target(end=.023),)
+        ledger = SongLedger(ScoreTask(targets), sample(0, targets))
+        successes = 0.
+        for step in range(1, 8):
+            successes += ledger.update(sample(step, targets))['song_left_success']
+        note = ledger.summary()['per_note']['a']
+        self.assertAlmostEqual(note['clean_audible_s'], .023)
+        self.assertAlmostEqual(note['required_dwell_s'], .023)
+        self.assertEqual(successes, 1.)
+        self.assertFalse(note['left_missed'])
+        self.assertEqual(ledger.summary()['expired_count'], 1)
+
+    def test_two_successive_notes_and_repeated_strikes_not_episode_latched(self):
+        targets = (target('a', 1/240., 4/240.), target('b', 8/240., 12/240.))
+        ledger = SongLedger(ScoreTask(targets), sample(0, targets), window_s=.002)
+        for step in range(1, 15):
+            events = (crossing(step, str(step)),) if step in (1, 8) else ()
+            ledger.update(sample(step, targets, crossings=events))
+        result = ledger.summary()
+        self.assertEqual(result['right_success_count'], 2)
+        self.assertEqual(result['coupled_hit_count'], 2)
+        self.assertEqual(result['left_success_count'], 2)
+        self.assertEqual(result['wrong_crossings'], 0)
+        self.assertEqual(result['repeat_crossings'], 0)
+
+    def test_crossing_consumes_one_nearest_target_and_duplicate_id_not_repaid(self):
+        targets = (target('a', .1, .3), target('b', .11, .3))
+        ledger = SongLedger(ScoreTask(targets), sample(0, targets))
+        first = ledger.update(sample(1, targets, crossings=[crossing(1)]))
+        self.assertEqual(first['song_right_success'], 1.)
+        self.assertIsNotNone(ledger.notes['a']['right_crossing_id'])
+        self.assertIsNone(ledger.notes['b']['right_crossing_id'])
+        again = ledger.update(sample(2, targets, crossings=[crossing(2)]))
+        self.assertEqual(again['song_right_success'], 0.)
+        self.assertEqual(ledger.summary()['duplicate_crossings'], 1)
+
+    def test_missing_endpoint_blocks_coupling_but_right_match_is_independent(self):
+        targets = (target(),)
+        for previous, current in ((False, True), (True, False)):
+            ledger = SongLedger(ScoreTask(targets), sample(0, targets, previous))
+            terms = ledger.update(sample(1, targets, current, [crossing(1)]))
+            self.assertEqual(terms['song_right_success'], 1.)
+            self.assertEqual(terms['song_coupled'], 0.)
+            self.assertEqual(ledger.summary()['coupled_hit_count'], 0)
+
+    def test_repeat_wrong_miss_once_and_end_exclusion(self):
+        targets = (target(end=2/240.),)
+        ledger = SongLedger(ScoreTask(targets), sample(0, targets, False))
+        ledger.update(sample(1, targets, False, [crossing(1)]))
+        # The end boundary cannot be a sounding hit, even inside timing tolerance.
+        terms = ledger.update(sample(2, targets, False, [crossing(2, 'end')]))
+        self.assertEqual(terms['song_wrong_crossing'], -.1)
+        first = ledger.update(sample(3, targets, False))
+        later = ledger.update(sample(4, targets, False))
+        self.assertEqual(first['song_left_missed'], -.5)
+        self.assertEqual(later['song_left_missed'], 0.)
+        self.assertEqual(ledger.summary()['right_missed_count'], 0)
+        ledger = SongLedger(ScoreTask((target(),)), sample(0, (target(),)))
+        ledger.update(sample(1, (target(),), crossings=[crossing(1)]))
+        repeat = ledger.update(sample(2, (target(),), crossings=[crossing(2, 'repeat')]))
+        self.assertEqual(repeat['song_repeat_crossing'], -.02)
+
+    def test_safety_suppresses_future_positive_and_complete_requires_full_horizon(self):
+        targets = (target(end=1/240.),)
+        task = ScoreTask(targets)
+        ledger = SongLedger(task, sample(0, targets))
+        ledger.invalidate(['unsafe'])
+        terms = ledger.update(sample(1, targets, crossings=[crossing(1, at=.001)]))
+        self.assertTrue(all(value <= 0 for value in terms.values()))
+        self.assertFalse(ledger.summary(True)['stage_success'])
+        self.assertFalse(ledger.summary(True)['completed'])
+        self.assertEqual(len(ledger.history()), 32)
+        self.assertEqual(len(HISTORY_FIELDS), len(HISTORY_SCALES))
+        self.assertEqual(dict(zip(HISTORY_FIELDS, ledger.history()))['safety_invalidated'], 1.)
+        with self.assertRaisesRegex(ValueError, 'consecutive'):
+            ledger.update(sample(3, targets))
+
+    def test_fabricated_future_crossing_is_rejected_and_strict_ledger_separate(self):
+        targets = (target(),)
+        ledger = SongLedger(ScoreTask(targets), sample(0, targets))
+        with self.assertRaisesRegex(ValueError, 'same-interval'):
+            ledger.update(sample(1, targets, crossings=[crossing(1, at=2/240.)]))
+        ledger = SongLedger(ScoreTask(targets), sample(0, targets))
+        ledger.update(sample(1, targets, crossings=[crossing(1)]))
+        self.assertEqual(ledger.summary()['right_success_count'], 1)
+        self.assertEqual(ledger.summary()['strict_music']['matched50'], 0)
+
+
+if __name__ == '__main__': unittest.main()

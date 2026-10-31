@@ -1,0 +1,36 @@
+"""Closed conditional selection for the new finite Body9 target; no adoption claim."""
+from pathlib import Path
+from ..lower_body_release_v1.common import BASE,read,sha,verify
+from .runtime_v8 import INCREMENT_DELTA as PREVIOUS_INCREMENT,JOINTS
+P=BASE/'front_facing_ready_v1';SELECTED=P/'spine_margin035_pipeline_v1/selected_vector_v1.json';ANCHORS=P/'spine_margin035_pipeline_v1/selection_anchors_v1.json'
+SELECTED_SHA='516dd4af078b4bceca8ad31bc31145a43b7b31982a918ba9238d5b30e2ba9a97'
+INCREMENT_MODE='finite_static_Body9_boundedChest_shift_Spine_extra0p35mm_v1'
+INCREMENT_DELTA=[-0.0030176817997788095, 0.006059354440470439, -0.004621030169684824, 0.00259699291536422, 0.0038037921459062284, 0.009449434210115215, 0.0004079708174446026, -0.01001112962281478, -0.005168917002708124]
+
+
+def margin_selection_inputs():
+    assert sha(SELECTED)==SELECTED_SHA
+    selection=read(SELECTED);anchors=read(ANCHORS);resultpath=P/'diagnose_spine_margin_bounded_goal_v1/result_v1/result.json';result=read(resultpath)
+    assert selection['joint_names']==JOINTS and selection['indices105']==list(range(24,33))
+    assert selection['mode']==INCREMENT_MODE and selection['selected_solution_index']==1 and selection['eligible_solution_indices']==[0,1]
+    assert selection['previous_increment9_rad']==PREVIOUS_INCREMENT and selection['combined_increment9_rad']==INCREMENT_DELTA
+    assert INCREMENT_DELTA==[a+b for a,b in zip(PREVIOUS_INCREMENT,selection['extra_delta9_rad'])]
+    assert selection['extra_delta9_rad']==result['solutions'][1]['delta9_rad'] and selection['ramp_s']==[16.,16.5]
+    assert selection['point_result']==result['solutions'][1] and selection['additional_conditional_source_away_gain_m']==result['solutions'][1]['requested_gain_m']==.00035
+    assert selection['source_result']==str(resultpath) and selection['source_result_sha256']==sha(resultpath)=='49b54c0ae00490b0acbe8d5ea912c5cc4cf173ee7f45433f5563e9fc5a0169e9'
+    assert result['eligible_solution_indices']==[0,1] and result['bounded_goal_rotation_conditional_pass'] is True and result['inputs_unchanged'] is True
+    assert result['goalChest_rotation_budget_deg']==selection['goalChest_path_rotation_budget_deg']==.001 and result['original_exact_goal_sweep_pass'] is False
+    assert result['input_sha256']==read(resultpath.parent/'inputs_before.json') and anchors==selection['input_sha256']
+    for cases in result['runs'].values():
+        assert len(cases)==2 and all(c['passed'] is True and c['original_exact_goal_full_sweep_pass'] is False and c['original_actual_full105_EPS0_pass'] is False and c['original_zero8_qref_exact'] is False for c in cases)
+    for d in (selection,result):
+        assert d['new_native_steps']==0 and d['actual_dynamic_tracking_validated'] is False and d['new_LH_IK_response_certified'] is False and d['solver_cause_confirmed'] is False and d['final_adoption_eligible'] is False
+    assert result['selected_runtime_candidate'] is None
+    models=read(P/'diagnose_spine_margin_fullperiod_v1/result_v1/inputs_before.json')['model108_sha256'];assert len(models)==108
+    expected={}
+    for mapping in (anchors,result['input_sha256'],models):
+        for p,h in mapping.items():assert p not in expected or expected[p]==h,p;expected[p]=h
+    assert all(anchors[p]==h for p,h in result['input_sha256'].items()) and verify(expected)
+    paths=[SELECTED,ANCHORS,resultpath,resultpath.parent/'inputs_before.json']+[Path(p) for p in expected]
+    metadata=dict(selection=str(SELECTED),selection_sha256=SELECTED_SHA,mode=INCREMENT_MODE,combined_increment9_rad=INCREMENT_DELTA,source_result=str(resultpath),source_result_sha256=sha(resultpath),goalChest_path_rotation_budget_deg=.001,original_exact_goal_sweep_pass=False,actual_dynamic_tracking_validated=False,final_adoption_eligible=False)
+    return metadata,[expected],paths

@@ -1,0 +1,106 @@
+"""Full-score single-hand rewards on the shared persistent native scene."""
+import copy
+from unittest.mock import patch
+
+import numpy as np
+
+from guitar_learning.runtime.persistent_environment import _CONSTRUCTION_LOCK
+from guitar_learning.song import environment as original
+from guitar_learning.song.reward_environment import RewardEnvironment
+
+
+SCHEMA = 'guitar_learning.hand_song.v1'
+HAND_TERMS = {
+    'left': ('song_clean_hold', 'song_left_success', 'song_wrong_press',
+             'song_missing_press', 'song_left_approach', 'song_left_missed'),
+    'right': ('song_right_success', 'song_right_missed', 'song_wrong_crossing',
+              'song_repeat_crossing', 'song_right_progress'),
+}
+SHARED_TERMS = ('action_change', 'terminal_failure')
+
+
+class HandSongEnvironment(RewardEnvironment):
+    def __init__(self, *args, role, **kwargs):
+        if role not in HAND_TERMS:
+            raise ValueError('left/right full-song role required')
+        super().__init__(*args, **kwargs)
+        self.role = role
+
+    def reset(self):
+        observation, info = super().reset()
+        self.contract['task']['specialist'] = dict(
+            schema=SCHEMA, role=self.role, frozen_partner=False,
+            inactive_action='zero_residual', scope='complete_score')
+        self.contract['reward']['hand_projection'] = dict(
+            schema=SCHEMA, role=self.role,
+            terms=list(HAND_TERMS[self.role]), shared_terms=list(SHARED_TERMS),
+            inactive_hand_terms='diagnostic_only', coupled_reward=False)
+        info['training_contract'] = self.contract
+        return observation, info
+
+    def _song_info(self, info, completed):
+        super()._song_info(info, completed)
+        summary = info['song']
+        summary['joint_stage_success'] = summary['stage_success']
+        summary['joint_provisional_success'] = summary['provisional_success']
+        success = (not summary['safety_invalidated'] and
+                   summary[self.role+'_success_count'] == summary['denominator'])
+        if self.role == 'right':
+            success = success and summary['wrong_crossings'] == summary['repeat_crossings'] == 0
+        summary.update(role=self.role, success_schema=SCHEMA,
+                       provisional_success=bool(success),
+                       stage_success=bool(summary['completed'] and success))
+        compact = {key: copy.deepcopy(value) for key, value in summary.items()
+                   if key not in ('targets', 'per_note', 'events')}
+        info['musical_quality'] = dict(
+            schema=SCHEMA, role=self.role, stage_success=summary['stage_success'],
+            provisional_success=summary['provisional_success'], song=compact)
+        if 'episode' in info:
+            info['episode']['song'] = copy.deepcopy(summary)
+            info['episode']['musical_quality'] = copy.deepcopy(info['musical_quality'])
+
+    def step(self, action):
+        if self.finished:
+            raise RuntimeError('reset required before stepping a finished/uninitialized episode')
+        try:
+            action = np.asarray(action, dtype=float)
+            if action.shape != (39,) or not np.isfinite(action).all():
+                raise ValueError('finite 39-channel hand-song action required')
+            inactive = action[33:] if self.role == 'left' else action[:33]
+            if np.any(inactive != 0.):
+                raise ValueError('inactive hand action must be zero residual')
+            observation, old_reward, terminated, truncated, info = super().step(action)
+            allowed = HAND_TERMS[self.role] + SHARED_TERMS
+            info['reward_terms'] = {key: value for key, value in info['reward_terms'].items()
+                                    if key in allowed}
+            for row in info['physics_measurements']:
+                row['song_reward_terms'] = {key: value for key, value in row['song_reward_terms'].items()
+                                            if key in HAND_TERMS[self.role]}
+            info['reward_shaping']['included_in_reward'] = self.role == 'right'
+            reward = float(sum(info['reward_terms'].values()))
+            if not np.isfinite(reward):
+                raise ValueError('finite projected full-score reward required')
+            self.total_reward += reward-old_reward
+            if 'episode' in info:
+                info['episode']['reward'] = self.total_reward
+            return observation, reward, terminated, truncated, info
+        except BaseException:
+            self.finished = True
+            raise
+
+
+def build_environment(config, out, *, bundle, song, role, **kwargs):
+    task = original.make_task(bundle, pre_roll_s=song['pre_roll_s'], tail_s=song['tail_s'])
+    environment = HandSongEnvironment
+    if 'left_curriculum' in song:
+        if role != 'left':
+            raise ValueError('left curriculum requires the left hand')
+        from guitar_learning.song.left_curriculum import default_config
+        from guitar_learning.song.left_environment import LeftSongEnvironment
+        if song['left_curriculum'] != default_config():
+            raise ValueError('supported left curriculum contract required')
+        environment = LeftSongEnvironment
+        kwargs['bundle'] = bundle
+    with _CONSTRUCTION_LOCK, patch.object(original.training_environment, 'ContactEnvironment',
+                                          original.PersistentContactEnvironment):
+        return environment(config, out, task=task, song=song, role=role, **kwargs)

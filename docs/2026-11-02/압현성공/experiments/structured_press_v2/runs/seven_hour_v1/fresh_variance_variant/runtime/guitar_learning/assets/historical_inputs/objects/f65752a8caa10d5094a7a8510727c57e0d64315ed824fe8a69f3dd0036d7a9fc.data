@@ -1,0 +1,37 @@
+import numpy as np
+import pytest
+from scipy.spatial.transform import Rotation
+from stability_adapter_2.prepared_strike_start import guitar_in_playable_region, diagnostic_start_ready
+
+
+@pytest.mark.parametrize('angles',[(45,50,135),(90,100,180),(67.5,90,157.5),(47.72,94.72,139.70)])
+def test_both_euler_branches_and_singular_pose_and_quaternion_sign(angles):
+    q=Rotation.from_euler('xyz',angles,degrees=True).as_quat()
+    assert guitar_in_playable_region([-.23,.08,.70],q,.88)
+    assert guitar_in_playable_region([-.23,.08,.70],-q,.88)
+
+
+@pytest.mark.parametrize('angles',[(44,70,150),(70,49,150),(70,101,150),(70,70,181),(10,90,180)])
+def test_rotation_outside_user_box(angles):
+    q=Rotation.from_euler('xyz',angles,degrees=True).as_quat()
+    assert not guitar_in_playable_region([-.23,.08,.70],q,.88)
+
+
+def test_position_and_invalid_pose_rejected():
+    q=Rotation.from_euler('xyz',[67.5,90,157.5],degrees=True).as_quat()
+    assert not guitar_in_playable_region([-.23,.08,.64],q,.88)
+    assert not guitar_in_playable_region([-.23,.08,.89],q,.88)
+    assert not guitar_in_playable_region([-.23,.08,.70],[0,0,0,0],.88)
+    assert not guitar_in_playable_region([np.nan,.08,.70],q,.88)
+
+
+def test_probe_start_is_explicitly_looser_than_strict_readiness():
+    conditions=dict.fromkeys(('finite','left_finger_neck_contact','left_palm_up','right_front_side','right_grip','right_noncontact'),True)
+    conditions['left_palm_under_neck_contact']=False
+    conditions['right_near_strike']=False
+    r={'conditions':conditions,'pick_to_ready_m':.056,'ready_now':False}
+    assert diagnostic_start_ready(r,2,True)
+    assert not diagnostic_start_ready(r,1.99,True)
+    assert not diagnostic_start_ready(r,2,False)
+    r['conditions']['right_noncontact']=False
+    assert not diagnostic_start_ready(r,2,True)

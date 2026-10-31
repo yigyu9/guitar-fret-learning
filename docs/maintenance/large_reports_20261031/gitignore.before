@@ -1,0 +1,107 @@
+# 공유 범위: 코드, 학습 입력, 문서. 새 최상위 디렉토리는 검토 후 추가한다.
+/*/
+!/data/
+!/docs/
+!/guitar_learning/
+!/isaacgym/
+!/paper/
+!/tab2fingermapping/
+!/.githooks/
+!/scripts/
+
+# 과거 코드·외부 참고 구현은 로컬 보관한다.
+*[aA][rR][cC][hH][iI][vV][eE]*/
+related_work/
+DIGIT/
+# assets의 archive는 경로를 유지해야 하는 필수 입력이다.
+!/guitar_learning/assets/**
+
+# 개인 에이전트 지침, 환경, 편집기와 캐시
+AGENT.md
+AGENTS.md
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+.ipynb_checkpoints/
+.venv/
+venv/
+/env/
+.conda/
+.env
+.env.*
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+.githook/
+**/.git/
+
+# 모델과 동영상 산출물: 입력 JSON/NPZ/mesh/공유 라이브러리는 제외하지 않는다.
+*.[pP][tT]
+*.[pP][tT][hH]
+*.[cC][kK][pP][tT]
+*.[sS][aA][fF][eE][tT][eE][nN][sS][oO][rR][sS]
+*.[oO][nN][nN][xX]
+*.[wW][eE][iI][gG][hH][tT][sS]
+*.[pP][tT][hH].[tT][aA][rR]
+[cC][hH][eE][cC][kK][pP][oO][iI][nN][tT]/
+[cC][hH][eE][cC][kK][pP][oO][iI][nN][tT][sS]/
+*.[mM][pP]4
+*.[mM][oO][vV]
+*.[aA][vV][iI]
+*.[mM][kK][vV]
+*.[wW][eE][bB][mM]
+*.[mM]4[vV]
+*.[mM][pP][eE][gG]
+*.[mM][pP][gG]
+*.[wW][mM][vV]
+*.[gG][iI][fF]
+
+# 실행 출력과 임시 파일. 이미 추적 중인 파일은 이 설정만으로 제외되지 않는다.
+**/training/runs/
+[lL][oO][gG][sS]/
+tensorboard/
+wandb/
+events.out.tfevents.*
+*.[lL][oO][gG]
+*.[lL][oO][gG].*
+*.[oO][uU][tT]
+*.tmp
+*.bak
+*.orig
+
+# docs는 설명·요약·그림을 공유하고, 원시 스트림/배열/압축 묶음은 로컬에 둔다.
+# JSON/CSV 보고서 크기는 staged-file 검사(10 MiB)가 제한한다.
+/docs/**/*.[jJ][sS][oO][nN][lL]
+/docs/**/*.[jJ][sS][oO][nN][lL].[gG][zZ]
+/docs/**/*.[jJ][sS][oO][nN].[gG][zZ]
+/docs/**/*.[nN][pP][zZ]
+/docs/**/*.[nN][pP][zZ].[gG][zZ]
+/docs/**/*.tar
+/docs/**/*.tar.*
+/docs/**/*.zip
+/docs/**/*.7z
+/docs/**/source_before*/
+/docs/**/source_final*/
+/docs/**/source_run*/
+/docs/**/source_snapshot*/
+/docs/**/source_overlay*/
+/docs/**/changed_source/
+/docs/**/frozen_execution_view*/
+/docs/**/reference_links/
+
+# 변환 도구의 재생성 가능한 출력
+/tab2fingermapping/_gen/*_stage1/
+/tab2fingermapping/_gen/random_*/
+/tab2fingermapping/chordtrack/_gen/
+
+# 외부 저장소 링크는 .githooks/storage_policy.py가 .git/info/exclude에 관리한다.
+# 공유 ignore는 개별 실험 파일명을 나열하지 않는다.

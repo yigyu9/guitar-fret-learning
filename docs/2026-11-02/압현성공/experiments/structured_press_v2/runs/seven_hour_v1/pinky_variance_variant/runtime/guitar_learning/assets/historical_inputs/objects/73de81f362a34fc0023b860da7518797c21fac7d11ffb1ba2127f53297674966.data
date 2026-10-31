@@ -1,0 +1,43 @@
+"""240Hz body-centre motion and exact anatomical contact scopes for cold trials."""
+import argparse
+from pathlib import Path
+import numpy as np
+from scipy.spatial.transform import Rotation
+from .initial_pose_noise_v1 import read,save,sha,pose
+from .environment_contract_v1 import EnvironmentContract
+
+ROOT=Path(__file__).resolve().parents[1]
+CENTRE=ROOT/'docs/2026-10-19/stability_adapter_2/results/user_guided_no_left_v1/diagnostic_v1/diagnostic.json'
+LEFT=('L_Thorax','L_Shoulder','L_Elbow','L_Wrist')
+
+def human(c):
+    a,b=c['body0_name'],c['body1_name']
+    if a.startswith('human/') and b.startswith('guitar/'):return a[6:]
+    if b.startswith('human/') and a.startswith('guitar/'):return b[6:]
+    return None
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--native',type=Path,required=True);parser.add_argument('--out',type=Path,required=True);args=parser.parse_args();n=args.native.resolve();out=args.out.resolve();assert not out.exists()
+    report=read(n/'report.json');cfg=Path(report['config']);paths={Path(__file__).resolve(),Path(__file__).with_name('initial_pose_noise_v1.py'),Path(__file__).with_name('environment_contract_v1.py'),CENTRE,cfg,n/'report.json',n/'initial_values.json',n/'actual_contacts.json',n/'trace.json',n/'controls.json',n/'final_efforts.json',n/'attempt.json'}
+    c=EnvironmentContract(cfg);paths|=set(map(Path,c.inputs));pins={str(f):sha(f) for f in paths};save(out.with_name(out.stem+'_before.json'),pins)
+    initial=read(n/'initial_values.json');rows=read(n/'actual_contacts.json')['rows'];assert [r['physics_step'] for r in rows]==list(range(1,report['physics_steps']+1))
+    gs=[initial['native_initial_state']['guitar_body_states'][0]]+[r['guitar_state'] for r in rows];p=np.array([pose(s)[0] for s in gs]);rot=Rotation.from_quat([pose(s)[1].as_quat() for s in gs]);center=np.array(read(CENTRE)['guitar_centre_G_m']);body=p+rot.apply(center);time=np.arange(len(gs))/240
+    def motion(start,end):
+        index=np.flatnonzero((time>=start-1e-9)&(time<=end+1e-9));base=index[0];dist=np.linalg.norm(body[index]-body[base],axis=1)*1000;angle=np.rad2deg((rot[base].inv()*rot[index]).magnitude());return {'start_s':float(time[base]),'end_s':float(time[index[-1]]),'maximum_body_mm':float(dist.max()),'final_body_mm':float(dist[-1]),'maximum_SO3_deg':float(angle.max()),'final_SO3_deg':float(angle[-1])}
+    free=[];paired=[];rh=[];support={x:[] for x in ('Chest','R_Shoulder','R_Hip','L_Hip','R_Elbow','R_Wrist')};rawsupport={x:[] for x in support}
+    for row in rows:
+        hits=[(human(x),x['lambda']) for x in row['contacts'] if human(x) is not None];lh=[(name,l) for name,l in hits if name.startswith('LH:') or name in LEFT];free.append(not lh);digits={name.split(':')[1].rstrip('123') for name,l in lh if name.startswith('LH:') and l>0};paired.append('thumb' in digits and bool(digits&{'index','middle','ring','pinky'}));rh.append(any(name=='R_Wrist' or name.startswith('RH:') for name,l in hits))
+        for name in support:support[name].append(any(k==name and l>0 for k,l in hits));rawsupport[name].append(any(k==name for k,l in hits))
+    def contacts(start,end):
+        ix=np.flatnonzero((time[1:]>start+1e-9)&(time[1:]<=end+1e-9));return {'samples':len(ix),'all_left_arm_hand_contact_free_samples':int(np.array(free)[ix].sum()),'thumb_plus_other_positive_samples':int(np.array(paired)[ix].sum()),'right_wrist_hand_contact_samples':int(np.array(rh)[ix].sum()),'positive_support_samples':{k:int(np.array(v)[ix].sum()) for k,v in support.items()},'raw_support_samples':{k:int(np.array(v)[ix].sum()) for k,v in rawsupport.items()}}
+    end=time[-1];stages=[]
+    intervals=[('full',0.,end),('settle',0.,min(2.,end)),('last2',max(0.,end-2),end)]
+    if report['mode']=='left_cycle':intervals += [('hold_A',3.,4.5),('open_A',6.,7.),('move_B',7.,8.5),('hold_B',10.,11.5),('open_B',13.,16.)]
+    for label,start,stop in intervals:
+        if end>=stop and stop>start:stages.append({'stage':label,'motion':motion(start,stop),'contacts':contacts(start,stop)})
+    trace=read(n/'trace.json');q=np.array([r['q_rad'] for r in trace]);qd=np.array([r['qdot_rad_s'] for r in trace]);controls=read(n/'controls.json');targets=np.vstack([c.q_ref]+[r['final_rad'] for r in controls]);eff=np.array([r['submitted81_Nm'] for r in read(n/'final_efforts.json')['rows']]);caps=np.array(initial['PD_properties']['effort']);owned=[i for i,name in enumerate(c.names) if (report['mode']=='left_cycle' and (name.startswith(LEFT) or name.startswith('LH:'))) or(report['mode']=='strike' and name.startswith(('R_Elbow_','R_Wrist_')))];mask=np.ones(81,dtype=bool);mask[owned]=False
+    invariant={'completed':report['completed'],'forbidden_calls_zero':not report['forbidden_calls'],'initial_checks':all(report['initial_checks'].values()),'targets_limits':bool(np.all(targets>=c.effective_lower-2e-6) and np.all(targets<=c.effective_upper+2e-6)),'targets_rate':bool(np.all(abs(np.diff(targets,axis=0))<=c.rates/60+2e-6)),'other_targets_exact':bool(np.array_equal(targets[:,mask],np.broadcast_to(c.q_ref[mask],targets[:,mask].shape))),'efforts_coverage':len(eff)==len(rows),'efforts_finite_caps':bool(np.isfinite(eff).all() and np.all(abs(eff)<=caps+1e-6)),'inputs_unchanged':all(sha(f)==h for f,h in pins.items()),'native_inputs_current':all(sha(f)==h for f,h in read(n/'attempt.json')['input_sha256'].items())}
+    measured={'native_completed':report['completed'],'native_failure':report['failure'],'mode':report['mode'],'duration_s':float(end),'body_center_G_m':center.tolist(),'stages':stages,'maximum_joint_speed_rad_s':float(abs(qd).max()),'maximum_actual_joint_limit_overshoot_rad':float(np.maximum(np.maximum(c.lower-q,q-c.upper),0).max()),'last2_max_body_speed_mm_s':float((np.linalg.norm(np.diff(body,axis=0),axis=1)*240*1000)[max(0,int((end-2)*240)):].max()),'scope':'BB body centre240Hz, SO3 normalized quaternion; contacts rawquery evenlambda0 counted; positive not calibratedforceN; finite active human support, not passive equilibrium'}
+    save(out,{'input_sha256':pins,'invariants':invariant,'measured':measured});assert all(v for k,v in invariant.items() if k!='completed'),invariant;print(report['mode'],[(s['stage'],s['motion']['maximum_body_mm'],s['motion']['maximum_SO3_deg'],s['contacts']['all_left_arm_hand_contact_free_samples']) for s in stages],flush=True)
+
+if __name__=='__main__':main()

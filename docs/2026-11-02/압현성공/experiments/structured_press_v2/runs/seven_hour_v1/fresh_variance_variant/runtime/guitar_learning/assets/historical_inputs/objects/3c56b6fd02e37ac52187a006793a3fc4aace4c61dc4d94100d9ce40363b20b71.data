@@ -1,0 +1,95 @@
+"""원 압현의 유한 네 축 명령 경로를 새 접촉 목표 유지 비교에 고정한다."""
+import copy
+from pathlib import Path
+import numpy as np
+from ..lower_body_release_v1.common import ROOT,A,BASE,read,save,pin,verify,sha
+
+PHASE=BASE/'grounded_guitar_support_v1';PLAY=PHASE/'play_v1';OUT=PLAY/'preflight_v4'
+REFERENCE=PHASE/'native_prepared_v17';REPEAT=PHASE/'native_prepared_repeat_v18';RECORDED=PLAY/'native_press_v1'
+PLAN=ROOT/'docs/plans/grounded_guitar_recorded_press_20261016.md'
+MODE='recorded_finite_finger_contact_hold_v1'
+FINGER=('LH:index1_x','LH:index1_z','LH:index2','LH:index3')
+
+
+def numeric(row):
+    return {k:row[k] for k in ('physics_step_before','joint_names','requested105_rad','final105_rad','native105_position_readback_rad')}
+
+
+def main():
+    OUT.mkdir(exist_ok=False)
+    prior=PLAY/'preflight_v1'
+    discovery=pin(extra=[Path(__file__).resolve(),Path(__file__).with_name('__init__.py'),PLAN,
+        prior/'report.json',prior/'play_spec.json',RECORDED/'support_wrapper.json',RECORDED/'attempt.json',
+        PHASE/'provenance/native_press_v1_before.json',PLAY/'inputs/press.json',PLAY/'inputs/combined.json'])
+    save(OUT/'discovery_before.json',discovery)
+    oldreport=read(prior/'report.json');wrapper=read(RECORDED/'support_wrapper.json')
+    paths=list(discovery)+list(oldreport['input_sha256'])+list(wrapper['input_sha256'])+[OUT/'discovery_before.json']
+    for run in (RECORDED,REFERENCE,REPEAT):
+        paths += [run/n for n in ('initial_values.json','states240.json','contacts240.json','efforts240.json','targets60.json','native_properties.json','report.json')]
+    inputs=pin(extra=paths);save(OUT/'inputs_before.json',inputs)
+    assert verify(discovery) and verify(oldreport['input_sha256']) and verify(wrapper['input_sha256'])
+    assert not any('/grounded_guitar_play_v1/'+n in p for p in inputs for n in ('motion_v3.py','runtime_v3.py','run_v3.py','analyze_v4.py'))
+    initial=read(RECORDED/'initial_values.json');names=initial['joint_names'];indices=[names.index(n) for n in FINGER]
+    lower=np.array(initial['PD_properties']['lower'])[indices];upper=np.array(initial['PD_properties']['upper'])[indices]
+    targets=read(RECORDED/'targets60.json')['rows'];rest=next(r for r in targets if r['physics_step_before']==2396)
+    rest4=np.array(rest['final105_rad'])[indices];previous=rest4.copy();rows=[];checks=[]
+    for row in targets:
+        k=row['physics_step_before']
+        if not 2400<=k<3120:continue
+        requested=np.array(row['requested105_rad'])[indices];final=np.array(row['final105_rad'])[indices]
+        replay=np.clip(requested,previous-1.5/60,previous+1.5/60).astype(np.float32).astype(float)
+        readback=np.array(row['native105_position_readback_rad'])[indices]
+        error=row['play']['press_IK_error_m']
+        rows.append(dict(physics_step_before=k,requested4_rad=requested.tolist(),final4_rad=final.tolist(),reference_IK_error_m=error))
+        checks.append(dict(step=k,names_exact=row['joint_names']==names,strict_bounds=bool(np.all(requested>=lower) and np.all(requested<=upper) and np.all(final>=lower) and np.all(final<=upper)),float32_final=bool(np.array_equal(final,final.astype(np.float32).astype(float))),original_rate_replay_exact=bool(np.array_equal(replay,final)),original_readback_exact=bool(np.array_equal(readback,final)),reference_IK_pass=bool(np.isfinite(error) and error<=.003)))
+        previous=final
+    prefix={}
+    for run in (REFERENCE,REPEAT):
+        checked={}
+        for name,end in (('states240.json',2401),('contacts240.json',2401),('efforts240.json',2400)):
+            original=read(RECORDED/name)['rows'];prepared=read(run/name)['rows']
+            checked[name]=bool(original[:end]==prepared[:end] and len(prepared)==end)
+        prepared=read(run/'targets60.json')['rows']
+        checked['numeric_targets60']=bool([numeric(r) for r in targets[:600]]==[numeric(r) for r in prepared] and len(prepared)==600)
+        prefix[str(run)]=checked
+    spec=read(prior/'play_spec.json')
+    spec['finger_control']=dict(mode=MODE,return_mode='capture13_to_reference2396_target13p5',readiness_hz=60,
+        required_dwell_s=.1,minimum_descent_m=.002,minimum_qchange_rad=.02,table_end_step=3120)
+    spec['finger_trajectory']=dict(joint_names=list(FINGER),joint_indices105=indices,reference_run=str(RECORDED),rest_target_step=2396,rest_final4_rad=rest4.tolist(),rows=rows)
+    gates=dict(oldreport['gates'])
+    gates.update(recorded_wrapper_inputs_unchanged=wrapper['inputs_unchanged'] and verify(wrapper['input_sha256']),
+        source1_midpoint_press_spec_exact=spec['press']==read(prior/'play_spec.json')['press'],
+        original_right_strike_spec_exact=spec['strike']==read(prior/'play_spec.json')['strike'],
+        table180_ticks_exact=[r['physics_step_before'] for r in rows]==list(range(2400,3120,4)),
+        recorded_joint_order_all105_exact=all(r['names_exact'] for r in checks),
+        recorded_requested_final_original_strict_bounds=all(r['strict_bounds'] for r in checks),
+        recorded_final_float32_exact=all(r['float32_final'] for r in checks),
+        original_scene_rate_replay_exact=all(r['original_rate_replay_exact'] for r in checks),
+        recorded_native_readback_exact=all(r['original_readback_exact'] for r in checks),
+        reference_source_IK3mm_all_passed=all(r['reference_IK_pass'] for r in checks),
+        rest4_original_strict_bounds=bool(np.all(rest4>=lower) and np.all(rest4<=upper)),
+        actual_prefix10_states_contacts_efforts_numeric_targets_both_exact=all(all(v.values()) for v in prefix.values()))
+    gates={k:bool(v) for k,v in gates.items()}
+    assert verify(inputs)
+    save(OUT/'play_spec.json',spec)
+    fields=('source_candidate_sha256','reference_run','repeat_run','reference_time_s','repeat_verification_path','repeat_verification_sha256','raw_equal_sha256','actual10_FK_errors','actual10_FK_max_position_m','actual10_FK_max_rotation_deg','actual10_strict_all105_bounds','inherited_actual_outside_bounds','source_query_latch')
+    report={k:copy.deepcopy(oldreport[k]) for k in fields}
+    report.update(eligible_for_native=all(gates.values()),gates=gates,inputs_unchanged=True,input_sha256=inputs,
+        inputs_after_sha256={p:sha(p) for p in inputs},spec_sha256=sha(OUT/'play_spec.json'),
+        recorded_reference_run=str(RECORDED),recorded_reference_raw_sha256={n:sha(RECORDED/n) for n in ('states240.json','contacts240.json','efforts240.json','targets60.json')},
+        table_row_checks=checks,prefix10_checks=prefix,finger_control=spec['finger_control'],
+        source_reach_reused_path=str(prior/'report.json'),source_reach_reused_sha256=sha(prior/'report.json'),
+        samples=copy.deepcopy(oldreport['samples']),press_target=spec['press'],
+        new_finger_IK_evaluations=0,native_simulation_steps=0,
+        scope='원 V1의 180개 요청·최종 네 관절 목표와 직전 2396 휴지 목표를 고정한 특정 유한 관절 명령 경로다. 새 실행의 손가락 IK를 계산하지 않는다. reference_IK_error_m와 재사용 source41은 과거 원 모델의 명목 도달 근거이며 현재 일반 FK의 정확성 인증이 아니다. 새 실행은 실제 접촉 조건에서 직전 제출 목표를 유지하고 13초부터 휴지 관절 목표로 복귀한다. 관절 목표 복귀가 숨은 회전 성분·실제 검지 원점·메시 자세 복귀를 보장하지 않는다. 압현 단독은 개입 전 원 V1 실제 prefix 일치를 별도로 검증하며 타현 병합은 그 이후 prefix를 요구하지 않는다. 실제 압현·접촉 유지·지지 안정 성공을 인증하지 않는다.')
+    save(OUT/'report.json',report)
+    configs=[]
+    for case in ('press','combined'):
+        cfg=read(PLAY/'inputs'/(case+'.json'));cfg.update(play_preflight_report=str(OUT/'report.json'),play_spec=str(OUT/'play_spec.json'),play_spec_sha256=sha(OUT/'play_spec.json'),finger_control_mode=MODE)
+        path=PLAY/'inputs'/(case+'_v4.json');save(path,cfg);configs.append(path)
+    assert verify(inputs)
+    save(OUT/'generation.json',dict(eligible_for_native=report['eligible_for_native'],inputs_unchanged=True,input_sha256=inputs,native_simulation_steps=0,new_finger_IK_evaluations=0,output_sha256={str(p):sha(p) for p in [OUT/'play_spec.json',OUT/'report.json',*configs]}))
+    print(dict(eligible=report['eligible_for_native'],gates=gates,rows=len(rows),rest4_rad=rest4.tolist(),input_count=len(inputs)),flush=True)
+    assert report['eligible_for_native'],'유한 기록 경로 사전 검사 실패: 새 물리 실행 금지'
+
+if __name__=='__main__':main()

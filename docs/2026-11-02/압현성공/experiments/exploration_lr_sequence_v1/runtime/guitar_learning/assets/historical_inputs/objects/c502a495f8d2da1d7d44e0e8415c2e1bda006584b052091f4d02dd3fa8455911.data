@@ -1,0 +1,58 @@
+"""실제 손가락 자세를 anchor로 쓰는 국소 좌표 모델. 상태·기존 팔 FK 변경 없음."""
+import xml.etree.ElementTree as ET
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import HUMAN
+
+FINGER_NAMES = ('LH:index1_x', 'LH:index1_z', 'LH:index2', 'LH:index3')
+
+
+def make_finger_fk(scene, state):
+    names, bodies = scene.names, scene.human_bodies
+    indices = np.array([names.index(n) for n in FINGER_NAMES])
+    anchor_q = np.array([r['pos'] for r in state['human_dof_states']])
+    chain = ('LH:index1', 'LH:index2', 'LH:index3')
+    parent = {'LH:index1': 'LH:palm', 'LH:index2': 'LH:index1', 'LH:index3': 'LH:index2'}
+    poses = {n: pose(state['human_body_states'][bodies.index(n)]) for n in ('LH:palm', *chain)}
+    elements = {b.get('name'): b for b in ET.parse(HUMAN).iter('body')}
+    joints = [j for n in chain for j in elements[n].findall('joint')]
+    assert tuple(j.get('name') for j in joints) == FINGER_NAMES
+    axes = np.array([np.fromstring(j.get('axis'), sep=' ') for j in joints])
+    assert np.array_equal(axes, [[1, 0, 0], [0, 0, 1], [1, 0, 0], [1, 0, 0]])
+    offsets = {n: poses[parent[n]][1].inv().apply(poses[n][0]-poses[parent[n]][0]) for n in chain}
+    relative = {n: poses[parent[n]][1].inv()*poses[n][1] for n in chain}
+    anchor_projection = relative['LH:index1'].as_rotvec()[[0, 2]]
+
+    def fk(q105):
+        q = np.asarray(q105, dtype=float)
+        assert q.shape == anchor_q.shape and np.isfinite(q[indices]).all()
+        delta = q[indices]-anchor_q[indices]
+        if np.array_equal(delta[:2], [0., 0.]):
+            first = relative['LH:index1']
+            error = 0.
+        else:
+            def residual(w):
+                rotation = relative['LH:index1']*Rotation.from_rotvec([w[0], 0., w[1]])
+                return rotation.as_rotvec()[[0, 2]]-anchor_projection-delta[:2]
+            fitted = least_squares(residual, np.zeros(2), max_nfev=20, ftol=1e-12, xtol=1e-12, gtol=1e-12)
+            error = float(np.max(abs(residual(fitted.x))))
+            assert error <= 1e-9, '손가락 국소 회전의 qxz 역변환 실패'
+            first = relative['LH:index1']*Rotation.from_rotvec([fitted.x[0], 0., fitted.x[1]])
+        rotations = {'LH:index1': first,
+            'LH:index2': relative['LH:index2']*Rotation.from_rotvec(axes[2]*delta[2]),
+            'LH:index3': relative['LH:index3']*Rotation.from_rotvec(axes[3]*delta[3])}
+        result = {'LH:palm': poses['LH:palm']}
+        for n in chain:
+            p, r = result[parent[n]]
+            result[n] = (p+r.apply(offsets[n]), r*rotations[n])
+        fk.last_inverse_projection_error_rad = error
+        return result
+
+    fk.indices105 = indices.copy()
+    fk.anchor_q105_rad = anchor_q.copy()
+    fk.anchor_palm_pose = poses['LH:palm']
+    fk.anchor_index1_relative_rotvec_rad = relative['LH:index1'].as_rotvec()
+    fk.last_inverse_projection_error_rad = 0.
+    return fk

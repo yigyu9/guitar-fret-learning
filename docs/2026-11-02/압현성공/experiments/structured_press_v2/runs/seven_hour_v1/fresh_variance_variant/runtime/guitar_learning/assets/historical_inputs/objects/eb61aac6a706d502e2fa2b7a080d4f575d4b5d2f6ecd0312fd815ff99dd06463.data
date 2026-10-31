@@ -1,0 +1,21 @@
+"""Five-second cause diagnostic: current-G IK activation only, fingers at q_ref."""
+import isaacgym
+import argparse
+from pathlib import Path
+from unittest.mock import patch
+import numpy as np
+from stability_adapter_2.initial_pose_noise_v1 import read,save,sha
+from stability_adapter_2.pose_experiments_v1 import motion,run as native
+
+def trajectory(t,_):return ('prepare' if t<2 else 'IK_hold_only'),np.zeros(3),np.zeros(3)
+
+def main():
+    p=argparse.ArgumentParser();p.add_argument('--config',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();cfg=a.config.resolve();out=a.out.resolve();assert read(cfg)['qualification_mode']=='ik_hold'
+    leaf=Path(__file__).with_name('IK_HOLD_PLAN.md');pins={str(f):sha(f) for f in (Path(__file__).resolve(),leaf,cfg,Path(motion.__file__),Path(native.__file__))};before=out.parent/(out.name+'_wrapper_before.json');assert not before.exists();save(before,pins)
+    try:
+        with patch.object(motion,'trajectory',trajectory):motion.main(lambda:native.run(cfg,out))
+    finally:
+        unchanged=all(sha(f)==h for f,h in pins.items());save(out.parent/(out.name+'_wrapper_after.json'),{'input_sha256':pins,'inputs_unchanged':unchanged})
+    assert unchanged
+
+if __name__=='__main__':main()

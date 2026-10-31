@@ -1,0 +1,38 @@
+import unittest
+from stability_adapter_2.environment import np
+from stability_adapter_2.native_contacts import plain
+from stability_adapter_2.run_contact_calibration import calibrate
+
+
+class ContactTests(unittest.TestCase):
+    def test_native_box_signed_gap_and_skin(self):
+        result = calibrate()
+        self.assertEqual(result['substeps'],1)
+        for case in result['cases']:
+            gap = case['analytic_initial_gap_m']
+            contacts = case['contacts']
+            if gap==.01:
+                self.assertEqual(contacts,[])
+                continue
+            self.assertGreater(len(contacts),0)
+            for contact in contacts:
+                self.assertAlmostEqual(contact['initialOverlap'],gap,delta=2e-6)
+                self.assertAlmostEqual(contact['minDist'],.0002,delta=1e-8)
+                self.assertEqual({contact['body0_name'],contact['body1_name']},
+                    {'free_box/box','fixed_box/box'})
+            if gap>=0:
+                np.testing.assert_allclose(case['free_box_after_position_m'],
+                    case['free_box_initial_position_m'],atol=1e-7)
+            else:
+                self.assertGreater(case['free_box_after_position_m'][0],
+                    case['free_box_initial_position_m'][0])
+
+    def test_nested_raw_contact_serialization(self):
+        value = np.zeros(1,dtype=[('body0','i4'),('normal',[('x','f4'),('y','f4'),('z','f4')])])
+        value['body0']=66
+        value['normal']['z']=1
+        self.assertEqual(plain(value),[{'body0':66,'normal':{'x':0.,'y':0.,'z':1.}}])
+
+
+if __name__ == '__main__':
+    unittest.main()

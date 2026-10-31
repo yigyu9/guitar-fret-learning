@@ -1,5 +1,6 @@
 """v25 wrong-fretting acceptance cases; synthetic poses do not certify native pressure."""
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 import torch
@@ -8,6 +9,7 @@ from guitar_learning.gpu.control import apply
 from guitar_learning.gpu.finger_skill_environment import FingerSkillEnvironment
 from guitar_learning.gpu.contact import pad_contact_cells
 from guitar_learning.gpu.contact import wrong_press_sources
+from guitar_learning.song.task import ScoreTask
 from guitar_learning.tests.test_gpu_environment import fixture, SONG, BUNDLE, place_pad_sample, press_goal
 from guitar_learning.tests.test_gpu_surface_learning import task
 from guitar_learning.tests.test_simplified_finger_environment import advance
@@ -75,6 +77,34 @@ class WrongPressRuleTests(unittest.TestCase):
         values['pad_cells'][0][:, 3] = True; values['pad_cells'][1][:, 3] = 3
         self.assertFalse(wrong_press_sources(**values)['wrong'].item())  # idle pinky
 
+    def test_same_finger_higher_blocks_positive_lower_but_not_reverse(self):
+        # 한 패드가 6·7프렛에 걸쳐도 낮은 음만 차단한다.
+        values = self.inputs(2)
+        values['frets'][:] = torch.tensor([6, 7])
+        values['positive'].fill_(True)
+        values['pad_cells'] = (torch.ones(1, 4, 2, dtype=torch.bool),
+            torch.tensor([[[6, 7]]*4]), torch.zeros(1, 4, 2, dtype=torch.long))
+        result = wrong_press_sources(**values)
+        self.assertEqual(result['wrong'].tolist(), [[True, False]])
+        self.assertEqual(result['flags'][0, :, 3, 1].tolist(), [True, False])
+        self.assertEqual(result['fret_min'][0, 0, 3].item(), 7)
+        self.assertEqual(result['fret_max'][0, 0, 3].item(), 7)
+        # 겹치는 목표의 허가나 다음 음 준비도 낮은 음 간섭을 면제하지 않는다.
+        values['onset'][1] = 1.
+        result = wrong_press_sources(**values)
+        self.assertEqual(result['wrong'].tolist(), [[True, False]])
+        self.assertTrue(result['next_preparation'][0, 0])
+
+    def test_positive_target_still_ignores_incidental_lower_and_other_string(self):
+        for string, fret in ((0, 3), (1, 7)):
+            with self.subTest(string=string, fret=fret):
+                values = self.inputs()
+                values['positive'].fill_(True)
+                values['pad_cells'][0][:, 0] = True
+                values['pad_cells'][1][:, 0] = fret
+                values['pad_cells'][2][:, 0] = string
+                self.assertFalse(wrong_press_sources(**values)['wrong'].any())
+
     def test_future_preparation_does_not_exempt_current_interference(self):
         values = self.inputs(2)
         values['fingers'][1] = 2; values['frets'][1] = 7
@@ -140,6 +170,39 @@ class WrongPressEnvironmentTests(unittest.TestCase):
             row['body_state'][:, index, 3:7], env.surface_local[body, 0])
         row['contact_force'][:, index, 2] = 1.
         env.surface_valid[body*env.surface_count] = True
+
+    def test_actual_distal_mesh_spanning_adjacent_frets_does_not_satisfy_both(self):
+        # 실제 패드 표본·준비 상태 fixture의 강체 pose로 판정만 검증한다.
+        # 관절 도달 가능성·접촉 상대·현 압력·음향 검증을 뜻하지 않는다.
+        first = replace(task((2,), end=.5).targets[0], string=2, fret=6)
+        second = replace(first, target_id='next', event_id='next', fret=7,
+            onset_s=1., end_s=1.5, press_s=1., source_onset_s=1., source_end_s=1.5)
+        env, row = self.setup(ScoreTask((first, second)))
+        env.pad_valid.zero_(); env.pad_valid[1] = True
+        goal = press_goal(env)
+        goal[:, 1] = env.frets[:, 6, 1]
+        spanning = place_pad_sample(env, row, 2, goal)
+        env.reset([0, 1], spanning)
+        self.assertTrue(env.contact_loaded_target.all())  # 수정 전 두 음 모두 positive
+        self.assertEqual(env.candidate.tolist(), [[False, True], [False, True]])
+        self.assertEqual(env.wrong.tolist(), [[True, False], [True, False]])
+        advance(env, spanning)
+        self.assertFalse(env.note['clean'][:, 0].any())
+        torch.testing.assert_close(env.note['wrong'][:, 0],
+            torch.full((2,), 1/60, dtype=torch.float64))
+        self.assertFalse(env.note['wrong'][:, 1].any())  # 미래 음에는 비용 없음
+        torch.testing.assert_close(env.episode_reward_terms['song_wrong_press'],
+            torch.full((2,), -.15/60/.5))  # 여러 패드 표본도 한 음 비용 한 번
+        self.assertTrue(env.wrong_source_flags[:, 0, 5, 1].all())
+        self.assertEqual(env.contact_contract['wrong_press']['schema'],
+            'guitar_learning.wrong_press_sources.v3')
+
+        goal[:, 1] += .005  # 6프렛 단독 접촉이면 6 정상, 7 오압현/미달성
+        lower_only = place_pad_sample(env, row, 2, goal)
+        env.reset([0, 1], lower_only)
+        self.assertEqual(env.contact_loaded_target.tolist(), [[True, False], [True, False]])
+        self.assertEqual(env.candidate.tolist(), [[True, False], [True, False]])
+        self.assertEqual(env.wrong.tolist(), [[False, True], [False, True]])
 
     def test_replacement_finger_neither_wrong_nor_assigned_success(self):
         env, row = self.setup()

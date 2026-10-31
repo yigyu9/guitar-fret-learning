@@ -1,5 +1,6 @@
 """CPU checks of compound mass, original marker frames and COM velocities."""
 import copy
+from collections import Counter
 from pathlib import Path
 import shutil
 import tempfile
@@ -124,6 +125,51 @@ class RigidGuitarTests(unittest.TestCase):
                     rigid.RigidGuitar(self.contract, 'cpu')
                 (folder / 'manifest.json').write_bytes((folder / 'manifest.json').read_bytes() + b' ')
                 with self.assertRaisesRegex(ValueError, 'manifest SHA'):
+                    rigid.RigidGuitar(self.contract, 'cpu')
+
+    def test_string_visual_meshes_preserve_capsule_bounds_without_colliders(self):
+        xml = ET.parse(self.guitar.asset_path).getroot()
+        definitions = {m.get('name'): m.get('file') for m in xml.findall('./asset/mesh')}
+        strings = [g for g in xml.findall('./worldbody/body/geom')
+                   if g.get('mesh', '').startswith('string_visual_')]
+        self.assertEqual(len(strings), 6)
+        halves = (.309999, .310759, .311601, .310001, .311999, .312800)
+        for geom, half in zip(strings, halves):
+            self.assertEqual((geom.get('type'), geom.get('contype'), geom.get('conaffinity')),
+                             ('mesh', '0', '0'))
+            path = self.guitar.asset_path.parent / definitions[geom.get('mesh')]
+            lines = path.read_text(encoding='ascii').splitlines()
+            vertices = np.array([[float(x) for x in row.split()[1:]]
+                                 for row in lines if row.startswith('v ')])
+            faces = [[int(x.split('/')[0])-1 for x in row.split()[1:]]
+                     for row in lines if row.startswith('f ')]
+            radius = .0009
+            np.testing.assert_allclose(vertices.min(0), [-radius, -radius, -half-radius], atol=1e-14)
+            np.testing.assert_allclose(vertices.max(0), [radius, radius, half+radius], atol=1e-14)
+            # Every vertex lies on the original capsule's analytic surface.
+            axial = np.maximum(np.abs(vertices[:, 2])-half, 0.)
+            np.testing.assert_allclose(np.sum(vertices[:, :2]**2, axis=1)+axial**2,
+                                       radius**2, atol=1e-16)
+            edges = Counter(tuple(sorted((face[i], face[(i+1)%3])))
+                            for face in faces for i in range(3))
+            self.assertTrue(all(count == 2 for count in edges.values()))
+            triangles = vertices[np.array(faces)]
+            volume = np.einsum('ij,ij->i', triangles[:, 0],
+                               np.cross(triangles[:, 1], triangles[:, 2])).sum()/6
+            analytic = np.pi*radius**2*(2*half)+4*np.pi*radius**3/3
+            self.assertGreater(volume, .96*analytic)  # Closed, outward winding.
+            self.assertLess(volume, analytic)
+
+    def test_tampered_visual_mesh_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            names = ['guitar_compound.xml', 'manifest.json'] + list(self.guitar.manifest['visual_mesh_sha256'])
+            for name in names:
+                shutil.copyfile(rigid._ASSET_DIR / name, folder / name)
+            mesh = folder / next(iter(self.guitar.manifest['visual_mesh_sha256']))
+            mesh.write_bytes(mesh.read_bytes() + b'\n')
+            with patch.object(rigid, '_ASSET_DIR', folder):
+                with self.assertRaisesRegex(ValueError, 'visual mesh SHA'):
                     rigid.RigidGuitar(self.contract, 'cpu')
 
     def test_changed_source_contract_and_wrong_native_layout_are_rejected(self):

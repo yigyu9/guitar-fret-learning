@@ -198,9 +198,8 @@ def _evaluate(pool, policy, spec, args, out):
         elif args.control == 'reference':
             fraction = ((pool.environment._local_time()+1/60)/reference['ramp_s']).clamp(0,1).to(action)
             desired = pool.teacher_reference+fraction[:,None]*(reference_goal-pool.teacher_reference)
-            action = trajectory_actions(desired, pool.controller.target[:,pool.controller.active],
-                pool.teacher_reference, pool.controller.action_low, pool.controller.action_high,
-                pool.incremental_mask, max_speed=4.)
+            action = trajectory_actions(desired, pool.teacher_reference,
+                pool.controller.action_low, pool.controller.action_high)
         observation, _, _, terminated, truncated, finished = pool.step(action)
         if counts[0] == 0:
             scene, env = pool.scene, pool.environment

@@ -121,15 +121,15 @@ def build_settings(hand, *, song=DEFAULT_SONG, updates=100, num_envs=None,
     if learning_family not in ('song', 'finger-skill'):
         raise ValueError('Unknown learning family; R/F stages have been retired')
     if learning_family == 'finger-skill' and (not gpu or hand != 'left' or
-            finger_action_mode == 'position' or finger_shape or finger_standby_rate not in (None, .02)):
-        raise ValueError('J-only finger skill requires GPU left, incremental control and default weak B')
+            finger_shape or finger_standby_rate not in (None, .02)):
+        raise ValueError('J-only finger skill requires GPU left and default weak B')
     if type(finger_shape) is not bool:
         raise ValueError('finger_shape must be boolean')
     if (finger_standby_rate is not None or finger_shape) and not (gpu and hand == 'left'):
         raise ValueError('finger recovery options require GPU left training')
     if finger_action_mode is not None:
-        if finger_action_mode not in ('position', 'incremental'):
-            raise ValueError('finger action mode must be position/incremental')
+        if finger_action_mode != 'position':
+            raise ValueError('finger action mode must be position; accumulated finger actions are retired')
         if not (gpu and hand == 'left'):
             raise ValueError('finger action mode requires GPU left training')
     environment_count = (128 if gpu else 2) if num_envs is None else num_envs
@@ -167,14 +167,15 @@ def build_settings(hand, *, song=DEFAULT_SONG, updates=100, num_envs=None,
             score_clock='original_audio_plus_policy_pre_roll', observation_dimension=500,
         ),
         simple_start=dict(
-            schema='guitar_learning.song_start.v1', initial_pose='agreed035_v14',
+            schema='guitar_learning.song_start.v1',
+            initial_pose='left_standby_v9' if gpu and hand == 'left' else 'agreed035_v14',
             initialization='fresh_unless_strict_resume',
         ),
     )
     if hand == 'left':
         if gpu:
             from guitar_learning.song.curriculum import gpu_default_config as default_config
-            settings['song']['finger_action_mode'] = finger_action_mode or 'incremental'
+            settings['song']['finger_action_mode'] = 'position'
             settings['ppo'].update(advantage_normalization='separate',gae_lambda=.98)
             settings['song']['surface_approach_gamma'] = settings['ppo']['gamma']
             from guitar_learning.gpu.finger_reward import finger_recovery_config

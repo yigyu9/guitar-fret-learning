@@ -1,0 +1,133 @@
+"""Front videos of saved timing evaluation body poses; no physics or policy run."""
+import argparse
+import gzip
+import json
+import subprocess
+from pathlib import Path
+
+from stability_adapter_2.initial_pose_video60_v1.replay_v6 import sha, save
+from stability_adapter_2.initial_pose_video60_v1.static_visual_v7 import (
+    asset_paths, build_model, set_body_poses, add_strings)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+TRAINING = ROOT/'docs/2026-10-12/stability_adapter_2/results/guitar_learning_timing_training_v1'
+INITIAL = ROOT/'docs/2026-10-12/stability_adapter_2/results/free_guitar_fretting_v1/native_probe_v1/initial_values.json'
+FONT = Path('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
+
+
+def encoder(path):
+    return subprocess.Popen(['ffmpeg', '-nostdin', '-n', '-loglevel', 'error',
+        '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '1280x720', '-r', '60',
+        '-i', '-', '-an', '-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p', str(path)],
+        stdin=subprocess.PIPE)
+
+
+def probe(path, frames):
+    result = subprocess.run(['ffprobe', '-v', 'error', '-count_frames', '-select_streams', 'v:0',
+        '-show_entries', 'stream=width,height,avg_frame_rate,nb_read_frames,duration',
+        '-of', 'json', str(path)], check=True, capture_output=True, text=True)
+    stream = json.loads(result.stdout)['streams'][0]
+    if (int(stream['nb_read_frames']) != frames or stream['avg_frame_rate'] != '60/1'
+            or (stream['width'], stream['height']) != (1280, 720)
+            or abs(float(stream['duration'])-frames/60.) > .002):
+        raise ValueError('video coverage mismatch')
+    return dict(path=str(path), sha256=sha(path), stream=stream)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--out', required=True, type=Path)
+    args = parser.parse_args()
+    import mujoco
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+    out = args.out.resolve(); out.mkdir(parents=True, exist_ok=False)
+    initial = json.loads(INITIAL.read_text())
+    assets = set().union(*(asset_paths(Path(a['path'])) for a in initial['loaded_assets']))
+    sources = assets | {INITIAL, FONT, Path(__file__).resolve(),
+        ROOT/'stability_adapter_2/initial_pose_video60_v1/static_visual_v7.py',
+        ROOT/'stability_adapter_2/initial_pose_video60_v1/replay_v6.py'}
+    for role in ('left', 'right'):
+        run = TRAINING/(role+'_stage1_final_eval_v1')
+        sources.update(run/name for name in ('result.json', 'transitions.json.gz', 'inputs_before.json', 'settings.json'))
+        sources.add(TRAINING/(role+'_stage1_v1/final.pt'))
+        original = json.loads((run/'inputs_before.json').read_text())
+        if any(original.get(str(f.resolve())) != sha(f) for f in assets | {INITIAL}):
+            raise ValueError('evaluation visual asset provenance mismatch')
+    pinned = {str(f): sha(f) for f in sorted(sources)}
+    save(out/'inputs_before.json', pinned)
+    model, data, mapping, xml = build_model(initial)
+    save(out/'presentation.json', dict(renderer='MuJoCo source visual geometry at exact saved body world poses',
+        camera='front: eye[0,3.1,.8], target[0,0,.72], horizontal FOV55',
+        source_hz=240, fps=60, episode=0, new_physics_steps=0,
+        scope='separate final hand policy evaluation replay, not new simulation or joint-hand performance',
+        preparation='policy pre-roll1s included; native settling2s not present in source trace'))
+    (out/'source_visual.xml').write_text(xml)
+    font, small = ImageFont.truetype(str(FONT), 24), ImageFont.truetype(str(FONT), 18)
+    renderer = mujoco.Renderer(model, height=720, width=1280)
+    combined = encoder(out/'front_combined_60fps.mp4')
+    reports = {}; enc = None
+    try:
+        for role in ('left', 'right'):
+            if role == 'right':
+                card = Image.new('RGB', (1280, 720), (22, 27, 34)); draw = ImageDraw.Draw(card)
+                draw.text((420, 315), '오른손 정책의 별도 평가로 전환', font=font, fill='white')
+                for _ in range(60): combined.stdin.write(card.tobytes())
+            run = TRAINING/(role+'_stage1_final_eval_v1')
+            with gzip.open(run/'transitions.json.gz', 'rt') as stream: rows = json.load(stream)
+            rows = [row for row in rows if row['episode'] == 0]
+            result = json.loads((run/'result.json').read_text())
+            if (not result['completed'] or not result['source_unchanged']
+                    or not result['episodes'][0]['timing']['stage_success']
+                    or len(rows) != 300 or [r['tick'] for r in rows] != list(range(300))):
+                raise ValueError('complete successful first evaluation episode required')
+            enc = encoder(out/('front_'+role+'_60fps.mp4')); frames = []
+            for index, row in enumerate(rows):
+                samples = row['native_physics_samples240']
+                if [s['native']['physics_step'] for s in samples] != list(range(481+4*index, 485+4*index)):
+                    raise ValueError('source physics samples not continuous after settling')
+                state = samples[-1]['native']; time_s = row['physics_measurements'][-1]['music']['task_time_s']
+                if abs(time_s-(index+1)/60.) > 1e-8: raise ValueError('policy clock mismatch')
+                error = set_body_poses(model, data, mapping, state)
+                before = (data.xpos.copy(), data.xquat.copy(), float(data.time))
+                renderer.update_scene(data, camera='front')
+                ends = [[[state['guitar_body_states'][initial['guitar_body_names'].index(name)]['pose']['p'][a]
+                    for a in 'xyz'] for name in ('G:string%d'%i, 'G:string%d_end'%i)] for i in range(1, 7)]
+                add_strings(renderer.scene, np.asarray(ends))
+                image = Image.fromarray(renderer.render()); draw = ImageDraw.Draw(image)
+                draw.rectangle((0, 0, 1280, 68), fill=(22, 27, 34))
+                label = '왼손 접촉 유지 정책' if role == 'left' else '오른손 타현 정책'
+                draw.text((20, 5), '%s | 곡 시각 %.3f초' % (label, time_s-1.), font=font, fill='white')
+                draw.text((20, 39), '최종 평가의 실제 기록 재생 · 손별 별도 시험 · 정면 60fps', font=small, fill=(210, 220, 230))
+                if index in (0, 127, 299): image.save(out/('preview_%s_%03d.png'%(role, index)))
+                raw = image.tobytes(); enc.stdin.write(raw); combined.stdin.write(raw)
+                if not (np.array_equal(before[0], data.xpos) and np.array_equal(before[1], data.xquat)
+                        and before[2] == data.time == 0.):
+                    raise ValueError('rendering altered saved transforms or advanced physics')
+                frames.append(dict(frame=index, policy_time_s=time_s, physics_step=state['physics_step'], pose_readback=error))
+            enc.stdin.close()
+            if enc.wait() != 0: raise RuntimeError('role encoding failed')
+            enc = None
+            reports[role] = dict(source=str(run), checkpoint=result['checkpoint'], frames=frames,
+                media=probe(out/('front_'+role+'_60fps.mp4'), 300))
+            print('rendered', role, len(frames), 'frames', flush=True)
+            del rows
+        combined.stdin.close()
+        if combined.wait() != 0: raise RuntimeError('combined encoding failed')
+        media = probe(out/'front_combined_60fps.mp4', 660)
+        subprocess.run(['ffmpeg', '-nostdin', '-n', '-loglevel', 'error', '-i', media['path'],
+            '-vf', 'setpts=2*PTS,fps=60,tpad=stop_mode=clone:stop_duration=0.1',
+            '-frames:v', '1320', '-r', '60', '-c:v', 'libx264', '-crf', '18',
+            '-pix_fmt', 'yuv420p', str(out/'front_combined_slow_60fps.mp4')], check=True)
+        slow = probe(out/'front_combined_slow_60fps.mp4', 1320)
+        if any(sha(f) != h for f, h in pinned.items()): raise ValueError('rendering input changed')
+        save(out/'report.json', dict(completed=True, inputs_unchanged=True, new_physics_steps=0,
+            roles=reports, combined=media, slow=slow, separate_trial_card_frames=60))
+    finally:
+        for process in (enc, combined):
+            if process is not None and process.poll() is None: process.kill(); process.wait()
+        renderer.close()
+
+
+if __name__ == '__main__': main()

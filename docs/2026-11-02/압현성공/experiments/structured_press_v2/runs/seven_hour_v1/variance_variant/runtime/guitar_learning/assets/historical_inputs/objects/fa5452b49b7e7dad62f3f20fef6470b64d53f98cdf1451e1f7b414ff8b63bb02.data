@@ -1,0 +1,38 @@
+# 자유 기타 학습
+
+곡 입력 도구는 [tool/](/home/ajou/yigyu/3/guitar_learning/tool/README.md), 기존 여섯 개발 디렉토리의 원본은 [보관 안내](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/README.md)를 따른다.
+native 실행·모델은 내부 `native/`·`assets/`, 악보 compiler는 `score/`를 사용한다. 최상위 `tab2body`·`stability_adapter_2`는 현행 실행 의존성에서 분리했다. [이전과 검증 기록](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_internalization_v1/README.md).
+
+[현재 상태](/home/ajou/yigyu/3/CURRENT_STATUS.md)에서 적용 조건과 검증 결과를 확인한다.
+
+## 실행 경로
+
+| 목적 | 진입점 | 관측과 행동 |
+|---|---|---|
+| 손별 초기 정책 | `local_skills` | 상태563, 손별33/6축 |
+| 단음 양손PPO | `joint.train`, `joint.evaluate` | 전체1132상태, Actor 각569입력, 행동33+6 |
+| 전곡 연속PPO | `song.train`, `song.evaluate` | 공통500상태, 독립Actor2개, 행동33+6 |
+
+Root 고정·하체 유한 제어·자유 기타·중력ON·스트랩OFF, 물리240Hz·정책60Hz다. 모델 입력105채널과 정책 출력39축을 구분한다. 가슴 접촉 지속 자체는 성공 조건이 아니다.
+
+## 초기화와 복원
+
+단음joint는 검증된 손별Actor와분산만 이전한다. 원563입력에 공동 이력6개를 추가하고새6열을0으로 둔다. Critic과Adam은 새로 시작한다.
+
+전곡은 기본468+곡 이력32=500상태다. 입력 필드와scale이 같은460개 물리 열, 토큰encoder·head·분산을초기값으로 사용하고 새 음악·이력40열은0으로 둔다. Critic과Adam은 새로 시작하며원정책 출력이나 성공을 보장하지 않는다.
+
+Strict resume는 관측·행동·목표·보상·물리·PPO 계약이 같은 모델에서만 허용한다.
+
+## 현재 결과와 실행 설정
+
+손별 초기 정책은 각4/4 품질 평가를 통과했다. 단음joint는840전이·1업데이트, 저장후엄격한 평가까지 확인했으며 공동 음악 성공은0이다. 전곡은67음·32.8166667초·1969tick으로4096전이·8업데이트를 완료했다. 안전 완주는2회, 전곡 음악 성공은0/2이며 별도 최종 모델 평가는 구분한다.
+
+- [단음 설정·명령·결과](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_joint_v1/README.md)
+- [전곡 작업 계획](/home/ajou/yigyu/3/docs/plans/guitar_learning_full_song_20261019.md)
+- [전곡 최종 보고](/home/ajou/yigyu/3/docs/2026-10-12/stability_adapter_2/results/guitar_learning_full_song_v1/training_v2/report.json)
+
+## 로그와 모델
+
+`settings.json`·`training_contract.json`·`inputs_before.json`은 실행 계약이다. `transitions.jsonl.gz`는전이, `episodes.jsonl`은실제에피소드 종료, `learning_metrics.jsonl`·update JSON은PPO 상태다. 최종 `report.json`, 경로별요약, persistent 감사와checkpoint를 함께 확인한다.
+
+sampled/logged/durable/committed/discarded를 구분하고 누적 품질값을매tick합산하지 않는다. 부분 수집과 전체 에피소드 완료, 물리 완주와 음악 성공을 분리한다.

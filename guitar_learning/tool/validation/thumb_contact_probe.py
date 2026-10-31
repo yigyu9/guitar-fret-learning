@@ -11,9 +11,6 @@ import subprocess
 import time
 
 
-def incremental_request(current, desired):
-    return ((desired-current)*(60./4.)).clamp(-1., 1.)
-
 
 def approach_gap(elapsed_s):
     """Close the remaining source gap gently; do not pursue increasing force."""
@@ -52,6 +49,7 @@ def main():
     from isaacgym import gymapi
     import numpy as np
     import torch
+    from guitar_learning.tool.validation.press_acquisition import trajectory_actions
     from guitar_learning.core.control import ACTIVE_NAMES
     from guitar_learning.gpu.scene import GpuScene
     from guitar_learning.gpu.control import BatchedController
@@ -91,7 +89,7 @@ def main():
             scene = GpuScene(1, 'left', out=out/'scene')
         finally:
             gymapi.acquire_gym = original_acquire
-        controller = BatchedController(scene, finger_action_mode='incremental')
+        controller = BatchedController(scene, finger_action_mode='position')
         snapshot = scene.snapshot()
         controller.reset([0], snapshot)
         joints = [scene.names.index('LH:'+name) for name in
@@ -178,14 +176,17 @@ def main():
                 if float(torch.linalg.vector_norm(force_g)) < 2. or stage == 'release':
                     desired = bounded_point_adjustment(point_j[:, :, joints], error_world,
                         controller.target[:, joints], reference, scene.lower[joints], scene.upper[joints])
-            action = torch.zeros(1, 39, device=device)
-            action[:, actions] = incremental_request(controller.target[:, joints], desired)
+            requested = controller.reference[controller.active].expand(1, -1).clone()
+            requested[:, actions] = desired
+            action = trajectory_actions(requested, controller.reference[controller.active],
+                controller.action_low, controller.action_high)
             before = controller.target[:, joints].clone()
             target = controller.targets(action, snapshot)
-            expected = (before+action[:, actions]*(4./60.)).clamp(scene.lower[joints], scene.upper[joints])
+            expected = torch.maximum(torch.minimum(desired, before+4./60.), before-4./60.)
+            expected = torch.maximum(torch.minimum(expected, scene.upper[joints]), scene.lower[joints])
             max_codec = max(max_codec, float((target[:, joints]-expected).abs().max()))
             if max_codec > 2e-6:
-                raise AssertionError('Diagnostic bypassed production incremental codec')
+                raise AssertionError('Diagnostic bypassed production position codec')
             for _ in range(4):
                 effort = controller.efforts(snapshot)
                 if not bool(controller.diagnostics['valid'].all()):

@@ -25,7 +25,7 @@ from guitar_learning.tool.experiments.short_finger_learning.runtime import (
 from guitar_learning.tool.experiments.short_finger_learning.runner import compact_episode, summary
 
 
-def setup(count=2, mode='incremental'):
+def setup(count=2, mode='position'):
     metadata, snapshot = fixture(count)
     task = make_task(BUNDLE, pre_roll_s=3., tail_s=.5)
     target = next(t for t in task.targets if t.finger == 2)
@@ -47,15 +47,16 @@ class ShortLearningTests(unittest.TestCase):
     def setUpClass(cls):
         torch.set_num_threads(1)
 
-    def test_default_guards_and_diagnostic_position(self):
-        env, _, _, metadata, song, skill = setup(mode='position')
+    def test_position_is_shared_production_and_diagnostic_contract(self):
+        env, _, _, metadata, song, skill = setup()
         self.assertEqual(env.finger_action_mode, 'position')
-        self.assertEqual(FingerSkillEnvironment.allowed_finger_action_modes, ('incremental',))
+        self.assertEqual(FingerSkillEnvironment.allowed_finger_action_modes, ('position',))
+        base = FingerSkillEnvironment(metadata, bundle=BUNDLE, song=song, skill=skill, device='cpu')
+        self.assertEqual(base.finger_action_mode, 'position')
+        from guitar_learning.training.launch import build_settings
+        self.assertEqual(build_settings('left', learning_family='finger-skill')['song']['finger_action_mode'], 'position')
         with self.assertRaises(ValueError):
-            FingerSkillEnvironment(metadata, bundle=BUNDLE, song=song, skill=skill, device='cpu')
-        from guitar_learning.training.launch import build_settings as settings_document
-        with self.assertRaises(ValueError):
-            settings_document('left', learning_family='finger-skill', finger_action_mode='position')
+            diagnostic_spec(env.task, song['short_learning']['teacher'], 'incremental', .01)
 
     def test_onset_scope_observation_and_no_exposure_switch(self):
         env, snapshot, obs, *_ = setup()
@@ -115,7 +116,6 @@ class ShortLearningTests(unittest.TestCase):
         pool.spec = song['short_learning']
         pool.teacher_reference, pool.teacher_final = reference, goal
         pool.learn_mask = torch.zeros(39, dtype=torch.bool); pool.learn_mask[ids] = True
-        pool.incremental_mask = torch.tensor([n.startswith('LH:') for n in ACTIVE_NAMES])
         low, high = reference-10, reference+10
         pool.controller = SimpleNamespace(target=reference.expand(2,-1).clone(), active=torch.arange(39),
             action_low=low, action_high=high)
@@ -160,8 +160,7 @@ class ShortLearningTests(unittest.TestCase):
         from guitar_learning.tool.experiments.short_finger_learning.runner import make_settings
         env,*_=setup()
         teacher=env.contract['task']['short_learning']['teacher']
-        args=parser().parse_args(['train','--teacher','test.json','--mode','position',
-            '--initial-std','.01','--size','small','--num-envs','2','--updates','1','--out','unused'])
+        args=parser().parse_args(['train','--teacher','test.json','--size','small','--num-envs','2','--updates','1','--out','unused'])
         with patch('guitar_learning.tool.experiments.short_finger_learning.runner.read_teacher',return_value=teacher):
             settings=make_settings(args)
         self.assertEqual(settings['initial_std'],.01)
@@ -293,7 +292,7 @@ class ShortLearningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             file = Path(folder)/'model.pt'; trainer.save(file)
             changed = copy.deepcopy(env.contract)
-            changed['task']['short_learning']['mode'] = 'position'
+            changed['task']['short_learning']['mode'] = 'incremental'
             other = DecisionPPOTrainer(ShortPolicy(contract=changed, size='small'), PPOConfig())
             with self.assertRaises(ValueError): other.load(file)
             for schema in ('guitar_learning.fixed_wrist_teacher.v1', 'guitar_learning.fixed_wrist_teacher.v2'):

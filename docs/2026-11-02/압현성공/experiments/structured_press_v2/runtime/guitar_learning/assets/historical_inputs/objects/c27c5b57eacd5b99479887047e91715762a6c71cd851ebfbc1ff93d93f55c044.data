@@ -1,0 +1,24 @@
+"""CPU-only regression for None-valued namespace module source metadata."""
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from .run_smoke_v7 import project_source_paths
+
+
+class ModuleSourceMetadata(unittest.TestCase):
+    def test_namespace_and_missing_file_are_ignored(self):
+        modules = [('stability_adapter_2.namespace', SimpleNamespace(__file__=None)),
+                   ('stability_adapter_2.other_namespace', SimpleNamespace())]
+        self.assertEqual(project_source_paths(modules), set())
+
+    def test_project_python_source_collected_and_external_sources_excluded(self):
+        source = str(Path(__file__).resolve())
+        modules = [('stability_adapter_2.free_guitar_learning_v1.test_smoke_metadata_v1', SimpleNamespace(__file__=source)),
+                   ('numpy.external', SimpleNamespace(__file__=source)),
+                   ('stability_adapter_2.compiled', SimpleNamespace(__file__=source + 'c')),
+                   ('stability_adapter_2.namespace', SimpleNamespace(__file__=None))]
+        self.assertEqual(project_source_paths(modules), {source})
+
+
+if __name__ == '__main__':
+    unittest.main()

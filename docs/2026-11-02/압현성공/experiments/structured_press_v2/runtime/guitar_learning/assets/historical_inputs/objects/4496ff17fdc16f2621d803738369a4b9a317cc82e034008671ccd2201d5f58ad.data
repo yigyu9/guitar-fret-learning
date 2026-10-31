@@ -1,0 +1,135 @@
+"""Korean report from preserved native summaries, with explicit input hashes."""
+from pathlib import Path
+from ..lower_body_release_v1.common import ROOT,BASE,read,save,sha,verify
+
+
+def main():
+    phase=BASE/'upright_horizontal_play_v1';old=BASE/'upright_horizontal_v1'
+    cases=('baseline','press','strike','combined');labels=dict(baseline='정지 대조',press='압현만',strike='타현만',combined='압현+타현')
+    paths=[Path(__file__).resolve(),Path(__file__).parents[1]/'lower_body_release_v1/common.py',phase/'inputs/play_spec_v1.json',phase/'tracking_limits_v2.json',phase/'figures_v1/verification.json']
+    paths += [phase/f'analysis_{c}_v1/summary.json' for c in cases]
+    pins={str(p):sha(p) for p in paths};save(phase/'docs_inputs_before.json',pins)
+    data={c:read(phase/f'analysis_{c}_v1/summary.json') for c in cases}
+    text=f'''# 교정 자세의 압현·타현 안정성 시험 결과
+
+2026-10-15. **현재 교정 자세는 동작 중 안정성 기준을 충족하지 못했다.** 같은 자세로5초를 진행한 뒤4초 동안 정지 대조·압현·타현·두 동작 결합을 각각 시험했다. 네 실행 모두9초/2160step을 완료했다. 압현의 접촉·위치·유지 후보와 실제 검지 움직임은 검출됐고, 타현 내려치기는6줄 모두 검출됐다. 그러나 압현에서 기타가 최대10.5mm/5.28°, 타현에서26.8mm/17.50°, 결합에서11.1mm/7.63° 이동·회전해 세 동작 조건 모두 실패했다. 가슴 실제 접촉은 전 구간0이다.
+
+[실제 영상 색인]({phase}/media_index.md) · [네 시험 요약]({phase}/attempt_summary.json) · [완료·미완료]({phase}/RESULT_CHECKLIST.md) · [변경 파일]({phase}/CHANGED_FILES.md).
+
+![동작시작5초와압현·내려치기중7.1초의실제native화면]({phase}/figures_v1/before_during_native.png)
+
+왼쪽은 정지 대조5.0초, 오른쪽은 결합 시험7.1초다. 동일 카메라·동일 자르기의 실제 화면이며, 압현 깊이·힘 인증을 대신하지 않는다.
+
+## 같은 교정 자세로 시작했는가
+
+오른쪽 비교 이미지는 [이전 교정 시험]({old}/README.md)의5초 프레임이다. 원source4 초기 자세·상체 목표·scene8/controller_horizontal_v4로 처음부터5초를 재현한 다음 움직였다.5초 상태를 강제로 다시 주입하지 않았다.
+
+네 실행 모두 이전 교정 실행과0~5초의1201개 실제 상태·sensor·접촉 행이exact 같고,0≤t<5초의1200개 effort 및300개 requested/final/readback 목표 배열이exact 같다. stage 설명이 달라 전체target JSON이같다는주장과구분한다. 추가 playing 카메라는 렌더만 추가했다. 기존5초의 넥최대5.269°/Chest최대5.003207623°/가슴접촉0이라는 실패는 보존했다. 이번 사용자 요청으로 동작 진단을 새로 했으며 기존 정지 성공이나15초 손해제 성공으로 바꾸지 않았다.
+
+## 동작5~9초의 실제 기타 유지
+
+기타 몸통 source AABB 중심의5초 위치를 이동 기준으로 쓰고 회전도5초 방향 대비SO(3) 각도다. 기타 root/COM 이동과 다른 양이다. 넥은바닥수평에서의절대기울기다.
+
+| 조건 | 몸통 최대이동 mm | 최대회전 ° | 넥 최대절대기울기 ° | Torso·Chest 최대기울기 ° | 판정 |
+|---|---:|---:|---:|---:|---|
+'''
+    meanings=dict(baseline='대조 구간 기준 충족, 가슴 지지 없음',press='압현 후보·움직임 검출 / 안정 실패',strike='down6줄·up4줄 / 완전왕복·안정 실패',combined='압현 후보+down6줄·up5줄 / 완전왕복·안정 실패')
+    for c in cases:
+        m=data[c]['action']['metrics']
+        text+=f"| [{labels[c]}]({phase}/analysis_{c}_v1/summary.json) | {m['max_body_displacement_from_5s_m']*1000:.3f} | {m['max_rotation_from_5s_deg']:.3f} | {m['max_abs_neck_elevation_deg']:.3f} | {m['max_Torso_Chest_total_tilt_deg']:.3f} | {meanings[c]} |\n"
+    text+=f'''
+사전 동작 기준은 몸통 이동30mm/회전5°/넥3°/원래 좌우 위치±20mm/Torso·Chest 전체5°·옆3°/오른 위팔 양의 접촉95%다. 가슴·위팔 동시95%는 별도의 전체 지지 조건이다. 압현과 타현은 회전·넥·몸통, 결합은 회전·몸통에서 실패했다. 정지 대조의5~9초구간이통과한것을연주성공으로부르지않는다.
+
+위팔/오른 허벅지는 단독 두 시험에서100%, 결합에서각99.896%/100%의표본에양의접촉응답이있었다. 가슴은모두0이다. 접촉빈도만으로하중·마찰안정성을확정하지않는다. 결합의회전이타현단독보다작게관측됐으나,한번의비교로압현하중의기여까지확정하지않는다. 같은시각의대조대비몸통위치차이최대는압현12.419mm/타현24.982mm/결합9.271mm다.
+
+![동작구간240Hz전체표본비교]({phase}/figures_v1/action_stability_comparison.png)
+
+그래프는5~9초의전체961표본이다. 점선은동작진단기준이며물리안전중단한계가아니다. 초기0~5초와그실패도전체영상·원자료에보존했다.
+
+## 압현: 후보와 실제 깊이는 구분
+
+왼 검지에가장가까운2번줄·5프렛구간을고르고검지4관절의유한목표만바꿨다. 왼팔·다른손가락목표는원제어를유지했다.5~5.8초접근/5.8~6.3초누름/6.3~8초유지/8~8.5초해제/9초까지관찰했다. 원범위·1.5rad/s변화율·유한PD/cap은유지했다.
+
+후보는LH:index3 원점이목표XY10mm/Z−6..+10mm밴드안이고 지정index3와실제기타형상의양의접촉이100ms이상연속유지되는조건이다. 실제동작은추가로5초대비marker높이2mm이상하강과손가락관절peak-to-peak.02rad이상을요구했다. 단독은하강2.020397mm/결합은2.192326mm로통과했다. 두조건모두hold409표본의후보유지와최대누적1.808333초를관측했다. 대조는검지접촉은있지만기하후보/2mm하강/관절움직임을통과하지않았다.
+
+**정확한단일줄압현이나측정압현력의인증은아니다.** 10mm밴드는약7mm줄간격보다넓고높이밴드에는hover도들어간다. marker는해부학적pad가아닌강체원점이다. 계획hold목표G:z=.00829998m 대비 실제marker의3차원오차는단독9.994~10.869mm/결합9.988~10.782mm였다. 작은계산IK오차가실제깊이추종을보장하지않았다. [실제추종한계]({phase}/tracking_limits_v2.json).
+
+## 타현: 내려치기 성립, 왕복 미완료
+
+R_Elbow/Wrist6개최종목표만현재기타좌표의가상피크경로로바꿨다. 기존right12IK중근위6목표와사람지원task/gain/cap은유지했다. distal6목표는최종command직전에동작이소유하므로기존IK에지워지지않는다.5초접근시작/6.5~7.1초down/7.3~7.9초up/8.5초철수다.
+
+원PickStrikeDetector를60Hz/dt1/60/rearm2프레임/깊이1mm/횡속도.05m/s/원zone·lane조건으로적용했다. 원자료240Hz/정규화native quaternion으로현재기타좌표를복원했다.
+
+- 단독 down: **6→5→4→3→2→1**, up: **1→4→5→6**. up2·3이빠졌다.
+- 결합 down: **6→5→4→3→2→1**, up: **1→2→4→5→6**. up3이빠졌다.
+- 결합의2번줄down6.957964초/up7.500398초는직전·직후240Hz표본의압현후보100ms유지를모두확인했다. 이부분성공으로다른줄실패를대체하지않는다.
+
+현재줄과RH:pick은**충돌·진동하지않는판정용표식**이다. 실제관절·기타물리반응과피크유효줄통과를검사했지만줄변형·발음·음향품질은검증하지않았다. [단독이벤트]({phase}/analysis_strike_v1/strike_events.json) · [결합이벤트·압현bracket]({phase}/analysis_combined_v1/strike_events.json).
+
+## 물리·안전·재현·보존
+
+Root/Pelvis·의자고정,하체16유효축finite rotational stable PD,원105입력/97비영범위/명목0축8을유지했다. 실제zero solver잔차는별도기록하며완전고정8축이라고하지않는다. 기타free/중력ON/strapOFF/원질량·COM·관성·마찰·collisionfilter·contactoffset이다. 기타직접힘·고정·강제부착·매step상태덮어쓰기·체크포인트학습·새PPO는없다. 손동작은유한목표만바꾸고effort계산은그대로다.
+
+네실행모두14초기검사/2161상태·접촉/2160effort/540target행정합성,Root·의자exact,finitecap/zero8·POSITION48명시effort0/목표readback/금지API없음/inner+outer SHA를통과했다. 무결성과동적지지성공은별개다. 발sourcebox는떠있어양발체중지지나자유Root균형으로확대하지않는다. 기존source상대형상감사도cooked전신무관통인증이아니다.
+
+[구현]({ROOT}/stability_adapter_2/horizontal_play_test_v1/) · [4조건입력]({phase}/inputs/). baseline은run_v1,동작은run_v2의config/out인수로재현한다. 실행환경은rl38/CPU PhysX·GPU카메라다. 새out경로만사용한다. 네9초는각각독립초기화이며연속36초유지가아니다. 새15초왼손해제나학습은실행하지않았다.
+
+preflight_v1의source4 report 직접before항목누락은원본을보존하고 [보완기록]({phase}/provenance/preflight_extra_input_v1.json)을추가했다. 이전sealedinventory SHA/현재파일/spec일치와inventory의preflight-before핀을확인했지만직접before측정을소급추가했다고주장하지않는다. nativeinner와새outer run_v2는source_report를직접pin한다. 예비추종수치tracking_limits_v1은root계산본으로보존하고별도producer/before맵이있는v2를권장했다.
+
+[사전검수]({phase}/review_preflight_v1.md) · [실제동작검수]({phase}/review_actions_v1.md). root최종보존감사는 [final_verification.json]({phase}/final_verification.json), [소스사본]({phase}/source_final/manifest.json), [파일색인]({phase}/artifact_inventory.json)에서별도확인한다. 설치된라이브러리전체를묶은hermetic실행물은아니다.
+
+## 남은 과제
+
+상향타현누락이실제깊이·속도·재무장·추종중어디서발생했는지분리하고,왼검지marker와실제접촉면/목표깊이관계를검사해야한다. 가슴접촉0과팔동작중기타회전·몸통기울기증가도미해결이다. 이번짧은한회씩의시험을안정된연주설정으로채택하거나학습을시작하지않는다.
+'''
+    save(phase/'attempt_summary.json',dict(native_attempt_count=4,completed_9s_count=4,action_attempt_count=3,action_stability_pass_count=0,full_support_action_pass_count=0,training_updates=0,left_release15s_attempts=0,cases={c:{'run':data[c]['run'],'gates':data[c]['gates'],'action':data[c]['action'],'press':data[c]['press'],'strike':data[c]['strike']} for c in cases}))
+    assert not (phase/'README.md').exists();(phase/'README.md').write_text(text)
+    media=f'''# 교정 자세 압현·타현 실제 영상
+
+권장설명은 [README]({phase}/README.md)다. 각9초이며0~5초는기존교정자세prefix,5~9초는동작이다. 세동작모두안정성실패다. 줄/피크는비충돌marker라소리·줄진동영상이아니다.
+
+## 결합시험 실제9초
+
+![압현+타현 전신]({phase}/native_combined_v1/media/whole_body.mp4)
+
+![압현+타현 손근접]({phase}/native_combined_v1/media/playing.mp4)
+
+압현후보와down6줄/up5줄,2번줄의압현후보+down/up통과는있었으나회전7.634°/몸통5.250°/가슴0으로실패했다. 영상에초기흔들림도포함했다.
+
+## 모든대조·단독조건
+
+| 조건 | 실제4뷰·원PNG | 입력 | 판정 |
+|---|---|---|---|
+'''
+    for c in cases:media+=f'| {labels[c]} | [media]({phase}/native_{c}_v1/media/) | [config]({phase}/inputs/{c}_v1.json) | [summary]({phase}/analysis_{c}_v1/summary.json) |\n'
+    media+=f'''
+각media의whole_body/hands/feet/playing은30fps/271프레임/CFR9.033333초이며t0를포함한다. 실제물리시간9초와구분한다. videos.json에SHA/ffprobe기록이있다. 네독립실험을연속36초유지로합하지않는다.
+
+[전후실제화면]({phase}/figures_v1/before_during_native.png) · [전체동작그래프]({phase}/figures_v1/action_stability_comparison.png) · [그림검증]({phase}/figures_v1/verification.json) · [결과]({phase}/README.md).
+'''
+    assert not (phase/'media_index.md').exists();(phase/'media_index.md').write_text(media)
+    checklist=f'''# 압현·타현 시험 완료와 남은 검증
+
+- [x] 같은초기자세/제어로오른쪽교정후5초까지재현했다. 강제state주입없음.
+- [x] 목표도달preflight와정지/압현/타현/결합각9초를실행했다.
+- [x] 240Hz상태·접촉/압현후보·실제marker·관절움직임과60Hz타현을구분했다.
+- [x] 입력보존·정지prefix·실제4뷰/원자료·성공범위·실패를기록했다.
+- [ ] 정확한단일줄압현력/줄진동·음향검증. 현재모델/지표로인증하지않음.
+- [ ] 완전6줄왕복. 단독up2·3/결합up3누락.
+- [ ] 동작중기타안정성. 세조건모두회전5°초과등으로실패.
+- [ ] 가슴·위팔동시지지. 가슴0으로실패.
+- [ ] 새PPO/15초손해제. 이번에실행하지않음.
+
+[결과]({phase}/README.md) · [영상]({phase}/media_index.md). 독립review/최종보존감사는별도자료다.
+'''
+    assert not (phase/'RESULT_CHECKLIST.md').exists();(phase/'RESULT_CHECKLIST.md').write_text(checklist)
+    result=ROOT/'docs/plans/upright_horizontal_play_result_20261015.md';assert not result.exists();result.write_text(checklist)
+    changed='# 이번 변경 파일 색인\n\n기존소스/입력/결과는보존했다. runtime/목표/사전검사는root,analyze는play_analysis,검수는review_probe가담당했다. 최종감사/소스사본은root소유다.\n\n'
+    for name in ('motion_v1','runtime_v1','run_v1','run_v2','prepare_v1','analyze_v1','plot_v1','tracking_limits_v2','write_report_v1'):
+        changed+=f'- [{name}.py]({ROOT}/stability_adapter_2/horizontal_play_test_v1/{name}.py:1)\n'
+    changed+=f'\n[입력]({phase}/inputs/) · [실험요약]({phase}/attempt_summary.json) · [판정계획]({ROOT}/docs/plans/upright_horizontal_play_20261015.md).\n'
+    assert not (phase/'CHANGED_FILES.md').exists();(phase/'CHANGED_FILES.md').write_text(changed)
+    assert verify(pins)
+
+
+if __name__=='__main__':main()

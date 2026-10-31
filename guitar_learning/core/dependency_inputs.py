@@ -9,8 +9,8 @@ def parity_errors(paths, expected):
     """Require both the recorded original SHA and the current internal SHA."""
     verify_provenance()
     manifest = json.loads(PROVENANCE.read_text())
-    moved = {row['internal']: row for row in manifest['files']}
-    generated = {row['internal'] for row in manifest.get('generated_files', [])}
+    moved = {str(resolve_input_path(row['internal'])): row for row in manifest['files']}
+    generated = {str(resolve_input_path(row['internal'])) for row in manifest.get('generated_files', [])}
     errors = []
     for path in paths:
         path = str(Path(path).resolve())

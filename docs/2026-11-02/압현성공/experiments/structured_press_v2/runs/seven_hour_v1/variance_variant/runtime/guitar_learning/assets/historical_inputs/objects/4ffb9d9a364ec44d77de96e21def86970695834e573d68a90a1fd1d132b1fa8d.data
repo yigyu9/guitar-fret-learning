@@ -1,0 +1,71 @@
+"""Measure native free-guitar lateral placement and neck elevation at every step."""
+import argparse
+import csv
+from pathlib import Path
+import numpy as np
+from .common import ROOT, A, read, save, pin, verify
+from stability_adapter_2.initial_pose_noise_v1 import pose
+
+
+def main(run, analysis, source_report, out):
+    out.mkdir(exist_ok=False)
+    pins = pin(extra=[run/n for n in ('initial_values.json', 'states240.json', 'contacts240.json', 'report.json')]
+               +[analysis/'summary.json', analysis/'samples.csv', source_report,
+                 ROOT/'docs/plans/upright_horizontal_20261015.md'])
+    save(out/'inputs_before.json', pins)
+    initial = read(run/'initial_values.json')
+    reference = read(source_report)
+    center_G = np.array(reference['reference_body_center_G_m'])
+    lateral_reference = reference['reference_lateral_coordinate_m']
+    samples = read(run/'states240.json')['rows']
+    names = initial['human_body_names']
+    origin = samples[0]['state']
+    right = pose(origin['human_body_states'][names.index('R_Hip')])[0]-pose(origin['human_body_states'][names.index('L_Hip')])[0]
+    right[2] = 0
+    right /= np.linalg.norm(right)
+    posture_rows = list(csv.DictReader((analysis/'samples.csv').open()))
+    assert len(samples)==len(posture_rows), "incomplete posture trajectory"
+    rows = []
+    for sample, posture in zip(samples, posture_rows):
+        assert sample['physics_step']==int(posture['step'])
+        state = sample['state']
+        gp, gr = pose(state['guitar_body_states'][0])
+        root, _ = pose(state['human_body_states'][names.index('Pelvis')])
+        center = gp+gr.apply(center_G)
+        lateral = float((center-root)@right)
+        neck = gr.apply([0., 1., 0.])
+        rows.append(dict(step=sample['physics_step'], time_s=sample['time_s'],
+             guitar_body_right_coordinate_m=lateral, lateral_error_m=lateral-lateral_reference,
+             neck_elevation_deg=float(np.rad2deg(np.arcsin(np.clip(neck[2], -1., 1.)))),
+             Chest_and_RShoulder_positive=bool(float(posture['Chest_positive_lambda_contacts'])>0 and float(posture['R_Shoulder_positive_lambda_contacts'])>0)))
+    with (out/'samples.csv').open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    steady = [r for r in rows if r['time_s']>1]
+    max_level = max(abs(r['neck_elevation_deg']) for r in rows)
+    max_side = max(abs(r['lateral_error_m']) for r in rows)
+    simultaneous = sum(r['Chest_and_RShoulder_positive'] for r in steady)/len(steady) if steady else 0.
+    posture = read(analysis/'summary.json')
+    gates = dict(all_posture_contact_safety_gates=posture['passed'],
+                 neck_elevation_within_3deg=max_level<=3.,
+                 lateral_coordinate_within_original_20mm=max_side<=.02,
+                 simultaneous_Chest_RShoulder_after1s_over95pct=simultaneous>=.95)
+    save(out/'summary.json', dict(gates=gates, passed=all(gates.values()), samples=len(rows),
+         reference_right_coordinate_m=lateral_reference,
+         first_neck_elevation_deg=rows[0]['neck_elevation_deg'], last_neck_elevation_deg=rows[-1]['neck_elevation_deg'],
+         max_abs_neck_elevation_deg=max_level, max_abs_lateral_error_m=max_side,
+         first_right_coordinate_m=rows[0]['guitar_body_right_coordinate_m'], last_right_coordinate_m=rows[-1]['guitar_body_right_coordinate_m'],
+         after1s_simultaneous_contact_fraction=simultaneous, inputs_unchanged=verify(pins),
+         scope='Original source G:body-convex AABB center transformed by normalized native rigid-body pose. right=initial horizontal(RHip-LHip), origin=actual fixed Pelvis. Neck direction=G local+Y. This measures the free guitar, does not enforce or overwrite its state.'))
+    print(gates, 'max_neck_deg', max_level, 'max_lateral_error_m', max_side, 'contact', simultaneous, flush=True)
+
+
+if __name__=='__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--run', type=Path, required=True)
+    parser.add_argument('--analysis', type=Path, required=True)
+    parser.add_argument('--source-report', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    args = parser.parse_args()
+    main(args.run.resolve(), args.analysis.resolve(), args.source_report.resolve(), args.out.resolve())

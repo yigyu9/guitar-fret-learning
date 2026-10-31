@@ -1,0 +1,174 @@
+"""CPU interface integration using recorded bodies; no native dynamics executed."""
+import copy
+import gzip
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+import numpy as np
+import torch
+from guitar_learning.core.training_environment import TrainingEnvironment
+from guitar_learning.music_task import ScoreTask, ScoreTarget
+from guitar_learning.training.policy import Policy
+from guitar_learning.training.ppo import PPOTrainer, PPOConfig
+from guitar_learning.tool.validation.rollout import RolloutCollector
+
+SOURCE = Path(__file__).resolve().parents[2]/'docs/2026-10-12/stability_adapter_2/results/guitar_learning_short_preparation_v1/native_v1'
+
+
+def sources():
+    initial=json.loads((SOURCE/'initial_values.json').read_text())
+    prepared=json.loads((SOURCE/'prepared.json').read_text())
+    with gzip.open(SOURCE/'measurements240.json.gz','rt') as stream:
+        rows=json.load(stream)['rows']
+    return initial, prepared, rows
+
+
+class RecordedSession:
+    def __init__(self, config, out):
+        initial,prepared,self.rows=sources()
+        self.preparation_calls=self.policy_calls=0
+        self.closed=False
+        self.unsafe=False
+        props=initial['native_PD_properties']
+        self.scene=SimpleNamespace(names=initial['joint_names'],human_bodies=initial['human_body_names'],
+            guitar_bodies=initial['guitar_body_names'],human_properties=initial['human_properties'],
+            guitar_properties=initial['guitar_properties'],steps=0,
+            target=np.array(prepared['metadata']['prepared_target105_rad'],dtype=np.float32),
+            lower=np.array(props['lower']),upper=np.array(props['upper']),
+            zero_indices=np.array(initial['zero_range_indices']),
+            human_root_fixed=True,guitar_root_fixed=False,guitar_gravity_disabled=False,
+            pd_properties=np.array(props['effort']),forbidden_calls=[])
+        self.scene.native=self.native
+
+    def row(self):
+        return self.rows[max(0,self.scene.steps-480)]
+
+    def native(self):
+        native=copy.deepcopy(self.row()['native'])
+        native['physics_step']=self.scene.steps
+        if self.unsafe and self.scene.steps==481:
+            for body in native['guitar_body_states']:
+                body['pose']['p']['x']+=.1
+        return native
+
+    def prepare_tick(self): self.preparation_calls+=1
+    def submit_policy_target(self,target):
+        self.policy_calls+=1
+        self.scene.target[:]=target
+        return {'final105_rad':self.scene.target.tolist()}
+    def integrate(self):
+        self.scene.steps+=1
+        return {'physics_step_before':self.scene.steps-1}
+    def close(self): self.closed=True
+
+
+def task(end=.9):
+    return ScoreTask((ScoreTarget('a','e',0,5,1,1,.1,end,0.,.1,end),),provenance={'source':'recorded_cpu_fixture'})
+
+
+class TrainingEnvironmentTests(unittest.TestCase):
+    def setUp(self):
+        self.folder=tempfile.TemporaryDirectory()
+        self.sessions=[]
+        self.environments=[]
+
+    def tearDown(self):
+        for env in self.environments: env.close()
+        self.folder.cleanup()
+
+    def environment(self,**kwargs):
+        def factory(config,out):
+            session=RecordedSession(config,out)
+            self.sessions.append(session)
+            return session
+        def contacts(scene):
+            return copy.deepcopy(self.sessions[-1].row()['native_contacts']['contacts'])
+        env=TrainingEnvironment({},Path(self.folder.name)/str(len(self.environments)),
+            task=kwargs.pop('task',task()),session_factory=factory,contact_reader=contacts,**kwargs)
+        self.environments.append(env)
+        return env
+
+    def assert_observation(self,obs,dimension):
+        self.assertEqual(obs['state'].shape,(dimension,))
+        self.assertEqual(obs['events'].shape,(64,24))
+        self.assertEqual(obs['priority_events'].shape,(2,24))
+        for name,value in obs.items():
+            self.assertEqual(value.dtype,np.bool_ if 'mask' in name else np.float32)
+            self.assertTrue(np.isfinite(value).all())
+
+    def test_short_preparation_four_substeps_and_live_target_observation(self):
+        env=self.environment()
+        obs,info=env.reset()
+        dimension=info['training_contract']['observation']['dimension']
+        self.assert_observation(obs,dimension)
+        self.assertEqual(self.sessions[-1].preparation_calls,120)
+        self.assertEqual(self.sessions[-1].scene.steps,480)
+        self.assertEqual(info['task_time_s'],0.)
+        state,reward,terminated,truncated,step=env.step(np.ones(39))
+        self.assert_observation(state,dimension)
+        self.assertEqual([x['physics_step'] for x in step['physics_measurements']],[481,482,483,484])
+        self.assertEqual(len(step['native_control']['physics_samples240']),4)
+        self.assertEqual(self.sessions[-1].policy_calls,1)
+        self.assertFalse(terminated or truncated)
+        self.assertAlmostEqual(step['task_time_s'],1/60)
+        spec=env.builder.spec
+        positions=np.array([x['pos'] for x in env.last_sample['native']['human_dof_states']])
+        indices=[i for i,f in enumerate(spec['fields']) if f.startswith('target_error.')]
+        expected=np.clip(self.sessions[-1].scene.target-positions,-10,10)
+        np.testing.assert_allclose(state['state'][indices],expected,atol=1e-7)
+        np.testing.assert_array_equal(state['state'][315:354],np.ones(39,np.float32))
+        self.assertTrue(np.isfinite(reward))
+        self.assertGreaterEqual(step['cost'],0.)
+
+    def test_time_limit_final_observation_and_episode_cost(self):
+        env=self.environment(time_limit_s=1/60)
+        env.reset()
+        obs,reward,terminated,truncated,info=env.step(np.zeros(39))
+        self.assertFalse(terminated)
+        self.assertTrue(truncated)
+        self.assertEqual(info['termination_reason'],'time_limit')
+        self.assertEqual(info['episode']['cost'],info['cost'])
+        self.assertTrue(info['episode']['valid'])
+        self.assertGreater(obs['state'][env.builder.fields.index('music.elapsed_s')],0.)
+        with self.assertRaises(RuntimeError): env.step(np.zeros(39))
+
+    def test_timeline_and_unsafe_failure_are_distinct(self):
+        env=self.environment(task=task(end=.11))
+        env.reset()
+        for _ in range(13): obs,reward,terminated,truncated,info=env.step(np.zeros(39))
+        self.assertTrue(terminated)
+        self.assertFalse(truncated)
+        self.assertEqual(info['termination_reason'],'timeline_complete')
+        unsafe=self.environment(time_limit_s=1/60)
+        unsafe.reset()
+        self.sessions[-1].unsafe=True
+        _,reward,terminated,truncated,info=unsafe.step(np.zeros(39))
+        self.assertTrue(terminated)
+        self.assertFalse(truncated)
+        self.assertEqual(info['termination_reason'],'terminal_failure')
+        self.assertIn('guitar_displacement',info['failure_reasons'])
+        self.assertEqual(info['physics_measurements'][0]['stability']['failure_reasons'],['guitar_displacement'])
+        self.assertEqual(info['physics_measurements'][-1]['stability']['failure_reasons'],[])
+        self.assertGreater(info['cost'],unsafe.safety_config.failure_cost)
+        self.assertEqual(info['reward_terms']['terminal_failure'],-2.)
+        self.assertLess(reward,0.)
+
+    def test_cpu_policy_collection_and_update(self):
+        torch.set_num_threads(1)
+        torch.manual_seed(41)
+        env=self.environment(time_limit_s=2/60)
+        obs,_=env.reset()
+        model=Policy(len(obs['state']),size='small',contract=env.contract)
+        collector=RolloutCollector(model,env)
+        collector.observation=obs
+        data,episodes=collector.collect(4)
+        self.assertEqual(data['state'].shape[:2],(4,1))
+        self.assertEqual(len(episodes),2)
+        before=[p.detach().clone() for p in model.actor_parameters()]
+        trainer=PPOTrainer(model,PPOConfig(actor_lr=1e-6,epochs=1,target_kl=.1))
+        result=trainer.update(data,episodes)
+        self.assertEqual(trainer.updates,1)
+        self.assertTrue(np.isfinite(result['actor_loss']))
+        self.assertTrue(any(not torch.equal(a,b) for a,b in zip(before,model.actor_parameters())))

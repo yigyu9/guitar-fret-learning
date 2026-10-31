@@ -25,13 +25,17 @@ class GpuPool:
         self.scene = None
         self.closed = False
         self.valid = True
+        self.finger_control_diagnostics = None
+        self.out = out
         try:
             if ('finger_skill' in settings and
                     settings['finger_skill']['schema'] != 'guitar_learning.finger_skill.v3'):
                 raise ValueError('J-only finger_skill.v3 settings required')
+            if settings['song'].get('finger_action_mode', 'position') != 'position':
+                raise ValueError('Direct position finger control required; old accumulated settings cannot be resumed')
             self.scene = self._create_scene(settings, out)
             self.controller = BatchedController(self.scene,
-                finger_action_mode=settings['song'].get('finger_action_mode', 'incremental'))
+                finger_action_mode=settings['song'].get('finger_action_mode', 'position'))
             metadata = copy.deepcopy(self.scene.metadata)
             metadata['action_contract'] = copy.deepcopy(self.controller.contract)
             environment_class = TensorSongEnvironment
@@ -55,6 +59,13 @@ class GpuPool:
             if settings['specialist']['role'] == 'left':
                 self.contract['native_backend']['hand_collision'] = copy.deepcopy(
                     self.scene.metadata['hand_collision'])
+            if settings['specialist']['role'] == 'left':
+                from guitar_learning.gpu.episode_diagnostics import FingerControlDiagnostics
+                from guitar_learning.core.control import LEFT_HAND_NAMES
+                self.finger_control_diagnostics = FingerControlDiagnostics(
+                    self.num_envs, LEFT_HAND_NAMES, self.environment.finger_joint_indices,
+                    self.scene.effort_caps, self.controller.position, out)
+                self.environment.finger_control_diagnostics = self.finger_control_diagnostics
             self.last_valid_efforts = self.scene.efforts.clone()
             self.observation = self.reset()[0]
         except BaseException:
@@ -72,6 +83,8 @@ class GpuPool:
         sample = self.scene.reset(ids)
         self.last_valid_efforts[ids] = 0
         self.controller.reset(ids, sample)
+        if self.finger_control_diagnostics is not None:
+            self.finger_control_diagnostics.reset(ids)
         self.observation = self.environment.reset(ids, sample)
         return self.observation, []
 
@@ -82,6 +95,13 @@ class GpuPool:
             sample = self.scene.snapshot()
             self.environment.begin_control(actions)
             target = self.controller.targets(actions, sample)
+            if self.finger_control_diagnostics is not None:
+                # 속도 제한 이전의 순수 위치 요청: 제어기와 같은 준비 기준·비대칭 범위.
+                c = self.controller
+                ref = c.reference[c.active]
+                action = actions.clamp(-1, 1)
+                requested = ref+torch.where(action >= 0, c.action_high-ref, ref-c.action_low)*action
+                requested = requested[:, self.environment.finger_action_indices]
             # 정책 60Hz 한 tick 동안 같은 목표로 물리 240Hz를 네 번 진행한다.
             for _ in range(4):
                 efforts = self.controller.efforts(sample)
@@ -103,6 +123,9 @@ class GpuPool:
                 self.last_valid_efforts.copy_(efforts)
                 sample = self.scene.step(target, efforts)
                 self.environment.substep(sample)
+                if self.finger_control_diagnostics is not None:
+                    self.finger_control_diagnostics.record(requested, target, sample, efforts,
+                                                           self.environment)
             result = self.environment.end_control()
             self.observation = result[0]
             return result
@@ -120,8 +143,20 @@ class GpuPool:
     def close(self):
         if not self.closed:
             self.closed = True
-            if self.scene is not None:
-                self.scene.close()
+            try:
+                if self.finger_control_diagnostics is not None:
+                    from pathlib import Path
+                    import json
+                    diagnostic = self.finger_control_diagnostics
+                    diagnostic.close()
+                    rows = [diagnostic.episode(i) for i in range(self.num_envs)]
+                    path = Path(self.out)/'finger_control_diagnostics.json'
+                    path.write_text(json.dumps(dict(schema=diagnostic.schema,
+                        scope='live partial episode summaries at pool close; not completed episodes',
+                        environments=rows), ensure_ascii=False), encoding='utf-8')
+            finally:
+                if self.scene is not None:
+                    self.scene.close()
 
 
 class TensorCollector:

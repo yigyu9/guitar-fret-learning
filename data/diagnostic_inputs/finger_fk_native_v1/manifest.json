@@ -1,0 +1,232 @@
+{
+  "schema": "guitar_learning.team_handoff.fk_native.v1",
+  "as_of": "2026-10-31",
+  "scope": "Historical baseline trace, not current learned-policy result; no external filesystem source needed",
+  "source_trace_renamed_for_handoff_only": true,
+  "files": [
+    {
+      "path": "data/diagnostic_inputs/finger_fk_native_v1/trace.npz",
+      "source": "docs/2026-10-27/guitar_learning_failure_diagnosis_v1/baseline/trace_initial/trace_env0000.npz",
+      "bytes": 8839093,
+      "sha256": "661c7e4a1b2f3ad5bfb41286ec98bbed46947856fe616b4ff3964bb6c542d2bc"
+    },
+    {
+      "path": "data/diagnostic_inputs/finger_fk_native_v1/trace_metadata.json",
+      "source": "docs/2026-10-27/guitar_learning_failure_diagnosis_v1/baseline/trace_initial/trace_metadata.json",
+      "bytes": 13971,
+      "sha256": "9c543830c8a04be469b88e370944b65f677ab7a266323f97cb1057369520423a"
+    },
+    {
+      "path": "data/diagnostic_inputs/finger_fk_native_v1/gpu_scene_initial.json",
+      "source": "docs/2026-10-27/guitar_learning_failure_diagnosis_v1/baseline/trace_initial/gpu_scene_initial.json",
+      "bytes": 4736,
+      "sha256": "e6fc6b4b80367b78d95f35512ef937d1b1cfb7c250da1b832ddc5d171615ec12"
+    },
+    {
+      "path": "data/diagnostic_inputs/finger_fk_native_v1/joint_body_order.json",
+      "bytes": 5292,
+      "sha256": "ddde7d937c82ede79974ed8fcb3d0e7287e94f70ac26754e2550df52e86f0520"
+    }
+  ],
+  "support_candidate": {
+    "path": "guitar_learning/assets/runtime_inputs/paper/initial_pose/archive/experiment_records/lower_body_release_v1/front_facing_pose_v1/source_v9/support_candidate.json",
+    "bytes": 4959,
+    "sha256": "15ae33e4b96a760c83cfad1dd12f7525ea007af526619d9c7e400a6a9ad67b65"
+  },
+  "arrays": {
+    "q": {
+      "shape": [
+        1969,
+        105
+      ],
+      "dtype": "float32"
+    },
+    "qd": {
+      "shape": [
+        1969,
+        105
+      ],
+      "dtype": "float32"
+    },
+    "target": {
+      "shape": [
+        1969,
+        105
+      ],
+      "dtype": "float32"
+    },
+    "body_state": {
+      "shape": [
+        1969,
+        106,
+        13
+      ],
+      "dtype": "float32"
+    },
+    "contact_force": {
+      "shape": [
+        1969,
+        106,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "physics_step": {
+      "shape": [
+        1969
+      ],
+      "dtype": "int64"
+    },
+    "action": {
+      "shape": [
+        1969,
+        39
+      ],
+      "dtype": "float32"
+    },
+    "previous_target": {
+      "shape": [
+        1969,
+        105
+      ],
+      "dtype": "float32"
+    },
+    "score_time_s": {
+      "shape": [
+        1969
+      ],
+      "dtype": "float64"
+    },
+    "policy_mean": {
+      "shape": [
+        1969,
+        39
+      ],
+      "dtype": "float32"
+    },
+    "policy_log_std": {
+      "shape": [
+        1969,
+        39
+      ],
+      "dtype": "float32"
+    },
+    "policy_latent": {
+      "shape": [
+        1969,
+        39
+      ],
+      "dtype": "float32"
+    },
+    "policy_action": {
+      "shape": [
+        1969,
+        39
+      ],
+      "dtype": "float32"
+    },
+    "finger_gate": {
+      "shape": [
+        1969,
+        4
+      ],
+      "dtype": "float64"
+    },
+    "finger_idle_weight": {
+      "shape": [
+        1969,
+        4
+      ],
+      "dtype": "float64"
+    },
+    "finger_tracking_weight": {
+      "shape": [
+        1969,
+        4
+      ],
+      "dtype": "float64"
+    },
+    "finger_quality": {
+      "shape": [
+        1969,
+        4
+      ],
+      "dtype": "float32"
+    },
+    "finger_angles": {
+      "shape": [
+        1969,
+        4,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "finger_band_inside": {
+      "shape": [
+        1969,
+        4
+      ],
+      "dtype": "bool"
+    },
+    "finger_contact_veto": {
+      "shape": [
+        1969,
+        4
+      ],
+      "dtype": "bool"
+    },
+    "finger_near_veto": {
+      "shape": [
+        1969,
+        4
+      ],
+      "dtype": "bool"
+    },
+    "candidate": {
+      "shape": [
+        1969,
+        67
+      ],
+      "dtype": "bool"
+    },
+    "wrong": {
+      "shape": [
+        1969,
+        67
+      ],
+      "dtype": "bool"
+    },
+    "surface_distance": {
+      "shape": [
+        1969,
+        67
+      ],
+      "dtype": "float32"
+    },
+    "focus_mask": {
+      "shape": [
+        1969,
+        67
+      ],
+      "dtype": "bool"
+    },
+    "reward": {
+      "shape": [
+        1969
+      ],
+      "dtype": "float32"
+    },
+    "cost": {
+      "shape": [
+        1969
+      ],
+      "dtype": "float32"
+    }
+  },
+  "limitations": [
+    "60Hz endpoint samples cannot establish 240Hz extrema",
+    "body_state human observations are native; guitar logical markers are reconstructed",
+    "No body-pair contact, calibrated string pressure or acoustic success proof",
+    "Old baseline uses previous initial pose/control; do not treat as current v9 position policy"
+  ]
+}

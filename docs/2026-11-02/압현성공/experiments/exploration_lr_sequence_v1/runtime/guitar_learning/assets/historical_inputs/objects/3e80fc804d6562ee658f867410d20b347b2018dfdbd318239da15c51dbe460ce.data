@@ -1,0 +1,63 @@
+"""New arm alignment to free guitar; immutable finite world support and feet reused."""
+import isaacgym
+import argparse
+from pathlib import Path
+from unittest.mock import patch
+from ..lower_body_release_v1 import run_horizontal_v7 as runner, scene_v8, controller_horizontal_v4
+from ..lower_body_release_v1.common import ROOT, BASE, pin, verify, read, save, sha
+from ..seated_foot_support_v1.runtime_v6 import Scene
+from .runtime_v15 import Controller
+
+
+def main(config, out):
+    cfg = read(config)
+    phase = BASE/'grounded_guitar_support_v1'
+    source = Path(cfg['candidate']).parent
+    report = read(cfg['source_report'])
+    assert report['eligible_for_native'] and report['inputs_unchanged'] and verify(read(source/'inputs_before.json'))
+    posture_report = Path(cfg['posture_target_report'])
+    posture = read(posture_report)
+    assert posture['eligible_for_native_target'] and posture['inputs_unchanged'] and verify(read(posture_report.parent/'inputs_before.json'))
+    assert sha(cfg['upper_target105']) == cfg['upper_target105_sha256'] == posture['target_sha256']
+    assert sha(cfg['candidate']) == cfg['candidate_sha256'] == posture['source_candidate_sha256']
+    assert Path(cfg['upper_target105']).resolve() == posture_report.parent/'upper_target105.json'
+    assert Path(cfg['candidate']).resolve() == Path(posture['source_candidate']).resolve()
+    goal_report_path = Path(cfg['finite_right_goal_report'])
+    goal = read(goal_report_path)
+    assert goal['eligible_for_finite_human_goal'] and goal['inputs_unchanged']
+    assert verify(read(goal_report_path.parent/'inputs_before.json'))
+    assert sha(cfg['finite_right_goal_spec']) == cfg['finite_right_goal_spec_sha256'] == goal['spec_sha256']
+    assert read(cfg['finite_right_goal_spec'])['initial_candidate_sha256'] == cfg['candidate_sha256']
+    assert goal['source_candidate_sha256'] == cfg['candidate_sha256']
+    assert Path(cfg['finite_right_goal_spec']).resolve() == goal_report_path.parent/'right_goal_spec.json'
+    assert cfg['seconds'] == 5 and cfg['mode'] == 'static'
+    extras = list(Path(__file__).resolve().parent.glob('*.py'))
+    extras += list((ROOT/'stability_adapter_2/seated_foot_support_v1').glob('*.py'))
+    extras += [ROOT/'docs/plans/grounded_guitar_support_20261016.md',
+               BASE/'seated_foot_support_v1/artifact_inventory.json',
+               Path(cfg['source_report']), Path(cfg['upper_target105']), source/'inputs_before.json', ROOT/'docs/plans/grounded_guitar_world_anchor_20261016.md', ROOT/'docs/plans/grounded_guitar_spine_clearance_20261016.md', ROOT/'docs/plans/grounded_guitar_arm_alignment_20261016.md', ROOT/'docs/plans/grounded_guitar_arm_audit_20261016.md', ROOT/'stability_adapter_2/AGENTS.md', ROOT/'docs/plans/grounded_guitar_chest_preload_20261016.md', ROOT/'docs/plans/grounded_guitar_aligned_preload_20261016.md', ROOT/'docs/plans/grounded_guitar_contact_margin_20261016.md', ROOT/'docs/plans/grounded_guitar_load_ramp_20261016.md', ROOT/'docs/plans/grounded_guitar_normal_cap_20261016.md', ROOT/'docs/plans/grounded_guitar_chest_orientation_20261016.md']
+    extras += [posture_report, posture_report.parent/'inputs_before.json', ROOT/'docs/plans/grounded_guitar_relative_translation_20261016.md']
+    extras += [goal_report_path, Path(cfg['finite_right_goal_spec']), goal_report_path.parent/'inputs_before.json', ROOT/'docs/plans/grounded_guitar_right_goal_20261016.md']
+    extras += [Path(read(cfg['candidate'])['support_candidate'])]
+    extras += [ROOT/'docs/plans/grounded_guitar_normal_load_20261016.md', ROOT/'isaacgym/docs/programming/tensors.html', ROOT/'isaacgym/docs/api/python/gym_py.html']
+    assert cfg['right_task_preload_m'] == .002
+    inputs = pin(config, extra=extras)
+    before = phase/'provenance'/(out.name+'_before.json')
+    save(before, inputs)
+    try:
+        with patch.object(scene_v8, 'Scene', Scene), patch.object(controller_horizontal_v4, 'Controller', Controller):
+            runner.run(config, out)
+    finally:
+        save(out/'support_wrapper.json', dict(input_sha256=inputs, inputs_unchanged=verify(inputs),
+             before_manifest=str(before), actual_scene_class='seated_foot_support_v1.runtime_v6.Scene',
+             controller='grounded_guitar_support_v1.runtime_v15.Controller',
+             scope='Source V4 arm alignment with original native filters and float32 Elbow margin at unchanged source V2 guitar placement. V2 world human support and successful finite feet, Target2 posture and7to9mm preload unchanged. Constant affine correction of finite human right palm/material/task world goals from settled support geometry; no guitar command. Right human task preload4to2mm, palm/material IK anchors retained; read-only net-contact force probe, original gains/caps/restrictions retained.'))
+    assert verify(inputs)
+
+
+if __name__ == '__main__':
+    p = argparse.ArgumentParser()
+    p.add_argument('--config', type=Path, required=True)
+    p.add_argument('--out', type=Path, required=True)
+    a = p.parse_args()
+    main(a.config.resolve(), a.out.resolve())

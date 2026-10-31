@@ -1,0 +1,63 @@
+"""Current OM guitar, fixed lower human, native self-collision and ordinary PD."""
+import json
+from pathlib import Path
+import isaacgym  # Must precede native scene dependencies that import Torch.
+from isaacgym import gymapi
+from ..self_collision_environment import SelfCollisionEnvironment
+from ..environment import ROOT
+
+GEOMETRY = ROOT / 'stability_adapter_2/assets/om_body_geometry_v3/manifest.json'
+MASS = ROOT / 'docs/2026-10-12/stability_adapter_2/results/realistic_guitar_proportions_v1/native_realistic_v2/native_properties.json'
+
+
+def read(path):
+    return json.loads(Path(path).read_text())
+
+
+class GraphicsGym:
+    def __init__(self, gym, enabled): self.gym, self.enabled = gym, enabled
+    def __getattr__(self, name): return getattr(self.gym, name)
+    def create_sim(self, compute, graphics, engine, params):
+        return self.gym.create_sim(compute, 0 if self.enabled else -1, engine, params)
+
+
+class Scene(SelfCollisionEnvironment):
+    def __init__(self, graphics=True):
+        self.geometry = read(GEOMETRY)
+        self.mass_reference = read(MASS)['applied']
+        acquire = gymapi.acquire_gym
+        gymapi.acquire_gym = lambda: GraphicsGym(acquire(), graphics)
+        try:
+            super().__init__({}, [0, 0, 0])
+        finally:
+            gymapi.acquire_gym = acquire
+
+    def _create_scene(self):
+        self.config['guitar_asset'] = self.geometry['asset']
+        self.config['strap']['buttons_G_m'] = self.geometry['strap_buttons_G_m']
+        super()._create_scene()
+        if self.guitar_bodies != [row['name'] for row in self.mass_reference]:
+            raise ValueError('기타 강체 순서와 질량 기준이 다릅니다.')
+        props = self.gym.get_actor_rigid_body_properties(self.env, self.guitar)
+        for prop, reference in zip(props, self.mass_reference):
+            ratio = reference['mass_kg'] / prop.mass
+            prop.mass = reference['mass_kg']
+            for i in 'xyz':
+                for j in 'xyz':
+                    setattr(getattr(prop.inertia, i), j, float(getattr(getattr(prop.inertia, i), j)) * ratio)
+        if not self.gym.set_actor_rigid_body_properties(self.env, self.guitar, props, False):
+            raise RuntimeError('기타 질량 설정 실패')
+        actual = self.gym.get_actor_rigid_body_properties(self.env, self.guitar)
+        if any(abs(p.mass-r['mass_kg']) > 1e-6 for p, r in zip(actual, self.mass_reference)):
+            raise RuntimeError('기타 질량 확인 실패')
+        self.guitar_mass = sum(p.mass for p in actual)
+        for actor, names in ((self.human, self.human_bodies), (self.guitar, self.guitar_bodies)):
+            for i, name in enumerate(names):
+                color = (.15,.7,.3) if name.startswith('LH:') else ((.85,.12,.5) if name.startswith('RH:') else (.7,.7,.7))
+                self.gym.set_rigid_body_color(self.env, actor, i, gymapi.MESH_VISUAL_AND_COLLISION, gymapi.Vec3(*color))
+
+    def step_physics(self):
+        # No strap law, support task, guitar force or pose submission here.
+        self.gym.simulate(self.sim)
+        self.gym.fetch_results(self.sim, True)
+        self.steps += 1

@@ -1,0 +1,66 @@
+"""Near-contact initial proposals from the observed late chest/upper-arm support."""
+import copy
+from pathlib import Path
+import xml.etree.ElementTree as ET
+import numpy as np
+from scipy.optimize import least_squares
+from .initial_pose_noise_v1 import read,save,sha,pose
+from .upper_arm_static_geometry_v1 import ROOT,ASSET,calibrated_upper_fk,state_from_fk
+from .om_axilla_source_geometry_v3 import CapsuleBodyDistance
+from .realistic_guitar_geometry_v1 import source_scene,source_audit
+from .environment_contract_v1 import EnvironmentContract
+from .elbow_wrist_strike_source_v1 import solve_pick
+from .left_neck_near_geometry_v1 import FACETS
+from .left_neck_three_face_geometry_v1 import measurements,placement_pass
+
+A=ROOT/'stability_adapter_2';D=ROOT/'docs/2026-10-19/stability_adapter_2'
+P=D/'results/chest_upperarm_initial_v1'
+B=D/'results/chest_contact_cycle_v1/native_v1'
+CFG=D/'results/right_shift_initial_v1/config_v1/config.json'
+
+def main():
+    out=P/'search_v1';out.mkdir(parents=True,exist_ok=False)
+    cfg=read(CFG);geometry=read(A/'assets/om_body_geometry_v3/manifest.json');asset=Path(geometry['asset'])
+    paths={Path(__file__).resolve(),A/'CHEST_UPPERARM_INITIAL_PLAN_V1.md',CFG,B/'initial_values.json',B/'final_state.json',FACETS,ASSET,A/'config.json',A/'assets/om_body_geometry_v3/manifest.json',asset}
+    paths|=set(A.glob('*.py'))|set(map(Path,geometry['input_sha256']))|{Path(x['path']) for x in geometry['meshes']}|{Path(cfg[k]) for k in ('initial_candidate','native_reference')}
+    for path in (ASSET,asset):
+        xml=ET.parse(path).getroot();md=(path.parent/xml.find('compiler').get('meshdir')).resolve();paths|={(md/m.get('file')).resolve() for m in xml.findall('./asset/mesh')}
+    pins={str(p.resolve()):sha(p) for p in paths};save(out/'inputs_before.json',pins)
+    c=EnvironmentContract(CFG);base=read(B/'initial_values.json');state=base['native_initial_state'];end=read(B/'final_state.json');q0=np.array(base['q_ref_rad']);names=base['joint_names'];bodies=base['human_body_names']
+    fk,parents=calibrated_upper_fk(names,bodies,state,q0);gp0,gr0=pose(state['guitar_body_states'][0]);gpseed,gr=pose(end['guitar_body_states'][0]);qs=np.array([s['pos'] for s in end['human_dof_states']])
+    distance=CapsuleBodyDistance(asset,ASSET);facets=read(FACETS)['facets'];old=read(cfg['initial_candidate']);station=old['left_neck_near']['station_G_m'];front=old['left_neck_near']['front_z_G_m']
+    left=np.array([i for i,n in enumerate(names) if n.startswith(('L_Thorax','L_Shoulder','L_Elbow','L_Wrist'))]);shoulder=np.array([names.index('R_Shoulder_'+a) for a in 'xyz']);chest=np.array([names.index('Chest_'+a) for a in 'xyz']);distal=np.array([names.index(n+'_'+a) for n in ('R_Elbow','R_Wrist') for a in 'xyz'])
+    frozen=np.array([i for i,n in enumerate(names) if n.startswith(('Neck_','Head_','LH:','RH:'))]);qs[frozen]=q0[frozen];qs[left]=q0[left]
+    wp,wr=fk(q0)['L_Wrist'];left_rotation=gr*(gr0.inv()*wr);left_local=gr0.inv().apply(wp-gp0)
+    points=np.array(cfg['six_joint_strike_waypoints_G_m']);rows=[];selected=[]
+    for label,gap in [('near020',.0002),('near050',.0005)]:
+        q=qs.copy()
+        lo=np.r_[np.full(3,-.005),np.maximum(c.lower[chest],q0[chest]-.10)-q[chest],np.maximum(c.lower[shoulder],q0[shoulder]-.25)-q[shoulder]]
+        hi=np.r_[np.full(3,.005),np.minimum(c.upper[chest],q0[chest]+.10)-q[chest],np.minimum(c.upper[shoulder],q0[shoulder]+.25)-q[shoulder]]
+        def residual(v):
+            trial=q.copy();trial[chest]+=v[3:6];trial[shoulder]+=v[6:9];ps=fk(trial);gp=gpseed+v[:3]
+            gaps={n:distance.measure(ps,n,gp,gr)['gap_m'] for n in ('Chest','R_Shoulder','R_Hip','L_Hip','R_Elbow')}
+            return np.r_[10000*(gaps['Chest']-gap),10000*(gaps['R_Shoulder']-gap),10000*(gaps['R_Hip']-gap),15000*min(gaps['L_Hip']-.00015,0),5000*min(gaps['R_Elbow']-.020,0),2*v[:3],.05*v[3:]]
+        fit=least_squares(residual,np.clip(np.zeros(9),lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=40,diff_step=1e-4,ftol=1e-8)
+        gp=(gpseed+fit.x[:3]).astype(np.float32).astype(float);q[chest]+=fit.x[3:6];q[shoulder]+=fit.x[6:9]
+        def left_res(v):
+            trial=q.copy();trial[left]=v;p,r=fk(trial)['L_Wrist'];return np.r_[1200*(p-gp-gr.apply(left_local)),100*(left_rotation.inv()*r).as_rotvec(),.03*(v-q0[left])]
+        ll=np.maximum(c.lower[left]+1e-6,q0[left]-.8);lh=np.minimum(c.upper[left]-1e-6,q0[left]+.8)
+        lf=least_squares(left_res,np.clip(q[left],ll+1e-8,lh-1e-8),bounds=(ll,lh),max_nfev=70);q[left]=lf.x
+        q,err,_=solve_pick(fk,q,distal,c.lower,c.upper,q,gp+gr.apply(points[0]),q[distal]);q=q.astype(np.float32).astype(float);ps=fk(q)
+        caps={n:distance.measure(ps,n,gp,gr) for n in ('Chest','R_Thorax','R_Shoulder','R_Elbow','R_Hip','L_Hip','Torso','Spine')};faces=measurements(ps,gp,gr,station,front,facets)
+        predicted=state_from_fk(state,bodies,q,fk)
+        for s,orig in zip(predicted['guitar_body_states'],state['guitar_body_states']):
+            p,r=pose(orig);p=gp+gr.apply(gr0.inv().apply(p-gp0));r=gr*gr0.inv()*r;s['pose']={'p':dict(zip('xyz',p.tolist())),'r':dict(zip('xyzw',r.as_quat().tolist()))}
+        audit=source_audit(source_scene(predicted,bodies,asset),parents);samples=[];previous=q[distal]
+        for target in np.vstack([points,(points[1]+points[2])/2]):
+            trial,error,_=solve_pick(fk,q,distal,c.lower,c.upper,q,gp+gr.apply(target),previous);previous=trial[distal];psample=fk(trial)
+            samples.append({'target_G_m':target.tolist(),'q6_rad':trial[distal].tolist(),'error_m':error,'forearm_gap_m':distance.measure(psample,'R_Elbow',gp,gr)['gap_m'],'ball_max_deg':float(np.rad2deg(np.linalg.norm(trial[distal].reshape(2,3),axis=1)).max())})
+        eligible=bool(audit['source_clear'] and placement_pass(faces) and all(.00003< caps[n]['gap_m']<.001 for n in ('Chest','R_Shoulder','R_Hip')) and caps['L_Hip']['gap_m']>.00003 and np.array_equal(q[frozen],q0[frozen]) and np.all(abs(q[c.body]-q0[c.body])<=.10+1e-6) and all(s['error_m']<.002 and s['forearm_gap_m']>.00005 and s['ball_max_deg']<160 for s in samples))
+        row={'label':label,'accepted_for_native':eligible,'source_audit':audit,'capsule_body':caps,'proximal_upper_arm30_witness':caps['R_Shoulder'],'proximal_upper_arm65_witness':caps['R_Shoulder'],'proximal_upper_arm45_witness':caps['R_Shoulder'],'scope':'source near-contact proposal, not cooked-contact certification; whole upper arm compatibility witness keys','face_measurements':faces,'samples':samples,'station_G_m':station,'front_z_G_m':front,'body_delta_from_previous_rad':{names[i]:float(q[i]-q0[i]) for i in c.body},'seed_final_state':str(B/'final_state.json'),'seed_guitar_translation_correction_W_m':(gp-gpseed).tolist()}
+        save(out/(label+'_audit.json'),row);rows.append(row);print(label,'accepted',eligible,'source',audit['source_clear'],'faces',placement_pass(faces),'gapsmm',{n:round(v['gap_m']*1000,3) for n,v in caps.items()},'EWerror',max(s['error_m'] for s in samples),flush=True)
+        if eligible:
+            folder=out/label;folder.mkdir();candidate={'joint_names':names,'joint_angles_rad':q.tolist(),'position_W_m':gp.tolist(),'quaternion_xyzw':gr.as_quat().tolist(),'predicted_human_poses':{n:{'p':p.tolist(),'q':r.as_quat().tolist()} for n,(p,r) in ps.items()},'predicted_guitar_body_states':predicted['guitar_body_states'],'right_block_cradle':row,'body_side_lean_axilla':row,'no_strap_upper_arm_proposal':{'proximal_support':caps['R_Elbow']},'left_neck_near':{'accepted_for_native':True,'station_G_m':station,'front_z_G_m':front,'face_measurements':faces,'source_audit':audit},'chest_upperarm_initial':row}
+            save(folder/'candidate.json',candidate);save(folder/'config.json',{**cfg,'initial_candidate':str(folder/'candidate.json'),'initial_candidate_sha256':sha(folder/'candidate.json'),'six_joint_strike_enabled':True});selected.append(str(folder/'config.json'))
+    assert all(sha(p)==h for p,h in pins.items());save(out/'search.json',{'input_sha256':pins,'rows':rows,'selected':selected,'native_runs':0})
+if __name__=='__main__':main()

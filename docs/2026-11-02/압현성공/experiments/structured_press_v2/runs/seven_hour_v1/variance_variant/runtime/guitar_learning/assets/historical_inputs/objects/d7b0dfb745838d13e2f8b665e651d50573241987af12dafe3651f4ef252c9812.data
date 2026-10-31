@@ -1,0 +1,81 @@
+"""Preserve source V1 fit; correct metadata and audit changed foot boxes."""
+import copy,itertools
+from pathlib import Path
+import xml.etree.ElementTree as ET
+import numpy as np
+from scipy.spatial import ConvexHull
+from scipy.spatial.transform import Rotation
+from ..lower_body_release_v1.common import ROOT,A,BASE,HUMAN,read,save,sha,pin,verify
+from ..lower_body_release_v1.upright_source_v1 import full_fk,NATIVE,INITIAL
+from ..lower_body_release_v1.upright_polytope_v2 import GuitarBoxes
+from stability_adapter_2.om_axilla_source_geometry_v3 import CapsuleBodyDistance,segment_convex
+from .source_v1 import PHASE,PREVIOUS,PLAN
+
+
+def main():
+    source=PHASE/'source_v1';out=PHASE/'source_v2';out.mkdir(exist_ok=False)
+    pins=pin(extra=[Path(__file__).resolve(),Path(__file__).with_name('source_v1.py'),PLAN,ROOT/'docs/plans/seated_foot_support_metadata_20261016.md',INITIAL,NATIVE/'native_properties.json']
+             +[source/n for n in ('candidate.json','predicted_state.json','report.json','support_candidate.json','upper_target105.json','static5.json')]
+             +[PREVIOUS/'source_v4/candidate.json'])
+    save(out/'inputs_before.json',pins)
+    c=read(source/'candidate.json');state=copy.deepcopy(c['expected_initial_state'])
+    c['restoration_reference_lower24_q_rad']=c.pop('lower24_q_rad')
+    c['lower24_q_rad']={n:q for n,q in zip(c['joint_names'],c['q_ref_rad']) if n in c['restoration_reference_lower24_q_rad']}
+    c['historical_chair_baseline_center_W_m']=c.pop('chair_baseline_center_W_m')
+    for body in state['chair_body_states']:body['pose']['p']=dict(zip('xyz',c['chair_initial_center_W_m']))
+    c['expected_initial_state']=state;c['support_candidate']=str(out/'support_candidate.json')
+    i=read(INITIAL);names,bodies=c['joint_names'],i['human_body_names']
+    poses,_=full_fk(names,bodies,state,np.array(c['q_ref_rad']));poses=poses(np.array(c['q_ref_rad']))
+    previous=read(PREVIOUS/'source_v4/candidate.json')
+    old,_=full_fk(names,bodies,previous['expected_initial_state'],np.array(previous['q_ref_rad']));old=old(np.array(previous['q_ref_rad']))
+    distance=CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']),HUMAN)
+    boxes=GuitarBoxes(distance);xml=ET.parse(HUMAN)
+    parents={b.get('name'):a.get('name') for a in xml.iter('body') for b in a.findall('body')}
+    excluded={frozenset((e.get('body1'),e.get('body2'))) for e in xml.findall('./contact/exclude')}
+    props=read(NATIVE/'native_properties.json')['actual_shape_properties']['human']
+    def enabled(a,b):
+        return a!=b and parents.get(a)!=b and parents.get(b)!=a and frozenset((a,b)) not in excluded and any((x['filter']&y['filter'])==0 for x in props[a] for y in props[b])
+    corners=np.array(list(itertools.product((-1.,1.),repeat=3)))
+    def box(p,n):
+        center,size,rot=boxes.boxes[n];bp,br=p[n];rr=br*rot
+        return bp+br.apply(center)+rr.apply(corners*size),rr.as_matrix().T
+    def sat(v,axes,w,otheraxes):
+        cross=np.cross(axes[:,None],otheraxes[None,:]).reshape(-1,3)
+        cross=cross[np.linalg.norm(cross,axis=1)>1e-9];cross/=np.linalg.norm(cross,axis=1)[:,None]
+        directions=np.r_[axes,otheraxes,cross];a=v@directions.T;b=w@directions.T
+        return float(np.maximum(a.min(0)-b.max(0),b.min(0)-a.max(0)).max())
+    def audit(p,chair_half,chair_center,gp,gr):
+        rows=[]
+        for name in ('L_Ankle','L_Toe','R_Ankle','R_Toe'):
+            v,axes=box(p,name);planes=ConvexHull(v).equations
+            for other in boxes.boxes:
+                if enabled(name,other):
+                    w,otheraxes=box(p,other);rows.append(dict(a=name,b=other,kind='box_box_SAT',gap_m=sat(v,axes,w,otheraxes)))
+            for other,(segment,radius) in distance.capsules.items():
+                if enabled(name,other):
+                    bp,br=p[other];seg=bp+br.apply(segment)
+                    gap=segment_convex(seg[0],seg[1],v,planes)[0]-radius
+                    rows.append(dict(a=name,b=other,kind='capsule_box',gap_m=gap))
+            w=chair_center+corners*chair_half
+            rows.append(dict(a=name,b='chair',kind='box_box_SAT',gap_m=sat(v,axes,w,np.eye(3))))
+            rows.append(dict(a=name,b='G:body',kind='box_convex_SAT',gap_m=boxes.measure(p,name,gp,gr)))
+        return rows
+    newrows=audit(poses,np.array(c['chair_half_m']),np.array(c['chair_initial_center_W_m']),np.array(c['guitar_position_W_m']),Rotation.from_quat(c['guitar_quaternion_xyzw']))
+    oldrows=audit(old,np.array(previous['chair_initial_half_extents_m']),np.array(previous['chair_initial_center_W_m']),np.array(previous['guitar_position_W_m']),Rotation.from_quat(previous['guitar_quaternion_xyzw']))
+    key=lambda r:(r['a'],r['b'],r['kind']);before={key(r):r['gap_m'] for r in oldrows}
+    worse=[r for r in newrows if r['gap_m']<-.0001 and r['gap_m']<before[key(r)]-.0002]
+    report=read(source/'report.json');report['gates']['no_new_relevant_foot_box_intersections']=not worse
+    report.update(eligible_for_native=all(report['gates'].values()),foot_box_pairs=newrows,previous_foot_box_pairs=oldrows,
+                  new_or_worsened_foot_box_intersections=worse,metadata_only_human_guitar_and_q_preserved=True,
+                  scope_v2='V1 float32 fit/human and guitar predictions preserved exactly. Corrected chair predicted pose and actual lower24 metadata; historical restoration references labeled. Source capsules plus four changed foot boxes checked against enabled human boxes/capsules, chair and G:body convex pieces. Hand meshes/other guitar marker shapes not certified; native contact and safety remain required.',inputs_unchanged=verify(pins))
+    for name,value in (('candidate.json',c),('predicted_state.json',state),('support_candidate.json',read(source/'support_candidate.json')),('upper_target105.json',read(source/'upper_target105.json')),('report.json',report)):
+        save(out/name,value)
+    cfg=read(source/'static5.json');cfg.update(candidate=str(out/'candidate.json'),candidate_sha256=sha(out/'candidate.json'),source_report=str(out/'report.json'),upper_target105=str(out/'upper_target105.json'),upper_target105_sha256=sha(out/'upper_target105.json'))
+    save(out/'static5.json',cfg)
+    assert c['q_ref_rad']==read(source/'candidate.json')['q_ref_rad'] and state['human_body_states']==read(source/'predicted_state.json')['human_body_states']
+    assert state['guitar_body_states']==read(source/'predicted_state.json')['guitar_body_states']
+    print(dict(eligible=report['eligible_for_native'],foot_box_pairs=len(newrows),worsened=worse),flush=True)
+    assert report['eligible_for_native'] and verify(pins)
+
+
+if __name__=='__main__':main()

@@ -174,9 +174,9 @@ def source_capsule_witness(a, b, triangles, low, high, candidate_count=512):
 
 
 class BatchedController:
-    def __init__(self, scene, *, finger_action_mode='incremental'):
-        if finger_action_mode not in ('position', 'incremental'):
-            raise ValueError('finger_action_mode must be position or incremental')
+    def __init__(self, scene, *, finger_action_mode='position'):
+        if finger_action_mode != 'position':
+            raise ValueError('finger_action_mode must be position; legacy incremental control is archived')
         self.scene, self.device = scene, scene.device
         self.finger_action_mode = finger_action_mode if scene.hand == 'left' else None
         self.dtype = scene.q.dtype
@@ -192,8 +192,6 @@ class BatchedController:
         self.active = self.index([self.names.index(n) for n in ACTIVE_NAMES])
         self.finger_actions = self.index([ACTIVE_NAMES.index(n) for n in LEFT_HAND_NAMES]
                                         if scene.hand == 'left' else [])
-        self.incremental_actions = (self.finger_actions if self.finger_action_mode == 'incremental'
-                                    else self.index([]))
         self.leg = self.index([self.names.index(side+'_'+part+'_'+axis) for side in ('L', 'R') for part in ('Hip', 'Knee', 'Ankle', 'Toe') for axis in 'xyz'])
         self.moving_leg = self.index([self.names.index(side+'_'+part+'_'+axis) for side in ('L', 'R') for part, axes in (('Hip', 'xyz'), ('Knee', 'x'), ('Ankle', 'xyz'), ('Toe', 'x')) for axis in axes])
         self.foot_channels = self.index([self.names.index(side+'_'+name) for side in ('L', 'R') for name in ('Knee_x', 'Ankle_x', 'Ankle_y', 'Ankle_z', 'Toe_x')])
@@ -238,29 +236,19 @@ class BatchedController:
             chest_proximity='source_triangle_capsule_closest_features_not_cooked_contact',
             chest_search='certified_AABB512_then_full_surface_exact_fallback_in_chunks16',
             initial_jacobian='geometry_fallback_until_first_step_after_boundary_reset',
-            source_contract='035_v14_prepared22s', native_cpu_parity=False,
+            source_contract=scene.contract.get('initial_pose', {}).get('schema', '035_v14_prepared22s'),
+            native_cpu_parity=False,
             differences=['GPU PhysX solver and native contact backend',
                          'Explicit geometry lower mass; native CUDA mass comparison is recorded separately',
                          'Fixed-step damped foot IK replaces CPU SciPy least_squares',
                          'Triangle source proximity replaces CPU convex optimizer',
                          'Initial/reset upper Jacobian uses source child-axis geometry until GPU refresh'])
-        if self.finger_action_mode == 'incremental':
-            self.contract.update(schema='guitar_learning.gpu_finite_control.v3',
-                action_codec=dict(schema='guitar_learning.gpu_left_incremental_fingers.v1',
-                    mode='incremental',
-                    incremental_joint_names=list(LEFT_HAND_NAMES),
-                    incremental_action_indices=self.incremental_actions.cpu().tolist(),
-                    velocity_scale_rad_s=4., control_hz=60,
-                    target_update='clamp(previous_target + action * 4 / 60, native_lower, native_upper)',
-                    zero_action='hold previous target', smoothing='bypassed for left21',
-                    limit_memory='clamped target only; no windup; reversal on next control tick',
-                    remaining_actions='unchanged reset-reference affine offsets, smoothing and rate limits'))
-        elif self.finger_action_mode == 'position':
+        if self.finger_action_mode == 'position':
             self.contract.update(schema='guitar_learning.gpu_finite_control.v4',
                 action_codec=dict(schema='guitar_learning.gpu_left_position_fingers.v1',
                     mode='position', joint_names=list(LEFT_HAND_NAMES),
                     action_indices=self.finger_actions.cpu().tolist(),
-                    reference='035/v14 prepared reference105_rad; not B standby pose or actual q',
+                    reference='scene prepared reference105_rad; not B standby pose or actual q',
                     target_request='reference + action * (native_upper - reference) if action >= 0; '
                                    'reference + action * (reference - native_lower) otherwise',
                     target_update='rate_limit(previous_target, target_request, 4 / 60), then native clamp',
@@ -469,15 +457,11 @@ class BatchedController:
             torch.minimum(smoothed, old+self.rate[self.active]/60),
             old-self.rate[self.active]/60,
         )
-        # 3. 증분 손가락은 평활 결과를 덮어써 이전 명령 + 행동*4rad/s/60Hz로 만든다.
-        if self.incremental_actions.numel():
-            ids = self.incremental_actions
-            active[:, ids] = old[:, ids]+action[:, ids]*(4./60)
         target = self.reference.expand(self.num_envs, -1).clone()
         target[:, self.active] = torch.maximum(torch.minimum(active, self.action_high), self.action_low)
-        # 4. 전신 기준 자세에 활성 명령을 넣고 발의 유한 역기구학 보정을 적용한다.
+        # 3. 전신 기준 자세에 활성 명령을 넣고 발의 유한 역기구학 보정을 적용한다.
         target = self._foot_targets(target)
-        # 5. 보정 뒤 전체 속도·관절 한계를 적용하고 원 영범위 8축을 기준값으로 고정한다.
+        # 4. 보정 뒤 전체 속도·관절 한계를 적용하고 원 영범위 8축을 기준값으로 고정한다.
         target = torch.maximum(torch.minimum(target, self.target+self.rate/60), self.target-self.rate/60)
         target = torch.maximum(torch.minimum(target, self.upper), self.lower)
         target[:, self.zero] = self.reference[self.zero]

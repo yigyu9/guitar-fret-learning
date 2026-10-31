@@ -1,0 +1,156 @@
+"""Native-preflight-gated joint PPO with two actors and strict checkpoint resume."""
+import argparse
+from guitar_learning.core.dependency_inputs import pin_evidence
+import copy
+import json
+import os
+from pathlib import Path
+import sys
+
+
+def settings_document(raw):
+    from guitar_learning.tool.experiments.joint.settings import settings_document as parse
+    return parse(raw)
+
+
+def summarize_run(out):
+    """Read complete episode records; keep both hand and coordination evidence."""
+    from guitar_learning.training.recording import write, digest
+    out = Path(out)
+    report = json.loads((out/'report.json').read_text())
+    from guitar_learning.tool.experiments.joint.proofs import full_safe_episode
+    counts = dict(completed_episodes=0, safe_complete_episodes=0, physical_failure_episodes=0,
+        joint_successful_episodes=0, coordination_successful_episodes=0,
+        hand_quality_successful_episodes=dict(left=0, right=0),
+        strict_music=dict(target_count=0, matched50=0, matched100=0))
+    path = out/'episodes.jsonl'
+    if path.is_file():
+        with path.open() as stream:
+            for line in stream:
+                episode = json.loads(line).get('episode')
+                if episode is None or episode.get('valid') is not True: continue
+                counts['completed_episodes'] += 1
+                counts['physical_failure_episodes'] += int(episode.get('reason') == 'terminal_failure'
+                    or episode.get('joint', {}).get('safety_invalidated', False))
+                for key in counts['strict_music']:
+                    counts['strict_music'][key] += episode.get('music', {}).get(key, 0)
+                if not full_safe_episode(episode): continue
+                counts['safe_complete_episodes'] += 1
+                counts['joint_successful_episodes'] += int(episode.get('musical_quality', {}).get('stage_success') is True)
+                counts['coordination_successful_episodes'] += int(episode.get('coordination', {}).get('stage_success') is True)
+                for role in ('left', 'right'):
+                    counts['hand_quality_successful_episodes'][role] += int(
+                        episode.get('musical_quality', {}).get(role, {}).get('stage_success') is True)
+    initialization = out/'joint_initialization.json'
+    summary = dict(schema='guitar_learning.joint_training_report.v1', completed=report['completed'],
+        report=dict(path=str((out/'report.json').resolve()), sha256=digest(out/'report.json')),
+        optimizer_updates=report.get('optimizer_updates'), committed_transitions=report.get('transitions'),
+        accounting=report.get('accounting'), counts=counts,
+        episode_records=dict(path=str(path.resolve()), sha256=digest(path),
+            scope='streamed original full episode records retain both hand and coordination evidence') if path.is_file() else None,
+        initialization=dict(path=str(initialization.resolve()), sha256=digest(initialization)) if initialization.is_file() else None,
+        scope='same-scene joint contact/geometric success; separate hand success and safe preflight do not certify joint performance or sound')
+    write(out/'joint_report.json', summary)
+    return summary
+
+
+def run(settings, args):
+    import isaacgym  # Must precede all policy/native dependencies in this process.
+    from unittest.mock import patch
+    from guitar_learning.training import parallel, policy, ppo
+    from guitar_learning.training import runner as train_parallel
+    from guitar_learning.imitation.imitation import dataset_manifest
+    from guitar_learning.tool.experiments.local_skills.learning import contract_digest
+    from guitar_learning.training.monitoring import available_memory_bytes, LowMemoryError
+    from guitar_learning.training.persistent_audit import finalize_persistent_run
+    from guitar_learning.training.recording import write
+    from guitar_learning.tool.experiments.joint.policy import JointPolicy
+    from guitar_learning.tool.experiments.joint.transfer import validate_experts, apply_experts
+    from guitar_learning.tool.experiments.joint.proofs import validate_preflight
+    from guitar_learning.tool.experiments.joint.worker import native_environment
+    from guitar_learning.native.lower_body_release_v1 import common
+    out = args.out.resolve()
+    existed = out.exists()
+    if existed: raise FileExistsError(str(out))
+    if available_memory_bytes() < 8*1024**3:
+        raise LowMemoryError('joint training requires at least8GiB available before native startup')
+    settings = copy.deepcopy(settings)
+    settings['min_available_memory_gib'] = max(6., settings['min_available_memory_gib'])
+    evidence = validate_experts(settings)
+    preflight = validate_preflight(settings) if args.resume is None else None
+    expected = dict(evidence['source_pins'])
+    for path, sha in (preflight['pins'] if preflight else {}).items():
+        if path in expected and expected[path] != sha:
+            raise RuntimeError('conflicting joint preflight/expert input digest')
+        expected[path] = sha
+    if dataset_manifest(expected) != expected:
+        raise RuntimeError('joint expert/preflight inputs changed before startup')
+    original_pin, original_trainer, base_pool = common.pin, ppo.PPOTrainer, parallel.Pool
+
+    def pin_with_proof(config, extra=()):
+        result = pin_evidence(original_pin, config, extra, expected)
+        return result
+
+    class JointTrainer(original_trainer):
+        def __init__(self, model, config=None):
+            transfer = None
+            if args.resume is None:
+                if contract_digest(model.architecture['contract']) != preflight['contract_sha256']:
+                    raise ValueError('joint runtime contract must exactly match safe native preflight')
+                if dataset_manifest(expected) != expected:
+                    raise RuntimeError('joint expert/preflight inputs changed before actor transfer')
+                transfer = apply_experts(model, settings)
+                if transfer['source_pins'] != evidence['source_pins']:
+                    raise RuntimeError('joint expert proof changed before actor transfer')
+            # The shared runner fills initial_std before this constructor. Copying
+            # each learned actor/std here precedes fresh Adam construction.
+            super().__init__(model, config)
+            write(out/'joint_initialization.json', dict(
+                mode='strict_resume' if args.resume else 'validated_experts_actor_only_fresh_joint_critics_and_Adam',
+                transfer=transfer, source_pins=evidence['source_pins'],
+                preflight=preflight, strict_resume=str(args.resume.resolve()) if args.resume else None,
+                scope='no inherited joint success; fixed expert preflight certifies safety only'))
+
+    class JointPool(base_pool):
+        def __init__(self, specs, **kwargs):
+            specs = copy.deepcopy(specs)
+            for spec in specs: spec['timing'] = copy.deepcopy(settings['timing'])
+            super().__init__(specs, worker_factory=native_environment, **kwargs)
+
+    argv = [sys.argv[0], '--settings', str(args.settings), '--out', str(out)]
+    if args.resume is not None: argv += ['--resume', str(args.resume)]
+    if available_memory_bytes() < 8*1024**3:
+        raise LowMemoryError('joint training requires at least8GiB available immediately before native startup')
+    summary = None
+    try:
+        with patch.object(train_parallel, 'settings_document', lambda _:copy.deepcopy(settings)), \
+                patch.object(parallel, 'Pool', JointPool), patch.object(policy, 'Policy', JointPolicy), \
+                patch.object(ppo, 'PPOTrainer', JointTrainer), patch.object(common, 'pin', pin_with_proof), \
+                patch.object(sys, 'argv', argv):
+            train_parallel.main()
+    finally:
+        primary = sys.exc_info()[1]
+        try:
+            passed = finalize_persistent_run(out)
+            if (out/'report.json').is_file(): summary = summarize_run(out)
+            if passed is False and primary is None:
+                raise RuntimeError('joint persistent lifecycle audit failed; see report.json')
+        except BaseException as error:
+            if primary is None: raise
+            print('[joint] secondary finalization error: '+str(error), file=sys.stderr, flush=True)
+    return summary
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--settings', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--resume', type=Path)
+    args = parser.parse_args()
+    for name in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS'):
+        os.environ[name] = '1'
+    import isaacgym
+    run(settings_document(json.loads(args.settings.read_text())), args)
+
+
+if __name__ == '__main__': main()

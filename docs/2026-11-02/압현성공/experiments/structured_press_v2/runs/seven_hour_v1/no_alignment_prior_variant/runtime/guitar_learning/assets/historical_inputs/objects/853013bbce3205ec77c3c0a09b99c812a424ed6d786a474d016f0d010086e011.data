@@ -1,0 +1,87 @@
+"""Joint musical counterexamples use the reviewed real canonical first event."""
+import unittest
+from dataclasses import replace
+import numpy as np
+from stability_adapter_2.dual_music_clock_v1 import JointMusicClock
+from stability_adapter_2.environment_contract_v1 import EnvironmentContract
+
+
+class DualMusicTest(unittest.TestCase):
+    def make(self,dwell=.1):
+        m=JointMusicClock(dwell_s=dwell)
+        # Keep the real required string/fret/direction; move its authored time to1s.
+        m.events=(replace(m.events[0],score_time_s=1.,traversal_end_time_s=1.),)
+        return m
+
+    def until(self,m,step,sounding):
+        for i in range(m.physics_step+1,step+1):m.update(i,sounding)
+
+    def test_real_bundle_identity_and_targets(self):
+        m=JointMusicClock();self.assertEqual(len(m.events),42)
+        self.assertEqual(m.timeline.fps,60)
+        self.assertEqual(m.targets().tolist(),[-1,-1,6,-1,-1,-1])
+
+    def test_correct_pitch_and_crossing_joint_success(self):
+        m=self.make();pitch=np.array([0,0,6,0,0,0]);self.until(m,719,pitch)
+        m.update(720,pitch,[(2,1.,1,True)]);self.until(m,733,pitch)
+        self.assertTrue(m.results[0]['joint_success'])
+
+    def test_wrong_crossing_not_repaired_by_later_correct_pitch(self):
+        m=self.make();wrong=np.array([0,0,7,0,0,0]);self.until(m,719,wrong)
+        m.update(720,wrong,[(2,1.,1,True)]);self.until(m,733,np.array([0,0,6,0,0,0]))
+        self.assertFalse(m.results[0]['joint_success'])
+        self.assertEqual(m.crossings[0]['reason'],'wrong_pitch_or_uncertain')
+
+    def test_correct_press_without_crossing_misses(self):
+        m=self.make();self.until(m,733,np.array([0,0,6,0,0,0]))
+        self.assertFalse(m.results[0]['joint_success'])
+
+    def test_uncertain_bracket_and_short_dwell_rejected(self):
+        for stable,why in [(False,'wrong_pitch_or_uncertain'),(True,'dwell')]:
+            m=self.make(dwell=4.);self.until(m,719,np.array([0,0,6 if stable else 5,0,0,0]))
+            m.update(720,np.array([0,0,6,0,0,0]),[(2,1.,1,True)])
+            self.assertEqual(m.crossings[0]['reason'],why)
+
+    def test_prep_does_not_score_and_wrong_direction_rejected(self):
+        m=self.make();pitch=np.array([0,0,6,0,0,0]);m.update(1,pitch,[(2,.5,1,True)])
+        self.assertEqual(m.crossings[0]['reason'],'PREP');self.assertFalse(m.bad)
+        self.until(m,719,pitch);m.update(720,pitch,[(2,1.,-1,True)])
+        self.assertEqual(m.crossings[-1]['reason'],'direction')
+
+    def test_duplicate_crossing_fails_event(self):
+        m=self.make();pitch=np.array([0,0,6,0,0,0]);self.until(m,719,pitch)
+        m.update(720,pitch,[(2,1.,1,True)]);m.update(721,pitch,[(2,0.,1,True)])
+        self.until(m,733,pitch);self.assertFalse(m.results[0]['joint_success'])
+
+    def test_open_string_interference(self):
+        m=self.make();t=replace(m.events[0].string_targets[0],fret=0)
+        m.events=(replace(m.events[0],string_targets=(t,)),)
+        self.until(m,719,np.array([0,0,1,0,0,0]));m.update(720,np.array([0,0,1,0,0,0]),[(2,1.,1,True)])
+        self.assertEqual(m.crossings[0]['reason'],'wrong_pitch_or_uncertain')
+
+    def test_nonconsecutive_clock_and_invalid_measurement_rejected(self):
+        m=self.make()
+        with self.assertRaises(ValueError):m.update(2,np.zeros(6))
+        with self.assertRaises(ValueError):m.update(1,[0,0,23,0,0,0])
+
+    def test_false_zone_cannot_receive_joint_credit(self):
+        m=self.make();pitch=np.array([0,0,6,0,0,0]);self.until(m,719,pitch)
+        m.update(720,pitch,[(2,1.,1,False)]);self.until(m,733,pitch)
+        self.assertEqual(m.crossings[0]['reason'],'zone')
+        self.assertFalse(m.results[0]['joint_success'])
+
+    def test_chord_wrong_order_rejected(self):
+        m=self.make();e=m.events[0];t=e.string_targets[0]
+        m.events=(replace(e,string_targets=(replace(t,string=2),replace(t,string=3)),
+            strike=replace(e.strike,traversal_strings=(2,3),audible_strings=(2,3))),)
+        pitch=np.array([0,0,6,6,0,0]);self.until(m,719,pitch)
+        m.update(720,pitch,[(3,1.,1,True)]);self.until(m,733,pitch)
+        self.assertEqual(m.crossings[0]['reason'],'order')
+        self.assertFalse(m.results[0]['joint_success'])
+
+    def test_full_81_target_history_and_ranges(self):
+        c=EnvironmentContract();request,final=c.targets(c.neutral_action(),c.q_ref)
+        self.assertEqual(len(final),81);np.testing.assert_array_equal(final,c.q_ref.astype(np.float32))
+
+
+if __name__=='__main__':unittest.main()

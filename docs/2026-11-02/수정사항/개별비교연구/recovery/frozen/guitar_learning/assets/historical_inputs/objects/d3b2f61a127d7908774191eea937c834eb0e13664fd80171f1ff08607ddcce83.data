@@ -1,0 +1,31 @@
+"""Explicit full-score experiment settings, separate from single-note joint."""
+import copy
+import math
+from pathlib import Path
+
+
+def settings_document(raw):
+    from ..train_parallel import settings_document as base_settings
+    from .transfer import validate_experts
+    value = copy.deepcopy(raw)
+    song = value.pop('song',None); experts = value.pop('joint_experts',None)
+    defaults = dict(schema='guitar_learning.song.v1',pre_roll_s=3.,tail_s=.5,window_s=.5,left_fraction=.4)
+    if not isinstance(song,dict) or set(song)-set(defaults): raise ValueError('explicit song config required')
+    config = dict(defaults,**song)
+    if (config['schema'] != defaults['schema'] or config['pre_roll_s'] != 3. or config['tail_s'] != .5
+            or any(isinstance(config[k],bool) or not isinstance(config[k],(int,float)) or not math.isfinite(config[k])
+                for k in ('pre_roll_s','tail_s','window_s','left_fraction'))
+            or not 0 < config['window_s'] <= .5 or not 0 < config['left_fraction'] <= 1):
+        raise ValueError('supported full-score timing/quality config required')
+    if not isinstance(experts,dict) or set(experts) != {'left_settings','right_settings'}:
+        raise ValueError('two proven expert settings required')
+    if any(not Path(p).is_absolute() or not Path(p).is_file() for p in experts.values()):
+        raise ValueError('absolute expert files required')
+    parsed = base_settings(value)
+    if (parsed['stage'] != 'D' or parsed['start_event_index'] != 0 or parsed['tempo_scale'] != 1.
+            or parsed['music'] != dict(reward_mode='legacy',goal_event_indices=None)
+            or parsed['ppo']['cost_weight'] <= 0):
+        raise ValueError('complete original-tempo score and positive safety cost required')
+    parsed.update(song=config,joint_experts=experts)
+    validate_experts(parsed)
+    return parsed

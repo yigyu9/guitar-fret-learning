@@ -1,0 +1,96 @@
+"""Probe policy initialization/cleanup and import order, with no native run."""
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import types
+import unittest
+from unittest.mock import patch
+
+from guitar_learning.tool.experiments.transition import probe, transfer, environment
+from guitar_learning.tool.experiments.transition.policy import SpecialistPolicy
+from guitar_learning.tests.test_transition_capture import RecordedProbeFixture,write_json
+from guitar_learning.tests.test_transition_train import settings
+
+
+class TransitionProbeTests(unittest.TestCase):
+    def test_policy_uses_actual_transition_alias_source_proof_and_closes_on_step_failure(self):
+        fixture=RecordedProbeFixture();observed=[]
+        original_initializer=transfer.initialize_actor
+        original_build=fixture.build
+        def build(*args,**kwargs):
+            env=original_build(*args,**kwargs)
+            def fail(action):raise RuntimeError('injected native-step failure')
+            env.step=fail
+            return env
+        fixture.build=build
+        def initialize(model,value):
+            observed.append(model)
+            return original_initializer(model,value)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);value=settings();config=root/'settings.json';write_json(config,value)
+            args=types.SimpleNamespace(settings=config,out=root/'run',controller='policy',episodes=1,checkpoint=None)
+            with fixture.patches(),patch.object(transfer,'initialize_actor',side_effect=initialize):
+                with self.assertRaisesRegex(RuntimeError,'native-step failure'):probe.run(value,args)
+            self.assertEqual(len(observed),1);self.assertIsInstance(observed[0],SpecialistPolicy)
+            self.assertEqual(fixture.sessions[0].close_calls,1)
+            report=json.loads((args.out/'result.json').read_text())
+            self.assertFalse(report['completed']);self.assertEqual(report['failure']['message'],'injected native-step failure')
+            case=json.loads((args.out/'case_000/result.json').read_text())
+            self.assertFalse(case['success']);self.assertFalse(case['completed'])
+            self.assertTrue((args.out/'case_000/demonstration.npz').is_file())
+
+    def test_initializer_and_cleanup_failures_preserve_primary_and_close(self):
+        fixture=RecordedProbeFixture();original_build=fixture.build
+        def build(*args,**kwargs):
+            env=original_build(*args,**kwargs);original_close=env.close
+            def close():original_close();raise RuntimeError('injected cleanup failure')
+            env.close=close
+            return env
+        fixture.build=build
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);value=settings();config=root/'settings.json';write_json(config,value)
+            args=types.SimpleNamespace(settings=config,out=root/'run',controller='policy',episodes=1,checkpoint=None)
+            with fixture.patches(),patch.object(transfer,'initialize_actor',side_effect=ValueError('injected initializer failure')):
+                with self.assertRaisesRegex(ValueError,'initializer failure'):probe.run(value,args)
+            self.assertEqual(fixture.sessions[0].close_calls,1)
+            result=json.loads((args.out/'result.json').read_text())
+            self.assertEqual(result['failure']['message'],'injected initializer failure')
+            self.assertEqual(result['cleanup_error']['message'],'injected cleanup failure')
+            self.assertFalse(result['completed'])
+
+    def test_low_memory_never_constructs_a_scene(self):
+        fixture=RecordedProbeFixture()
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);value=settings();config=root/'settings.json';write_json(config,value)
+            args=types.SimpleNamespace(settings=config,out=root/'run',controller='zero',episodes=1,checkpoint=None)
+            with fixture.patches(),patch('guitar_learning.training.monitoring.available_memory_bytes',return_value=1024):
+                with self.assertRaisesRegex(RuntimeError,'memory guard'):probe.run(value,args)
+            self.assertFalse(fixture.sessions)
+            report=json.loads((args.out/'result.json').read_text());self.assertFalse(report['completed'])
+
+    def test_native_entrypoints_import_Isaac_before_numpy_or_torch(self):
+        script='''
+import builtins,runpy,sys
+original=builtins.__import__
+def check(name,*args,**kwargs):
+    if name=='isaacgym':
+        assert 'torch' not in sys.modules and 'numpy' not in sys.modules, 'numerical import before Isaac'
+        raise RuntimeError('ISAAC_FIRST_CONFIRMED')
+    return original(name,*args,**kwargs)
+builtins.__import__=check
+sys.argv=[sys.argv[1],'--settings','/tmp/unused-settings.json','--out','/tmp/unused-out']
+try:runpy.run_module(sys.argv[0],run_name='__main__')
+except RuntimeError as error:
+    assert str(error)=='ISAAC_FIRST_CONFIRMED', str(error)
+else:raise AssertionError('Isaac import never reached')
+'''
+        root=Path(__file__).resolve().parents[2]
+        for module in ('probe','evaluate','train'):
+            result=subprocess.run([sys.executable,'-c',script,'guitar_learning.tool.experiments.transition.'+module],
+                cwd=root,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=30)
+            self.assertEqual(result.returncode,0,result.stderr)
+
+
+if __name__=='__main__':unittest.main()

@@ -1,0 +1,187 @@
+"""Serialization/replay tests, not new native feasibility evidence.
+
+The positive fixture freezes one previously recorded7-ring-contact sample and
+removes LH contacts at2.5s. All measurements, observations and ledgers are real;
+the frozen body motion and edited contact schedule are synthetic CPU inputs.
+"""
+import copy
+import gzip
+import json
+from pathlib import Path
+import shutil
+import tempfile
+import types
+import unittest
+from unittest.mock import patch
+
+import numpy as np
+import torch._dynamo
+
+from guitar_learning.imitation.imitation import dataset_manifest
+from guitar_learning.training.recording import digest
+from guitar_learning.tests.test_skill_environment import LongRecordedSession
+from guitar_learning.tests.test_transition_train import settings
+from guitar_learning.transition import environment,probe,capture
+
+BUILD_ENVIRONMENT=environment.build_environment
+
+PROJECT=Path(__file__).resolve().parents[2]
+TRACE=PROJECT/'docs/2026-10-12/stability_adapter_2/results/guitar_learning_local_skills_v1/left_native_probe_v2/left_return_reference/trace.jsonl.gz'
+
+
+def positive_recorded_sample():
+    with gzip.open(TRACE,'rt') as stream:
+        for line in stream:
+            row=json.loads(line)
+            for measured,sample in zip(row['info']['physics_measurements'],row['info']['native_control']['physics_samples240']):
+                if any(value['candidate'] for value in measured['music']['targets'].values()):
+                    return sample
+    raise AssertionError('actual qualified7-ring sample missing')
+
+
+class StaticContactSession(LongRecordedSession):
+    """Frozen recorded kinematics and scheduled contact deletion, not physics."""
+    sample=None
+
+    def native(self):
+        value=copy.deepcopy(self.sample['native']);value['physics_step']=self.scene.steps
+        return value
+
+    def contacts(self):
+        contacts=copy.deepcopy(self.sample['native_contacts']['contacts'])
+        if self.scene.steps/240.>=2.5:
+            contacts=[contact for contact in contacts if not any(
+                str(contact.get(key,'')).startswith('human/LH:') for key in ('body0_name','body1_name'))]
+        return contacts
+
+
+class RecordedProbeFixture:
+    def __init__(self):
+        self.sessions=[];self.environments=[]
+        StaticContactSession.sample=positive_recorded_sample()
+
+    def build(self,config,out,*,bundle,transition,**kwargs):
+        def factory(config,path):
+            session=StaticContactSession(config,path);self.sessions.append(session);return session
+        env=BUILD_ENVIRONMENT({},out,bundle=bundle,transition=transition,
+            session_factory=factory,contact_reader=lambda scene:self.sessions[-1].contacts())
+        self.environments.append(env)
+        return env
+
+    def patches(self):
+        # Exact consumed immutable source evidence remains real. Exclude the
+        # live source census only in this declared CPU/replay test fixture.
+        import contextlib
+        stack=contextlib.ExitStack()
+        stack.enter_context(patch.dict('sys.modules',{'isaacgym':types.ModuleType('isaacgym')}))
+        stack.enter_context(patch.object(environment,'build_environment',side_effect=self.build))
+        stack.enter_context(patch('guitar_learning.imitation.imitation_io.pin_inputs',side_effect=dataset_manifest))
+        stack.enter_context(patch('guitar_learning.training.recording.project_source_paths',return_value=set()))
+        stack.enter_context(patch('guitar_learning.training.monitoring.available_memory_bytes',return_value=16*1024**3))
+        return stack
+
+
+def write_json(path,value):
+    Path(path).write_text(json.dumps(value,allow_nan=False))
+
+
+def republish(case):
+    report=json.loads((case/'result.json').read_text())
+    for key,name in {'trace_sha256':'trace.jsonl.gz','demonstration_sha256':'demonstration.npz',
+        'contract_sha256':'contract.json','settings_sha256':'settings.json','inputs_before_sha256':'inputs_before.json',
+        'context_sha256':'context.json','initial_sha256':'initial.json'}.items():report[key]=digest(case/name)
+    write_json(case/'result.json',report)
+    parent=Path(report['parent_result_path']);value=json.loads(parent.read_text())
+    value['case_manifests'][str(case)]=digest(case/'result.json');write_json(parent,value)
+
+
+def rewrite_first(case,change):
+    path=case/'trace.jsonl.gz';temporary=case/'trace-mutated.jsonl.gz'
+    with gzip.open(path,'rt') as source,gzip.open(temporary,'wt') as target:
+        first=json.loads(next(source));change(first);target.write(json.dumps(first)+'\n')
+        for line in source:target.write(line)
+    temporary.replace(path)
+
+
+class TransitionCaptureTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.folder=tempfile.TemporaryDirectory();cls.root=Path(cls.folder.name)
+        cls.fixture=RecordedProbeFixture();cls.config=cls.root/'settings.json'
+        cls.value=settings();write_json(cls.config,cls.value)
+        args=types.SimpleNamespace(settings=cls.config,out=cls.root/'positive',controller='zero',episodes=1,checkpoint=None)
+        with cls.fixture.patches():cls.parent=probe.run(cls.value,args)
+        cls.case=cls.root/'positive/case_000'
+        cls.good=capture.audit_capture(cls.case)
+
+    @classmethod
+    def tearDownClass(cls):cls.folder.cleanup()
+
+    def copy_case(self):
+        temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup)
+        folder=Path(temporary.name)/'copy';shutil.copytree(self.case.parent,folder)
+        case=folder/'case_000';report=json.loads((case/'result.json').read_text())
+        report['parent_result_path']=str(folder/'result.json');write_json(case/'result.json',report)
+        parent=json.loads((folder/'result.json').read_text());parent['case_manifests']={str(case):digest(case/'result.json')}
+        write_json(folder/'result.json',parent)
+        return case
+
+    def test_positive_replay_uses_actual_measurement_and_ledgers(self):
+        self.assertTrue(self.parent['completed']);self.assertTrue(self.good['report']['success'])
+        self.assertEqual(self.good['arrays']['state'].shape,(240,500))
+        self.assertEqual(self.good['report']['episode']['transition']['physics_sample_count'],960)
+        self.assertEqual(self.good['report']['episode']['song']['left_success_count'],1)
+        self.assertEqual(self.fixture.sessions[0].close_calls,1)
+
+    def test_partial_or_failed_claim_cannot_become_demonstration(self):
+        for field,value in (('completed',False),('failure',dict(type='Injected',message='partial'))):
+            case=self.copy_case();report=json.loads((case/'result.json').read_text())
+            report[field]=value;report['success']=True;write_json(case/'result.json',report);republish(case)
+            with self.assertRaisesRegex(ValueError,'complete finalized'):capture.audit_capture(case)
+
+    def test_parent_cleanup_and_case_hash_are_required(self):
+        for field,value in (('completed',False),('cleanup_error',{'type':'Injected'}),('case_manifests',{})):
+            case=self.copy_case();path=case.parent/'result.json';parent=json.loads(path.read_text());parent[field]=value;write_json(path,parent)
+            with self.assertRaisesRegex(ValueError,'complete finalized'):capture.audit_capture(case)
+
+    def test_rehashed_action_change_does_not_match_demonstration(self):
+        case=self.copy_case();rewrite_first(case,lambda row:row['action'].__setitem__(0,.2));republish(case)
+        with self.assertRaisesRegex(ValueError,'action/native trace'):capture.audit_capture(case)
+
+    def test_rehashed_three_physics_rows_are_not_four_actual_samples(self):
+        case=self.copy_case()
+        def remove(row):
+            row['info']['physics_measurements'].pop();row['info']['native_control']['physics_samples240'].pop()
+        rewrite_first(case,remove);republish(case)
+        with self.assertRaisesRegex(ValueError,'four actual'):capture.audit_capture(case)
+
+    def test_reordered_native_substeps_cannot_replay_consecutive_clock(self):
+        case=self.copy_case()
+        def reorder(row):
+            for values in (row['info']['physics_measurements'],row['info']['native_control']['physics_samples240']):
+                values[0],values[1]=values[1],values[0]
+        rewrite_first(case,reorder);republish(case)
+        with self.assertRaises(ValueError):capture.audit_capture(case)
+
+    def test_post_action_times_cannot_replace_before_action_clock(self):
+        case=self.copy_case()
+        with np.load(case/'demonstration.npz',allow_pickle=False) as archive:arrays={key:archive[key].copy() for key in archive.files}
+        arrays['task_time_s']+=1/60.;np.savez_compressed(case/'demonstration.npz',**arrays);republish(case)
+        with self.assertRaisesRegex(ValueError,'precede action'):capture.audit_capture(case)
+
+    def test_self_consistent_before_observation_edit_fails_raw_reconstruction(self):
+        case=self.copy_case()
+        rewrite_first(case,lambda row:row['before_observation']['state'].__setitem__(0,row['before_observation']['state'][0]+.5))
+        with np.load(case/'demonstration.npz',allow_pickle=False) as archive:arrays={key:archive[key].copy() for key in archive.files}
+        arrays['state'][0,0]+=.5;np.savez_compressed(case/'demonstration.npz',**arrays);republish(case)
+        with self.assertRaisesRegex(ValueError,'before-action observation'):capture.audit_capture(case)
+
+    def test_rehashed_raw_contact_change_cannot_preserve_positive_measurement(self):
+        case=self.copy_case()
+        def remove_contact(row):
+            row['info']['native_control']['physics_samples240'][0]['native_contacts']['contacts']=[]
+        rewrite_first(case,remove_contact);republish(case)
+        with self.assertRaises(ValueError):capture.audit_capture(case)
+
+
+if __name__=='__main__':unittest.main()

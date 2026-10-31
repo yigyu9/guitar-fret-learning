@@ -21,6 +21,7 @@ from guitar_learning.gpu.control import _point_triangle
 from guitar_learning.gpu.finger_reward import (FINGER_REWARD_CONTRACT,
     finger_tracking_reward, source_finger_frame_contract)
 from guitar_learning.gpu.scene import _ASSET_DIR, _MANIFEST_SHA256, _REPO_ROOT
+from guitar_learning.native.paths import resolve_input_path
 # 별칭은 기존 해시 검증 지점을 유지하며 같은 스트리밍 구현을 재사용한다.
 from guitar_learning.training.training_log_io import digest as _sha
 from guitar_learning.training.training_log_io import digest as _wrist_sha
@@ -220,7 +221,7 @@ def load_press_surface(strings, frets):
         raise ValueError('Press surface manifest SHA mismatch')
     manifest = json.loads(manifest_path.read_text())
     xml_path = (_ASSET_DIR/'guitar_compound.xml').resolve()
-    expected = {str((_REPO_ROOT/p).resolve()): value for p, value in manifest['source_sha256'].items()}
+    expected = {str(resolve_input_path(_REPO_ROOT/p).resolve()): value for p, value in manifest['source_sha256'].items()}
     expected[str(xml_path)] = manifest['asset_sha256']
     plane, hulls, pins = _extract_plane(xml_path, expected)
     pins[str(manifest_path.resolve())] = _MANIFEST_SHA256
@@ -317,7 +318,7 @@ def load_wrist_region_track(bundle, press_surface):
             source_pins.get(str(manifest_path)) != _MANIFEST_SHA256):
         raise ValueError('pinned source press surface required for wrist region')
     manifest = json.loads(manifest_path.read_text())
-    expected = {str((_REPO_ROOT/path).resolve()): value for path, value in manifest['source_sha256'].items()}
+    expected = {str(resolve_input_path(_REPO_ROOT/path).resolve()): value for path, value in manifest['source_sha256'].items()}
     expected[str((_ASSET_DIR/'guitar_compound.xml').resolve())] = manifest['asset_sha256']
     plane, hulls, extracted_pins = _extract_plane(_ASSET_DIR/'guitar_compound.xml', expected)
     if any(source_pins.get(path) != value for path, value in extracted_pins.items()):
@@ -762,7 +763,7 @@ def load_thumb_support():
     manifest = json.loads(manifest_path.read_text())
     pins[str(manifest_path.resolve())] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     pins[str((_ASSET_DIR/'guitar_compound.xml').resolve())] = manifest['asset_sha256']
-    pins.update({str((_REPO_ROOT/p).resolve()): sha for p, sha in manifest['source_sha256'].items()})
+    pins.update({str(resolve_input_path(_REPO_ROOT/p).resolve()): sha for p, sha in manifest['source_sha256'].items()})
     diagnostic.update(body='LH:thumb3', mesh=str(path), mesh_scale=scale.tolist(),
         geom_quaternion_wxyz=quat.tolist(), geom_position_m=position.tolist())
     contract = dict(THUMB_SUPPORT_CONTRACT, source_sha256=pins,
@@ -880,10 +881,10 @@ def thumb_support_geometry(points, normals, valid, center_y, rear_vertices, plan
 
 
 WRONG_PRESS_CONTRACT = dict(
-    schema='guitar_learning.wrong_press_sources.v2',
+    schema='guitar_learning.wrong_press_sources.v3',
     causes=['other_higher', 'own_wrong_fret', 'own_wrong_string'],
-    effective='selected target geometry: own loaded facing distal pad at an unauthorized string/fret, or another finger at a higher fret on the target string; penalties only on audible overlap',
-    own='positive assigned pad takes precedence over incidental own samples; any simultaneous active selected own target cell is authorized',
+    effective='selected target geometry: own loaded facing distal pad at a higher fret on the target string or an unauthorized string/fret, or another finger at a higher fret on the target string; penalties only on audible overlap',
+    own='same-string higher distal pad blocks even with positive assigned pad or simultaneous authorization; otherwise positive assigned pad takes precedence over incidental own samples and simultaneous active selected own target cells are authorized',
     other='full thumb/finger2/3 loaded virtual-string samples; same/lower fret is not wrong; higher blocks even with positive assigned pad',
     pad_geometry='finite unique nearest press-plane string within3mm, signed height[-1,3]mm, facing cosine>=0.1, distal netload>=0.01N, fret interior inset2mm',
     times='raw geometry at both physics endpoints, integrated over clipped audible overlap; no time-mask before trapezoid; overlapping sources do not multiply penalty',
@@ -956,15 +957,19 @@ def wrong_press_sources(*, qualifies, assigned, nearest, source_fingers, surface
         pf, ps = pad_frets[:, finger-1], pad_strings[:, finger-1]
         pad_keys = (ps*fret_count+pf)*5+finger
         authorized = active_grid.gather(1, pad_keys) > 0
-        # 올바른 담당 패드는 같은 손가락의 부수적인 표면 표본 때문에 무효화하지 않는다.
-        # 다른 손가락의 더 높은 프렛은 별개로 계속 차단 요인이 된다.
+        # 같은 줄의 더 높은 유효 패드는 담당 손가락이어도 낮은 목표 음을 막는다.
+        # 그 외 부수적인 낮은 프렛·다른 줄은 기존 positive/동시 목표 우선을 유지한다.
         wrong_pad = (pad_valid[:, finger-1, :, None] & ~authorized[..., None] &
                      scope[:, None, indices] & ~positive[:, None, indices])
         same_string = ps[..., None] == strings[indices]
+        own_higher = (pad_valid[:, finger-1, :, None] & scope[:, None, indices] &
+                      same_string & (pf[..., None] > frets[indices]))
         body = 2*finger+1  # 몸체 순서: 엄지2/3, 검지2/3, ..., 소지2/3
         for cause, relation in ((1, same_string & (pf[..., None] != frets[indices])),
                                 (2, ~same_string)):
             points = wrong_pad & relation
+            if cause == 1:
+                points |= own_higher
             flags[:, indices, body, cause] = points.any(1)
             minima[:, indices, body] = torch.minimum(minima[:, indices, body],
                 torch.where(points, pf[..., None].to(torch.int16), fret_count).amin(1))

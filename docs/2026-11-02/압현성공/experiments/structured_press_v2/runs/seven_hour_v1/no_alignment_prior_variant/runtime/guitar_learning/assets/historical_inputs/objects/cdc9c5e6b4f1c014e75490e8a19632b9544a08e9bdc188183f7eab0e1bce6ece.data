@@ -1,0 +1,71 @@
+"""Name-based finite105 human commands; no guitar force or hidden leg submission."""
+import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+from stability_adapter_2.initial_pose_noise_v1 import pose
+from stability_adapter_2.strap import point_kinematics
+from .common import HUMAN
+import xml.etree.ElementTree as ET
+
+
+def skew(v):return np.array([[0,-v[2],v[1]],[v[2],0,-v[0]],[-v[1],v[0],0]])
+def vec(b,field):return np.array([b['vel'][field][k] for k in 'xyz'])
+
+
+def full_fk(scene,state):
+ xml=ET.parse(HUMAN).getroot();parents={c.get('name'):p.get('name') for p in xml.iter('body') for c in p.findall('body')};initial={n:pose(s) for n,s in zip(scene.human_bodies,state['human_body_states'])};rows=[]
+ for b in next(b for b in xml.iter('body') if b.get('name')=='Pelvis').iter('body'):
+  n=b.get('name');parent=parents.get(n)
+  if parent not in initial:continue
+  p,r=initial[n];pp,pr=initial[parent];ix=[scene.names.index(j.attrib['name']) for j in b.findall('joint')];basis=np.column_stack([np.fromstring(j.attrib['axis'],sep=' ') for j in b.findall('joint')]) if ix else np.zeros((3,0));relative=pr.inv()*r;zero=Rotation.from_rotvec(basis@scene.q_ref[ix]).inv()*relative if ix else relative;rows.append((n,parent,pr.inv().apply(p-pp),zero,basis,ix))
+ def fk(q):
+  result=dict(initial)
+  for n,parent,t,zero,basis,ix in rows:
+   p,r=result[parent];relative=Rotation.from_rotvec(basis@q[ix])*zero if ix else zero;result[n]=(p+r.apply(t),r*relative)
+  return result
+ return fk
+
+
+class Controller:
+ def __init__(self,scene):
+  self.s=scene;self.fk=full_fk(scene,scene.native());self.arm=np.array([i for i,n in enumerate(scene.names) if n.startswith(('L_Thorax','L_Shoulder','L_Elbow','L_Wrist'))]);state=scene.native();gp,gr=pose(state['guitar_body_states'][0]);wp,wr=pose(state['human_body_states'][scene.human_bodies.index('L_Wrist')]);self.anchor=gr.inv().apply(wp-gp);self.wrist_rotation=gr.inv()*wr;self.target_rows=[]
+
+ def targets(self):
+  s=self.s;t=s.steps/240;request=s.q_ref.copy();stage='static';info={}
+  if s.cfg['mode']=='release':
+   def smooth(a,b):
+    u=np.clip((t-a)/(b-a),0,1);return u*u*(3-2*u)
+   opening=.3*smooth(2,4);withdraw=smooth(2,5);stage='prepare' if t<2 else 'release' if t<5 else 'released_hold';state=s.native();q=np.array([v['pos'] for v in state['human_dof_states']]);gp,gr=pose(state['guitar_body_states'][0]);goal=self.anchor+np.array([.07*withdraw,.08*withdraw,0]);goalr=gr*self.wrist_rotation;error=rotation_error=0.
+   if t>=2:
+    lo=np.maximum(s.lower[self.arm],s.q_ref[self.arm]-.8);hi=np.minimum(s.upper[self.arm],s.q_ref[self.arm]+.8)
+    def residual(v):
+     trial=q.copy();trial[self.arm]=v;p,r=self.fk(trial)['L_Wrist'];return np.r_[1000*(p-gp-gr.apply(goal)),100*(goalr.inv()*r).as_rotvec(),.05*(v-s.q_ref[self.arm])]
+    fit=least_squares(residual,np.clip(s.target[self.arm],lo+1e-8,hi-1e-8),bounds=(lo,hi),max_nfev=30,ftol=1e-7);request[self.arm]=fit.x;trial=q.copy();trial[self.arm]=fit.x;p,r=self.fk(trial)['L_Wrist'];error=float(np.linalg.norm(p-gp-gr.apply(goal)));rotation_error=float((goalr.inv()*r).magnitude())
+    if not np.isfinite(fit.x).all() or error>.01 or rotation_error>.05 or np.any(np.linalg.norm(fit.x.reshape(4,3),axis=1)>=np.deg2rad(160)):raise RuntimeError('native105 left IK hard gate')
+    for digit in ('index','middle','ring','pinky'):
+     for suffix,w in (('1_x',.7),('2',1.),('3',.6)):
+      i=s.names.index('LH:'+digit+suffix);request[i]=np.clip(request[i]-w*opening,s.lower[i],s.upper[i])
+    for suffix,w in (('thumb2',1.),('thumb3',.6)):
+     i=s.names.index('LH:'+suffix);request[i]=np.clip(request[i]-w*opening,s.lower[i],s.upper[i])
+   info={'stage':stage,'goal_wrist_G_m':goal.tolist(),'source_IK_position_error_m':error,'source_IK_rotation_error_rad':rotation_error,'opening_rad':opening,'withdraw_fraction':withdraw}
+  row=s.command(dict(zip(s.names,request.tolist())));row.update(info);row['stage']=stage;self.target_rows.append(row);return row
+
+ def effort(self):
+  s=self.s;state=s.native();q=np.array([v['pos'] for v in state['human_dof_states']]);qd=np.array([v['vel'] for v in state['human_dof_states']]);assert np.isfinite(np.r_[q,qd]).all()
+  if abs(qd).max()>50:raise RuntimeError('actual105 joint velocity safety limit')
+  s.gym.refresh_jacobian_tensors(s.sim);jac=s.jacobian.detach().cpu().numpy()[0].astype(float).copy();assert jac.shape==(len(s.human_bodies)-1,6,105) and np.isfinite(jac).all();errors={m:[] for m in ('COM','origin')}
+  for name in ('R_Elbow','L_Ankle','R_Ankle'):
+   i=s.human_bodies.index(name);b=state['human_body_states'][i];p,r=pose(b);_,v=point_kinematics(p,r.as_quat(),vec(b,'linear'),vec(b,'angular'),np.zeros(3),s.hcom[i]);block=jac[i-1]
+   for mode in errors:
+    j=block[:3]-skew(r.apply(-(s.hcom[i] if mode=='COM' else np.zeros(3))))@block[3:];errors[mode].append(float(np.linalg.norm(j@qd-v)))
+  if max(abs(np.array(errors['COM'])-np.array(errors['origin'])))>1e-9:s.jacobian_mode=min(errors,key=lambda m:max(errors[m]))
+  if max(errors[s.jacobian_mode])>.01:raise RuntimeError('105 upper/lower Jacobian velocity frame mismatch')
+  gravity=np.zeros(105)
+  for i in range(1,len(s.human_bodies)):
+   _,r=pose(state['human_body_states'][i]);block=jac[i-1];j=block[:3] if s.jacobian_mode=='COM' else block[:3]-skew(r.apply(s.hcom[i]))@block[3:];gravity-=j.T@(s.mass[i]*np.array([0,0,-9.81]))
+  task=np.zeros(105);points=[];guitar=state['guitar_body_states'][0];gp,gr=pose(guitar)
+  for ref in s.references:
+   i=ref['index'];body=state['human_body_states'][i];p,r=pose(body);local=np.array(ref['local_m']);point,v=point_kinematics(p,r.as_quat(),vec(body,'linear'),vec(body,'angular'),local,s.hcom[i]);block=jac[i-1];j=block[:3]-skew(r.apply(local-(s.hcom[i] if s.jacobian_mode=='COM' else np.zeros(3))))@block[3:];goal,gv=point_kinematics(gp,gr.as_quat(),vec(guitar,'linear'),vec(guitar,'angular'),np.array(ref['goal_G_m']),s.com[s.guitar_bodies[0]]);raw=2000*(goal-point)+30*(gv-v);force=raw*min(1.,ref['cap_N']/max(np.linalg.norm(raw),1e-12));ix=ref['indices'];task[ix]+=(j.T@force)[ix];points.append({'body':ref['body'],'point_W_m':point.tolist(),'goal_W_m':goal.tolist(),'virtual_force_request_W_N':force.tolist(),'point_velocity_error_m_s':float(np.linalg.norm(j@qd-v))})
+  posture=s.control_kp*(s.target.astype(float)-q)-s.control_kd*qd;request=gravity+posture+task;effort=np.zeros(105,dtype=np.float32);effort[s.effort_indices]=np.clip(request[s.effort_indices],-s.pd_properties['effort'][s.effort_indices],s.pd_properties['effort'][s.effort_indices]).astype(np.float32);effort[s.zero_indices]=0
+  assert np.isfinite(effort).all() and s.native()==state
+  return effort,{'physics_step_before':s.steps,'joint_names':s.names,'gravity105_Nm':gravity.tolist(),'scalar_PD105_Nm':posture.tolist(),'support_task105_Nm':task.tolist(),'submitted105_Nm':effort.astype(float).tolist(),'raw_requested105_Nm':request.tolist(),'jacobian_frame':s.jacobian_mode,'jacobian_velocity_errors_m_s':errors,'support_points':points,'scope':'Submitted explicit57EFFORT commands,8zero-range commands0;48POSITION use separately logged nativePD/targets. Virtual task is human command, not measured contact/guitar force.'}

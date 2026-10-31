@@ -1,0 +1,48 @@
+# 자유 기타 학습
+
+현재 환경·측정·학습·평가 코드는 이 패키지에서 관리한다. 실행 목적별 진입점은 [README_CURRENT](README_CURRENT.md), 연구 범위·실험별 성과는 [master_plan](/home/ajou/yigyu/3/master_plan/README.md)을 따른다. 상태 차원이나 파일 버전이 같아도 목표·보상·입력 SHA가 다른 checkpoint를 혼용하지 않는다.
+
+## 실행 경로와 공용 기반
+
+| 위치 | 역할 |
+|---|---|
+| [contact_recovery](contact_recovery/README.md) | 현행 접촉 획득·상실·회복 진단과 교사 자료 수집. 새 BC/PPO 학습과 구분 |
+| [transition_refinement_runtime_v2](transition_refinement_runtime_v2/README.md) | 왼손 정밀화 평가·학습의 JSON 계약과 runtime 감사 |
+| [transition_refinement](transition_refinement/README.md) | 실제 접촉 준비·유지·해제 보상과 시연 rehearsal PPO |
+| [transition](transition/README.md) | 단음 A/B·겹친 준비·두 음 전환, 교사·BC·원자료 감사의 공통 기반 |
+| [song_reward_v2](song_reward_v2/README.md) | 전곡의 보상 V2·이전·평가·학습 |
+| [song](song/README.md)·[joint](joint/README.md) | 전곡·양손 단음의 공통 실행과 초기화 검증. 이후 경로가 재사용 |
+| [local_skills](local_skills/README.md) | 초기 손별 시연·전문가 검증. 이후 모델 이전이 사용하는 기반 포함 |
+| [native](native)·[assets](assets) | 실제 장면·제어·접촉·렌더와 모델·mesh·자세·설정 |
+| [score](score) | 검수한 곡 입력 읽기·정본화·계획 검증 |
+| [tool](tool/README.md) | 곡 등록·데이터/타현 계획 생성·감사·시각화·운영 도구 |
+| [tests](tests) | 물리·학습·자료·checkpoint 계약의 회귀 검사 |
+| [archive](archive/README.md) | 이전 소스·실험·검사의 원형과 원래 경로/SHA. 실행 입력으로 import하지 않음 |
+
+루트의 환경·관측·제어·정책·PPO·병렬 수집·로그 모듈은 여러 경로가 공유한다. `train_parallel.py`와 이전 환경 버전도 현재 재사용된다. `environment.py`는 기초 접촉 probe용 facade이며 모든 학습의 대표 진입점이 아니다. 구버전 접미사만으로 공용 코드를 삭제하지 않는다.
+
+## 물리와 입력 계약
+
+Root 고정·하체 유한 제어·105입력/97비영 범위/8원 영범위를 유지한다. 정책 행동은 왼손33+오른손6이며 왼손 과제에서는 오른손 정책 행동이0이다. 기타는 자유 강체·중력ON·스트랩OFF이고 직접 보조 힘·부착·실행 중 상태 덮어쓰기를 사용하지 않는다. 가슴 접촉 지속은 성공의 필수조건이 아니다. 물리240Hz·정책60Hz와 실제 표본 기반 음악/안전 판정을 유지한다.
+
+초기 자세는 기존035/v14를 기준으로 하며 현재 자산은 내부 `assets/`에서 읽는다. 준비·정착·정책 pre-roll은 경로별 설정을 따른다. 과거 정착2초 규칙을 native0초인 전곡·전환 경로에 자동 적용하지 않는다. 자세 연구의 새 후보도 학습에 자동 적용되지 않는다.
+
+`assets/native_provenance.json`은 원본과 현재 SHA를 구분한다. `historical_inputs.py`와 실행하지 않는 `assets/historical_inputs/` 원문은 기존 gate·checkpoint의 정확한 입력을 검증한다. 내부화·정리 전 원문 검증을 현재 실행 소스의 검증과 섞지 않는다. 외부 Isaac Gym, `data/song_bundles`, 기존 `docs`·`paper`의 checkpoint와 증거는 계속 필요하다.
+
+## 실행과 검사
+
+프로젝트 루트 `/home/ajou/yigyu/3`에서 Isaac Gym Preview4가 설치된 `rl38` 환경을 사용한다. native 진입점은 Isaac을 NumPy·Torch보다 먼저 import한다. 실제 설정과 새 출력 디렉토리를 지정하고 기존 실행 결과를 덮어쓰지 않는다.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 /home/ajou/miniconda3/envs/rl38/bin/python -B -m unittest discover -s guitar_learning/tests -t . -v
+```
+
+로그·전이 회계·checkpoint는 [LOGGING](LOGGING.md)을 따른다. 저장 모델의 strict load는 같은 관측·행동·목표·보상·물리·PPO 계약에서만 허용한다. 접촉 후보·기하 타현·음악 성공·안전 완주·정상 실행 완료를 각각 보고한다.
+
+## 이전 단계 문서
+
+[TRAINING](TRAINING.md), [SPECIALIST_TRAINING](SPECIALIST_TRAINING.md), [SKILL_CURRICULUM](SKILL_CURRICULUM.md), [IMITATION_TRAINING](IMITATION_TRAINING.md), [TIMING_TRAINING](TIMING_TRAINING.md), [ACTIONABLE_PREPARATION](ACTIONABLE_PREPARATION.md), [MUSICAL_QUALITY](MUSICAL_QUALITY.md)는 단계별 계약·구현 근거다. 그 안의 과거 실행 설정이나 성공을 최신 과제에 자동 상속하지 않는다. [CODE_LINEAGE](CODE_LINEAGE.md)는 원구현의 역사적 대응을 설명한다.
+
+구형 프로젝트 여섯 디렉토리는 [legacy 보관소](/home/ajou/yigyu/3/archive/legacy_guitar_20261019/README.md)에 있다. 구조 정리 전 소스는 [20261019_before_structure_cleanup](archive/20261019_before_structure_cleanup/manifest.json)에 보존했다.
+
+2026-10-19 구조 정리의 도구 이전·보관 범위·동등성 검증은 [정리 결과](/home/ajou/yigyu/3/docs/2026-10-19/guitar_learning_structure_cleanup_v1/README.md)에 기록했다.

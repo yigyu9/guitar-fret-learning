@@ -1,0 +1,146 @@
+"""Actual-pose finger IK, finite contact target hold, and return to the rest point."""
+from pathlib import Path
+import numpy as np
+from ..initial_pose_noise_v1 import pose
+from ..lower_body_release_v1.common import save
+from ..native_contacts import body_names, read_contacts
+from ..horizontal_play_test_v1.analyze_v1 import physical_guitar_bodies
+from . import motion_v1 as old
+from .finger_fk_v1 import make_finger_fk
+
+MODE = 'actual_pose_local_FK_contact_target_hold_v1'
+
+
+class Motion(old.Motion):
+    def __init__(self, scene, fk):
+        super().__init__(scene, fk)
+        assert self.spec['finger_control'] == dict(mode=MODE, return_mode='actual13_G_to_actual10_G',
+            full_goal_IK_gate_m=.003, local_prediction_gate_m=.0001, actual4qnorm_gate_rad=.05)
+        self.previous_model = None
+        self.ready_since = None
+        self.capture = None
+        self.return_origin = None
+
+    def apply(self, named):
+        s = self.s
+        t = s.steps / 240
+        if t < 10 or self.case not in ('press', 'combined'):
+            return super().apply(named)
+        state = s.native()
+        q = np.array([r['pos'] for r in state['human_dof_states']])
+        gp, gr = pose(state['guitar_body_states'][0])
+        marker = pose(state['human_body_states'][s.human_bodies.index('LH:index3')])[0]
+        palm_p, palm_r = pose(state['human_body_states'][s.human_bodies.index('LH:palm')])
+        finger_G = gr.inv().apply(marker-gp)
+        if not self.started:
+            assert s.steps == 2400
+            self.initial_finger = finger_G.copy()
+            self.initial_pick = gr.inv().apply(pose(state['human_body_states'][s.human_bodies.index('RH:pick')])[0]-gp)
+            self.q10 = q[self.finger].copy()
+            self.mapping = body_names(s.gym, s.env)
+            self.physical = physical_guitar_bodies()
+            save(Path(s.cfg['attempt_out'])/'play_reference.json', dict(time_s=t, state=state,
+                initial_finger_G_m=self.initial_finger.tolist(), initial_pick_G_m=self.initial_pick.tolist(), spec=self.spec))
+            self.started = True
+        original = np.array([named[n] for n in s.names])
+        request = original.copy()
+        model = make_finger_fk(s, state)
+        anchor_error = float(np.linalg.norm(model(q)['LH:index3'][0]-marker))
+        assert anchor_error <= 1e-9, 'actual finger anchor mismatch'
+        prediction_error = increment_norm = None
+        if self.previous_model is not None:
+            predicted = self.previous_model(q)['LH:index3'][0]
+            local_predicted = self.previous_palm_r.inv().apply(predicted-self.previous_palm_p)
+            local_actual = palm_r.inv().apply(marker-palm_p)
+            prediction_error = float(np.linalg.norm(local_predicted-local_actual))
+            increment_norm = float(np.linalg.norm(q[self.finger]-self.previous_q4))
+            assert s.steps-self.previous_step == 4
+            assert increment_norm <= .05, 'actual finger increment exceeds local model trust region'
+            assert prediction_error <= .0001, 'actual four-step finger prediction exceeds0.1mm'
+        target = np.array(self.spec['press']['target_G_m'])
+        relative = finger_G-target
+        positive = []
+        for contact in read_contacts(s.gym, s.env, self.mapping):
+            a, b = contact['body0_name'], contact['body1_name']
+            if float(contact['lambda']) > 0 and ((a == 'human/LH:index3' and b in self.physical) or (b == 'human/LH:index3' and a in self.physical)):
+                positive.append(dict(body0=a, body1=b, raw_lambda=float(contact['lambda'])))
+        ready = bool(positive and np.linalg.norm(relative[:2]) <= self.spec['press']['geometry_xy_m']
+            and self.spec['press']['geometry_z_band_m'][0] <= relative[2] <= self.spec['press']['geometry_z_band_m'][1])
+        if not ready or t < 10.8:
+            self.ready_since = None
+        elif self.ready_since is None:
+            self.ready_since = t
+        dwell = t-self.ready_since if self.ready_since is not None else 0.
+        descent = float(self.initial_finger[2]-finger_G[2])
+        qchange = float(np.max(abs(q[self.finger]-self.q10)))
+        before_target = s.target[self.finger].astype(float).copy()
+        if self.capture is None and 10.8 <= t < 13 and ready and dwell >= .1 and descent >= .002 and qchange >= .02:
+            self.capture = dict(step=s.steps, source_target_step=s.steps-4, final4_rad=before_target.tolist(),
+                observed_ready_duration_60Hz_s=dwell, actual_descent_m=descent, actual_qchange_rad=qchange)
+        held = self.capture is not None and t < 13
+        goal = None
+        error = None
+        if held:
+            values = np.array(self.capture['final4_rad'])
+        else:
+            if t < 13:
+                hover, down = target+[0, 0, .008], target-[0, 0, .004]
+                goal = old.interpolate(t, [10, 10.8, 11.3, 13], np.array([self.initial_finger, hover, down, down]))
+            else:
+                if self.return_origin is None:
+                    assert s.steps == 3120
+                    self.return_origin = finger_G.copy()
+                goal = old.interpolate(t, [13, 13.5, 14], np.array([self.return_origin, self.initial_finger, self.initial_finger]))
+            values, error = old.solve_finger(model, q, self.finger, s.lower, s.upper, s.q_ref,
+                gp+gr.apply(goal), s.target[self.finger].astype(float))
+            if not np.isfinite(values).all() or error > .003:
+                raise RuntimeError('actual-anchor press finite finger IK3mm hard gate')
+        assert np.all(values >= s.lower[self.finger]) and np.all(values <= s.upper[self.finger])
+        request[self.finger] = values
+        self.stage = 'press_contact_target_hold' if held else 'press_return' if t >= 13 else 'playing'
+        self.info = dict(case=self.case, press_enabled=True, strike_enabled=self.case == 'combined',
+            finger_control_mode=MODE, press_IK_evaluated=not held, press_goal_G_m=None if goal is None else goal.tolist(),
+            press_IK_error_m=error, finger_target_capture=self.capture, contact_hold_active=held,
+            readiness_observation_hz=60, ready_observation_start_s=self.ready_since, observed_ready_duration_s=dwell,
+            actual_geometry_contact_ready=ready, actual_index3_positive_contacts=positive,
+            actual_finger_G_m=finger_G.tolist(), actual_descent_from10_m=descent, actual_max_qchange_from10_rad=qchange,
+            actual_q4_rad=q[self.finger].tolist(), previous_submitted4_rad=before_target.tolist(),
+            actual_anchor_error_m=anchor_error, previous_actual4step_prediction_error_m=prediction_error,
+            actual4step_increment_norm_rad=increment_norm, return_origin13_G_m=None if self.return_origin is None else self.return_origin.tolist(),
+            return_destination10_G_m=self.initial_finger.tolist(),
+            local_model_scope='Actual palm-relative4step prediction is checked separately from before-rate fullgoal IK and requested/final target predictions.60Hz observed readiness is not240Hz dwell certification.')
+        if self.case == 'combined':
+            points = np.array(self.spec['strike']['waypoints_G_m'])
+            pick_goal = old.interpolate(t, [10,10.8,11.1,11.5,12.1,12.3,12.9,13.1,13.5],
+                np.vstack([self.initial_pick, points[0], points[1], points[1], points[2], points[2], points[3], points[3], points[4]]))
+            fitted, pick_error, nfev = old.solve_pick(self.fk, q, self.distal, s.lower, s.upper, s.q_ref,
+                gp+gr.apply(pick_goal), s.target[self.distal].astype(float))
+            if not np.isfinite(fitted).all() or pick_error > .002 or np.any(np.linalg.norm(fitted[self.distal].reshape(2,3),axis=1) >= np.deg2rad(160)):
+                raise RuntimeError('strike finite distal IK/principal2mm hard gate')
+            request[self.distal] = fitted[self.distal]
+            self.info.update(pick_goal_G_m=pick_goal.tolist(), pick_IK_error_m=pick_error, pick_IK_nfev=nfev)
+        changed = set(self.finger) | (set(self.distal) if self.case == 'combined' else set())
+        other = [j for j in range(105) if j not in changed]
+        assert np.array_equal(request[other], original[other]) and s.native() == state
+        self.info['other_base_request_channels_exact'] = True
+        requested_prediction = model(request)['LH:index3'][0]
+        self.info.update(requested_target_model_prediction_W_m=requested_prediction.tolist(),
+            requested_inverse_projection_error_rad=model.last_inverse_projection_error_rad,
+            actual_fullgoal_error_m=None if goal is None else float(np.linalg.norm(marker-gp-gr.apply(goal))))
+        self.current_model, self.current_q = model, q
+        self.current_goal_W = None if goal is None else gp+gr.apply(goal)
+        self.previous_model, self.previous_q4, self.previous_step = model, q[self.finger].copy(), s.steps
+        self.previous_palm_p, self.previous_palm_r = palm_p, palm_r
+        return dict(zip(s.names, request.tolist()))
+
+    def record_final(self, row):
+        if not self.started or self.case not in ('press', 'combined'):
+            return
+        requested, final = np.array(row['requested105_rad']), np.array(row['final105_rad'])
+        final_prediction = self.current_model(final)['LH:index3'][0]
+        self.info.update(final_inverse_projection_error_rad=self.current_model.last_inverse_projection_error_rad,
+            requested_minus_actual4_norm_rad=float(np.linalg.norm(requested[self.finger]-self.current_q[self.finger])),
+            final_minus_actual4_norm_rad=float(np.linalg.norm(final[self.finger]-self.current_q[self.finger])),
+            final_target_model_prediction_W_m=final_prediction.tolist(),
+            final_target_model_goal_error_m=None if self.current_goal_W is None else float(np.linalg.norm(final_prediction-self.current_goal_W)))
+        row['play'] = self.info.copy()

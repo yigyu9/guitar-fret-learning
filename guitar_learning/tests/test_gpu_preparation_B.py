@@ -71,7 +71,8 @@ class PreparationBTests(unittest.TestCase):
                 for j in range(3):
                     accumulated = accumulated*Rotation.from_quat(relative[f, j])
                     data['segment_quaternion'][0, f, j] = torch.tensor(accumulated.as_quat())
-            expected = .02/(1+3*max(abs(offset)-15., 0.)**2/30**2)
+            expected = .02/(1+(max(abs(offset)-30., 0.)**2 +
+                                2*max(abs(offset)-15., 0.)**2)/30**2)
             self.assertAlmostEqual(float(finger_preparation_reward(**data)['rate']), expected, places=9)
 
     def test_preparation_hold_and_boundaries_only_block_assigned_finger(self):

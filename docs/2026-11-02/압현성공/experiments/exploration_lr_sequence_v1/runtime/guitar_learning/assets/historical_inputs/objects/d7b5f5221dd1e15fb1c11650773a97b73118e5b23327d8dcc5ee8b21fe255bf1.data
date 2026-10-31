@@ -1,0 +1,226 @@
+"""PPO with native-success action rehearsal and separately optimized exploration.
+
+The rollout return, cost return, KL rollback and atomic update follow the frozen
+shared PPO. Demonstration rows contribute only an actor action-space MSE; they
+never enter GAE or either value target. The copied update intentionally retains
+its original order so failure recovery remains auditable against shared PPO.
+"""
+from dataclasses import asdict, dataclass
+import hashlib
+import json
+import math
+
+import numpy as np
+import torch
+
+from ..parallel import FIELDS
+from ..ppo import PPOTrainer as BasePPOTrainer, compute_gae, gaussian_kl, KLGuardError
+from ..ppo_diagnostics import MinibatchSummary, advantage_diagnostics, post_update_diagnostics
+from ..transition.learning import SHAPES
+from .policy import SpecialistPolicy
+
+
+@dataclass(frozen=True)
+class RefinementConfig:
+    bc_weight: float = 1.
+    bc_batch_size: int = 120
+    std_lr: float = 1e-5
+
+    def __post_init__(self):
+        if (type(self.bc_batch_size) is not int or self.bc_batch_size < 1
+                or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                       or not math.isfinite(value) or value <= 0
+                       for value in (self.bc_weight, self.std_lr))):
+            raise ValueError('positive finite BC weight/std_lr and integer BC batch required')
+
+
+def demonstration_tensors(demonstration, device='cpu'):
+    """Validate and own a fixed float32/bool copy of actual audited capture rows."""
+    if not isinstance(demonstration, dict) or any(key not in demonstration for key in SHAPES):
+        raise ValueError('complete native demonstration observation/action mapping required')
+    result = {}
+    count = None
+    for key, shape in SHAPES.items():
+        value = torch.as_tensor(demonstration[key])
+        if count is None:
+            count = value.shape[0] if value.ndim else 0
+        if count < 2 or tuple(value.shape) != (count,)+shape:
+            raise ValueError('complete 500-state native demonstration shapes required: '+key)
+        if 'mask' in key:
+            if value.dtype != torch.bool:
+                raise ValueError('boolean demonstration masks required')
+        elif not value.is_floating_point() or not torch.isfinite(value).all():
+            raise ValueError('finite floating native demonstration rows required')
+        result[key] = value.detach().to(device=device,
+            dtype=torch.bool if 'mask' in key else torch.float32).clone()
+    action = result['action']
+    if (not torch.isfinite(action).all() or torch.any(action.abs() > 1)
+            or torch.any(action[:,33:] != 0)):
+        raise ValueError('bounded action39 with exactly zero inactive right hand required')
+    # Float64-to-float32 overflow is not silently accepted.
+    if any(not torch.isfinite(value).all() for key,value in result.items() if 'mask' not in key):
+        raise ValueError('demonstration must be representable as finite float32')
+    return result
+
+
+def demonstration_digest(demonstration):
+    """Content identity of normalized float32/bool rows, independent of NPZ zip metadata."""
+    arrays = demonstration_tensors(demonstration)
+    digest = hashlib.sha256()
+    for key in SHAPES:
+        value = arrays[key].cpu().numpy()
+        digest.update(json.dumps([key, str(value.dtype), list(value.shape)],separators=(',',':')).encode())
+        digest.update(value.tobytes(order='C'))
+    return digest.hexdigest()
+
+
+class PPOTrainer(BasePPOTrainer):
+    schema = 'guitar_learning_transition_refinement_ppo_v1'
+
+    def __init__(self, policy, config=None, *, demonstration, refinement=None,
+                 demonstration_sha256=None):
+        if not isinstance(policy, SpecialistPolicy):
+            raise ValueError('explicit refinement policy required')
+        self.refinement = (RefinementConfig(**refinement) if isinstance(refinement, dict)
+                           else refinement or RefinementConfig())
+        if not isinstance(self.refinement, RefinementConfig):
+            raise ValueError('explicit RefinementConfig or dictionary required')
+        self._demonstration = demonstration_tensors(demonstration, next(policy.parameters()).device)
+        self.demonstration_sha256 = demonstration_digest(self._demonstration)
+        if demonstration_sha256 is not None and demonstration_sha256 != self.demonstration_sha256:
+            raise ValueError('demonstration SHA256 content mismatch')
+        super().__init__(policy, config)
+        actor = [parameter for parameter in policy.actor_parameters() if parameter is not policy.log_std]
+        self.actor_optimizer = torch.optim.Adam([
+            dict(params=actor,lr=self.config.actor_lr,name='selected_actor'),
+            dict(params=[policy.log_std],lr=self.refinement.std_lr,name='active_log_std')])
+
+    def _bc_mse(self, indices):
+        data = self._demonstration
+        mean = self.policy(*(data[key][indices] for key in FIELDS))['mean'][:,:33]
+        return (mean.tanh()-data['action'][indices,:33]).square().mean()
+
+    def _measure_bc(self):
+        # Bound peak accelerator memory when captures are combined in future fits.
+        with torch.no_grad():
+            count = len(self._demonstration['action'])
+            total = torch.zeros((),device=next(self.policy.parameters()).device)
+            for indices in torch.arange(count,device=total.device).split(self.refinement.bc_batch_size):
+                total += self._bc_mse(indices)*len(indices)
+            return total/count
+
+    def _identity(self):
+        return dict(super()._identity(),refinement=dict(
+            schema='guitar_learning.transition_refinement_rehearsal.v1',
+            config=asdict(self.refinement),demonstration_sha256=self.demonstration_sha256,
+            demonstration_rows=len(self._demonstration['action']),
+            target='tanh_mean_action_left33_native_success',critic_demonstration_fit=False))
+
+    def _update(self,buffer,completed_episodes):
+        """Episode rows: {cost, valid:True, reason:'terminal'|'terminal_failure'|'timeline_complete'}.
+
+        Incomplete/guard-fault episodes never update the optional multiplier.
+        Reward and cost advantages retain their units until jointly normalized.
+        """
+        c=self.config
+        eligible=[]
+        for row in completed_episodes:
+            if row.get('valid') is True and row.get('reason') in ('terminal','terminal_failure','timeline_complete'):
+                cost=float(row['cost'])
+                if not np.isfinite(cost) or cost<0: raise ValueError('invalid completed episode cost')
+                eligible.append(cost)
+        b={k:v.detach() for k,v in buffer.items()}
+        ar,rr=compute_gae(b['reward'],b['reward_value'],b['next_reward_value'],b['terminated'],b['truncated'],c.gamma,c.gae_lambda)
+        ac,rc=compute_gae(b['cost'],b['cost_value'],b['next_cost_value'],b['terminated'],b['truncated'],c.cost_gamma,c.gae_lambda)
+        t,n=b['reward'].shape
+        if t*n<2: raise ValueError('at least two transitions required')
+        for key in ('state','events','mask','priority_events','priority_mask','latent','logp','old_mean','old_log_std'):
+            if b[key].shape[:2]!=(t,n): raise ValueError('rollout shape mismatch: '+key)
+        state=b['state'].flatten(0,1)
+        events=b['events'].flatten(0,1)
+        mask=b['mask'].flatten(0,1)
+        priority=b['priority_events'].flatten(0,1)
+        priority_mask=b['priority_mask'].flatten(0,1)
+        if any(b[key].shape!=(t,n,39) for key in ('latent','old_mean','old_log_std')) or b['logp'].shape!=(t,n):
+            raise ValueError('39D Gaussian and scalar logp rollout shapes required')
+        latent=b['latent'].reshape(-1,39)
+        old_mean=b['old_mean'].reshape(-1,39)
+        old_std=b['old_log_std'].reshape(-1,39)
+        old_logp=b['logp'].flatten()
+        if not all(torch.isfinite(x).all() for x in (old_mean,old_std,old_logp,latent)):
+            raise ValueError('nonfinite old distribution')
+        advantage=(ar-self.cost_weight*ac).flatten()
+        combined=advantage
+        advantage=(advantage-advantage.mean())/advantage.std(unbiased=False).clamp_min(1e-8)
+        diagnostics=dict(schema='guitar_learning_ppo_diagnostics_v1',
+                         legacy_scalar_scope='last optimizer minibatch; actor metrics refer to last accepted attempt',
+                         advantages=advantage_diagnostics(b,ar,ac,combined,advantage,self.cost_weight,c))
+        actor_accepted,actor_rejected,value_steps=(MinibatchSummary() for _ in range(3))
+        original=self._actor_snapshot()
+        retries=0
+        max_kl=0.
+        try:
+            for epoch in range(c.epochs):
+                for index in torch.randperm(t*n,device=state.device).split(c.minibatch_size):
+                    before=self._actor_snapshot()
+                    for retry in range(c.kl_retries+1):
+                        result=self.policy.evaluate(state[index],events[index],mask[index],priority[index],priority_mask[index],latent[index])
+                        ratio=(result['logp']-old_logp[index]).exp()
+                        loss=-torch.minimum(ratio*advantage[index],ratio.clamp(1-c.clip_ratio,1+c.clip_ratio)*advantage[index]).mean()
+                        ppo_loss=loss
+                        bc_index=torch.randperm(len(self._demonstration['action']),device=state.device)[:self.refinement.bc_batch_size]
+                        bc_loss=self._bc_mse(bc_index)
+                        loss=ppo_loss+self.refinement.bc_weight*bc_loss
+                        if not torch.isfinite(loss): raise FloatingPointError('nonfinite actor/BC loss')
+                        self.actor_optimizer.zero_grad()
+                        loss.backward()
+                        norm=torch.nn.utils.clip_grad_norm_(self.policy.actor_parameters(),c.max_grad_norm,error_if_nonfinite=True)
+                        self.actor_optimizer.step()
+                        with torch.no_grad():
+                            full=self.policy(state,events,mask,priority,priority_mask)
+                            kl=gaussian_kl(old_mean,old_std,full['mean'],full['log_std'])
+                        max_kl=max(max_kl,float(kl))
+                        if torch.isfinite(kl) and kl<=c.target_kl:
+                            actor_accepted.add(len(index),loss=loss,grad_norm_pre_clip=norm,full_rollout_kl=kl,ppo_loss=ppo_loss,bc_mse=bc_loss)
+                            break
+                        actor_rejected.add(len(index),loss=loss,grad_norm_pre_clip=norm,full_rollout_kl=kl,ppo_loss=ppo_loss,bc_mse=bc_loss)
+                        self._actor_restore(before)
+                        retries+=1
+                        if retry==c.kl_retries:
+                            raise KLGuardError(dict(epoch=epoch,retries=retries,attempted_kl=float(kl),target_kl=c.target_kl))
+                        for group in self.actor_optimizer.param_groups:
+                            group['lr']*=c.retry_lr_factor**(retry+1)
+        except BaseException:
+            self._actor_restore(original)
+            raise
+        for _ in range(c.epochs):
+            for index in torch.randperm(t*n,device=state.device).split(c.minibatch_size):
+                result=self.policy(state[index],events[index],mask[index],priority[index],priority_mask[index])
+                reward_loss=(result['reward_value']-rr.flatten()[index]).square().mean()
+                cost_loss=(result['cost_value']-rc.flatten()[index]).square().mean()
+                value_loss=.5*(reward_loss+cost_loss)
+                if not torch.isfinite(value_loss): raise FloatingPointError('nonfinite value loss')
+                self.value_optimizer.zero_grad()
+                value_loss.backward()
+                value_norm=torch.nn.utils.clip_grad_norm_(self.policy.value_parameters(),c.max_grad_norm,error_if_nonfinite=True)
+                self.value_optimizer.step()
+                value_steps.add(len(index),reward_loss=reward_loss,cost_loss=cost_loss,grad_norm_pre_clip=value_norm)
+        if not all(torch.isfinite(p).all() for p in self.policy.parameters()):
+            raise FloatingPointError('nonfinite optimized parameters')
+        if c.episode_cost_budget is not None and eligible:
+            self.cost_weight=max(0.,self.cost_weight+c.lambda_lr*(float(np.mean(eligible))-c.episode_cost_budget))
+        self.updates+=1
+        diagnostics['minibatches']=dict(actor_accepted=actor_accepted.summary(),actor_rejected=actor_rejected.summary(),
+                                       value=value_steps.summary())
+        diagnostics['rehearsal']=dict(bc_weight=self.refinement.bc_weight,bc_mse=float(self._measure_bc()),
+            demonstration_rows=len(self._demonstration['action']),demonstration_sha256=self.demonstration_sha256)
+        diagnostics['post_update']=post_update_diagnostics(self.policy,(state,events,mask,priority,priority_mask),
+                                                          latent,old_logp,rr,rc,c.clip_ratio)
+        return dict(actor_loss=float(loss),reward_value_loss=float(reward_loss),cost_value_loss=float(cost_loss),
+                    actor_grad_norm=float(norm),analytic_kl=float(kl),max_attempted_kl=max_kl,
+                    kl_retries=retries,actor_lr=self.actor_optimizer.param_groups[0]['lr'],
+                    std_lr=self.actor_optimizer.param_groups[1]['lr'],bc_mse=diagnostics['rehearsal']['bc_mse'],
+                    cost_weight=self.cost_weight,
+                    actor_loss_last=float(loss),reward_value_loss_last=float(reward_loss),cost_value_loss_last=float(cost_loss),
+                    actor_grad_norm_last=float(norm),diagnostics=diagnostics)
+

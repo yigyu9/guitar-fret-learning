@@ -1,0 +1,40 @@
+"""All-sample upright tilt, finite control and actual contact evidence."""
+import argparse,csv
+from pathlib import Path
+import numpy as np
+from scipy.spatial.transform import Rotation
+from .common import A,BASE,HUMAN,read,save,sha,verify
+from stability_adapter_2.initial_pose_noise_v1 import pose
+import xml.etree.ElementTree as ET
+
+
+def analyze(run,out):
+    out.mkdir(exist_ok=False);files=[run/n for n in ('report.json','initial_values.json','states240.json','contacts240.json','efforts240.json','targets60.json','attempt.json')]+[Path(__file__).resolve(),Path(__file__).with_name('common.py'),A/'initial_pose_noise_v1.py',HUMAN];pins={str(p):sha(p) for p in files};save(out/'inputs_before.json',pins);report=read(run/'report.json');i=read(run/'initial_values.json');states=read(run/'states240.json')['rows'];contacts=read(run/'contacts240.json')['rows'];efforts=read(run/'efforts240.json')['rows'];names=i['human_body_names'];summaries=[];gp0,gr0=pose(states[0]['state']['guitar_body_states'][0]);right=pose(states[0]['state']['human_body_states'][names.index('R_Hip')])[0]-pose(states[0]['state']['human_body_states'][names.index('L_Hip')])[0];right[2]=0;right/=np.linalg.norm(right);caps={}
+    for b in ET.parse(HUMAN).iter('body'):
+        g=b.find('geom')
+        if g is not None and g.get('type')=='capsule':caps[b.get('name')]=np.fromstring(g.get('fromto'),sep=' ').reshape(2,3).mean(0)
+    for sample,cs in zip(states,contacts):
+        assert sample['physics_step']==cs['physics_step'];state=sample['state'];p,r=pose(state['guitar_body_states'][0]);row=dict(step=sample['physics_step'],time_s=sample['time_s'],guitar_root_displacement_m=float(np.linalg.norm(p-gp0)),guitar_rotation_deg=float(np.rad2deg((gr0.inv()*r).magnitude())),max_abs_qd_rad_s=max(abs(v['vel']) for v in state['human_dof_states']))
+        for n in ('Torso','Spine','Chest','Head'):
+            _,r=pose(state['human_body_states'][names.index(n)]);up=r.apply([0.,0.,1.]);row[n+'_total_tilt_deg']=float(np.rad2deg(np.arccos(np.clip(up[2],-1,1))));row[n+'_right_tilt_deg']=float(np.rad2deg(np.arctan2(up@right,up[2])))
+        centers={n:(lambda p,r:p+r.apply(caps[n]))(*pose(state['human_body_states'][names.index(n)])) for n in ('Torso','Spine','Chest')};line=centers['Chest']-centers['Torso'];row['waist_chest_centerline_tilt_deg']=float(np.rad2deg(np.arctan2(np.linalg.norm(line[:2]),line[2])));row['spine_centerline_offset_m']=float(np.linalg.norm((centers['Spine']-(centers['Torso']+centers['Chest'])/2)[:2]))
+        for n in ('Chest','R_Shoulder','R_Hip','L_Hip','LH:'):
+            matches=[]
+            for contact in cs['contacts']:
+                a,b=contact['body0_name'],contact['body1_name'];human=a if a.startswith('human/') else b;guitar=b if a.startswith('human/') else a
+                if guitar.startswith('guitar/') and (human.startswith('human/'+n) if n.endswith(':') else human=='human/'+n):matches.append(contact)
+            row[n+'_raw_contacts']=len(matches);row[n+'_positive_lambda_contacts']=sum(float(c['lambda'])>0 for c in matches)
+        summaries.append(row)
+    with (out/'samples.csv').open('w',newline='') as f:
+        w=csv.DictWriter(f,fieldnames=list(summaries[0]));w.writeheader();w.writerows(summaries)
+    def interval(rows):
+        return dict(samples=len(rows),first_time_s=rows[0]['time_s'],last_time_s=rows[-1]['time_s'],max_guitar_root_displacement_m=max(r['guitar_root_displacement_m'] for r in rows),max_guitar_rotation_deg=max(r['guitar_rotation_deg'] for r in rows),max_abs_qd_rad_s=max(r['max_abs_qd_rad_s'] for r in rows),max_waist_centerline_tilt_deg=max(r['waist_chest_centerline_tilt_deg'] for r in rows),tilt={n:dict(first_right_deg=rows[0][n+'_right_tilt_deg'],last_right_deg=rows[-1][n+'_right_tilt_deg'],max_abs_right_deg=max(abs(r[n+'_right_tilt_deg']) for r in rows),max_total_deg=max(r[n+'_total_tilt_deg'] for r in rows)) for n in ('Torso','Spine','Chest','Head')},contacts={n:dict(raw_samples=sum(r[n+'_raw_contacts']>0 for r in rows),positive_lambda_samples=sum(r[n+'_positive_lambda_contacts']>0 for r in rows)) for n in ('Chest','R_Shoulder','R_Hip','L_Hip','LH:')})
+    whole=interval(summaries);last=interval([r for r in summaries if r['time_s']>=max(0,report['physics_seconds']-1)]);steady=[r for r in summaries if r['time_s']>1];released=[r for r in summaries if r['time_s']>5]
+    submitted=np.array([r['submitted105_Nm'] for r in efforts]);finite=bool(np.isfinite(submitted).all() and np.all(abs(submitted)<=np.array(i['PD_properties']['effort'])+1e-6));no_overwrite=not report['forbidden_calls'];gates=dict(runner_completed=report['completed'],all_initial_checks=all(report['initial_checks'].values()),all_Torso_Chest_total_tilt_under_5deg=all(r[n+'_total_tilt_deg']<=5 for r in summaries for n in ('Torso','Chest')),all_Torso_Chest_right_tilt_under_3deg=all(abs(r[n+'_right_tilt_deg'])<=3 for r in summaries for n in ('Torso','Chest')),finite_efforts_within_caps=finite,zero8_effort_zero=bool(np.all(submitted[:,i['zero_range_indices']]==0)),position48_explicit_effort_zero=bool(np.all(submitted[:,i['position_indices']]==0)),Chest_and_upper_arm_positive_contact_over_95pct_after_1s=bool(steady and all(sum(r[n+'_positive_lambda_contacts']>0 for r in steady)/len(steady)>=.95 for n in ('Chest','R_Shoulder'))),no_forbidden_calls=no_overwrite,all_consumed_inputs_unchanged=verify(read(run/'attempt.json')['input_sha256']))
+    if report['mode']=='release':gates['left_hand_no_raw_contact_after_5s']=bool(released and all(r['LH:_raw_contacts']==0 for r in released))
+    last_lh=max((r['time_s'] for r in summaries if r['LH:_raw_contacts']),default=None)
+    result=dict(run=str(run),gates=gates,passed=all(gates.values()),whole=whole,last_1s=last,after_1s=interval(steady) if steady else None,after_5s=interval(released) if released else None,last_left_hand_raw_contact_s=last_lh,scope='Native normalized-quaternion world up-axis tilt. right=horizontal(RHip-LHip); scalar DOF suffix is not world axis. Positive raw lambda signifies solver contact response; lambda is not converted to N. Human finite effort commands do not directly force guitar. Hand mesh penetration not source-certified; actual solver contacts and 240Hz trajectory recorded.',inputs_unchanged=verify(pins));save(out/'summary.json',result);print(gates,flush=True);print('whole',whole,flush=True);print('last1',last,flush=True)
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--run',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();analyze(a.run.resolve(),a.out.resolve())

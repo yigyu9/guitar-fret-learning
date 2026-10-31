@@ -1,0 +1,163 @@
+"""실제 정면10초에서 오른팔꿈치·손목6축 타현41점을 독립 검사한다."""
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from ..lower_body_release_v1.common import ROOT, A, BASE, HUMAN, read, save, pin, verify, sha
+from ..lower_body_release_v1.controller_horizontal_v4 import full_fk
+from ..initial_pose_noise_v1 import pose
+from ..elbow_wrist_strike_source_v1 import string_segments, path_points, solve_pick
+from ..om_axilla_source_geometry_v3 import CapsuleBodyDistance
+from ..front_facing_pose_v1.release_prepare_v2 import validate_reference
+from .motion_v1 import pick_goal, command_gate, TIMES
+PROTOCOL = 'front_prepare5_hold5_distalstrike4_v1'
+
+PHASE = BASE/'front_facing_strike_v1'
+PLAN = ROOT/'docs/plans/front_facing_strike_20261016.md'
+RAW = ('states240.json', 'contacts240.json', 'efforts240.json', 'targets60.json')
+
+
+def main(config, reference, repeat, certificate, out):
+    baseline, reference, repeat, certificate, out = map(lambda p: Path(p).resolve(), (config, reference, repeat, certificate, out))
+    assert out.parent == PHASE
+    out.mkdir(parents=True, exist_ok=False)
+    cfg, cert = read(baseline), read(certificate)
+    paths = [baseline, certificate, PLAN, A/'AGENTS.md'] + list(cert['input_sha256'])
+    paths += [Path(cfg[k]) for k in ('candidate', 'source_report', 'upper_target105', 'posture_target_report',
+                                   'finite_right_goal_spec', 'finite_right_goal_report', 'hip_load_bias_spec', 'hip_load_bias_report')]
+    paths += [Path(read(cfg['candidate'])['support_candidate'])]
+    for package in ('front_facing_strike_v1', 'front_facing_pose_v1', 'grounded_guitar_support_v1',
+                    'grounded_guitar_play_v1', 'seated_foot_support_v1'):
+        paths += list((A/package).glob('*.py'))
+    paths += [r/n for r in (reference, repeat) for n in (*RAW, 'attempt.json', 'report.json', 'initial_values.json',
+              'native_properties.json', 'final_state.json', 'support_wrapper.json')]
+    inputs = pin(extra=paths)
+    # 각 소스·spec·reference 인증이 실제 소비한 모델/mesh/원자료까지 닫는다.
+    maps = [cert['input_sha256']]
+    for field in ('source_report', 'posture_target_report', 'finite_right_goal_report', 'hip_load_bias_report'):
+        maps.append(read(Path(cfg[field]).parent/'inputs_before.json'))
+    for mapping in maps:
+        assert mapping and verify(mapping)
+        for path, expected in mapping.items():
+            assert path not in inputs or inputs[path] == expected
+            inputs[path] = expected
+    save(out/'inputs_before.json', inputs)
+    cert, analyses, summaries, raw_equal, verified_config = validate_reference(reference, repeat, certificate)
+    assert baseline == verified_config and verify(inputs)
+    initial, state = read(reference/'initial_values.json'), read(reference/'final_state.json')
+    assert state['physics_step'] == 2400 and state == read(repeat/'final_state.json')
+    names, bodies = initial['joint_names'], initial['human_body_names']
+    qref = np.array(initial['q_ref105_rad'])
+    actual = np.array([r['pos'] for r in state['human_dof_states']])
+    fk = full_fk(SimpleNamespace(names=names, q_ref=qref, human_bodies=bodies), initial['native_initial_state'])
+    reproduced = fk(actual)
+    fk_errors = {n: dict(position_m=float(np.linalg.norm(reproduced[n][0]-pose(b)[0])),
+                        rotation_deg=float(np.degrees((reproduced[n][1]*pose(b)[1].inv()).magnitude())))
+                 for n, b in zip(bodies, state['human_body_states'])}
+    chain = ['Pelvis', 'Torso', 'Spine', 'Chest', 'R_Thorax', 'R_Shoulder', 'R_Elbow', 'R_Wrist']
+    relevant = chain + [n for n in bodies if n.startswith('RH:')]
+    assert len(set(relevant)) == len(relevant) and 'RH:pick' in relevant
+    targets = read(reference/'targets60.json')['rows']
+    last = targets[-1]
+    assert last['physics_step_before'] == 2396 and last['joint_names'] == names
+    proximal = np.array([names.index(n+'_'+a) for n in ('R_Thorax', 'R_Shoulder') for a in 'xyz'])
+    distal = np.array([names.index(n+'_'+a) for n in ('R_Elbow', 'R_Wrist') for a in 'xyz'])
+    query = actual.copy()
+    query[proximal] = np.array(last['final105_rad'])[proximal]
+    lower, upper = (np.array(initial['PD_properties'][key]) for key in ('lower', 'upper'))
+    gp, gr = pose(state['guitar_body_states'][0])
+    pick = gr.inv().apply(pose(state['human_body_states'][bodies.index('RH:pick')])[0]-gp)
+    start, end = string_segments(dict(native_initial_state=state, guitar_body_names=initial['guitar_body_names']))
+    points = path_points(start, end, -.325, 'strum')
+    distance = CapsuleBodyDistance(Path(read(A/'assets/om_body_geometry_v3/manifest.json')['asset']), HUMAN)
+    vertices = np.concatenate([v for v, _, _, _ in distance.pieces])
+    spec = dict(reference_run=str(reference), repeat_run=str(repeat), reference_time_s=10.,
+        reference_state_sha256=sha(reference/'final_state.json'), source_candidate_sha256=cfg['candidate_sha256'],
+        initial_candidate_sha256=cfg['candidate_sha256'], initial_candidate_path=cfg['candidate'],
+        repeat_verification_path=str(certificate), repeat_verification_sha256=sha(certificate),
+        joint_names=[names[j] for j in distal], joint_indices105=distal.tolist(), initial_pick_G_m=pick.tolist(),
+        proximal_latch=dict(source_target_step=2396, indices105=proximal.tolist(), joint_names=[names[j] for j in proximal],
+                            final6_rad=query[proximal].tolist()),
+        string_start_G_m=start.tolist(), string_end_G_m=end.tolist(),
+        strike=dict(marker='RH:pick', lane_G_y_m=-.325, waypoints_G_m=points.tolist(),
+                    waypoint_times_s=TIMES, sweep_times_s=[11.5, 12.1, 12.3, 12.9]),
+        guitar_body_center_G_m=((vertices.min(0)+vertices.max(0))/2).tolist(),
+        action_interval_s=[10.,14.], arm_qref_radius_rad=1., principal_limit_deg=160.,
+        source_position_limit_m=.002, proximal_actual_relative_rotation_limit_deg=1.,
+        source_scope='초기 calibration은 original native initial만 사용. actual10 전신 오류 원값 보존, 타현 영향 chain/RH body의 엄격 재현을 독립 검사. source query만 근위6을2396 제출목표로 대체. 왼손/손가락 명령이나 해제 인증 없음.')
+    samples, seed = [], query[distal].copy()
+    for time in np.linspace(10., 14., 41):
+        goal = pick_goal(time, pick, points)
+        fitted, error64, nfev = solve_pick(fk, query, distal, lower, upper, qref, gp+gr.apply(goal), seed)
+        seed = fitted[distal].astype(np.float32).astype(float)
+        trial = query.copy()
+        trial[distal] = seed
+        error = float(np.linalg.norm(fk(trial)['RH:pick'][0]-(gp+gr.apply(goal))))
+        other = np.setdiff1d(np.arange(105), distal)
+        samples.append(dict(time_s=float(time), pick_goal_G_m=goal.tolist(), pick_targets_rad=seed.tolist(),
+            pick_IK_error_m=error, pick_IK_float64_error_m=error64, pick_IK_nfev=int(nfev),
+            distal_ball_norm_deg=np.degrees(np.linalg.norm(seed.reshape(2,3), axis=1)).tolist(),
+            new6_float32_strict_bounds_qref_principal=command_gate(seed, lower[distal], upper[distal], qref[distal]),
+            other99_source_query_q_exact=bool(np.array_equal(trial[other], query[other]))))
+    maxp, maxr = max(r['position_m'] for r in fk_errors.values()), max(r['rotation_deg'] for r in fk_errors.values())
+    rp, rr = max(fk_errors[n]['position_m'] for n in relevant), max(fk_errors[n]['rotation_deg'] for n in relevant)
+    candidate_q = np.array(read(cfg['candidate'])['q_ref_rad'])
+    gates = dict(prepared_repeat_all_actual25_gates_pass=all(s['passed'] for s in summaries),
+        four_raw_SHA_exact=all(raw_equal.values()), actual10_right_chain_and_all_RH_FK_under10um_0p01deg=rp < 1e-5 and rr < .01,
+        original_initial105_strict_bounds=bool(np.all(candidate_q >= lower) and np.all(candidate_q <= upper)),
+        actual_initial_qref_exact_source=bool(np.array_equal(qref, candidate_q)),
+        proximal6_latch_strict_bounds=bool(np.all(query[proximal] >= lower[proximal]) and np.all(query[proximal] <= upper[proximal])),
+        proximal6_latch_principal_under160=bool(np.all(np.linalg.norm(query[proximal].reshape(2,3), axis=1) < np.deg2rad(160))),
+        source41_new6_float32_strict_bounds_qref_principal=all(s['new6_float32_strict_bounds_qref_principal'] for s in samples),
+        source41_float32_pick_reach2mm=all(s['pick_IK_error_m'] <= .002 for s in samples),
+        source41_other99_source_query_q_exact=all(s['other99_source_query_q_exact'] for s in samples),
+        new_commands_exclude_original_zero8=not bool(set(distal) & set(initial['zero_range_indices'])),
+        source_candidate_SHA_exact=sha(cfg['candidate']) == cfg['candidate_sha256'],
+        upper_target_SHA_exact=sha(cfg['upper_target105']) == cfg['upper_target105_sha256'])
+    gates = {k: bool(v) for k,v in gates.items()}
+    assert verify(inputs)
+    save(out/'play_spec.json', spec)
+    report = dict(eligible_for_native=all(gates.values()), gates=gates, inputs_unchanged=True,
+        input_sha256=inputs, inputs_after_sha256={p: sha(p) for p in inputs},
+        spec_sha256=sha(out/'play_spec.json'), prepared_static_config=str(baseline), prepared_static_config_sha256=sha(baseline),
+        source_candidate_sha256=cfg['candidate_sha256'], source_candidate_path=cfg['candidate'],
+        reference_run=str(reference), repeat_run=str(repeat), reference_time_s=10.,
+        repeat_verification_path=str(certificate), repeat_verification_sha256=sha(certificate), raw_equal_sha256=raw_equal,
+        actual10_FK_errors=fk_errors, actual10_FK_max_position_m=maxp, actual10_FK_max_rotation_deg=maxr,
+        actual10_fullFK_under10um_0p01deg_diagnostic=bool(maxp < 1e-5 and maxr < .01),
+        strict_FK_body_names=relevant, strict_FK_max_position_m=rp, strict_FK_max_rotation_deg=rr,
+        actual10_strict_all105_bounds=bool(np.all(actual >= lower) and np.all(actual <= upper)),
+        inherited_actual_outside_bounds=[dict(name=names[j], actual_rad=float(actual[j]), lower_rad=float(lower[j]), upper_rad=float(upper[j]))
+                                       for j in np.flatnonzero((actual < lower) | (actual > upper))],
+        source_query_latch=dict(target_step_before=2396, proximal_names=[names[j] for j in proximal],
+            actual10_rad=actual[proximal].tolist(), latched_final_command_rad=query[proximal].tolist(),
+            query_minus_actual_rad=(query[proximal]-actual[proximal]).tolist(),
+            scope='source query 한정 근위6 제출목표 대체. actual10 재보정이나 상태주입이 아니다.'),
+        samples=samples, native_simulation_steps=0,
+        scope='타현6축 source 도달만 인증. 전신FK의 왼검지 실패는 원값 공개하고 해제 성공으로 확대하지 않는다. 실제 타현 crossing/기타지지/근위회전/발접지/형상관통은 native 별도 검사. 원 모델·물성·유한gain/cap·충돌정책 보존. 기타 명령/힘/고정/부착/매step상태주입/PPO 없음. RH:pick/strings는 비충돌 기하 표식이며 소리/진동/현접촉력 인증 아님.')
+    save(out/'report.json', report)
+    outputs = [out/'play_spec.json', out/'report.json']
+    for case in ('baseline','strike'):
+        casecfg = dict(cfg)
+        casecfg.update(seconds=14., mode='static', play_case=case, play_start_s=10., play_action_interval_s=[10,14],
+            validation_protocol=PROTOCOL, play_preflight_report=str(out/'report.json'),
+            play_preflight_report_sha256=sha(out/'report.json'), play_spec=str(out/'play_spec.json'), play_spec_sha256=sha(out/'play_spec.json'),
+            prepared_static_config=str(baseline), prepared_static_config_sha256=sha(baseline),
+            prepared_reference_run=str(reference), prepared_repeat_run=str(repeat), prepared_repeat_certificate=str(certificate))
+        path = out.parent/'inputs'/(case+'_v1.json')
+        save(path, casecfg)
+        outputs.append(path)
+    assert verify(inputs)
+    save(out/'generation.json', dict(input_sha256=inputs, inputs_unchanged=True, eligible_for_native=report['eligible_for_native'],
+        output_sha256={str(p): sha(p) for p in outputs}, native_simulation_steps=0))
+    print(dict(eligible=report['eligible_for_native'], gates=gates, right_FK_position_m=rp, right_FK_rotation_deg=rr,
+        fullFK_position_m=maxp, fullFK_rotation_deg=maxr, maximum_pick_error_m=max(s['pick_IK_error_m'] for s in samples)), flush=True)
+    assert report['eligible_for_native'], '새 타현 source 검사 실패. Native 실행 금지.'
+
+
+if __name__ == '__main__':
+    import argparse
+    parser=argparse.ArgumentParser()
+    for key in ('config','reference','repeat','certificate','out'):
+        parser.add_argument('--'+key, type=Path, required=True)
+    args=parser.parse_args()
+    main(args.config,args.reference,args.repeat,args.certificate,args.out)

@@ -1,0 +1,29 @@
+"""Actual preparation-prefix comparison and post-release native contact pairs."""
+from collections import Counter
+from pathlib import Path
+from .common import BASE,read,save,sha,verify
+
+
+def main():
+    out=BASE/'diagnosis_v2/release_verification_v1';out.mkdir(exist_ok=False)
+    static=BASE/'native/rotational_stable_pd_interior_static_v1';release=BASE/'native/rotational_stable_pd_interior_release_v1'
+    files=[Path(__file__).resolve(),Path(__file__).with_name('common.py')]
+    for p in (static,release):files.extend(p/n for n in ('states240.json','contacts240.json','efforts240.json','targets60.json','report.json','attempt.json'))
+    pins={str(p):sha(p) for p in files};save(out/'inputs_before.json',pins)
+    s=read(static/'states240.json')['rows'];r=read(release/'states240.json')['rows'];sc=read(static/'contacts240.json')['rows'];rc=read(release/'contacts240.json')['rows'];se=read(static/'efforts240.json')['rows'];re=read(release/'efforts240.json')['rows'];st=read(static/'targets60.json')['rows'];rt=read(release/'targets60.json')['rows']
+    comparison=dict(state_and_sensor_prefix_0_to_2s_exact=s[:481]==r[:481],contact_prefix_0_to_2s_exact=sc[:481]==rc[:481],submitted_effort_prefix_0_to_2s_exact=all(a['submitted105_Nm']==b['submitted105_Nm'] for a,b in zip(se[:480],re[:480])),target_prefix_before_2s_exact=all(a['final105_rad']==b['final105_rad'] for a,b in zip(st[:120],rt[:120])),scope='Same initial scene and controller; 2s preparation prefix only, not an independent5s repetition. State/sensor/contact include original t0 cached queries without interpreting their cause.')
+    pairs=Counter();positive=Counter();samples=0
+    for row in rc:
+        if row['time_s']<=5:continue
+        samples+=1;raw_this=set();positive_this=set()
+        for c in row['contacts']:
+            a,b=c['body0_name'],c['body1_name']
+            if a.startswith('guitar/') and b.startswith('human/'):a,b=b,a
+            if a.startswith('human/') and b.startswith('guitar/'):
+                pair=(a,b);raw_this.add(pair)
+                if c['lambda']>0:positive_this.add(pair)
+        pairs.update(raw_this);positive.update(positive_this)
+    save(out/'verification.json',dict(preparation_prefix=comparison,post_5s_samples=samples,guitar_human_contact_pairs=[dict(human=a,guitar=b,raw_contact_sample_count=count,positive_lambda_sample_count=positive[(a,b)]) for (a,b),count in sorted(pairs.items())],inputs_unchanged=verify(pins),scope='Pair counts are240Hz sampled native contacts, not N. No claim on causal load sharing from pair occurrence alone.'))
+
+
+if __name__=='__main__':main()

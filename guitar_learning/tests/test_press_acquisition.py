@@ -40,37 +40,31 @@ class PressAcquisitionTests(unittest.TestCase):
     def codec(self):
         active, low, high = action_bounds(self.contract)
         ref = torch.tensor(np.asarray(self.contract['target105'])[active])
-        return ref, torch.tensor(low), torch.tensor(high), torch.tensor([n.startswith('LH:') for n in ACTIVE_NAMES])
+        return ref, torch.tensor(low), torch.tensor(high)
 
-    def test_hold_is_zero_incremental_and_exact_inverse_for_absolute_channels(self):
-        ref, low, high, incremental = self.codec()
+    def test_direct_inverse_matches_requested_angles_on_every_channel(self):
+        ref, low, high = self.codec()
         desired = (low*.2+high*.8).expand(3, -1).clone()
-        action = trajectory_actions(desired, desired, ref, low, high, incremental)
-        self.assertTrue(torch.equal(action[:, incremental], torch.zeros_like(action[:, incremental])))
+        action = trajectory_actions(desired, ref, low, high)
         decoded = ref+torch.where(action >= 0, high-ref, ref-low)*action
-        self.assertTrue(torch.allclose(decoded[:, ~incremental], desired[:, ~incremental], atol=1e-12, rtol=0))
+        torch.testing.assert_close(decoded, desired, atol=1e-12, rtol=0)
+        torch.testing.assert_close(trajectory_actions(ref[None], ref, low, high), torch.zeros_like(ref[None]))
 
-    def test_incremental_reads_previous_clamped_target_and_limits_requested_speed(self):
-        ref, low, high, incremental = self.codec()
-        current = ref.expand(2, -1).clone()
-        desired = torch.stack((high, low))
-        action = trajectory_actions(desired, current, ref, low, high, incremental, max_speed=.8)
-        self.assertLessEqual(float(action[:, incremental].abs().max()), .2)
-        delta = action[:, incremental]*(4/60)
-        self.assertLessEqual(float(delta.abs().max()), .8/60+1e-15)
-        # Near the goal the existing incremental controller lands exactly.
-        desired = current.clone(); desired[:, incremental] += .0001
-        near = trajectory_actions(desired, current, ref, low, high, incremental)
-        self.assertTrue(torch.allclose(current[:, incremental]+near[:, incremental]*(4/60), desired[:, incremental]))
+    def test_direct_inverse_has_no_previous_target_dependency(self):
+        ref, low, high = self.codec()
+        for desired in (high[None], low[None], ref[None]):
+            first = trajectory_actions(desired, ref, low, high)
+            for _ in range(10):
+                torch.testing.assert_close(trajectory_actions(desired, ref, low, high), first, atol=0, rtol=0)
 
     def test_codec_rejects_out_of_bounds_and_nonfinite_requests(self):
-        ref, low, high, incremental = self.codec()
+        ref, low, high = self.codec()
         desired = ref[None].clone(); desired[0, 0] = high[0]+.01
         with self.assertRaises(ValueError):
-            trajectory_actions(desired, ref[None], ref, low, high, incremental)
+            trajectory_actions(desired, ref, low, high)
         desired = ref[None].clone(); desired[0, 0] = float('nan')
         with self.assertRaises(ValueError):
-            trajectory_actions(desired, ref[None], ref, low, high, incremental)
+            trajectory_actions(desired, ref, low, high)
 
     def test_both_endpoints_and_longest_uninterrupted_contact(self):
         streak = np.zeros(2); best = np.zeros(2)
@@ -144,8 +138,7 @@ class PressAcquisitionTests(unittest.TestCase):
         capped = integral_tracking_offset(torch.full_like(offset, .099), torch.zeros_like(nominal),
             -torch.ones_like(actual), low, high, mask)
         self.assertTrue(torch.allclose(capped, torch.full_like(capped, .1)))
-        action = trajectory_actions(nominal+offset, nominal, torch.zeros(39, dtype=torch.float64),
-                                    low, high, mask[0])
+        action = trajectory_actions(nominal+offset, torch.zeros(39, dtype=torch.float64), low, high)
         self.assertLessEqual(float(action.abs().max()), 1.)
 
     def test_current_source_fk_is_calibrated_to_actual_prepared_state(self):

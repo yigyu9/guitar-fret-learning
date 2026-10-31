@@ -1,0 +1,322 @@
+"""Native measured-state visualization, with no integration or interpolation."""
+import argparse
+import gzip
+import hashlib
+import json
+import re
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+
+def sha(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def save(path, value):
+    with Path(path).open('x') as stream:
+        json.dump(value, stream, indent=2, allow_nan=False)
+        stream.write('\n')
+
+
+def rows(path):
+    """Stream actual compact JSON rows; .json may contain gzip bytes."""
+    with Path(path).open('rb') as probe:
+        compressed = probe.read(2) == b'\x1f\x8b'
+    opener = gzip.open if compressed else open
+    decoder = json.JSONDecoder()
+    with opener(path, 'rt') as stream:
+        buffer = ''
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                raise ValueError('rows array missing')
+            buffer += chunk
+            match = re.search(r'"rows"\s*:\s*\[', buffer)
+            if match:
+                buffer = buffer[match.end():]
+                break
+        while True:
+            buffer = buffer.lstrip()
+            if buffer.startswith(','):
+                buffer = buffer[1:].lstrip()
+            if buffer.startswith(']'):
+                return
+            try:
+                row, end = decoder.raw_decode(buffer)
+            except json.JSONDecodeError:
+                chunk = stream.read(65536)
+                if not chunk:
+                    raise ValueError('incomplete state row')
+                buffer += chunk
+                continue
+            yield row
+            buffer = buffer[end:]
+
+
+def selected_rows(path, start, end, preview=False):
+    wanted = {round(start * 240)} if preview else set(range(round(start * 240), round(end * 240), 4))
+    last = max(wanted)
+    seen = set()
+    previous = -1
+    for row in rows(path):
+        step = row['physics_step']
+        if step <= previous:
+            raise ValueError('saved states must be strictly ordered')
+        previous = step
+        if step in wanted:
+            if abs(row['time_s'] - step / 240) > 1e-9:
+                raise ValueError('saved timestamp is not 240Hz')
+            seen.add(step)
+            yield row
+        if step >= last:
+            break
+    if seen != wanted:
+        raise ValueError('missing selected native states')
+
+
+class NoIntegration:
+    def __init__(self, gym):
+        self.gym = gym
+        self.blocked_calls = []
+
+    def __getattr__(self, name):
+        if name in ('simulate', 'fetch_results') or name.startswith('apply_'):
+            def blocked(*args, **kwargs):
+                self.blocked_calls.append(name)
+                raise RuntimeError('Measured-state visualization forbids physics: ' + name)
+            return blocked
+        return getattr(self.gym, name)
+
+
+def assign(target, value):
+    """Fill nested native structured records without changing floating values."""
+    for field in target.dtype.names:
+        if target[field].dtype.names:
+            assign(target[field], value[field])
+        else:
+            target[field] = value[field]
+
+
+def restore(scene, raw, state, gymapi):
+    dofs = raw.get_actor_dof_states(scene.env, scene.human, gymapi.STATE_ALL).copy()
+    if len(dofs) != len(state['human_dof_states']):
+        raise ValueError('human DOF count changed')
+    for target, value in zip(dofs, state['human_dof_states']):
+        assign(target, value)
+    if raw.set_actor_dof_states(scene.env, scene.human, dofs, gymapi.STATE_ALL) is False:
+        raise RuntimeError('native DOF restore failed')
+    # Restore body poses last, preserving measured links rather than regenerated FK.
+    for actor, key in ((scene.human, 'human_body_states'), (scene.guitar, 'guitar_body_states'), (scene.chair_actor, 'chair_body_states')):
+        bodies = raw.get_actor_rigid_body_states(scene.env, actor, gymapi.STATE_ALL).copy()
+        if len(bodies) != len(state[key]):
+            raise ValueError('actor body count changed: ' + key)
+        for target, value in zip(bodies, state[key]):
+            assign(target, value)
+        if raw.set_actor_rigid_body_states(scene.env, actor, bodies, gymapi.STATE_ALL) is False:
+            raise RuntimeError('native body restore failed: ' + key)
+
+
+def max_error(a, b):
+    if isinstance(a, dict):
+        return max(max_error(a[k], b[k]) for k in a if k != 'physics_step')
+    if isinstance(a, list):
+        if len(a) != len(b):
+            raise ValueError('state length mismatch')
+        return max((max_error(x, y) for x, y in zip(a, b)), default=0.)
+    return abs(float(a) - float(b))
+
+
+def frame_indices(measured_index, segment_number, preview):
+    return {'measured_frame_index': measured_index,
+            'encoded_output_frame': None if preview else measured_index + (60 if segment_number > 0 else 0),
+            'preview_image_index': measured_index if preview else None}
+
+
+def original_expected_inputs(run):
+    """Merge original runner and wrapper manifests, rejecting alias/SHA conflicts."""
+    expected = {}
+    for filename in ('attempt.json', 'support_wrapper.json'):
+        mapping = json.loads((Path(run) / filename).read_text())['input_sha256']
+        for path, digest in mapping.items():
+            key = str(Path(path).resolve())
+            if key in expected and expected[key] != digest:
+                raise RuntimeError('Conflicting original input SHA: ' + key)
+            expected[key] = digest
+    return expected
+
+
+def original_asset_evidence(runs, configs, adapter):
+    """Verify currently consumed scene code/config and all declared meshes against each run."""
+    root = adapter.parent
+    geometry_path = adapter / 'assets/om_body_geometry_v3/manifest.json'
+    geometry = json.loads(geometry_path.read_text())
+    required = {geometry_path, adapter / 'config.json', adapter / 'working_initial_pose_v1/manifest.json'}
+    cfg = json.loads((adapter / 'config.json').read_text())
+    required.update((root / cfg[key]).resolve() for key in ('pose_source', 'gain_source'))
+    xmls = {root / 'tab2body/assets/smpl_mpl_hands_body.xml', Path(geometry['asset'])}
+    for xml in xmls:
+        required.add(xml.resolve())
+        tree = ET.parse(xml)
+        compiler = tree.find('compiler')
+        meshdir = compiler.get('meshdir', '') if compiler is not None else ''
+        required.update((xml.parent / meshdir / element.attrib['file']).resolve() for element in tree.findall('./asset/mesh'))
+    for name, module in list(sys.modules.items()):
+        if name.startswith('stability_adapter_2.') and not name.startswith('stability_adapter_2.initial_pose_video60_v1.'):
+            source = getattr(module, '__file__', None)
+            if source and source.endswith('.py'):
+                required.add(Path(source).resolve())
+    result = []
+    for run, config in zip(runs, configs):
+        expected = original_expected_inputs(run)
+        original_assets = {Path(path) for path in expected if Path(path).suffix.lower() in ('.xml', '.obj', '.stl', '.ply', '.dae')}
+        checks = {}
+        for path in sorted(required | original_assets | {config.resolve()}):
+            key = str(path)
+            if key not in expected:
+                raise RuntimeError('Original run lacks consumed scene input SHA: ' + key)
+            current = sha(path)
+            if current != expected[key]:
+                raise RuntimeError('Original scene input SHA mismatch: ' + key)
+            checks[key] = {'expected_sha256': expected[key], 'actual_sha256': current, 'match': True}
+        result.append({'run': str(run), 'original_expected_manifests': [str(run / 'attempt.json'), str(run / 'support_wrapper.json')], 'all_match': True, 'asset_bytes_exact': True, 'original_asset_count': len(original_assets), 'inputs': checks})
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--free-run', type=Path, required=True)
+    parser.add_argument('--regrasp-run', type=Path, required=True)
+    parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--preview', action='store_true')
+    args = parser.parse_args()
+    # Isaac Gym must precede NumPy/torch-dependent project imports.
+    import isaacgym
+    from isaacgym import gymapi
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+    from ..front_facing_ready_v1.runtime_v15 import Scene
+    from ..lower_body_release_v1.common import pin
+    from ..string_trial_recording_v1 import draw_strings
+    from ..initial_pose_noise_v1 import pose
+    from unittest.mock import patch
+
+    out = args.out.resolve()
+    out.mkdir(parents=True, exist_ok=False)
+    runs = [args.free_run.resolve(), args.regrasp_run.resolve()]
+    configs = [Path(json.loads((run / 'report.json').read_text())['config']) for run in runs]
+    cfgs = [json.loads(path.read_text()) for path in configs]
+    paths = {Path(__file__).resolve()}
+    font_path = Path('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
+    paths.add(font_path)
+    for run in runs:
+        paths.update(run / name for name in ('attempt.json', 'states240.json', 'initial_values.json', 'native_properties.json', 'report.json', 'support_wrapper.json'))
+    adapter = Path(__file__).resolve().parents[1]
+    paths.add(adapter.parent / 'paper/initial_pose/current_v3/presentation_60fps_v1/BRIEF.md')
+    paths.update(adapter.glob('*.py'))
+    for package in ('initial_pose_video60_v1', 'lower_body_release_v1', 'front_facing_ready_v1', 'front_facing_strike_v1', 'front_facing_pose_v1', 'seated_foot_support_v1', 'grounded_guitar_support_v1', 'grounded_guitar_release_v1'):
+        paths.update((adapter / package).glob('*.py'))
+    pins = {}
+    for config in configs:
+        pins.update(pin(config, extra=paths))
+    # Include config-referenced files as well as every original scene-consumed input.
+    for run in runs:
+        original = json.loads((run / 'attempt.json').read_text())['input_sha256']
+        for path in original:
+            if Path(path).is_file():
+                pins[str(Path(path).resolve())] = sha(path)
+    save(out / 'inputs_before.json', pins)
+    original_evidence = original_asset_evidence(runs, configs, adapter)
+    save(out / 'original_scene_input_parity.json', {'runs': original_evidence, 'scope': 'Original expected SHA vs consumed scene modules, config, model XML and every declared mesh, including unused declarations'})
+    camera_spec = {'position_W_m': [0., 3.1, .8], 'target_W_m': [0., 0., .72], 'width': 1280, 'height': 720, 'horizontal_fov': 55.}
+    save(out / 'attempt.json', {'scope': 'Measured-state native replay; two independent trials with explicit cut; no new physics', 'fps': 60, 'source_hz': 240, 'stride': 4, 'physics_steps_requested': 0, 'camera': camera_spec, 'segments': [{'run': str(runs[0]), 'interval_s': [17, 40]}, {'run': str(runs[1]), 'interval_s': [40, 49]}], 'preview': args.preview})
+    acquire = gymapi.acquire_gym
+    barrier = NoIntegration(acquire())
+    scene = None
+    records = []
+    video = None
+    font = ImageFont.truetype(str(font_path), 21)
+    small_font = ImageFont.truetype(str(font_path), 17)
+    try:
+        with patch.object(gymapi, 'acquire_gym', lambda: barrier):
+            scene = Scene({**cfgs[0], 'attempt_out': str(out)})
+        parity = []
+        for run in runs:
+            initial = json.loads((run / 'initial_values.json').read_text())
+            wrapper = json.loads((run / 'support_wrapper.json').read_text())
+            assert wrapper['actual_scene_class'] == 'front_facing_ready_v1.runtime_v15.Scene'
+            assert scene.names == initial['joint_names'] and scene.human_bodies == initial['human_body_names'] and scene.guitar_bodies == initial['guitar_body_names']
+            assert scene.loaded_assets == initial['loaded_assets']
+            assert scene.chair_placement == initial['chair_initial_placement']
+            parity.append({'run': str(run), 'original_scene_class': wrapper['actual_scene_class'], 'replay_scene_class': 'front_facing_ready_v1.runtime_v15.Scene', 'joint_body_order_exact': True, 'loaded_assets_exact': True, 'asset_bytes_exact': True, 'original_expected_SHA_evidence': str(out / 'original_scene_input_parity.json'), 'chair_initial_placement_exact': True})
+        save(out / 'scene_parity.json', {'runs': parity, 'loaded_assets': scene.loaded_assets, 'camera_spec': scene.camera_spec, 'prepare_sim_required_for_graphics': True, 'simulate_and_fetch_disabled_before_constructor': True})
+        camera = scene.cameras['whole_body']
+        indices = [(scene.guitar_bodies.index('G:string%d' % i), scene.guitar_bodies.index('G:string%d_end' % i)) for i in range(1, 7)]
+        if not args.preview:
+            command = ['ffmpeg', '-nostdin', '-n', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '1280x720', '-r', '60', '-i', '-', '-an', '-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p', str(out / 'front_full_body_60fps.mp4')]
+            video = subprocess.Popen(command, stdin=subprocess.PIPE)
+        segments = [(0, 17, 40), (1, 40, 49)] if not args.preview else [(0, 17, 18), (0, 29, 30), (1, 44, 45)]
+        for segment_number, (run_index, start, end) in enumerate(segments):
+            if video and segment_number == 1:
+                card = Image.new('RGB', (1280, 720), (20, 25, 32))
+                draw = ImageDraw.Draw(card)
+                draw.text((405, 300), '별도 시험으로 전환', font=font, fill='white')
+                draw.text((350, 340), '왼손 넥 재접촉 및 준비 복귀', font=font, fill='white')
+                for _ in range(60):
+                    video.stdin.write(card.tobytes())
+            for row in selected_rows(runs[run_index] / 'states240.json', start, end, args.preview):
+                restore(scene, barrier, row['state'], gymapi)
+                before = scene.native()
+                error = max_error(row['state'], before)
+                if error > 1e-6:
+                    raise RuntimeError('restored measured-state mismatch: %g' % error)
+                scene.gym.step_graphics(scene.sim)
+                scene.gym.render_all_camera_sensors(scene.sim)
+                raw_path = out / 'current_native.png'
+                if raw_path.exists():
+                    raw_path.unlink()
+                scene.gym.write_camera_image_to_file(scene.sim, scene.env, camera, gymapi.IMAGE_COLOR, str(raw_path))
+                endpoints = np.array([[pose(row['state']['guitar_body_states'][i])[0] for i in pair] for pair in indices])
+                view = np.asarray(scene.gym.get_camera_view_matrix(scene.sim, scene.env, camera))
+                projection = np.asarray(scene.gym.get_camera_proj_matrix(scene.sim, scene.env, camera))
+                depth = np.asarray(scene.gym.get_camera_image(scene.sim, scene.env, camera, gymapi.IMAGE_DEPTH)).reshape(720, 1280)
+                path = out / ('preview_%s_%05d.png' % (runs[run_index].name, row['physics_step']) if args.preview else 'current_strings.png')
+                draw_strings(raw_path, path, endpoints, view, projection, depth)
+                image = Image.open(path).convert('RGB')
+                draw = ImageDraw.Draw(image)
+                draw.rectangle((0, 0, 1280, 58), fill=(18, 23, 29))
+                caption = '[시험 1] 왼손 해제 · 오른손 타현' if run_index == 0 else '[시험 2] 넥 재접촉 · 준비 복귀'
+                draw.text((18, 2), '%s | 기록 시각 %.3f초 | 60fps' % (caption, row['time_s']), font=font, fill='white')
+                draw.text((18, 31), '저장된 두 개별 시험의 편집 영상', font=small_font, fill=(205, 215, 225))
+                if args.preview:
+                    image.save(path)
+                else:
+                    video.stdin.write(image.tobytes())
+                if scene.native() != before or scene.steps != 0 or barrier.blocked_calls:
+                    raise RuntimeError('graphics must preserve all actor states and zero integration')
+                records.append(dict(frame_indices(len(records), segment_number, args.preview), run=str(runs[run_index]), physics_step=row['physics_step'], time_s=row['time_s'], max_native_restore_error=error, render_preserves_states=True))
+                if len(records) % 60 == 0:
+                    print('rendered', len(records), 'measured frames', flush=True)
+        if video:
+            video.stdin.close()
+            if video.wait() != 0:
+                raise RuntimeError('ffmpeg encoding failed')
+        changed = [path for path, digest in pins.items() if sha(path) != digest]
+        if changed:
+            raise RuntimeError('input mutation: ' + repr(changed))
+        save(out / 'replay_report.json', {'renderer': 'Isaac Gym native camera + depth-tested six-string overlay', 'measured_frames': len(records), 'transition_card_frames': 0 if args.preview else 60, 'fps': 60, 'physics_steps': scene.steps, 'blocked_physics_calls': barrier.blocked_calls, 'inputs_unchanged': True, 'max_native_restore_error': max(r['max_native_restore_error'] for r in records), 'frames': records})
+    finally:
+        if video and video.poll() is None:
+            video.kill()
+            video.wait()
+        if scene:
+            scene.close()
+
+
+if __name__ == '__main__':
+    main()

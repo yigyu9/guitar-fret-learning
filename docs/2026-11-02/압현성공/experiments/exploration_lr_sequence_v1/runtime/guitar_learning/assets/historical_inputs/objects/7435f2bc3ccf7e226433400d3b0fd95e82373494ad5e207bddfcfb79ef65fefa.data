@@ -1,0 +1,161 @@
+"""Recorded-body interface tests; static replay is not native song success."""
+import copy
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import numpy as np
+import torch
+
+from guitar_learning.rollout import RolloutCollector
+from guitar_learning.song.environment import build_environment
+from guitar_learning.song.measurement import SongMeasurement
+from guitar_learning.song.policy import SongPolicy
+from guitar_learning.tests.test_skill_environment import LongRecordedSession
+
+
+SONG = dict(schema='guitar_learning.song.v1', pre_roll_s=3., tail_s=.5,
+            window_s=.5, left_fraction=.4)
+BUNDLE = Path(__file__).resolve().parents[2] / 'data/song_bundles/05_BN2-131-B_solo'
+
+
+def environment(folder, **kwargs):
+    sessions = []
+    def factory(config, out):
+        session = LongRecordedSession(config, out)
+        sessions.append(session)
+        return session
+    def contacts(scene):
+        return copy.deepcopy(sessions[-1].row()['native_contacts']['contacts'])
+    env = build_environment({}, folder, bundle=BUNDLE, song=SONG,
+                            session_factory=factory, contact_reader=contacts, **kwargs)
+    return env, sessions
+
+
+class SongEnvironmentTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        torch.set_num_threads(1)
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.environments = []
+
+    def tearDown(self):
+        for env in self.environments:
+            env.close()
+        self.folder.cleanup()
+
+    def make_environment(self, **kwargs):
+        env, sessions = environment(Path(self.folder.name) / str(len(self.environments)), **kwargs)
+        self.environments.append(env)
+        return env, sessions
+
+    def test_full_task_500_observation_no_native_wait_and_persistent_reset(self):
+        env, sessions = self.make_environment()
+        observation, info = env.reset()
+        self.assertIsInstance(env.measurement, SongMeasurement)
+        self.assertEqual(len(env.task.targets), 67)
+        self.assertEqual(env.task.duration_s, 1969 / 60.)
+        self.assertGreater(env.task.duration_s, 7.)
+        self.assertIsNone(env.time_limit_s)
+        self.assertEqual(observation['state'].shape, (500,))
+        self.assertEqual(observation['events'].shape, (64, 24))
+        self.assertEqual(observation['priority_events'].shape, (2, 24))
+        self.assertEqual(len(env.contract['observation']['fields']), 500)
+        self.assertEqual(len(env.contract['observation']['scales']), 500)
+        self.assertEqual(info['training_contract']['task']['duration_s'], 1969 / 60.)
+        self.assertEqual(env.control.session.scene.steps, 0)
+        self.assertEqual(env.control.session.preparation_calls, 0)
+        self.assertEqual(info['song']['target_count'], 67)
+        self.assertFalse(info['song']['stage_success'])
+        session = sessions[0]
+        env.step(np.full(39, .1))
+        again, _ = env.reset()
+        self.assertEqual(len(sessions), 1)
+        self.assertIs(env.control.session, session)
+        self.assertEqual(session.reset_calls, 1)
+        self.assertEqual(session.scene.steps, 0)
+        for key in observation:
+            np.testing.assert_array_equal(observation[key], again[key])
+
+    def test_both_actions_share_four_actual_samples_and_exact_episode_totals(self):
+        env, _ = self.make_environment(time_limit_s=1 / 60.)
+        env.reset()
+        observation, reward, terminated, truncated, info = env.step(np.full(39, .1))
+        self.assertFalse(terminated)
+        self.assertTrue(truncated)
+        self.assertEqual(env.control.session.policy_calls, 1)
+        self.assertEqual(env.control.session.scene.steps, 4)
+        self.assertEqual([r['physics_step'] for r in info['physics_measurements']], [1, 2, 3, 4])
+        self.assertEqual(env.song_ledger.previous['physics_step'], 4)
+        self.assertAlmostEqual(env.song_ledger.previous['task_time_s'], 1 / 60.)
+        self.assertEqual(observation['state'].shape, (500,))
+        self.assertAlmostEqual(reward, sum(info['reward_terms'].values()))
+        self.assertAlmostEqual(info['episode']['reward'], reward)
+        self.assertEqual(info['episode']['song'], info['song'])
+        self.assertEqual(info['episode']['musical_quality'], info['musical_quality'])
+        self.assertFalse(info['song']['completed'])
+        self.assertFalse(info['musical_quality']['stage_success'])
+
+    def test_failure_tick_suppresses_earlier_positive_samples_and_pays_cost_once(self):
+        env, _ = self.make_environment()
+        env.reset()
+        env.control.session.unsafe_at = 4
+        original = env.song_ledger.update
+        def credited(*args, **kwargs):
+            terms = original(*args, **kwargs)
+            terms['song_clean_hold'] += 100.
+            return terms
+        with patch.object(env.song_ledger, 'update', side_effect=credited):
+            _, reward, terminated, truncated, info = env.step(np.zeros(39))
+        self.assertTrue(terminated)
+        self.assertFalse(truncated)
+        self.assertTrue(info['failure_reasons'])
+        self.assertTrue(all(value <= 0 for value in info['reward_terms'].values()))
+        self.assertTrue(all(value <= 0 for row in info['physics_measurements']
+                            for value in row['song_reward_terms'].values()))
+        cost = sum(r['stability']['cost'] for r in info['physics_measurements']) + env.safety_config.failure_cost
+        self.assertAlmostEqual(info['cost'], cost)
+        self.assertAlmostEqual(info['episode']['cost'], cost)
+        self.assertAlmostEqual(info['episode']['reward'], reward)
+        self.assertTrue(info['song']['safety_invalidated'])
+        self.assertFalse(info['song']['stage_success'])
+        with self.assertRaisesRegex(RuntimeError, 'reset required'):
+            env.step(np.zeros(39))
+        self.assertEqual(env.control.session.scene.steps, 4)
+
+    def test_rollout_boundaries_do_not_reset_continuous_score(self):
+        env, sessions = self.make_environment()
+        env.reset()
+        collector = RolloutCollector(SongPolicy(500, size='small', contract=env.contract), env)
+        first, completed_first = collector.collect(2)
+        session = sessions[0]
+        second, completed_second = collector.collect(2)
+        self.assertEqual(completed_first + completed_second, [])
+        self.assertEqual(len(sessions), 1)
+        # The collector resets once when it first obtains its observation.
+        self.assertEqual(session.reset_calls, 1)
+        self.assertEqual(session.scene.steps, 16)
+        self.assertEqual(collector.episode_steps, 4)
+        self.assertEqual(env.control_steps, 4)
+        self.assertEqual(first['state'].shape, (2, 1, 500))
+        self.assertEqual(second['state'].shape, (2, 1, 500))
+        self.assertFalse(bool(first['terminated'].any() or second['terminated'].any()))
+        self.assertAlmostEqual(env.last_measured['task_time_s'], 4 / 60.)
+
+    def test_ledger_exception_blocks_further_physical_integration(self):
+        env, _ = self.make_environment()
+        env.reset()
+        with patch.object(env.song_ledger, 'update', side_effect=ValueError('injected song failure')):
+            with self.assertRaisesRegex(ValueError, 'injected song'):
+                env.step(np.zeros(39))
+        self.assertTrue(env.finished)
+        with self.assertRaisesRegex(RuntimeError, 'reset required'):
+            env.step(np.zeros(39))
+        self.assertEqual(env.control.session.scene.steps, 4)
+
+
+if __name__ == '__main__':
+    unittest.main()

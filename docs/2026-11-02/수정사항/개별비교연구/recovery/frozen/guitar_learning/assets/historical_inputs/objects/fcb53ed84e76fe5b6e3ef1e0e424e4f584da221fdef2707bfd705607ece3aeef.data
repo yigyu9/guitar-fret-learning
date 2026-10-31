@@ -1,0 +1,52 @@
+"""Choose a nearby single-finger target and audit reach without integrating."""
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from ..lower_body_release_v1.common import ROOT,BASE,read,save,pin,verify,sha
+from ..lower_body_release_v1.controller_horizontal_v4 import full_fk
+from ..initial_pose_noise_v1 import pose
+from ..elbow_wrist_strike_source_v1 import string_segments,path_points,solve_pick
+from .motion_v1 import solve_finger,interpolate
+
+
+def main():
+    phase=BASE/'upright_horizontal_play_v1';old=BASE/'upright_horizontal_v1';reference=old/'native_static_v6'
+    out=phase/'preflight_v1';out.mkdir(exist_ok=False)
+    inputs=pin(extra=list(Path(__file__).resolve().parent.glob('*.py'))+[ROOT/'docs/plans/upright_horizontal_play_20261015.md',reference/'initial_values.json',reference/'final_state.json',reference/'report.json',old/'inputs/static_v7.json',old/'artifact_inventory.json'])
+    save(out/'inputs_before.json',inputs)
+    initial=read(reference/'initial_values.json');state=read(reference/'final_state.json');names=initial['joint_names'];qref=np.array(initial['q_ref105_rad']);q=np.array([r['pos'] for r in state['human_dof_states']])
+    scene=SimpleNamespace(names=names,q_ref=qref,human_bodies=initial['human_body_names'])
+    fk=full_fk(scene,initial['native_initial_state']);gp,gr=pose(state['guitar_body_states'][0]);start,end=string_segments(initial)
+    origin=gr.inv().apply(fk(q)['LH:index3'][0]-gp)
+    fret_y=[gr.inv().apply(pose(state['guitar_body_states'][initial['guitar_body_names'].index('G:fret'+str(f))])[0]-gp)[1] for f in range(1,23)]
+    choices=[]
+    for string in range(6):
+        for fret in range(1,23):
+            prev=start[string,1] if fret==1 else fret_y[fret-2];y=(prev+fret_y[fret-1])/2
+            fraction=(y-start[string,1])/(end[string,1]-start[string,1]);point=start[string]+fraction*(end[string]-start[string])
+            choices.append((np.linalg.norm(point-origin),string,fret,point))
+    _,string,fret,target=min(choices,key=lambda r:r[0])
+    spec=dict(reference_run=str(reference),reference_time_s=5.,string_start_G_m=start.tolist(),string_end_G_m=end.tolist(),
+              press=dict(string=string+1,fret=fret,finger='index',marker='LH:index3',target_G_m=target.tolist(),lower_depth_m=.004,geometry_xy_m=.01,geometry_z_band_m=[-.006,.01],required_dwell_s=.1),
+              strike=dict(marker='RH:pick',lane_G_y_m=-.325,waypoints_G_m=path_points(start,end,-.325,'strum').tolist(),sweep_times_s=[6.5,7.1,7.3,7.9]),
+              guitar_body_center_G_m=read(old/'source_v4/report.json')['reference_body_center_G_m'])
+    lower=np.array(initial['PD_properties']['lower']);upper=np.array(initial['PD_properties']['upper'])
+    finger=np.array([names.index(n) for n in ('LH:index1_x','LH:index1_z','LH:index2','LH:index3')]);distal=np.array([names.index(n+'_'+a) for n in ('R_Elbow','R_Wrist') for a in 'xyz'])
+    rows=[];seedf=q[finger].copy();seedr=q[distal].copy();pick=gr.inv().apply(fk(q)['RH:pick'][0]-gp);points=np.array(spec['strike']['waypoints_G_m'])
+    for t in np.linspace(5,9,41):
+        hover=target+[0,0,.008];down=target-[0,0,.004];goal=interpolate(t,[5,5.8,6.3,8,8.5,9],np.array([origin,hover,down,down,hover,hover]))
+        values,ferror=solve_finger(fk,q,finger,lower,upper,qref,gp+gr.apply(goal),seedf);seedf=values
+        rgoal=interpolate(t,[5,5.8,6.1,6.5,7.1,7.3,7.9,8.1,8.5],np.vstack([pick,points[0],points[1],points[1],points[2],points[2],points[3],points[3],points[4]]))
+        fitted,rerror,_=solve_pick(fk,q,distal,lower,upper,qref,gp+gr.apply(rgoal),seedr);seedr=fitted[distal]
+        rows.append(dict(time_s=float(t),finger_goal_G_m=goal.tolist(),finger_IK_error_m=ferror,finger_targets_rad=values.tolist(),pick_goal_G_m=rgoal.tolist(),pick_IK_error_m=rerror,pick_targets_rad=seedr.tolist(),distal_ball_norm_deg=np.rad2deg(np.linalg.norm(seedr.reshape(2,3),axis=1)).tolist()))
+    eligible=all(r['finger_IK_error_m']<=.003 and r['pick_IK_error_m']<=.002 and max(r['distal_ball_norm_deg'])<160 for r in rows)
+    save(phase/'inputs/play_spec_v1.json',spec)
+    for case in ('baseline','press','strike','combined'):
+        cfg=read(old/'inputs/static_v7.json');cfg.update(seconds=9.,mode='static',play_case=case,play_spec=str(phase/'inputs/play_spec_v1.json'),test_kind='user_requested_action_diagnostic_not_prior_static_gate_pass')
+        save(phase/'inputs'/(case+'_v1.json'),cfg)
+    save(out/'report.json',dict(eligible_for_native=eligible,press_target=spec['press'],samples=rows,inputs_unchanged=verify(inputs),scope='41 static FK reach samples at the actual previous5s native pose; no physics steps, cooked penetration or actual press/strike certification. Original gains/limits retained.'))
+    print('target',spec['press'],'max errors',max(r['finger_IK_error_m'] for r in rows),max(r['pick_IK_error_m'] for r in rows),'eligible',eligible,flush=True)
+    assert verify(inputs) and eligible
+
+
+if __name__=='__main__':main()
