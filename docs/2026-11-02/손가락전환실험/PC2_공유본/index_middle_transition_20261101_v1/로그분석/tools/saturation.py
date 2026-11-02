@@ -1,0 +1,7 @@
+from pathlib import Path
+import json,math,numpy as np,torch
+L=Path(__file__).resolve().parents[1];D=L.parent
+v=json.loads((D/'진단/geometry/initial_catalog.json').read_text());i=v['action_indices'][1];ref=v['reference105'][i];hi=v['action_upper'][1];q=v['goals'][0]['hold_target105'][i];a=(q-ref)/(hi-ref);cl=min(.999999,max(-.999999,a));tf=lambda z:torch.tensor(z,dtype=torch.float32)
+af=((tf(q)-tf(ref))/(tf(hi)-tf(ref))).clamp(-.999999,.999999);bias32=float(torch.atanh(af));r=json.loads((D/'진단/native_reference_v2/reference_trace60.json').read_text())
+out={'axis':'L_Thorax_y','native_joint_index':i,'initial_actual_q_deg':v['initial_q105'][i]*180/math.pi,'initial_policy_hold_target_deg':q*180/math.pi,'reference_deg':ref*180/math.pi,'action_upper_deg':hi*180/math.pi,'initial_normalized_action':a,'initial_tanh_clamped':cl,'initial_latent_bias':bias32,'float64_reference_latent_bias':math.atanh(cl),'actual_float32_clamped_action':float(af),'dq_dlatent_deg_at_initial':(hi-ref)*(1-cl**2)*180/math.pi,'approx_requested_sd_deg_at_latent_sd005':(hi-ref)*(1-cl**2)*.05*180/math.pi,'teacher_requested_deg_range':[min(x['requested_q105'][i] for x in r)*180/math.pi,max(x['requested_q105'][i] for x in r)*180/math.pi],'teacher_B_requested_mean_deg':float(np.mean([x['requested_q105'][i] for x in r if 5.25<=x['time_s']<6.75]))*180/math.pi,'scope':'initial latent Jacobian approximate SD; not causal intervention or learned policy'}
+(L/'saturation.json').write_text(json.dumps(out,indent=2));print('saturation calculation reproduced')

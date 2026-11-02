@@ -16,10 +16,10 @@ v9 초기 자세에서 자유 기타3조건×독립2회×16목표, 총96개 목�
 | 성공 목표 | 채택 조건 | 두 실행 중 짧은 최대 연속접촉 | 손 확대 | 전신 |
 |---|---|---:|---|---|
 | 검지 3줄·4프렛 | free_open | 6.733초 | [영상](video/free_open/index_s3_f4_hand.mp4) | [영상](video/free_open/index_s3_f4_full.mp4) |
-| 소지 3줄·9프렛 | free_open | 6.654초 | [영상](video/free_open/pinky_s3_f9_hand.mp4) | [영상](video/free_open/pinky_s3_f9_full.mp4) |
-| 소지 2줄·10프렛 | free_open | 6.912초 | [영상](video/free_open/pinky_s2_f10_hand.mp4) | [영상](video/free_open/pinky_s2_f10_full.mp4) |
+| 소지 3줄·9프렛 | free_open | 6.654초 | 영상（대표 영상 정리로 삭제） | 영상（대표 영상 정리로 삭제） |
+| 소지 2줄·10프렛 | free_open | 6.912초 | 영상（대표 영상 정리로 삭제） | 영상（대표 영상 정리로 삭제） |
 | 소지 4줄·11프렛 | free_live | 6.421초 | [영상](video/free_live/pinky_s4_f11_hand.mp4) | [영상](video/free_live/pinky_s4_f11_full.mp4) |
-| 소지 4줄·12프렛 | free_live | 5.750초 | [영상](video/free_live/pinky_s4_f12_hand.mp4) | [영상](video/free_live/pinky_s4_f12_full.mp4) |
+| 소지 4줄·12프렛 | free_live | 5.750초 | 영상（대표 영상 정리로 삭제） | 영상（대표 영상 정리로 삭제） |
 
 이 검사는 정적 목표 진단이므로 곡 시계의 손목 안내·J 손목 이탈 누적 종료는 실행하지 않았다. 여기서 안전 실패0건은 기존 물리 안전 판정에 대한 값이다. 학습 환경의 모든 종료 조건을 통과했다는 의미가 아니며 손목 안내 범위·시점별 검증은 별도다.
 

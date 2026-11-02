@@ -66,7 +66,7 @@
 
 A는 팔을 계산된 정렬 자세에 유지하며 목표 손가락4축을 학습한다. 자유 실행에서도 평균 팔 명령은 학습 전 계산한 고정 IK bias였다. 따라서 현행 기하·접촉하중 기준의 손가락 압현 능력은 확인했지만 손목 정렬을 학습했다고 설명하지 않는다. C50→C75→C100 학습·승급 검사는 이번 연구에서 실행하지 않고 지원 제거 진단과 원인 대조로 대체했다. 네 모델은 별도 학습 모델이며 한 모델이 네 목표를 모두 수행한 결과가 아니다. A는 정렬된 시작 자세에서4축을 학습하고 full33은 원래v9 자세에서33축을 학습하므로, 두 절차의 차이를 순서 학습 하나의 단독 효과로 해석하지 않는다. 손가락마다 목표도 달라 난이도 차이를 손가락 자체의 차이로 해석하지 않는다.
 
-[네 손가락 실제 정책 영상](../../../../video/seven_hour_v1/four_fingers_A_free_v9_comparison.mp4). 원본 손·전신 영상과 모델/SHA는 [선택 모델 목록](SELECTED_MODELS.md)에 있다.
+네 손가락 실제 정책 영상（대표 영상 정리로 삭제）. 원본 손·전신 영상과 모델/SHA는 [선택 모델 목록](SELECTED_MODELS.md)에 있다.
 
 ### 성공 회복과 손가락 협응은 구분한다
 
@@ -125,9 +125,9 @@ A는 팔을 계산된 정렬 자세에 유지하며 목표 손가락4축을 학�
 
 | 조건 | 영상 한 회 압현 유지 비율 | 손 | 전신 |
 |---|---:|---|---|
-| full100 기존 평균 | 100% | [손](../../../../video/seven_hour_v1/full100_latent_mean_hand.mp4) | [전신](../../../../video/seven_hour_v1/full100_latent_mean_fullbody.mp4) |
-| full200 기존 평균 | 0% | [손](../../../../video/seven_hour_v1/full200_latent_mean_hand.mp4) | [전신](../../../../video/seven_hour_v1/full200_latent_mean_fullbody.mp4) |
-| full200 원래 확률 실행 | 99.67% | [손](../../../../video/seven_hour_v1/full200_stochastic_hand.mp4) | [전신](../../../../video/seven_hour_v1/full200_stochastic_fullbody.mp4) |
+| full100 기존 평균 | 100% | [손](renders/full100_latent_mean/hand.mp4) | [전신](renders/full100_latent_mean/fullbody.mp4) |
+| full200 기존 평균 | 0% | [손](../../../../../압현실험/동영상/08_전체33축_검지200회_평균동작실패_seed7_손확대.mp4) | [전신](../../../../../압현실험/동영상/08_전체33축_검지200회_평균동작실패_seed7_전신.mp4) |
+| full200 원래 확률 실행 | 99.67% | [손](../../../../../압현실험/동영상/09_전체33축_검지200회_탐색포함대표실행_seed7_손확대.mp4) | [전신](../../../../../압현실험/동영상/09_전체33축_검지200회_탐색포함대표실행_seed7_전신.mp4) |
 | full200 요청각 평균 | 100% | [손](../../../../video/seven_hour_v1/full200_requested_angle_mean_hand.mp4) | [전신](../../../../video/seven_hour_v1/full200_requested_angle_mean_fullbody.mp4) |
 
 원래 네 손가락의 손/전신8개와 모음1개를 포함해 공개 MP4는17개다. 원본 capture_metadata에 남은 고정 평균 실행 템플릿 문구는 확률·요청각 모드에서 오래된 설명이다. 실제 소스 분기와 완료 보고서/공개목록의 실행 방식을 기준으로 구분했으며 원본은 보존했다. [영상·모델·출처 목록](SELECTED_MODELS.md), [영상 QA](NATIVE_VIDEO_QA.md).

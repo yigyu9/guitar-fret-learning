@@ -1,0 +1,41 @@
+{
+  "schema": "single18.transport_retry.plan.v1",
+  "initial_failure_cases": [
+    "middle_s3_f22",
+    "middle_s3_f12",
+    "index_s6_f22",
+    "middle_s1_f12",
+    "ring_s1_f22",
+    "pinky_s3_f22",
+    "index_s3_f12",
+    "middle_s6_f22",
+    "index_s1_f22"
+  ],
+  "representatives": [
+    "index_s1_f1",
+    "middle_s3_f12",
+    "pinky_s3_f22"
+  ],
+  "conditions": {
+    "A": "aligned reset and fixed joint hold",
+    "B": "common preparation, finite path and fixed joint hold",
+    "C": "common preparation, finite path and actual wrist feedback"
+  },
+  "preparation_hold_s": 0.5,
+  "transport_max_s": 6,
+  "learning": {
+    "size": "large",
+    "num_envs": 64,
+    "horizon": 32,
+    "max_updates": 100,
+    "checkpoints": [
+      25,
+      50,
+      75,
+      100
+    ],
+    "seed": 7
+  },
+  "original_state_sha256": "2be1a2925133443d1e07c74666691d2b5e7b49ea3e9334e511316e04f53c7b73",
+  "scope": "New input/runtime identity; existing originals immutable; transport and conditional finger pressing reported separately"
+}

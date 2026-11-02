@@ -2,6 +2,8 @@
 
 현재 결과만 볼 때는 [실험별 역할 목록](experiments/README.md)의 최신 완료 행부터 읽는다. 이 문서의 아래 단일음·기하 재생·초기 구조는 이전 연구 이력이다.
 
+성공 영상 모음은 [대표 영상 목록](VIDEO_SELECTION.md)에서 확인한다. 실험 유형별 손 확대·전신 한 쌍을 남겼으며, 원본 검증 영상과 실패 진단은 구분해 보존한다.
+
 ## 최신 완료: 목표 전환 v2
 
 실험은 2026-10-31 20:18 KST에 완료했다. E4·large64·H32·팔12+중지4축·휴지0.75초의 A→B 두 음을 seed7/17 각300회, 총600회 학습하고 평균/확률 행동 각32에피소드로12회 평가했다. 평균 행동은 두 난수 모두 A32/32·B0/32·전체 AB0/32였다. 최종 확률 행동의 AB 달성은16/32·10/32였지만 두 음을 각각1.5초 전체 유지한 경우는1/32·0/32였다. 물리·손목 종료는 없었다. 참조 동작의 실현성과 학습 정책의 성과는 구분하며 안정적인 전환 학습은 아직 달성하지 못했다.
@@ -44,17 +46,14 @@
 
 ![손가락별 반복 성공](analysis/finger_summary.png)
 
-| 반복 성공 목표 | 연속 접촉 | 손 확대 영상 | 전신 영상 |
+| 대표 반복 성공 목표 | 연속 접촉 | 손 확대 영상 | 전신 영상 |
 |---|---:|---|---|
 | 검지 3줄·4프렛 | 6.733초 | [손 확대](video/free_open/index_s3_f4_hand.mp4) | [전신](video/free_open/index_s3_f4_full.mp4) |
-| 소지 3줄·9프렛 | 6.654초 | [손 확대](video/free_open/pinky_s3_f9_hand.mp4) | [전신](video/free_open/pinky_s3_f9_full.mp4) |
-| 소지 2줄·10프렛 | 6.912초 | [손 확대](video/free_open/pinky_s2_f10_hand.mp4) | [전신](video/free_open/pinky_s2_f10_full.mp4) |
 | 소지 4줄·11프렛 | 6.421초 | [손 확대](video/free_live/pinky_s4_f11_hand.mp4) | [전신](video/free_live/pinky_s4_f11_full.mp4) |
-| 소지 4줄·12프렛 | 5.750초 | [손 확대](video/free_live/pinky_s4_f12_hand.mp4) | [전신](video/free_live/pinky_s4_f12_full.mp4) |
 
 | 디렉토리 | 저장 내용 |
 |---|---|
-| video/ | 성공 목표의 손 확대·전신 MP410개만 |
+| video/ | 성공 실험 유형별 대표 손 확대·전신 한 쌍과 별도 실패 진단 |
 | analysis/ | 해석·전체 결과·CSV·JSON·그래프 |
 | process/ | 실행 도구·기하 후보·물리 기록·로그·렌더 증거·캐시·검수 |
 | initial_pose/ | 초기 자세 개발·적용 기록 |

@@ -1,0 +1,50 @@
+# 성공 정책 보존: 학습률 비교
+
+이 표의 반복은 모델 가중치 이전 뒤 추가 반복이다. 원본800회의 strict resume가 아니다.
+
+|조건|seed|추가 반복|실행|환경수|A|B|AB|전체 유지|정시|A/B clean초|물리/손목|
+|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---|---|
+|control|7|50|mean|32|32|32|32|32|32|1.500/1.500|0/0|
+|conservative|7|50|mean|32|32|32|32|32|32|1.500/1.500|0/0|
+|control|17|50|mean|32|32|29|29|27|29|1.500/1.356|0/0|
+|conservative|17|50|mean|32|32|0|0|0|0|1.500/0.000|0/0|
+|control|7|100|mean|32|32|0|0|0|0|1.500/0.000|0/0|
+|conservative|7|100|mean|32|32|7|7|7|7|1.500/0.328|0/0|
+|control|17|100|mean|32|32|32|32|1|1|1.500/1.479|0/0|
+|conservative|17|100|mean|32|32|20|20|20|29|1.500/1.051|0/0|
+|control|7|100|mean|128|100|90|63|59|65|1.181/1.057|0/0|
+|control|7|100|sampled|32|29|25|22|2|22|1.379/1.344|0/0|
+|conservative|7|100|mean|128|125|90|89|86|95|1.460/1.086|0/0|
+|conservative|7|100|sampled|32|28|15|13|0|28|1.477/1.420|0/0|
+|control|17|100|mean|128|125|122|120|25|28|1.466/1.413|0/0|
+|control|17|100|sampled|32|31|19|19|4|18|1.471/0.954|0/0|
+|conservative|17|100|mean|128|121|106|105|101|115|1.424/1.299|1/0|
+|conservative|17|100|sampled|32|28|18|15|0|23|1.475/1.391|0/0|
+|control_best_s7_u50|7|50|mean|128|122|123|117|115|120|1.430/1.456|0/0|
+|control_last_s7_u100|7|100|mean|128|95|86|57|54|58|1.107/1.027|0/0|
+|conservative_best_s7_u50|7|50|mean|128|120|105|100|89|104|1.411/1.245|0/0|
+|conservative_last_s7_u100|7|100|mean|128|126|94|94|85|96|1.477/1.107|0/0|
+
+## 해석
+
+- 선행 H/I/T는 분석기 오류로 미완료. 원본 failed 상태를 보존하고 가중치 이전 학습률 비교부터 독립 재개.
+- 음 종료 후 두 프렛 원시 후보는 성공 모순이 아님. A발음 중 높은 프렛 간섭의 유효성 검사는 유지.
+- 시간/완료 균형을 위해 추가200회 비교는 시작하지 않음.
+- 최종 두 seed 짝 비교 완료.
+- 보수군 90% 삼중 기준 미통과.
+- 보수군 AB가 두 seed 모두 대조군보다 높다고 확인되지 않음.
+- 기본 구현은 자동 교체하지 않으며 실제 평균 정책 성과·실패 포함 원장을 보존함.
+- 실제 평균 정책 영상 8개 검증·공개 완료.
+
+## 실제 평균 정책 영상
+
+- [16_성공유지학습률비교_control_best_seed7_추가50회_손확대.mp4](jobs/render_control_best_s7_u50/hand.mp4)
+- [16_성공유지학습률비교_control_best_seed7_추가50회_전신.mp4](jobs/render_control_best_s7_u50/fullbody.mp4)
+- [16_성공유지학습률비교_control_last_seed7_추가100회_손확대.mp4](jobs/render_control_last_s7_u100/hand.mp4)
+- [16_성공유지학습률비교_control_last_seed7_추가100회_전신.mp4](jobs/render_control_last_s7_u100/fullbody.mp4)
+- [16_성공유지학습률비교_conservative_best_seed7_추가50회_손확대.mp4](/home/ajou/yigyu/3/docs/2026-11-02/압현실험/동영상/16_성공유지학습률비교_conservative_best_seed7_추가50회_손확대.mp4)
+- [16_성공유지학습률비교_conservative_best_seed7_추가50회_전신.mp4](/home/ajou/yigyu/3/docs/2026-11-02/압현실험/동영상/16_성공유지학습률비교_conservative_best_seed7_추가50회_전신.mp4)
+- [16_성공유지학습률비교_conservative_last_seed7_추가100회_손확대.mp4](jobs/render_conservative_last_s7_u100/hand.mp4)
+- [16_성공유지학습률비교_conservative_last_seed7_추가100회_전신.mp4](jobs/render_conservative_last_s7_u100/fullbody.mp4)
+
+![학습률 비교](comparison.png)

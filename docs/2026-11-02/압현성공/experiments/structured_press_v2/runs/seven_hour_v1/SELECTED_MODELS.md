@@ -6,14 +6,14 @@
 
 |손가락·목표|학습 갱신|A 지원 평가|자유 v9 평가|자유 평가 clean 평균(실패0점,초)|영상|
 |---|--:|--:|--:|--:|---|
-|검지·3줄4프렛|100|32/32|32/32|2.496484|[손](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/index_A100_free_v9_hand.mp4) · [전신](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/index_A100_free_v9_fullbody.mp4)|
-|중지·3줄6프렛|200|32/32|32/32|2.500000|[손](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/middle_A200_free_v9_hand.mp4) · [전신](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/middle_A200_free_v9_fullbody.mp4)|
-|약지·2줄7프렛|200|32/32|32/32|2.500000|[손](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/ring_A200_free_v9_hand.mp4) · [전신](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/ring_A200_free_v9_fullbody.mp4)|
-|소지·3줄9프렛|200|32/32|32/32|2.500000|[손](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/pinky_A200_free_v9_hand.mp4) · [전신](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/pinky_A200_free_v9_fullbody.mp4)|
+|검지·3줄4프렛|100|32/32|32/32|2.496484|[손](../../../../../압현실험/동영상/04_검지3번줄4프렛_100회모델_v9재생_손확대.mp4) · [전신](../../../../../압현실험/동영상/04_검지3번줄4프렛_100회모델_v9재생_전신.mp4)|
+|중지·3줄6프렛|200|32/32|32/32|2.500000|[손](../../../../../압현실험/동영상/05_중지3번줄6프렛_200회모델_v9재생_손확대.mp4) · [전신](../../../../../압현실험/동영상/05_중지3번줄6프렛_200회모델_v9재생_전신.mp4)|
+|약지·2줄7프렛|200|32/32|32/32|2.500000|[손](../../../../../압현실험/동영상/06_약지2번줄7프렛_200회모델_v9재생_손확대.mp4) · [전신](../../../../../압현실험/동영상/06_약지2번줄7프렛_200회모델_v9재생_전신.mp4)|
+|소지·3줄9프렛|200|32/32|32/32|2.500000|[손](../../../../../압현실험/동영상/07_소지3번줄9프렛_200회모델_v9재생_손확대.mp4) · [전신](../../../../../압현실험/동영상/07_소지3번줄9프렛_200회모델_v9재생_전신.mp4)|
 
 A 체크포인트는 정렬·지원 조건에서 학습했다. 검지는 fresh100회 모델이며, 나머지 세 모델은 fresh100회 뒤 같은 A로 엄격히 재개한200회 모델이다. 위 영상은 동일 가중치를 0업데이트로 자유 v9/J33에 내보낸 실제 native 재생이다. 영상은 환경0의 한 에피소드이며 표의32환경 평가와 구분한다.
 
-[네 손가락 영상 모음](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/four_fingers_A_free_v9_comparison.mp4)은 독립 재생 네 개를 배치한 합성본이며 동시에 네 손가락을 제어한 정책 영상이 아니다. 공개 MP4 9개 모두 source/publication SHA와 ffprobe를 확인했다.
+네 손가락 영상 모음（대표 영상 정리로 삭제）은 독립 재생 네 개를 배치한 합성본이며 동시에 네 손가락을 제어한 정책 영상이 아니다. 공개 MP4 9개 모두 source/publication SHA와 ffprobe를 확인했다.
 
 ## B0는 별도로 보존
 
@@ -76,9 +76,9 @@ seed17 fresh 목표4축 분산0.1 실험은 **완료**했다. 원본과 분산0.
 
 |조건|영상 env0 달성|clean 비율|영상|
 |---|--:|--:|---|
-|full100_latent_mean|1|1.000000|[손](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/full100_latent_mean_hand.mp4) · [전신](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/full100_latent_mean_fullbody.mp4)|
-|full200_latent_mean|0|0.000000|[손](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/full200_latent_mean_hand.mp4) · [전신](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/full200_latent_mean_fullbody.mp4)|
-|full200_stochastic|1|0.996667|[손](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/full200_stochastic_hand.mp4) · [전신](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/full200_stochastic_fullbody.mp4)|
+|full100_latent_mean|1|1.000000|[손](renders/full100_latent_mean/hand.mp4) · [전신](renders/full100_latent_mean/fullbody.mp4)|
+|full200_latent_mean|0|0.000000|[손](../../../../../압현실험/동영상/08_전체33축_검지200회_평균동작실패_seed7_손확대.mp4) · [전신](../../../../../압현실험/동영상/08_전체33축_검지200회_평균동작실패_seed7_전신.mp4)|
+|full200_stochastic|1|0.996667|[손](../../../../../압현실험/동영상/09_전체33축_검지200회_탐색포함대표실행_seed7_손확대.mp4) · [전신](../../../../../압현실험/동영상/09_전체33축_검지200회_탐색포함대표실행_seed7_전신.mp4)|
 |full200_requested_angle_mean|1|1.000000|[손](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/full200_requested_angle_mean_hand.mp4) · [전신](/home/ajou/yigyu/3/docs/2026-11-02/압현성공/video/seven_hour_v1/full200_requested_angle_mean_fullbody.mp4)|
 
 각 영상은4환경 native renderer의 환경0 한 에피소드·6초·180프레임이다. 고정4242의32환경 평가와 초기화/분모가 다르므로 영상 성공을32/32로 표현하지 않는다. 확률 영상도 한 표본이다. CP·가중치·물리·source pin이 보존되고0학습임을 확인했다. 요청각 평균 영상은 배포 실행 규칙을 바꾼 진단이며 원래 latent_mean 실행과 구분한다. 기존 A/합성9개와 새8개를 합쳐 공개 MP417개의 source/publication SHA·인코딩 정보를 확인했다.

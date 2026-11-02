@@ -1,0 +1,74 @@
+"""Build and round-trip two-note diagnostic bundles using active CPU compilers."""
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
+import argparse
+import json
+from pathlib import Path
+import sys
+import wave
+
+from inputs import ROOT, STUDY, imported_pins, merge_pins, sha, verify, write
+sys.path.insert(0, str(ROOT))
+from common_pose import validate_case
+from guitar_learning.tool import build_fret_training_data, build_strike_training_data
+from guitar_learning.tool import build_strike_plan, register_song_bundle
+from guitar_learning.song.task import make_task
+
+
+def build(out):
+    out = Path(out).resolve(); out.relative_to(STUDY)
+    out.mkdir(parents=True, exist_ok=False)
+    cases_path = STUDY/'설계/cases.json'
+    pins = imported_pins(); merge_pins(pins, {str(cases_path): sha(cases_path)})
+    protected = json.loads((STUDY/'입력/protected_sha256.json').read_text()); verify(protected)
+    rows = []
+    for case in json.loads(cases_path.read_text())['cases']:
+        validate_case(case)
+        bundle = out/('multi_'+case['case_id']+'_v1')
+        notes, presses = [], []
+        for target in case['targets']:
+            # Input mapping is low-E=0; runtime task is high-e=0.
+            string = 5-target['string']; fret = target['fret']; finger = target['finger_id']
+            notes.append(dict(t_on=0., t_off=1.5, string=string, fret=fret,
+                midi=(40, 45, 50, 55, 59, 64)[string]+fret, finger=finger, barre=False, grip=None))
+            presses.append(dict(finger=finger, string=string, fret=fret, barre=False,
+                                t_press=0., t_release=1.5, strikes=[0.]))
+        mapping = dict(purpose='multi_press.cpu_input.v1', convention='string 0 = low-E',
+            notes=notes, presses=presses,
+            hand=[dict(t=0., P=max(1, min(22, notes[0]['fret']-notes[0]['finger']+1)), grip=None)],
+            stats=dict(dropped_invalid_fret=0), diagnostics=[], violations=[])
+        path = bundle/'mapping/fingering.json'; write(path, mapping)
+        register_song_bundle.write_tablature_if_missing(bundle)
+        audio = bundle/'source/audio.wav'; audio.parent.mkdir()
+        with wave.open(str(audio), 'wb') as stream:
+            stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(16000)
+            stream.writeframes(b'\0\0'*24000)
+        training = bundle/'training'; training.mkdir()
+        build_fret_training_data.main(['--fingering', str(path), '--audio', str(audio),
+                                      '--out', str(training/'fret_training.json')])
+        build_strike_training_data.main([str(path), '--out', str(training/'strike_training.json')])
+        build_strike_plan.main([str(training/'strike_training.json'), '--out', str(training/'strike_plan.json')])
+        register_song_bundle.write_manifest(bundle.name, bundle, dict(
+            generator=str(Path(__file__).resolve()), generator_sha256=pins[str(Path(__file__).resolve())],
+            scope='Two-note diagnostic input; silent audio is a clock, no musical success evidence'))
+        task = make_task(bundle, pre_roll_s=3., tail_s=.5)
+        actual = {(t.string, t.fret, t.finger, t.onset_s, t.end_s) for t in task.targets}
+        expected = {(t['string'], t['fret'], t['finger_id'], 3., 4.5) for t in case['targets']}
+        if len(task.targets) != 2 or actual != expected or task.duration_s != 5.:
+            raise ValueError('Compiler changed target identity, count or timing: '+case['case_id'])
+        rows.append(dict(case_id=case['case_id'], bundle=str(bundle),
+                         targets=[dict(target_id=t.target_id, string=t.string, fret=t.fret,
+                                       finger=t.finger, onset_s=t.onset_s, end_s=t.end_s) for t in task.targets],
+                         control_ticks=task.provenance['song']['control_ticks']))
+    merge_pins(pins, imported_pins()); verify(pins); verify(protected)
+    outputs = {str(p): sha(p) for p in out.rglob('*') if p.is_file()}
+    write(out/'report.json', dict(completed=True, rows=rows, source_sha256=pins,
+          output_sha256=outputs, protected_inputs_unchanged=True, physical_tests=0))
+    print(json.dumps(dict(completed=True, cases=len(rows), target_count_each=2)))
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--out', required=True)
+    args = parser.parse_args()
+    build(args.out)

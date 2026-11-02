@@ -1,0 +1,253 @@
+{
+  "num_envs": 2,
+  "horizon": 32,
+  "updates": 100,
+  "device": "cuda:0",
+  "seed": 7,
+  "size": "large",
+  "initial_std": 0.049787068367863944,
+  "stage": "D",
+  "checkpoint_every": 10,
+  "max_wall_seconds": null,
+  "min_available_memory_gib": 4.0,
+  "heartbeat_seconds": 10.0,
+  "resource_interval_seconds": 5.0,
+  "worker_timeout_seconds": 300.0,
+  "music": {
+    "reward_mode": "legacy",
+    "goal_event_indices": null
+  },
+  "logging": {
+    "detail": "standard",
+    "save_first_rollout": false
+  },
+  "start_event_index": 0,
+  "phrase_events": 1,
+  "tempo_scale": 1.0,
+  "ppo": {
+    "actor_lr": 3e-05,
+    "value_lr": 0.0003,
+    "gamma": 0.99,
+    "cost_gamma": 1.0,
+    "gae_lambda": 0.98,
+    "clip_ratio": 0.2,
+    "cost_weight": 1.0,
+    "epochs": 2,
+    "minibatch_size": 4096,
+    "max_grad_norm": 0.5,
+    "target_kl": 0.02,
+    "kl_retries": 3,
+    "retry_lr_factor": 0.5,
+    "episode_cost_budget": null,
+    "lambda_lr": 0.0,
+    "advantage_normalization": "joint"
+  },
+  "physics_backend": {
+    "schema": "guitar_learning.gpu_batch.v3",
+    "engine": "GPU PhysX",
+    "tensor_pipeline": "cuda",
+    "control": "batched_tensor",
+    "measurement": "gpu_surface_loaded.v1",
+    "cpu_checkpoint_compatible": false
+  },
+  "specialist": {
+    "role": "left",
+    "left_checkpoint": null,
+    "right_checkpoint": null
+  },
+  "song": {
+    "schema": "guitar_learning.song.v1",
+    "pre_roll_s": 3.0,
+    "tail_s": 0.5,
+    "window_s": 0.5,
+    "left_fraction": 0.4,
+    "finger_action_mode": "position",
+    "surface_approach_gamma": 0.99,
+    "finger_recovery": {
+      "schema": "guitar_learning.left_finger_recovery.v1",
+      "standby_rate_per_s": 0.02,
+      "shape_rate_per_s": 0.0
+    },
+    "left_curriculum": {
+      "schema": "guitar_learning.gpu_left_surface_curriculum.v1",
+      "window": 256,
+      "min_episodes": 256,
+      "step": 0.1,
+      "safe_threshold": 0.9,
+      "near_threshold": 0.2,
+      "contact_threshold": 0.2,
+      "near_distance_m": 0.01,
+      "near_required_s": 0.1,
+      "weights": {
+        "wrist": [
+          0.2,
+          0.1,
+          0.05
+        ],
+        "contact": [
+          0.5,
+          1.0,
+          1.0
+        ],
+        "timing": [
+          0.5,
+          1.0,
+          2.0
+        ],
+        "approach": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "weights_scope": "positive_terms_and_wrist_region_penalty",
+      "interpolation": "linear_surface_approach_contact_hold_transition",
+      "failed_episode_metrics": "zeros",
+      "finger_gate": "all_present_fingers"
+    },
+    "finger_control": {
+      "schema": "guitar_learning.flexible_left_fingers.v1",
+      "finger_rate_rad_s": 4.0,
+      "finger_smoothing_alpha": 0.45,
+      "finger_stiffness": 12.0,
+      "finger_damping": 1.5,
+      "thumb_stiffness": 8.0,
+      "thumb_damping": 1.25,
+      "scope": "left21_native_joint_limits"
+    }
+  },
+  "song_training": {
+    "schema": "guitar_learning.song_training.v1",
+    "song_id": "single18_middle_s1_f12",
+    "bundle": "project://docs/2026-11-02/압현실험/단일압현/입력/전체기타후보/middle_s1_f12/song_bundles/single18_middle_s1_f12",
+    "target_count": 1,
+    "control_ticks": 300,
+    "episode_duration_s": 5.0,
+    "score_clock": "original_audio_plus_policy_pre_roll",
+    "observation_dimension": 557
+  },
+  "simple_start": {
+    "schema": "guitar_learning.song_start.v1",
+    "initial_pose": "guitar_learning.single18.transported_learning.v1:common_transport",
+    "initialization": "fresh_unless_strict_resume"
+  },
+  "finger_skill": {
+    "schema": "guitar_learning.finger_skill.v3",
+    "phase": "J",
+    "exploration": "independent",
+    "hold_ticks": 1,
+    "scope": "scheduled",
+    "planned_transitions": 6400,
+    "full_song_after": 1600
+  },
+  "natural_press": {
+    "schema": "guitar_learning.single18.transported_learning.v1",
+    "condition": "E4",
+    "distribution": "aligned",
+    "axes": "goal4",
+    "song": "single18_middle_s1_f12",
+    "finger": "middle",
+    "geometry": "project://docs/2026-11-02/압현실험/단일압현/재실험_공통출발_v1/inputs_v2/middle_s1_f12/catalog.json",
+    "geometry_sha256": "e7adb3977ffba2fa127c7f1fb5d24022467904b132e6d480c2a5af7a2d75e807",
+    "provenance_sha256": "dc5802766b95d9bfbd3db705d691d751ded158d0944a0bf33aaf42cf09e04cfe",
+    "active_axes": [
+      21,
+      22,
+      23,
+      24
+    ],
+    "observation_extra_fields": [
+      "natural_press.phase.move",
+      "natural_press.phase.align",
+      "natural_press.phase.press",
+      "natural_press.phase_elapsed_s",
+      "natural_press.wrist_ready_s",
+      "natural_press.aligned_s",
+      "natural_press.transition_elapsed_s",
+      "natural_press.hold_action.L_Thorax_x",
+      "natural_press.hold_action.L_Thorax_y",
+      "natural_press.hold_action.L_Thorax_z",
+      "natural_press.hold_action.L_Shoulder_x",
+      "natural_press.hold_action.L_Shoulder_y",
+      "natural_press.hold_action.L_Shoulder_z",
+      "natural_press.hold_action.L_Elbow_x",
+      "natural_press.hold_action.L_Elbow_y",
+      "natural_press.hold_action.L_Elbow_z",
+      "natural_press.hold_action.L_Wrist_x",
+      "natural_press.hold_action.L_Wrist_y",
+      "natural_press.hold_action.L_Wrist_z",
+      "natural_press.hold_action.LH:thumb1_x",
+      "natural_press.hold_action.LH:thumb1_y",
+      "natural_press.hold_action.LH:thumb1_z",
+      "natural_press.hold_action.LH:thumb2",
+      "natural_press.hold_action.LH:thumb3",
+      "natural_press.hold_action.LH:index1_x",
+      "natural_press.hold_action.LH:index1_z",
+      "natural_press.hold_action.LH:index2",
+      "natural_press.hold_action.LH:index3",
+      "natural_press.hold_action.LH:middle1_x",
+      "natural_press.hold_action.LH:middle1_z",
+      "natural_press.hold_action.LH:middle2",
+      "natural_press.hold_action.LH:middle3",
+      "natural_press.hold_action.LH:ring1_x",
+      "natural_press.hold_action.LH:ring1_z",
+      "natural_press.hold_action.LH:ring2",
+      "natural_press.hold_action.LH:ring3",
+      "natural_press.hold_action.LH:pinky1_x",
+      "natural_press.hold_action.LH:pinky1_z",
+      "natural_press.hold_action.LH:pinky2",
+      "natural_press.hold_action.LH:pinky3",
+      "natural_press.ready.wrist",
+      "natural_press.ready.tangent",
+      "natural_press.ready.height",
+      "natural_press.ready.normal"
+    ],
+    "finger_initial_std": 0.15,
+    "finger_std_floor": 0.1,
+    "support_initial_std": 0.049787068367863944,
+    "phase_arm_support": false,
+    "inactive_execution": "transport teacher arm12; non-goal fingers finite hold; no phase relatch",
+    "initial_distribution": {
+      "v9_fraction": 0.0,
+      "rng": "torch CPU global RNG; official checkpoint restored; episode reset only"
+    },
+    "readiness": {
+      "wrist_axis_excess_m": 0.01,
+      "wrist_continuous_s": 0.1,
+      "tangent_m": 0.01,
+      "height_m": [
+        0.002,
+        0.02
+      ],
+      "normal_cos": 0.1,
+      "aligned_continuous_s": 0.1
+    },
+    "lr": {
+      "floor": 7.5e-06,
+      "cap": 3e-05,
+      "retry_factor": 0.5,
+      "stable_updates": 10,
+      "stable_kl_below": 0.005,
+      "recovery_factor": 1.25
+    },
+    "likelihood": "saved active axes Gaussian tanh latent; phase never blocks active actions",
+    "single18": {
+      "case": "middle_s1_f12",
+      "runtime_sha256": "5fd8a58a180ed0b91dec6c15f1db9849fe8877191a9a3cb9b156c5257f27289b",
+      "provenance": "project://docs/2026-11-02/압현실험/단일압현/재실험_공통출발_v1/inputs_v2/middle_s1_f12/provenance.json",
+      "planned_updates": 100,
+      "validation": "independently verified C transport"
+    },
+    "transport": {
+      "schema": "guitar_learning.single18.transported_learning.v1",
+      "case": "middle_s1_f12",
+      "evidence": "project://docs/2026-11-02/압현실험/단일압현/재실험_공통출발_v1/로그/retry_failed_C/jobs/middle_s1_f12_C/attempt01/report.json",
+      "evidence_sha256": "1c4b5606dd30c004f0bdeade9c94e83c14b2c7ccc67abeed312ce164052bdef1",
+      "runtime_sha256": "5fd8a58a180ed0b91dec6c15f1db9849fe8877191a9a3cb9b156c5257f27289b",
+      "preparation": "batch synchronous physical transport; no active policy advanced invisibly",
+      "waiting": "terminal rows bounded hold, reward and note ledger frozen, invalid PPO decisions",
+      "clock_mapping": "native episode step stays continuous; subtract recorded preparation offset in policy snapshot view; waiting clock continues but no new policy decisions or episode records",
+      "handoff": "preparation feedback ends; hold the actual settled wrist pose in guitar frame, not the original CPU full pose"
+    }
+  }
+}

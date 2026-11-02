@@ -13,3 +13,7 @@
 | 부록 |[재현·계약·용어](/home/ajou/yigyu/3/paper/06_appendix.md)|
 
 [근거 색인](/home/ajou/yigyu/3/paper/evidence_index.md) · [작성 메모](/home/ajou/yigyu/3/paper/writing_notes.md) · [현재 프로젝트 상태](/home/ajou/yigyu/3/CURRENT_STATUS.md) · [초기 자세의 값·매체](/home/ajou/yigyu/3/paper/initial_pose/current_v3/README.md).
+
+## 새 프레임워크 상세 초안
+
+교수님 피드백을 위한 Overview·Model·Method는 [framework/](framework/README.md)에 별도로 작성한다. 2026-11-02 확인한 구현을 기준으로 공통 구조·현재 왼손 기본 학습·검증 중인 확장을 구분한다. [그림과 편집 원본](framework/images/README.md)도 이 디렉토리에서 관리한다. 기존 방법·실험·결과의 2026-10-19 자료를 덮어쓰거나 새 결과로 간주하지 않는다.
