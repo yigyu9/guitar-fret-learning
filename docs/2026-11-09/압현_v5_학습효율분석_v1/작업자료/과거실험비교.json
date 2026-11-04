@@ -1,0 +1,1354 @@
+{
+  "schema": "guitar_learning.historical_learning_efficiency_evidence.v1",
+  "created_local_date": "2026-11-04",
+  "scope": "read-only historical comparison, not current v5 C1 performance",
+  "methods": {
+    "training": "stream learning_metrics rows; sum transitions, collection_s+update_s; LR/std use recorded accepted values; resume blocks nonoverlapping",
+    "clean": "stream 240Hz diagnostic_trace; sum clean_increment_s only episode_generation==1 separately for every env and target, average envs; divide by1.5 seconds for audible-duration fraction",
+    "time": "collection+update excludes setup/evaluation/render; wall_s shown separately only where read",
+    "success": "report.summary.stage_success is legacy configured hold task success, not full-duration or strict onset/release; diagnostics timing_pass is separate",
+    "hashes": "SHA256 of selected existing report/metrics/input-definition files; original raw traces are referenced, not copied"
+  },
+  "studies": [
+    {
+      "name": "aligned_single_finger_std",
+      "input_description": "중지3번줄6프렛, 정렬 출발, 담당 손가락4축 탐색; LR3e-5",
+      "runs": [
+        {
+          "condition": "std035",
+          "training": {
+            "path": "docs/2026-11-09/탐색값_035_040_045_비교_v1/실행/std035_s7/J/learning_metrics.jsonl",
+            "updates": 100,
+            "physical_transitions": 204800,
+            "collection_and_update_s": 539.8012859738083,
+            "actor_lr_first": 3e-05,
+            "actor_lr_last": 3e-05,
+            "actor_lr_min": 3e-05,
+            "kl_retries": 0,
+            "lr_recoveries": 0,
+            "final_latent_std": {
+              "actual_arm_latent_std": null,
+              "actual_middle_latent_std": null
+            }
+          },
+          "evaluation50": {
+            "report": "docs/2026-11-09/탐색값_035_040_045_비교_v1/실행/std035_eval50/report.json",
+            "summary": {
+              "count": 16,
+              "timeline_complete": 16,
+              "physical_failure": 0,
+              "stage_success": 16,
+              "mean_reward": -1.8679828867316246,
+              "mean_cost": 0.0,
+              "mean_left_success_count": 1.0,
+              "mean_right_success_count": 0.0,
+              "wrist_failure": 0
+            },
+            "checkpoint_sha256": "16deea42da0321553a85f1a1324cdb2d79830dab329f9735708ac83a5ab92d9a",
+            "scope": "full_song",
+            "completed": true,
+            "failure": null,
+            "changed_inputs": []
+          }
+        },
+        {
+          "condition": "std040",
+          "training": {
+            "path": "docs/2026-11-09/탐색값_035_040_045_비교_v1/실행/std040_s7/J/learning_metrics.jsonl",
+            "updates": 100,
+            "physical_transitions": 204800,
+            "collection_and_update_s": 539.38505892182,
+            "actor_lr_first": 3e-05,
+            "actor_lr_last": 3e-05,
+            "actor_lr_min": 3e-05,
+            "kl_retries": 0,
+            "lr_recoveries": 0,
+            "final_latent_std": {
+              "actual_arm_latent_std": null,
+              "actual_middle_latent_std": null
+            }
+          },
+          "evaluation50": {
+            "report": "docs/2026-11-09/탐색값_035_040_045_비교_v1/실행/std040_eval50/report.json",
+            "summary": {
+              "count": 16,
+              "timeline_complete": 16,
+              "physical_failure": 0,
+              "stage_success": 16,
+              "mean_reward": -1.821654200553894,
+              "mean_cost": 0.0,
+              "mean_left_success_count": 1.0,
+              "mean_right_success_count": 0.0,
+              "wrist_failure": 0
+            },
+            "checkpoint_sha256": "7047cb4d539471eef3194a5ec7881a74ccd245e5ad425e7593c563504a83b8b0",
+            "scope": "full_song",
+            "completed": true,
+            "failure": null,
+            "changed_inputs": []
+          }
+        },
+        {
+          "condition": "std045",
+          "training": {
+            "path": "docs/2026-11-09/탐색값_035_040_045_비교_v1/실행/std045_s7/J/learning_metrics.jsonl",
+            "updates": 100,
+            "physical_transitions": 204800,
+            "collection_and_update_s": 541.9430562520865,
+            "actor_lr_first": 3e-05,
+            "actor_lr_last": 3e-05,
+            "actor_lr_min": 3e-05,
+            "kl_retries": 0,
+            "lr_recoveries": 0,
+            "final_latent_std": {
+              "actual_arm_latent_std": null,
+              "actual_middle_latent_std": null
+            }
+          },
+          "evaluation50": {
+            "report": "docs/2026-11-09/탐색값_035_040_045_비교_v1/실행/std045_eval50/report.json",
+            "summary": {
+              "count": 16,
+              "timeline_complete": 16,
+              "physical_failure": 0,
+              "stage_success": 16,
+              "mean_reward": -1.8068206384778023,
+              "mean_cost": 0.0,
+              "mean_left_success_count": 1.0,
+              "mean_right_success_count": 0.0,
+              "wrist_failure": 0
+            },
+            "checkpoint_sha256": "1d6ea58edf4139e8e452faab2ffa879809efbc41837cdb70a8ec0d1a60a33b56",
+            "scope": "full_song",
+            "completed": true,
+            "failure": null,
+            "changed_inputs": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "middle_f6_to_f8_arm_std_x_lr",
+      "runs": [
+        {
+          "condition": "C00",
+          "training": {
+            "path": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C00_s7_train400/J/learning_metrics.jsonl",
+            "updates": 400,
+            "physical_transitions": 819200,
+            "collection_and_update_s": 2191.464286038303,
+            "actor_lr_first": 3e-05,
+            "actor_lr_last": 7.5e-06,
+            "actor_lr_min": 7.5e-06,
+            "kl_retries": 1,
+            "lr_recoveries": 0,
+            "final_latent_std": {
+              "actual_arm_latent_std": [
+                0.1500943899154663,
+                0.15003222227096558,
+                0.1498863846063614,
+                0.150161013007164,
+                0.1498868316411972,
+                0.1499379277229309,
+                0.1497921496629715,
+                0.1498177945613861,
+                0.14983408153057098,
+                0.15005013346672058,
+                0.14993537962436676,
+                0.14989086985588074
+              ],
+              "actual_middle_latent_std": [
+                0.34965670108795166,
+                0.3502720594406128,
+                0.3498302400112152,
+                0.3501227796077728
+              ]
+            },
+            "report": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C00_s7_train400/J/report.json",
+            "wall_s": 2208.2494929160457
+          },
+          "evaluation400": {
+            "report": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C00_s7_eval400/report.json",
+            "summary": {
+              "count": 16,
+              "timeline_complete": 16,
+              "physical_failure": 0,
+              "stage_success": 0,
+              "mean_reward": -2.6529377549886703,
+              "mean_cost": 0.0,
+              "mean_left_success_count": 1.0,
+              "mean_right_success_count": 0.0,
+              "wrist_failure": 0
+            },
+            "checkpoint_sha256": "f56d006c2956d9d2072f3055d39ed6075bb37104675d248f553d42617d423abe",
+            "scope": "full_song",
+            "completed": true,
+            "failure": null,
+            "changed_inputs": [],
+            "trace": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C00_s7_eval400/diagnostic_trace.jsonl.gz",
+            "trace_rows": 1920,
+            "first_episode_clean_mean_s": [
+              1.5,
+              0.0
+            ],
+            "clean_fraction_1p5s": [
+              1.0,
+              0.0
+            ],
+            "evaluation_envs": 16,
+            "timing_report": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C00_s7_eval400/diagnostics.json",
+            "timing_summary": {
+              "episodes": 16,
+              "exact_hz": 240,
+              "timing_pass_episodes": 0,
+              "internal_timing_pass_episodes": 0,
+              "terminal_release_pass_episodes": 16,
+              "overlap_pass_episodes": 16,
+              "wrong_press_active_union_s": 24.0,
+              "planned_active_union_s_per_episode": 3.0
+            }
+          }
+        },
+        {
+          "condition": "C10",
+          "training": {
+            "path": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C10_s7_train400/J/learning_metrics.jsonl",
+            "updates": 400,
+            "physical_transitions": 819200,
+            "collection_and_update_s": 2182.346006329346,
+            "actor_lr_first": 3e-05,
+            "actor_lr_last": 7.5e-06,
+            "actor_lr_min": 7.5e-06,
+            "kl_retries": 1,
+            "lr_recoveries": 0,
+            "final_latent_std": {
+              "actual_arm_latent_std": [
+                0.2000451683998108,
+                0.1999385803937912,
+                0.19983188807964325,
+                0.20012694597244263,
+                0.19970586895942688,
+                0.19981259107589722,
+                0.19982807338237762,
+                0.19979789853096008,
+                0.1996392011642456,
+                0.1999310851097107,
+                0.1999010145664215,
+                0.19983500242233276
+              ],
+              "actual_middle_latent_std": [
+                0.34992167353630066,
+                0.34986773133277893,
+                0.3498360812664032,
+                0.3499014973640442
+              ]
+            },
+            "report": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C10_s7_train400/J/report.json",
+            "wall_s": 2199.576054987032
+          },
+          "evaluation400": {
+            "report": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C10_s7_eval400/report.json",
+            "summary": {
+              "count": 16,
+              "timeline_complete": 16,
+              "physical_failure": 0,
+              "stage_success": 0,
+              "mean_reward": -2.651972234249115,
+              "mean_cost": 0.0,
+              "mean_left_success_count": 1.0,
+              "mean_right_success_count": 0.0,
+              "wrist_failure": 0
+            },
+            "checkpoint_sha256": "7a30cc2384b0d7c21b4cbc1ddaa4bb3bda36cd6e7c31f7b4c7106210108a8e74",
+            "scope": "full_song",
+            "completed": true,
+            "failure": null,
+            "changed_inputs": [],
+            "trace": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C10_s7_eval400/diagnostic_trace.jsonl.gz",
+            "trace_rows": 1920,
+            "first_episode_clean_mean_s": [
+              1.5,
+              0.0
+            ],
+            "clean_fraction_1p5s": [
+              1.0,
+              0.0
+            ],
+            "evaluation_envs": 16,
+            "timing_report": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C10_s7_eval400/diagnostics.json",
+            "timing_summary": {
+              "episodes": 16,
+              "exact_hz": 240,
+              "timing_pass_episodes": 0,
+              "internal_timing_pass_episodes": 0,
+              "terminal_release_pass_episodes": 16,
+              "overlap_pass_episodes": 16,
+              "wrong_press_active_union_s": 24.0,
+              "planned_active_union_s_per_episode": 3.0
+            }
+          }
+        },
+        {
+          "condition": "C01",
+          "training": {
+            "path": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C01_s7_train400/J/learning_metrics.jsonl",
+            "updates": 400,
+            "physical_transitions": 819200,
+            "collection_and_update_s": 2176.2969258305966,
+            "actor_lr_first": 3e-05,
+            "actor_lr_last": 1.5e-05,
+            "actor_lr_min": 7.5e-06,
+            "kl_retries": 1,
+            "lr_recoveries": 1,
+            "final_latent_std": {
+              "actual_arm_latent_std": [
+                0.15004552900791168,
+                0.15006670355796814,
+                0.14997410774230957,
+                0.15004916489124298,
+                0.14980220794677734,
+                0.14989368617534637,
+                0.1497826725244522,
+                0.14964412152767181,
+                0.1498822271823883,
+                0.14999687671661377,
+                0.1499221920967102,
+                0.14986595511436462
+              ],
+              "actual_middle_latent_std": [
+                0.34975314140319824,
+                0.3501414358615875,
+                0.34990882873535156,
+                0.3502326011657715
+              ]
+            },
+            "report": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C01_s7_train400/J/report.json",
+            "wall_s": 2192.936197323026
+          },
+          "evaluation400": {
+            "report": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C01_s7_eval400/report.json",
+            "summary": {
+              "count": 16,
+              "timeline_complete": 16,
+              "physical_failure": 0,
+              "stage_success": 0,
+              "mean_reward": -3.103870213031769,
+              "mean_cost": 0.0,
+              "mean_left_success_count": 1.0,
+              "mean_right_success_count": 0.0,
+              "wrist_failure": 0
+            },
+            "checkpoint_sha256": "fb0ad961a024208c77212e940f9f3a9d6171c1decc14eaa4f6c28b60dbfafe95",
+            "scope": "full_song",
+            "completed": true,
+            "failure": null,
+            "changed_inputs": [],
+            "trace": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C01_s7_eval400/diagnostic_trace.jsonl.gz",
+            "trace_rows": 1920,
+            "first_episode_clean_mean_s": [
+              1.5,
+              0.0
+            ],
+            "clean_fraction_1p5s": [
+              1.0,
+              0.0
+            ],
+            "evaluation_envs": 16,
+            "timing_report": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C01_s7_eval400/diagnostics.json",
+            "timing_summary": {
+              "episodes": 16,
+              "exact_hz": 240,
+              "timing_pass_episodes": 0,
+              "internal_timing_pass_episodes": 0,
+              "terminal_release_pass_episodes": 16,
+              "overlap_pass_episodes": 16,
+              "wrong_press_active_union_s": 24.0,
+              "planned_active_union_s_per_episode": 3.0
+            }
+          }
+        },
+        {
+          "condition": "C11",
+          "training": {
+            "path": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C11_s7_train400/J/learning_metrics.jsonl",
+            "updates": 400,
+            "physical_transitions": 819200,
+            "collection_and_update_s": 2169.064325501502,
+            "actor_lr_first": 3e-05,
+            "actor_lr_last": 1.5e-05,
+            "actor_lr_min": 7.5e-06,
+            "kl_retries": 1,
+            "lr_recoveries": 1,
+            "final_latent_std": {
+              "actual_arm_latent_std": [
+                0.20008759200572968,
+                0.1999451071023941,
+                0.19999538362026215,
+                0.20004622638225555,
+                0.19991177320480347,
+                0.19971923530101776,
+                0.19978024065494537,
+                0.1994096338748932,
+                0.19988301396369934,
+                0.1999119222164154,
+                0.19977574050426483,
+                0.1998869627714157
+              ],
+              "actual_middle_latent_std": [
+                0.3499363362789154,
+                0.34994518756866455,
+                0.3497237265110016,
+                0.34990158677101135
+              ]
+            },
+            "report": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C11_s7_train400/J/report.json",
+            "wall_s": 2185.189008829999
+          },
+          "evaluation400": {
+            "report": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C11_s7_eval400/report.json",
+            "summary": {
+              "count": 16,
+              "timeline_complete": 16,
+              "physical_failure": 0,
+              "stage_success": 0,
+              "mean_reward": -2.9121649116277695,
+              "mean_cost": 0.0,
+              "mean_left_success_count": 1.0,
+              "mean_right_success_count": 0.0,
+              "wrist_failure": 0
+            },
+            "checkpoint_sha256": "4aa4e1b1b166c41402f51e441d5f46533140b21b577c7b8d639759637b7c6bb1",
+            "scope": "full_song",
+            "completed": true,
+            "failure": null,
+            "changed_inputs": [],
+            "trace": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C11_s7_eval400/diagnostic_trace.jsonl.gz",
+            "trace_rows": 1920,
+            "first_episode_clean_mean_s": [
+              1.5,
+              0.0
+            ],
+            "clean_fraction_1p5s": [
+              1.0,
+              0.0
+            ],
+            "evaluation_envs": 16,
+            "timing_report": "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C11_s7_eval400/diagnostics.json",
+            "timing_summary": {
+              "episodes": 16,
+              "exact_hz": 240,
+              "timing_pass_episodes": 0,
+              "internal_timing_pass_episodes": 0,
+              "terminal_release_pass_episodes": 16,
+              "overlap_pass_episodes": 16,
+              "wrong_press_active_union_s": 24.0,
+              "planned_active_union_s_per_episode": 3.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "middle_s3f5_to_s4f8_long",
+      "training_blocks": [
+        {
+          "path": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000100/J/learning_metrics.jsonl",
+          "updates": 100,
+          "physical_transitions": 3276800,
+          "collection_and_update_s": 1693.6878729137825,
+          "actor_lr_first": 3e-05,
+          "actor_lr_last": 1.5e-05,
+          "actor_lr_min": 7.5e-06,
+          "kl_retries": 1,
+          "lr_recoveries": 1,
+          "final_latent_std": {
+            "actual_arm_latent_std": [
+              0.14995726943016052,
+              0.14971937239170074,
+              0.14995653927326202,
+              0.14977560937404633,
+              0.14954064786434174,
+              0.14973615109920502,
+              0.1492542028427124,
+              0.1494245082139969,
+              0.1496179848909378,
+              0.15015332400798798,
+              0.15034548938274384,
+              0.1498894840478897
+            ],
+            "actual_middle_latent_std": [
+              0.3468303680419922,
+              0.349873423576355,
+              0.34904953837394714,
+              0.34940606355667114
+            ]
+          }
+        },
+        {
+          "path": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000200/J/learning_metrics.jsonl",
+          "updates": 100,
+          "physical_transitions": 3276800,
+          "collection_and_update_s": 1693.2049114424153,
+          "actor_lr_first": 1.5e-05,
+          "actor_lr_last": 1.5e-05,
+          "actor_lr_min": 1.5e-05,
+          "kl_retries": 0,
+          "lr_recoveries": 0,
+          "final_latent_std": {
+            "actual_arm_latent_std": [
+              0.1498589962720871,
+              0.1496194303035736,
+              0.14978136122226715,
+              0.1496828943490982,
+              0.14935845136642456,
+              0.14949911832809448,
+              0.14899490773677826,
+              0.14897343516349792,
+              0.14947573840618134,
+              0.15017716586589813,
+              0.15034489333629608,
+              0.14961853623390198
+            ],
+            "actual_middle_latent_std": [
+              0.34607213735580444,
+              0.35026589035987854,
+              0.3484605550765991,
+              0.34918662905693054
+            ]
+          }
+        },
+        {
+          "path": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000300/J/learning_metrics.jsonl",
+          "updates": 100,
+          "physical_transitions": 3276800,
+          "collection_and_update_s": 1856.3685302502709,
+          "actor_lr_first": 1.5e-05,
+          "actor_lr_last": 1.5e-05,
+          "actor_lr_min": 1.5e-05,
+          "kl_retries": 0,
+          "lr_recoveries": 0,
+          "final_latent_std": {
+            "actual_arm_latent_std": [
+              0.14972856640815735,
+              0.149504154920578,
+              0.1496841013431549,
+              0.1493658721446991,
+              0.14911307394504547,
+              0.14919784665107727,
+              0.1488002985715866,
+              0.14877845346927643,
+              0.1492672562599182,
+              0.14982059597969055,
+              0.15034422278404236,
+              0.14921650290489197
+            ],
+            "actual_middle_latent_std": [
+              0.34458106756210327,
+              0.3495555520057678,
+              0.3473971486091614,
+              0.34938183426856995
+            ]
+          }
+        },
+        {
+          "path": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000400/J/learning_metrics.jsonl",
+          "updates": 100,
+          "physical_transitions": 3276800,
+          "collection_and_update_s": 1822.3362282667658,
+          "actor_lr_first": 1.5e-05,
+          "actor_lr_last": 1.5e-05,
+          "actor_lr_min": 3.75e-06,
+          "kl_retries": 2,
+          "lr_recoveries": 2,
+          "final_latent_std": {
+            "actual_arm_latent_std": [
+              0.14972473680973053,
+              0.1494729071855545,
+              0.1493602842092514,
+              0.14909814298152924,
+              0.1488582044839859,
+              0.14890097081661224,
+              0.14850614964962006,
+              0.14840029180049896,
+              0.14923229813575745,
+              0.1498037725687027,
+              0.15013068914413452,
+              0.1489677131175995
+            ],
+            "actual_middle_latent_std": [
+              0.34300196170806885,
+              0.3495989739894867,
+              0.3461625576019287,
+              0.34893959760665894
+            ]
+          }
+        },
+        {
+          "path": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000500/J/learning_metrics.jsonl",
+          "updates": 100,
+          "physical_transitions": 3276800,
+          "collection_and_update_s": 1700.281208213244,
+          "actor_lr_first": 1.5e-05,
+          "actor_lr_last": 1.5e-05,
+          "actor_lr_min": 9.375e-07,
+          "kl_retries": 8,
+          "lr_recoveries": 6,
+          "final_latent_std": {
+            "actual_arm_latent_std": [
+              0.14945819973945618,
+              0.14940117299556732,
+              0.1493215411901474,
+              0.14898478984832764,
+              0.14869233965873718,
+              0.1486678123474121,
+              0.14819243550300598,
+              0.14810994267463684,
+              0.14905470609664917,
+              0.14946892857551575,
+              0.15004555881023407,
+              0.14864301681518555
+            ],
+            "actual_middle_latent_std": [
+              0.34173452854156494,
+              0.3490070402622223,
+              0.3451458811759949,
+              0.3489672839641571
+            ]
+          }
+        },
+        {
+          "path": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000600/J/learning_metrics.jsonl",
+          "updates": 100,
+          "physical_transitions": 3276800,
+          "collection_and_update_s": 1707.354214510182,
+          "actor_lr_first": 1.5e-05,
+          "actor_lr_last": 1.5e-05,
+          "actor_lr_min": 1.46484375e-08,
+          "kl_retries": 33,
+          "lr_recoveries": 20,
+          "final_latent_std": {
+            "actual_arm_latent_std": [
+              0.1493362933397293,
+              0.14927828311920166,
+              0.1490895003080368,
+              0.14875274896621704,
+              0.14854687452316284,
+              0.1485401839017868,
+              0.14788493514060974,
+              0.1476687788963318,
+              0.14898447692394257,
+              0.14961974322795868,
+              0.14993266761302948,
+              0.1484369933605194
+            ],
+            "actual_middle_latent_std": [
+              0.3410033583641052,
+              0.34829235076904297,
+              0.3444715440273285,
+              0.34881022572517395
+            ]
+          }
+        },
+        {
+          "path": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000700/J/learning_metrics.jsonl",
+          "updates": 100,
+          "physical_transitions": 3276800,
+          "collection_and_update_s": 1693.9453156698146,
+          "actor_lr_first": 1.5e-05,
+          "actor_lr_last": 3.75e-06,
+          "actor_lr_min": 9.375e-07,
+          "kl_retries": 19,
+          "lr_recoveries": 16,
+          "final_latent_std": {
+            "actual_arm_latent_std": [
+              0.1493072211742401,
+              0.14933204650878906,
+              0.14893051981925964,
+              0.14854547381401062,
+              0.14810839295387268,
+              0.1480860412120819,
+              0.14714570343494415,
+              0.1470414698123932,
+              0.14860603213310242,
+              0.14941321313381195,
+              0.1497814804315567,
+              0.14798329770565033
+            ],
+            "actual_middle_latent_std": [
+              0.3393562436103821,
+              0.34783604741096497,
+              0.34415900707244873,
+              0.34857600927352905
+            ]
+          }
+        },
+        {
+          "path": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000800/J/learning_metrics.jsonl",
+          "updates": 100,
+          "physical_transitions": 3276800,
+          "collection_and_update_s": 1687.8627242482617,
+          "actor_lr_first": 3.75e-06,
+          "actor_lr_last": 3.75e-06,
+          "actor_lr_min": 9.375e-07,
+          "kl_retries": 18,
+          "lr_recoveries": 16,
+          "final_latent_std": {
+            "actual_arm_latent_std": [
+              0.14923183619976044,
+              0.14935117959976196,
+              0.14903414249420166,
+              0.14839906990528107,
+              0.1478005051612854,
+              0.1476793885231018,
+              0.1465231031179428,
+              0.1465388834476471,
+              0.14823468029499054,
+              0.14931714534759521,
+              0.1496901661157608,
+              0.14775866270065308
+            ],
+            "actual_middle_latent_std": [
+              0.3374624252319336,
+              0.34809672832489014,
+              0.34277209639549255,
+              0.3485528528690338
+            ]
+          }
+        }
+      ],
+      "total_updates": 800,
+      "total_transitions": 26214400,
+      "total_collection_and_update_s": 13855.041005514737,
+      "evaluations": {
+        "500": {
+          "report": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000500/report.json",
+          "summary": {
+            "count": 16,
+            "timeline_complete": 16,
+            "physical_failure": 0,
+            "stage_success": 0,
+            "mean_reward": -2.2817883789539337,
+            "mean_cost": 0.0,
+            "mean_left_success_count": 1.0,
+            "mean_right_success_count": 0.0,
+            "wrist_failure": 0
+          },
+          "checkpoint_sha256": "a0c912496f48421fe16ea84da259f77edfa72e6a194238a9168e968c8c32b99b",
+          "scope": "full_song",
+          "completed": true,
+          "failure": null,
+          "changed_inputs": [],
+          "trace": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000500/diagnostic_trace.jsonl.gz",
+          "trace_rows": 1920,
+          "first_episode_clean_mean_s": [
+            1.4533854166666664,
+            0.0
+          ],
+          "clean_fraction_1p5s": [
+            0.9689236111111109,
+            0.0
+          ],
+          "evaluation_envs": 16,
+          "timing_report": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000500/diagnostics.json",
+          "timing_summary": {
+            "episodes": 16,
+            "exact_hz": 240,
+            "timing_pass_episodes": 0,
+            "internal_timing_pass_episodes": 0,
+            "terminal_release_pass_episodes": 16,
+            "overlap_pass_episodes": 16,
+            "wrong_press_active_union_s": 0.0,
+            "planned_active_union_s_per_episode": 3.0
+          }
+        },
+        "600": {
+          "report": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000600/report.json",
+          "summary": {
+            "count": 16,
+            "timeline_complete": 16,
+            "physical_failure": 0,
+            "stage_success": 0,
+            "mean_reward": -2.509155824780464,
+            "mean_cost": 0.0,
+            "mean_left_success_count": 1.0,
+            "mean_right_success_count": 0.0,
+            "wrist_failure": 0
+          },
+          "checkpoint_sha256": "06fb4f6adb898eda103c8e8243400e687ff89995e743d940243dcdee3ca43ed8",
+          "scope": "full_song",
+          "completed": true,
+          "failure": null,
+          "changed_inputs": [],
+          "trace": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000600/diagnostic_trace.jsonl.gz",
+          "trace_rows": 1920,
+          "first_episode_clean_mean_s": [
+            1.4539062499999997,
+            0.0
+          ],
+          "clean_fraction_1p5s": [
+            0.9692708333333332,
+            0.0
+          ],
+          "evaluation_envs": 16,
+          "timing_report": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000600/diagnostics.json",
+          "timing_summary": {
+            "episodes": 16,
+            "exact_hz": 240,
+            "timing_pass_episodes": 0,
+            "internal_timing_pass_episodes": 0,
+            "terminal_release_pass_episodes": 16,
+            "overlap_pass_episodes": 16,
+            "wrong_press_active_union_s": 0.19583333333333464,
+            "planned_active_union_s_per_episode": 3.0
+          }
+        },
+        "700": {
+          "report": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000700/report.json",
+          "summary": {
+            "count": 16,
+            "timeline_complete": 16,
+            "physical_failure": 0,
+            "stage_success": 16,
+            "mean_reward": -1.9605696499347687,
+            "mean_cost": 0.0,
+            "mean_left_success_count": 2.0,
+            "mean_right_success_count": 0.0,
+            "wrist_failure": 0
+          },
+          "checkpoint_sha256": "edd43ed11e8084ca7de1a9ad5c2a4cc69b42181e0737ff772142d684a028fd03",
+          "scope": "full_song",
+          "completed": true,
+          "failure": null,
+          "changed_inputs": [],
+          "trace": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000700/diagnostic_trace.jsonl.gz",
+          "trace_rows": 1920,
+          "first_episode_clean_mean_s": [
+            1.44296875,
+            1.0026041666666665
+          ],
+          "clean_fraction_1p5s": [
+            0.9619791666666666,
+            0.6684027777777777
+          ],
+          "evaluation_envs": 16,
+          "timing_report": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000700/diagnostics.json",
+          "timing_summary": {
+            "episodes": 16,
+            "exact_hz": 240,
+            "timing_pass_episodes": 0,
+            "internal_timing_pass_episodes": 0,
+            "terminal_release_pass_episodes": 16,
+            "overlap_pass_episodes": 16,
+            "wrong_press_active_union_s": 1.791666666666666,
+            "planned_active_union_s_per_episode": 3.0
+          }
+        },
+        "800": {
+          "report": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000800/report.json",
+          "summary": {
+            "count": 16,
+            "timeline_complete": 16,
+            "physical_failure": 0,
+            "stage_success": 16,
+            "mean_reward": -1.7464465126395226,
+            "mean_cost": 0.0,
+            "mean_left_success_count": 2.0,
+            "mean_right_success_count": 0.0,
+            "wrist_failure": 0
+          },
+          "checkpoint_sha256": "c31e55a0e60ee653d6368c031f7f3f1396dd251c41c5727de9717fbaf3acd596",
+          "scope": "full_song",
+          "completed": true,
+          "failure": null,
+          "changed_inputs": [],
+          "trace": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000800/diagnostic_trace.jsonl.gz",
+          "trace_rows": 1920,
+          "first_episode_clean_mean_s": [
+            1.4585937500000001,
+            1.2627604166666666
+          ],
+          "clean_fraction_1p5s": [
+            0.9723958333333335,
+            0.8418402777777777
+          ],
+          "evaluation_envs": 16,
+          "timing_report": "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000800/diagnostics.json",
+          "timing_summary": {
+            "episodes": 16,
+            "exact_hz": 240,
+            "timing_pass_episodes": 0,
+            "internal_timing_pass_episodes": 0,
+            "terminal_release_pass_episodes": 16,
+            "overlap_pass_episodes": 16,
+            "wrong_press_active_union_s": 0.9125000000000032,
+            "planned_active_union_s_per_episode": 3.0
+          }
+        }
+      }
+    },
+    {
+      "name": "overnight_same_and_different_finger_transition",
+      "runs": [
+        {
+          "condition": "A0_arm015_s7",
+          "training_blocks": [
+            {
+              "path": "docs/2026-11-09/복합압현_야간확장_v1/실행/A0_arm015_s7_train100/J/learning_metrics.jsonl",
+              "updates": 100,
+              "physical_transitions": 204800,
+              "collection_and_update_s": 547.1590514070704,
+              "actor_lr_first": 3e-05,
+              "actor_lr_last": 7.5e-06,
+              "actor_lr_min": 7.5e-06,
+              "kl_retries": 1,
+              "lr_recoveries": 0,
+              "final_latent_std": {
+                "actual_arm_latent_std": null,
+                "actual_middle_latent_std": null
+              }
+            },
+            {
+              "path": "docs/2026-11-09/복합압현_야간확장_v1/실행/A0_arm015_s7_extend100/J/learning_metrics.jsonl",
+              "updates": 100,
+              "physical_transitions": 204800,
+              "collection_and_update_s": 547.7992830080912,
+              "actor_lr_first": 7.5e-06,
+              "actor_lr_last": 7.5e-06,
+              "actor_lr_min": 7.5e-06,
+              "kl_retries": 0,
+              "lr_recoveries": 0,
+              "final_latent_std": {
+                "actual_arm_latent_std": null,
+                "actual_middle_latent_std": null
+              }
+            }
+          ],
+          "total_transitions": 409600,
+          "total_collection_and_update_s": 1094.9583344151615,
+          "evaluation200": {
+            "report": "docs/2026-11-09/복합압현_야간확장_v1/실행/A0_arm015_s7_eval200/report.json",
+            "summary": {
+              "count": 16,
+              "timeline_complete": 16,
+              "physical_failure": 0,
+              "stage_success": 0,
+              "mean_reward": -2.649415373802185,
+              "mean_cost": 0.0,
+              "mean_left_success_count": 1.0,
+              "mean_right_success_count": 0.0,
+              "wrist_failure": 0
+            },
+            "checkpoint_sha256": "2226e94dfcbfadc794b8bc12912c008f30cd63baa1ea3af1055f7d96365dae41",
+            "scope": "full_song",
+            "completed": true,
+            "failure": null,
+            "changed_inputs": [],
+            "trace": "docs/2026-11-09/복합압현_야간확장_v1/실행/A0_arm015_s7_eval200/diagnostic_trace.jsonl.gz",
+            "trace_rows": 1920,
+            "first_episode_clean_mean_s": [
+              1.5,
+              0.0
+            ],
+            "clean_fraction_1p5s": [
+              1.0,
+              0.0
+            ],
+            "evaluation_envs": 16,
+            "timing_report": "docs/2026-11-09/복합압현_야간확장_v1/실행/A0_arm015_s7_eval200/diagnostics.json",
+            "timing_summary": {
+              "episodes": 16,
+              "exact_hz": 240,
+              "timing_pass_episodes": 0,
+              "internal_timing_pass_episodes": 0,
+              "terminal_release_pass_episodes": 16,
+              "overlap_pass_episodes": 16,
+              "wrong_press_active_union_s": 24.0,
+              "planned_active_union_s_per_episode": 3.0
+            }
+          }
+        },
+        {
+          "condition": "N07_s7",
+          "training_blocks": [
+            {
+              "path": "docs/2026-11-09/복합압현_야간확장_v1/실행/N07_s7_train100/J/learning_metrics.jsonl",
+              "updates": 100,
+              "physical_transitions": 204800,
+              "collection_and_update_s": 553.678136192495,
+              "actor_lr_first": 3e-05,
+              "actor_lr_last": 3e-05,
+              "actor_lr_min": 3e-05,
+              "kl_retries": 0,
+              "lr_recoveries": 0,
+              "final_latent_std": {
+                "actual_arm_latent_std": null,
+                "actual_middle_latent_std": null
+              }
+            },
+            {
+              "path": "docs/2026-11-09/복합압현_야간확장_v1/실행/N07_s7_extend100/J/learning_metrics.jsonl",
+              "updates": 100,
+              "physical_transitions": 204800,
+              "collection_and_update_s": 558.4136754674837,
+              "actor_lr_first": 3e-05,
+              "actor_lr_last": 7.5e-06,
+              "actor_lr_min": 7.5e-06,
+              "kl_retries": 1,
+              "lr_recoveries": 0,
+              "final_latent_std": {
+                "actual_arm_latent_std": null,
+                "actual_middle_latent_std": null
+              }
+            }
+          ],
+          "total_transitions": 409600,
+          "total_collection_and_update_s": 1112.0918116599787,
+          "evaluation200": {
+            "report": "docs/2026-11-09/복합압현_야간확장_v1/실행/N07_s7_eval200/report.json",
+            "summary": {
+              "count": 16,
+              "timeline_complete": 16,
+              "physical_failure": 0,
+              "stage_success": 16,
+              "mean_reward": -2.3885826468467712,
+              "mean_cost": 0.0,
+              "mean_left_success_count": 2.0,
+              "mean_right_success_count": 0.0,
+              "wrist_failure": 0
+            },
+            "checkpoint_sha256": "3ae30f6eb66de89c9bfd7015058155b8984f70d87cc1deacf79969ea88738e56",
+            "scope": "full_song",
+            "completed": true,
+            "failure": null,
+            "changed_inputs": [],
+            "trace": "docs/2026-11-09/복합압현_야간확장_v1/실행/N07_s7_eval200/diagnostic_trace.jsonl.gz",
+            "trace_rows": 1920,
+            "first_episode_clean_mean_s": [
+              1.5,
+              1.5
+            ],
+            "clean_fraction_1p5s": [
+              1.0,
+              1.0
+            ],
+            "evaluation_envs": 16,
+            "timing_report": "docs/2026-11-09/복합압현_야간확장_v1/실행/N07_s7_eval200/diagnostics.json",
+            "timing_summary": {
+              "episodes": 16,
+              "exact_hz": 240,
+              "timing_pass_episodes": 0,
+              "internal_timing_pass_episodes": 16,
+              "terminal_release_pass_episodes": 0,
+              "overlap_pass_episodes": 16,
+              "wrong_press_active_union_s": 0.0,
+              "planned_active_union_s_per_episode": 3.0
+            }
+          }
+        },
+        {
+          "condition": "N08_s7",
+          "training_blocks": [
+            {
+              "path": "docs/2026-11-09/복합압현_야간확장_v1/실행/N08_s7_train100/J/learning_metrics.jsonl",
+              "updates": 100,
+              "physical_transitions": 204800,
+              "collection_and_update_s": 556.8784459904418,
+              "actor_lr_first": 3e-05,
+              "actor_lr_last": 3e-05,
+              "actor_lr_min": 3e-05,
+              "kl_retries": 0,
+              "lr_recoveries": 0,
+              "final_latent_std": {
+                "actual_arm_latent_std": null,
+                "actual_middle_latent_std": null
+              }
+            },
+            {
+              "path": "docs/2026-11-09/복합압현_야간확장_v1/실행/N08_s7_extend100/J/learning_metrics.jsonl",
+              "updates": 100,
+              "physical_transitions": 204800,
+              "collection_and_update_s": 556.5065413202392,
+              "actor_lr_first": 3e-05,
+              "actor_lr_last": 7.5e-06,
+              "actor_lr_min": 7.5e-06,
+              "kl_retries": 1,
+              "lr_recoveries": 0,
+              "final_latent_std": {
+                "actual_arm_latent_std": null,
+                "actual_middle_latent_std": null
+              }
+            }
+          ],
+          "total_transitions": 409600,
+          "total_collection_and_update_s": 1113.384987310681,
+          "evaluation200": {
+            "report": "docs/2026-11-09/복합압현_야간확장_v1/실행/N08_s7_eval200/report.json",
+            "summary": {
+              "count": 16,
+              "timeline_complete": 16,
+              "physical_failure": 0,
+              "stage_success": 16,
+              "mean_reward": -2.315649062395096,
+              "mean_cost": 0.0,
+              "mean_left_success_count": 2.0,
+              "mean_right_success_count": 0.0,
+              "wrist_failure": 0
+            },
+            "checkpoint_sha256": "5de9f57eefcac2d46fb18bf907b869abe01cd4b6986685572fb42fd25d1f6d20",
+            "scope": "full_song",
+            "completed": true,
+            "failure": null,
+            "changed_inputs": [],
+            "trace": "docs/2026-11-09/복합압현_야간확장_v1/실행/N08_s7_eval200/diagnostic_trace.jsonl.gz",
+            "trace_rows": 1920,
+            "first_episode_clean_mean_s": [
+              1.5,
+              1.5
+            ],
+            "clean_fraction_1p5s": [
+              1.0,
+              1.0
+            ],
+            "evaluation_envs": 16,
+            "timing_report": "docs/2026-11-09/복합압현_야간확장_v1/실행/N08_s7_eval200/diagnostics.json",
+            "timing_summary": {
+              "episodes": 16,
+              "exact_hz": 240,
+              "timing_pass_episodes": 16,
+              "internal_timing_pass_episodes": 16,
+              "terminal_release_pass_episodes": 16,
+              "overlap_pass_episodes": 16,
+              "wrong_press_active_union_s": 0.0,
+              "planned_active_union_s_per_episode": 3.0
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "pins": {
+    "docs/2026-11-09/탐색값_035_040_045_비교_v1/실행/std035_s7/J/learning_metrics.jsonl": {
+      "bytes": 670924,
+      "sha256": "836244854895a0d2128b4cd3067aa9eac8bd26066ae750a4d7663cd8eb6f61f9"
+    },
+    "docs/2026-11-09/탐색값_035_040_045_비교_v1/실행/std035_eval50/report.json": {
+      "bytes": 305866,
+      "sha256": "e0f6da561cce23280aa338d094c1b870c85fe9a107e277efa9b1a90f5fd9c801"
+    },
+    "docs/2026-11-09/탐색값_035_040_045_비교_v1/실행/std040_s7/J/learning_metrics.jsonl": {
+      "bytes": 670972,
+      "sha256": "e303e2223e4057122cdba61a4491126f642df082820ae1ab434ad30985d62b8e"
+    },
+    "docs/2026-11-09/탐색값_035_040_045_비교_v1/실행/std040_eval50/report.json": {
+      "bytes": 305850,
+      "sha256": "78367c574a6e2f1ce64bfec104664ee89448a7ab59c0c831fe2b5c35961a8af3"
+    },
+    "docs/2026-11-09/탐색값_035_040_045_비교_v1/실행/std045_s7/J/learning_metrics.jsonl": {
+      "bytes": 670949,
+      "sha256": "0870419d3c3ebc28a8e44aac1799d3a6ea8f66343e1ea5a0907c1a9d463b16e3"
+    },
+    "docs/2026-11-09/탐색값_035_040_045_비교_v1/실행/std045_eval50/report.json": {
+      "bytes": 305877,
+      "sha256": "73d58e34a28b852c2ae5871019a7bff91dd64e63e5add0de246b229ee67e8b2e"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C00_s7_train400/J/learning_metrics.jsonl": {
+      "bytes": 3014514,
+      "sha256": "0562d1b9e2af2ca6b6daf4dba0e0e171325a203ae99f4b430e1ce78a9a9c8e10"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C00_s7_train400/J/report.json": {
+      "bytes": 841813,
+      "sha256": "cbe2f6603518dd30794006de2de54f36b59e5aca8781144605c4e25d44da5915"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C00_s7_eval400/report.json": {
+      "bytes": 469541,
+      "sha256": "4ba6264c7a981591dfe0dc62f7268e54efbda593b5c60879044dba60a0029a57"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C00_s7_eval400/diagnostics.json": {
+      "bytes": 23770,
+      "sha256": "3c53e94b314f311499e05b38ee03e1471b23bfe5f3a4483a85f49590c307d9e8"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C10_s7_train400/J/learning_metrics.jsonl": {
+      "bytes": 3023670,
+      "sha256": "96aa274222b23b59b4f61e4a99063607df77a3197864053d61de9697e145971c"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C10_s7_train400/J/report.json": {
+      "bytes": 841799,
+      "sha256": "3cfb5cfc0d261bd6d0e3243e1c3ee8c304dfe7999fca3d7cd7b691d067a17d7e"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C10_s7_eval400/report.json": {
+      "bytes": 469765,
+      "sha256": "5333877c22242d2bfe7956d2e01cf71041f4d7258f00e341717c5a8ee840225d"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C10_s7_eval400/diagnostics.json": {
+      "bytes": 23730,
+      "sha256": "19c3e7931f31f994a78fafa918e7d31c650996b545cb4224c53f38efbefd8b97"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C01_s7_train400/J/learning_metrics.jsonl": {
+      "bytes": 3018021,
+      "sha256": "15a175551ed108336ac53bbf98aff077252f055d3b9b5981ccf1c8399739a454"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C01_s7_train400/J/report.json": {
+      "bytes": 841922,
+      "sha256": "4dee3688597cfef8f6191ba005d0e47793c3b4495cbc01e58ed57ed421bd421e"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C01_s7_eval400/report.json": {
+      "bytes": 469733,
+      "sha256": "b55baf73f8a585dc0dd2f2753515a52e7fe9926834cd7ef22ea1e5d35a58d527"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C01_s7_eval400/diagnostics.json": {
+      "bytes": 24052,
+      "sha256": "ea10adc9f1e3abf981721542d1c7e0617e1b640c400ab861d257d0381441371d"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C11_s7_train400/J/learning_metrics.jsonl": {
+      "bytes": 3027570,
+      "sha256": "f55e4195bbc76b373089923f9c826b96134758622be6e1271848f07cf432e380"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C11_s7_train400/J/report.json": {
+      "bytes": 841907,
+      "sha256": "0d54a2d0de5a2b35b7815794c1b37c9f9e19bf333839cf4c0790454910e8efdd"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C11_s7_eval400/report.json": {
+      "bytes": 469631,
+      "sha256": "5c88f7b7c15c42a23ad6417edf9cbf63d1b45200d1017abbac243294b75e8f06"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/실행/C11_s7_eval400/diagnostics.json": {
+      "bytes": 24148,
+      "sha256": "8f14e23050545aa8ac29bd7362e9847f3aa7b3b4d4eab408fe68140a57f29944"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000100/J/learning_metrics.jsonl": {
+      "bytes": 812606,
+      "sha256": "c9ad034fa5d86ebaa79a2b2238a629e00ff78e3272ab83e78d0c1b7a3366af8b"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000200/J/learning_metrics.jsonl": {
+      "bytes": 815789,
+      "sha256": "d774863c9b221f0a8798ba679d4f8169ae669e76f89fbd2f1a17a0f574bf9f0b"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000300/J/learning_metrics.jsonl": {
+      "bytes": 814157,
+      "sha256": "83784f621ac7380d6af2190083bdff9e7d5f1886a6ca32b6adc2f2c8debe288a"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000400/J/learning_metrics.jsonl": {
+      "bytes": 814229,
+      "sha256": "93215ebf39dd3bdd5e0bc795674cfc01abe2ac2c9b1bbef9b3e3dedf9ec381e7"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000500/J/learning_metrics.jsonl": {
+      "bytes": 815253,
+      "sha256": "b0c546f53b1fc20f6d78b37c8fb331d100d35af830fa5d1825f083050a4c1ab7"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000600/J/learning_metrics.jsonl": {
+      "bytes": 819554,
+      "sha256": "e2b9d049750f435cca684e912c8933818acf7b1eb0a4f003a77389e437580422"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000700/J/learning_metrics.jsonl": {
+      "bytes": 819078,
+      "sha256": "00d4873e89f952ec5c4421cba2e19cdda3b3f92f7e0aca394f125bf237270b91"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/학습_u000800/J/learning_metrics.jsonl": {
+      "bytes": 817034,
+      "sha256": "84bcde043e9ee1f481c0a5273a719ed45840ed842aba16f33e7776812b7149bf"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000500/report.json": {
+      "bytes": 470037,
+      "sha256": "df812b0f44fe04a4630590a9947ab523fd598364916dbb317dd8e3c644c96d91"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000500/diagnostics.json": {
+      "bytes": 23917,
+      "sha256": "ba709b9a512b29f23a321889f7dd11394716fcd29d69de2a4b0ec67b2b1ebf77"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000600/report.json": {
+      "bytes": 469881,
+      "sha256": "b8faa0e63441c1aaec277d725ec0e7f5dc45d341dd2b1afe0cc602ced811399e"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000600/diagnostics.json": {
+      "bytes": 24190,
+      "sha256": "bdc05397b5ccd0a5c051b49c102dcaad842d98200e0da31c24b4532dbebf0b0d"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000700/report.json": {
+      "bytes": 469996,
+      "sha256": "e467d189ed2d4bec18082bb8b40f06c66834b8e2f47aaed3a2b76f36f9f2a4f3"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000700/diagnostics.json": {
+      "bytes": 25067,
+      "sha256": "e43104b874d7f71f9b169da1fe1684506bcafb36041f9728082625409ae019db"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000800/report.json": {
+      "bytes": 469896,
+      "sha256": "00aafce733b986a12f218911752b5ead3a5594513011b40a0c319b500132f7d8"
+    },
+    "docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/실행/평균_u000800/diagnostics.json": {
+      "bytes": 25065,
+      "sha256": "ac3eddd4127718e3090e0278c87e87c79aee297bb15218f1641a16325ebb0813"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/실행/A0_arm015_s7_train100/J/learning_metrics.jsonl": {
+      "bytes": 672771,
+      "sha256": "2766cb25c6ef7ac1658e922197a5d284458243339d216d21deccaf4f67537666"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/실행/A0_arm015_s7_extend100/J/learning_metrics.jsonl": {
+      "bytes": 674040,
+      "sha256": "e41a8ca15e29a6e19db49a938fa3be24ee055a6f0d7d1c800368805e0067d199"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/실행/A0_arm015_s7_eval200/report.json": {
+      "bytes": 468380,
+      "sha256": "e92b606ef515fa8621f2b53c25e4bd10c22e02fe6ef97857cde82d4fd83108e7"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/실행/A0_arm015_s7_eval200/diagnostics.json": {
+      "bytes": 23732,
+      "sha256": "98377dbe62352fe473987c1b790d3e4a940f33819cf0a37c45f75f2b64c04493"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/실행/N07_s7_train100/J/learning_metrics.jsonl": {
+      "bytes": 673059,
+      "sha256": "1721188d0f2872557f7dc3d76f66beb9bab8c76c952ade43c3aca3c3bb9ca791"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/실행/N07_s7_extend100/J/learning_metrics.jsonl": {
+      "bytes": 672880,
+      "sha256": "44a0853a7816abfe2876dfd2299ebc8040a09a1df35a82e7a598f628e1627d82"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/실행/N07_s7_eval200/report.json": {
+      "bytes": 468555,
+      "sha256": "e0679fbb5c2ac46c1d3d53f292eed569af7d414c430798ee4da07e33815c5577"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/실행/N07_s7_eval200/diagnostics.json": {
+      "bytes": 24675,
+      "sha256": "f9a950d324151a2cdb532686a04cecb6a81268c2552ee569a7a05688bc132f75"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/실행/N08_s7_train100/J/learning_metrics.jsonl": {
+      "bytes": 672999,
+      "sha256": "dd0cdda429c8cafa77ffd54f00fd894aa8ceb0cce7cb1c9c9372f5be447ed53b"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/실행/N08_s7_extend100/J/learning_metrics.jsonl": {
+      "bytes": 673574,
+      "sha256": "2ae458be7e1b87a242df8fd8a40edf0f241ac7d7ba73d271fe0a1488ae040127"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/실행/N08_s7_eval200/report.json": {
+      "bytes": 468386,
+      "sha256": "11f0b2a758b41ce45aa73de5ceb866097254b9433a1bc9876c5de47655f996d3"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/실행/N08_s7_eval200/diagnostics.json": {
+      "bytes": 25045,
+      "sha256": "3efd11e84546b276f9a043113dffecf56bb9950f7d2f72c8b77c7a5064d23de7"
+    },
+    "docs/2026-11-09/복합압현_야간확장_v1/도구/inputs.py": {
+      "bytes": 25360,
+      "sha256": "c4a08d8c47b7c579cbab9c7f4c884a555bca5aee56b14ced3728f6fda6abfe80"
+    },
+    "docs/2026-11-09/복합압현_단계별실험_v1/도구/inputs.py": {
+      "bytes": 25023,
+      "sha256": "b7f7fdc5ba273109a6ab4b4b663addcb6c48d097cb14c1fa0e65728ba6b23b4b"
+    },
+    "docs/2026-11-09/학습속도_개선방향.md": {
+      "bytes": 7637,
+      "sha256": "21cd8fbd1ea55c5a341bd6d4e4a400d23d3faafe92def8a21e13635e4f826918"
+    },
+    "docs/2026-11-09/중지6에서8_탐색학습률비교_v1/분석/실패원인_400회.md": {
+      "bytes": 3955,
+      "sha256": "e834764255090c60afd58808211bbdbd7036d000b0bf197c2f18e6ded8fca982"
+    }
+  },
+  "limitations": [
+    "Some historical episodes.jsonl and detailed finger_control_trace.jsonl.gz have been removed; do not independently re-assert archived per-note training episode counts or geometric distances.",
+    "16 repeated deterministic eval envs are not16 independent training seeds.",
+    "Single finger/old613-observation experiments differ from v5 C1 state464+goal26x8 and reward profiles.",
+    "Loaded pad geometry candidate does not certify string pressure or acoustic sound.",
+    "No new experiment, source change, GPU run or raw log copy."
+  ]
+}

@@ -1,0 +1,403 @@
+{
+  "timestamp_utc": "2026-11-04T04:04:09.784096+00:00",
+  "scope": [
+    "/var",
+    "/usr",
+    "/opt",
+    "/snap",
+    "/tmp",
+    "/boot",
+    "/root"
+  ],
+  "read_only": true,
+  "measurement": "Allocated blocks from stat.st_blocks * 512 and du -x -B1, unique inode within scanned tree. Docker uses engine reclaim estimate. No symlink target or mounted squashfs expansion counted.",
+  "directory_allocated_lower_bounds": {
+    "/var": 16694935552,
+    "/usr": 18258190336,
+    "/opt": 989626368,
+    "/tmp": 626315264,
+    "/boot": 219533312
+  },
+  "prioritized_candidates": [
+    {
+      "name": "systemd journal history",
+      "path": "/var/log/journal",
+      "allocated_bytes": 4337188864,
+      "archived_file_count": 75,
+      "archived_allocated_bytes": 4270071808,
+      "active_allocated_bytes": 67117056,
+      "classification": "recommended after retention choice; administrator operation",
+      "conditions": [
+        "Use journal-aware archived-file vacuum with an explicit retained budget; active journal currently ~64MiB must remain.",
+        "Estimates allow for whole-file granularity and ongoing growth. Size/time retention has not been configured explicitly.",
+        "journalctl vacuum-size applies to archived files; a 1GiB archive budget leaves ~64MiB active additionally. Thus practical 1GiB archive target estimates 2.98GiB reclaim, and 512MiB archive target estimates 3.48GiB. Whole-file deletion may vary."
+      ],
+      "evidence": [
+        "journalctl --disk-usage",
+        "systemd-analyze cat-config systemd/journald.conf",
+        "stat allocated bytes of journal files"
+      ],
+      "estimated_reclaim_keep_total_1GiB": 3263447040,
+      "estimated_reclaim_keep_total_512MiB": 3800317952,
+      "estimated_reclaim_vacuum_archives_to_1GiB": 3196329984,
+      "estimated_reclaim_vacuum_archives_to_512MiB": 3733200896
+    },
+    {
+      "name": "APT downloaded installer",
+      "path": "/var/cache/apt/archives/chatgpt_26.1027.51404_amd64.deb",
+      "allocated_bytes": 535330816,
+      "classification": "low-risk cache cleanup; administrator operation",
+      "conditions": [
+        "The exact package version is already installed. Removing this downloaded installer does not uninstall the application.",
+        "Partial directory inaccessible; amount includes only the verified complete .deb."
+      ],
+      "evidence": [
+        "dpkg-query -W chatgpt",
+        "stat allocated bytes; no hardlink"
+      ]
+    },
+    {
+      "name": "XRDP accumulated active logs",
+      "path": "/var/log/xrdp.log",
+      "allocated_bytes": 2038845440,
+      "classification": "conditional; service-aware rotation and retention required",
+      "conditions": [
+        "xrdp and xrdp-sesman are active. Do not unlink the live log or restart remote access without checking session impact.",
+        "No xrdp rule was found anywhere under /etc/logrotate.conf or /etc/logrotate.d.",
+        "Use a retention choice and a proven service-compatible rotation/truncation method; retaining a small recent tail can reclaim nearly 1.9GiB. Growth prevention needed."
+      ],
+      "evidence": [
+        "systemctl is-active xrdp xrdp-sesman",
+        "rg -n xrdp /etc/logrotate.conf /etc/logrotate.d",
+        "stat /var/log/xrdp.log"
+      ]
+    },
+    {
+      "name": "Unreferenced Docker images",
+      "path": "/var/lib/docker (engine uses overlayfs)",
+      "engine_reclaimable_display": "779.9MB (99%)",
+      "approximate_unique_image_bytes": 779828171,
+      "classification": "conditional; user may need images for future jobs, can redownload",
+      "images": [
+        {
+          "name": "brainicism/bgutil-ytdlp-pot-provider:latest",
+          "image_id": "1aaa43a0ca72",
+          "unique_bytes": 438614106,
+          "containers": 0
+        },
+        {
+          "name": "nvidia/cuda:11.8.0-base-ubuntu22.04",
+          "image_id": "f895871972c1",
+          "unique_bytes": 341214065,
+          "containers": 0
+        }
+      ],
+      "conditions": [
+        "Engine lists zero containers, zero volumes, zero build cache, zero shared image data.",
+        "These are engine estimates, not stat-measured physical blocks. No automatic system-wide prune recommended.",
+        "Docker directory is root-only, so its physical allocation is omitted from directory lower bounds."
+      ],
+      "evidence": [
+        "docker system df -v",
+        "docker system df --format {{json .}}",
+        "docker image inspect ... --format {{json .RepoTags}} {{json .Size}}"
+      ]
+    },
+    {
+      "name": "13 disabled Snap revisions",
+      "path": "/var/lib/snapd/snaps",
+      "candidate_payload_allocated_bytes": 3530698752,
+      "classification": "conditional upper bound; do not count as guaranteed free space",
+      "revisions": [
+        {
+          "name": "blender",
+          "revision": "7740",
+          "path": "/var/lib/snapd/snaps/blender_7740.snap",
+          "bytes": 425840640,
+          "allocated": 425844736,
+          "links": 2,
+          "inode": 273982,
+          "device": 66306,
+          "mtime": 1787678450.410092
+        },
+        {
+          "name": "code",
+          "revision": "271",
+          "path": "/var/lib/snapd/snaps/code_271.snap",
+          "bytes": 539365376,
+          "allocated": 539369472,
+          "links": 2,
+          "inode": 262913,
+          "device": 66306,
+          "mtime": 1792300705.826786
+        },
+        {
+          "name": "core20",
+          "revision": "2866",
+          "path": "/var/lib/snapd/snaps/core20_2866.snap",
+          "bytes": 66879488,
+          "allocated": 66883584,
+          "links": 2,
+          "inode": 266162,
+          "device": 66306,
+          "mtime": 1778622382.6851583
+        },
+        {
+          "name": "core22",
+          "revision": "2437",
+          "path": "/var/lib/snapd/snaps/core22_2437.snap",
+          "bytes": 77586432,
+          "allocated": 77590528,
+          "links": 2,
+          "inode": 269668,
+          "device": 66306,
+          "mtime": 1787124871.3824663
+        },
+        {
+          "name": "core24",
+          "revision": "1643",
+          "path": "/var/lib/snapd/snaps/core24_1643.snap",
+          "bytes": 70049792,
+          "allocated": 70053888,
+          "links": 2,
+          "inode": 265175,
+          "device": 66306,
+          "mtime": 1778741084.2449617
+        },
+        {
+          "name": "firefox",
+          "revision": "9057",
+          "path": "/var/lib/snapd/snaps/firefox_9057.snap",
+          "bytes": 297603072,
+          "allocated": 297607168,
+          "links": 2,
+          "inode": 263069,
+          "device": 66306,
+          "mtime": 1792174627.6578293
+        },
+        {
+          "name": "gnome-42-2204",
+          "revision": "247",
+          "path": "/var/lib/snapd/snaps/gnome-42-2204_247.snap",
+          "bytes": 557187072,
+          "allocated": 557191168,
+          "links": 2,
+          "inode": 264764,
+          "device": 66306,
+          "mtime": 1768463771.5763886
+        },
+        {
+          "name": "gnome-46-2404",
+          "revision": "164",
+          "path": "/var/lib/snapd/snaps/gnome-46-2404_164.snap",
+          "bytes": 644382720,
+          "allocated": 644386816,
+          "links": 2,
+          "inode": 275155,
+          "device": 66306,
+          "mtime": 1785513562.8188157
+        },
+        {
+          "name": "google-cloud-cli",
+          "revision": "515",
+          "path": "/var/lib/snapd/snaps/google-cloud-cli_515.snap",
+          "bytes": 371494912,
+          "allocated": 371499008,
+          "links": 2,
+          "inode": 262274,
+          "device": 66306,
+          "mtime": 1792839496.924878
+        },
+        {
+          "name": "mesa-2404",
+          "revision": "1165",
+          "path": "/var/lib/snapd/snaps/mesa-2404_1165.snap",
+          "bytes": 414167040,
+          "allocated": 414171136,
+          "links": 2,
+          "inode": 275516,
+          "device": 66306,
+          "mtime": 1774891837.5813768
+        },
+        {
+          "name": "snap-store",
+          "revision": "1447",
+          "path": "/var/lib/snapd/snaps/snap-store_1447.snap",
+          "bytes": 12537856,
+          "allocated": 12537856,
+          "links": 2,
+          "inode": 263101,
+          "device": 66306,
+          "mtime": 1792245413.7899468
+        },
+        {
+          "name": "snapd",
+          "revision": "27738",
+          "path": "/var/lib/snapd/snaps/snapd_27738.snap",
+          "bytes": 52711424,
+          "allocated": 52715520,
+          "links": 2,
+          "inode": 267704,
+          "device": 66306,
+          "mtime": 1788693406.9337082
+        },
+        {
+          "name": "snapd-desktop-integration",
+          "revision": "387",
+          "path": "/var/lib/snapd/snaps/snapd-desktop-integration_387.snap",
+          "bytes": 847872,
+          "allocated": 847872,
+          "links": 2,
+          "inode": 263615,
+          "device": 66306,
+          "mtime": 1781680594.9818933
+        }
+      ],
+      "conditions": [
+        "All 13 files have nlink=2; the other hardlink may be in inaccessible snapd cache. It was not possible to prove its location.",
+        "Deleting only the revision pathname may free zero data blocks until the other link is released. Use Snap revision removal and then verify paired cache lifecycle and actual df delta.",
+        "No accessible live process maps/exe/cwd/fds referenced these revisions, but root-only processes are not fully inspectable.",
+        "Keep active revisions and predownloaded code_275.snap (current auto-refresh pre-download); no snap snapshots exist."
+      ],
+      "evidence": [
+        "snap list --all",
+        "stat.st_nlink of each .snap",
+        "snap changes",
+        "snap saved",
+        "host /proc path reference scan"
+      ]
+    }
+  ],
+  "preserve_or_not_prioritized": [
+    {
+      "path": "/tmp/tab2body_natural_press_v3",
+      "allocated_bytes": 462020608,
+      "reason": "Research simulator/runtime cache; no visible process reference but this alone cannot prove unnecessary. Research parent must verify references and regenerability before proposing removal."
+    },
+    {
+      "path": "/tmp",
+      "reason": "Whole tree only about 0.6GiB and includes active browser/session artifacts and current audit evidence. No broad deletion proposed."
+    },
+    {
+      "path": "/usr /opt",
+      "reason": "Installed OS, NVIDIA/CUDA, remote access and current apps; size alone is insufficient evidence for uninstall. No broad package removal proposed."
+    },
+    {
+      "path": "/usr/lib/modules/6.8.0-134-generic and matching headers/boot",
+      "reason": "Only one previous kernel alongside current 6.8.0-138. Preserve fallback rather than count as safe reclaim."
+    },
+    {
+      "path": "/var/lib/snapd/seed",
+      "allocated_bytes": 1042944000,
+      "reason": "Original seeded installation payload, distinct inodes; do not manually delete from package-managed bootstrap state."
+    }
+  ],
+  "permission_gaps": {
+    "sudo_noninteractive": "password required",
+    "unreadable_major_paths": [
+      "/root",
+      "/var/lib/docker",
+      "/var/lib/containerd",
+      "/var/lib/snapd/cache",
+      "/opt/containerd"
+    ],
+    "other_unreadable_dirs": [
+      "du: cannot read directory '/var/lib/udisks2': Permission denied",
+      "du: cannot read directory '/var/lib/tailscale': Permission denied",
+      "du: cannot read directory '/var/lib/gdm3': Permission denied",
+      "du: cannot read directory '/var/lib/AccountsService/users': Permission denied",
+      "du: cannot read directory '/var/lib/ubuntu-advantage/apt-esm/var/lib/apt/lists/partial': Permission denied",
+      "du: cannot read directory '/var/lib/snapd/cookie': Permission denied",
+      "du: cannot read directory '/var/lib/snapd/void': Permission denied",
+      "du: cannot read directory '/var/lib/snapd/cache': Permission denied",
+      "du: cannot read directory '/var/lib/update-notifier/package-data-downloads/partial': Permission denied",
+      "du: cannot read directory '/var/lib/docker': Permission denied",
+      "du: cannot read directory '/var/lib/NetworkManager': Permission denied",
+      "du: cannot read directory '/var/lib/private': Permission denied",
+      "du: cannot read directory '/var/lib/containerd': Permission denied",
+      "du: cannot read directory '/var/lib/openvpn/chroot': Permission denied",
+      "du: cannot read directory '/var/lib/fprint': Permission denied",
+      "du: cannot read directory '/var/lib/apt/lists/partial': Permission denied",
+      "du: cannot read directory '/var/lib/bluetooth/A8:E2:91:B9:1B:25': Permission denied",
+      "du: cannot read directory '/var/lib/avahi-autoipd': Permission denied",
+      "du: cannot read directory '/var/lib/polkit-1': Permission denied",
+      "du: cannot read directory '/var/lib/fwupd/gnupg': Permission denied",
+      "du: cannot read directory '/var/lib/saned': Permission denied",
+      "du: cannot read directory '/var/log/teamviewer15/crashpad/teamviewerd/pending': Permission denied",
+      "du: cannot read directory '/var/log/teamviewer15/crashpad/teamviewerd/attachments': Permission denied",
+      "du: cannot read directory '/var/log/teamviewer15/crashpad/teamviewerd/new': Permission denied",
+      "du: cannot read directory '/var/log/teamviewer15/crashpad/teamviewerd/completed': Permission denied",
+      "du: cannot read directory '/var/log/gdm3': Permission denied",
+      "du: cannot read directory '/var/log/private': Permission denied",
+      "du: cannot read directory '/var/log/speech-dispatcher': Permission denied",
+      "du: cannot read directory '/var/spool/cups': Permission denied",
+      "du: cannot read directory '/var/spool/rsyslog': Permission denied",
+      "du: cannot read directory '/var/spool/cron/crontabs': Permission denied",
+      "du: cannot read directory '/var/cache/cups': Permission denied",
+      "du: cannot read directory '/var/cache/tailscale': Permission denied",
+      "du: cannot read directory '/var/cache/private': Permission denied",
+      "du: cannot read directory '/var/cache/apparmor/60cfb976.0': Permission denied",
+      "du: cannot read directory '/var/cache/apparmor/7a03f264.0': Permission denied",
+      "du: cannot read directory '/var/cache/apparmor/2693c843.0': Permission denied",
+      "du: cannot read directory '/var/cache/apt/archives/partial': Permission denied",
+      "du: cannot read directory '/var/cache/ldconfig': Permission denied",
+      "du: cannot read directory '/var/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-systemd-resolved.service-S1AzGC': Permission denied",
+      "du: cannot read directory '/var/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-systemd-logind.service-bipIFg': Permission denied",
+      "du: cannot read directory '/var/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-switcheroo-control.service-ZYXSaW': Permission denied",
+      "du: cannot read directory '/var/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-systemd-oomd.service-4BLG6j': Permission denied",
+      "du: cannot read directory '/var/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-ModemManager.service-rgl9QG': Permission denied",
+      "du: cannot read directory '/var/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-bluetooth.service-NiMT7A': Permission denied",
+      "du: cannot read directory '/var/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-power-profiles-daemon.service-NJMhTl': Permission denied",
+      "du: cannot read directory '/var/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-upower.service-4MsB6y': Permission denied",
+      "du: cannot read directory '/var/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-systemd-timesyncd.service-tmdcY4': Permission denied",
+      "du: cannot read directory '/var/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-colord.service-v79gqf': Permission denied",
+      "du: cannot read directory '/opt/containerd': Permission denied",
+      "du: cannot read directory '/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-systemd-timesyncd.service-tiaqsS': Permission denied",
+      "du: cannot read directory '/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-ModemManager.service-rA8FbD': Permission denied",
+      "du: cannot read directory '/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-upower.service-h36O4l': Permission denied",
+      "du: cannot read directory '/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-power-profiles-daemon.service-100Yd8': Permission denied",
+      "du: cannot read directory '/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-bluetooth.service-lCxRLS': Permission denied",
+      "du: cannot read directory '/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-systemd-oomd.service-WyGQtH': Permission denied",
+      "du: cannot read directory '/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-colord.service-tA8R6x': Permission denied",
+      "du: cannot read directory '/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-systemd-resolved.service-OWdI1F': Permission denied",
+      "du: cannot read directory '/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-systemd-logind.service-FSytzr': Permission denied",
+      "du: cannot read directory '/tmp/snap-private-tmp': Permission denied",
+      "du: cannot read directory '/tmp/systemd-private-d2d23aa99ced441788bb3286133cfb7a-switcheroo-control.service-s2oPaM': Permission denied",
+      "du: cannot read directory '/root': Permission denied"
+    ],
+    "process_scan": {
+      "host_pid_namespace": "pid:[4026531836]",
+      "process_count": 693,
+      "prefixes": [
+        "/tmp/tab2body_natural_press_v3/",
+        "/snap/blender/7740/",
+        "/snap/code/271/",
+        "/snap/core20/2866/",
+        "/snap/core22/2437/",
+        "/snap/core24/1643/",
+        "/snap/firefox/9057/",
+        "/snap/gnome-42-2204/247/",
+        "/snap/gnome-46-2404/164/",
+        "/snap/google-cloud-cli/515/",
+        "/snap/mesa-2404/1165/",
+        "/snap/snap-store/1447/",
+        "/snap/snapd/27738/",
+        "/snap/snapd-desktop-integration/387/"
+      ],
+      "matches": [],
+      "inaccessible_fields": {
+        "cwd": 453,
+        "exe": 453,
+        "fd": 453,
+        "maps": 62
+      }
+    }
+  },
+  "evidence_files": [
+    "/tmp/pc-system-storage-audit-20261104.host-metadata.json",
+    "/tmp/pc-system-storage-audit-20261104.details.json",
+    "/tmp/pc-system-storage-audit-20261104.extra.json",
+    "/tmp/pc-system-storage-audit-20261104.processes.json",
+    "/tmp/pc-system-storage-audit-20261104.config.json"
+  ]
+}

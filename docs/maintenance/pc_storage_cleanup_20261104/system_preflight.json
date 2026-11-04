@@ -1,0 +1,62 @@
+{
+  "time": 1793765689.2391672,
+  "euid": 1000,
+  "sudo -n true": {
+    "rc": 1,
+    "stdout": "",
+    "stderr": "sudo: a password is required\n"
+  },
+  "docker system df -v": {
+    "rc": 0,
+    "stdout": "Images space usage:\n\nREPOSITORY                             TAG                       IMAGE ID       CREATED        SIZE      SHARED SIZE   UNIQUE SIZE   CONTAINERS\nbrainicism/bgutil-ytdlp-pot-provider   latest                    1aaa43a0ca72   8 months ago   439MB     0B            438.6MB       0\nnvidia/cuda                            11.8.0-base-ubuntu22.04   f895871972c1   2 years ago    341MB     0B            341.2MB       0\n\nContainers space usage:\n\nCONTAINER ID   IMAGE     COMMAND   LOCAL VOLUMES   SIZE      CREATED   STATUS    NAMES\n\nLocal Volumes space usage:\n\nVOLUME NAME   LINKS     SIZE\n\nBuild cache usage: 0B\n\nCACHE ID   CACHE TYPE   SIZE      CREATED   LAST USED   USAGE     SHARED\n",
+    "stderr": ""
+  },
+  "docker image inspect brainicism/bgutil-ytdlp-pot-provider:latest nvidia/cuda:11.8.0-base-ubuntu22.04 --format {{json .RepoTags}}\t{{.Id}}\t{{.Size}}": {
+    "rc": 0,
+    "stdout": "[\"brainicism/bgutil-ytdlp-pot-provider:latest\"]\tsha256:1aaa43a0ca72dfca6a6d2129a0fb4a23465c25adb1b043f8aff829a20825646b\t438614106\n[\"nvidia/cuda:11.8.0-base-ubuntu22.04\"]\tsha256:f895871972c1c91eb6a896eee68468f40289395a1e58c492e1be7929d0f8703b\t341214065\n",
+    "stderr": ""
+  },
+  "docker ps -a --no-trunc --format {{.ID}}\t{{.Image}}\t{{.Status}}": {
+    "rc": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "journalctl --disk-usage": {
+    "rc": 0,
+    "stdout": "Archived and active journals take up 4.0G in the file system.\n",
+    "stderr": ""
+  },
+  "dpkg-query -W -f=${db:Status-Abbrev}\t${Version}\t${Architecture}\n chatgpt": {
+    "rc": 0,
+    "stdout": "ii \t26.1027.51404\tamd64\n",
+    "stderr": ""
+  },
+  "systemctl is-active xrdp xrdp-sesman": {
+    "rc": 0,
+    "stdout": "active\nactive\n",
+    "stderr": ""
+  },
+  "/var/cache/apt/archives/chatgpt_26.1027.51404_amd64.deb": {
+    "device": 66306,
+    "inode": 275581,
+    "size": 535323606,
+    "blocks": 1045568,
+    "mode": 420,
+    "uid": 0,
+    "gid": 0,
+    "mtime_ns": 1793490291000000000,
+    "nlink": 1,
+    "sha256": "46f1e22d028698fe9edaefd5847aece07c4509a30d3709e104220719d8c12822"
+  },
+  "/var/log/xrdp.log": {
+    "device": 66306,
+    "inode": 269016,
+    "size": 2038835511,
+    "blocks": 3982120,
+    "mode": 416,
+    "uid": 131,
+    "gid": 4,
+    "mtime_ns": 1793753063686096134,
+    "nlink": 1
+  }
+}

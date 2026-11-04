@@ -1,0 +1,23 @@
+프로젝트 루트 /home/ajou/yigyu/3 에서 실행했다.
+구현일 2026-11-04. 사용자 지정 자료 분류 경로는 docs/2026-11-09 이다.
+
+기존 CPU 회귀 29개
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 /home/ajou/miniconda3/envs/rl38/bin/python -B -m unittest -v guitar_learning.tests.test_compact_press_v5_environment guitar_learning.tests.test_compact_press_v5_entry guitar_learning.tests.test_song_task
+
+신규 CPU 검사 21개
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 /home/ajou/miniconda3/envs/rl38/bin/python -B -m unittest -v guitar_learning.tests.test_press_targets guitar_learning.tests.test_press_sequence_entry
+
+모든 등록 목표 확인
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 /home/ajou/miniconda3/envs/rl38/bin/python -m guitar_learning.tool.experiments.press_sequence check --all
+
+GPU 짧은 학습
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 /home/ajou/miniconda3/envs/rl38/bin/python scripts/tab2body.py --cache-root .runtime/cache run -m guitar_learning.tool.experiments.press_sequence train C1 --size large --num-envs 8 --horizon 32 --updates 4 --checkpoint-every 4 --seed 7 --improvement-profile corrected --out docs/2026-11-09/압현_v5_합성목표연결_v1/GPU검증/C1_학습
+
+GPU 저장본 재개
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 /home/ajou/miniconda3/envs/rl38/bin/python scripts/tab2body.py --cache-root .runtime/cache run -m guitar_learning.tool.experiments.press_sequence train --resume docs/2026-11-09/압현_v5_합성목표연결_v1/GPU검증/C1_학습/J/final.pt --updates 2 --out docs/2026-11-09/압현_v5_합성목표연결_v1/GPU검증/C1_재개
+
+GPU 전체 목표 평가
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 /home/ajou/miniconda3/envs/rl38/bin/python scripts/tab2body.py --cache-root .runtime/cache run -m guitar_learning.tool.experiments.press_sequence evaluate docs/2026-11-09/압현_v5_합성목표연결_v1/GPU검증/C1_재개/J/final.pt --scope full_song --num-envs 2 --out docs/2026-11-09/압현_v5_합성목표연결_v1/GPU검증/C1_전체평가
+
+각 GPU 명령의 표준 출력과 오류는 같은 폴더의 GPU_학습.txt, GPU_재개.txt, GPU_전체평가.txt에 각각 저장했다.
+과거 손목 검사 test_song_wrist_guide는 과거 fixture I/O 오류로 준비 단계에서 중단되어 통과 검사 수에서 제외했다. 원래 오류 로그를 별도 보존했다.

@@ -1,0 +1,89 @@
+{
+  "schema": "guitar_learning.horizon_study_status.v1",
+  "updated_at": "2026-11-04T21:12:13.497886+09:00",
+  "ready": true,
+  "phase": "training_running",
+  "gpu_executed": true,
+  "training_started": true,
+  "running_pid": 333814,
+  "seal_sha256": "743caaacf661c5b32c0072fb9c132149b4bf35949db4baf45e2d838affe6ce49",
+  "cpu_checks": {
+    "tests_passed": 8,
+    "official_cli_commands_validated": 21,
+    "runtime_settings_common_except": [
+      "horizon",
+      "updates",
+      "checkpoint_every"
+    ],
+    "required_inputs": 213,
+    "missing_or_external_inputs": 0,
+    "snapshot_files": 9338,
+    "independent_review": "검증/독립검수.md"
+  },
+  "conditions": [
+    {
+      "name": "H32_seed7",
+      "num_envs": 1024,
+      "horizon": 32,
+      "target_updates": 512,
+      "committed_transitions": 16777216,
+      "status": "training_complete",
+      "global_update": 511,
+      "pid": 319395
+    },
+    {
+      "name": "H64_seed7",
+      "num_envs": 1024,
+      "horizon": 64,
+      "target_updates": 256,
+      "committed_transitions": 5505024,
+      "status": "running",
+      "global_update": 84,
+      "pid": 333814
+    },
+    {
+      "name": "H128_seed7",
+      "num_envs": 1024,
+      "horizon": 128,
+      "target_updates": 128,
+      "committed_transitions": 0,
+      "status": "pending_other_pc"
+    }
+  ],
+  "next_step": "H32→H64→H128학습→동일경험량15평가→분석→대표영상",
+  "limitations": [
+    "GPU 메모리 및 native 환경은 다른 PC에서 검사",
+    "seed7 1회 선별 비교이며 최적 H 확정 아님",
+    "source_snapshot은 Git 제외이므로 별도 전달 필요"
+  ],
+  "local_study": "/home/yigyu/local-research/H_experiment_20261104_v1/project/docs/2026-11-09/H실험",
+  "shared_study": "/home/yigyu/cgl-lab/docs/2026-11-09/H실험",
+  "environment": "검증/다른PC_환경.json",
+  "snapshot_valid": true,
+  "design_valid": true,
+  "supervisor_pid": 319350,
+  "current_condition": "H64_seed7",
+  "started_at": "2026-11-04T17:59:48.683924+09:00",
+  "memory_peak_gpu_used_MiB": 4932.0,
+  "memory_peak_process_tree_rss_bytes": 4120887296,
+  "memory_elapsed_s": 82.46774379396811,
+  "memory_probe_passed": true,
+  "stage_started_at": "2026-11-04T20:26:11.444425+09:00",
+  "error": null,
+  "global_update": 84,
+  "committed_transitions": 5505024,
+  "latest_checkpoint_sha256": "bb5dba62ca74b4fdb4b228a1909a0159253d880594f06b4cdefcfc6036e88a83",
+  "latest_checkpoint_path": "/home/yigyu/local-research/H_experiment_20261104_v1/project/docs/2026-11-09/H실험/작업자료/source_snapshot/study_outputs/학습/H64_seed7/attempt01/J/checkpoint_000064.pt",
+  "actual_transitions_per_s": 1993.0903414267746,
+  "collection_transitions_per_s": 2189.9883393038376,
+  "elapsed_s": 2762.0544265239732,
+  "estimated_stage_end": "2026-11-04T22:46:29.133079+09:00",
+  "peak_gpu_total_used_MiB": 4874.0,
+  "peak_process_tree_rss_bytes": 4305203200,
+  "native_phase": "collecting",
+  "native_ticks": 22,
+  "last_completed_stage": "H32_seed7",
+  "completed_training_conditions": [
+    "H32_seed7"
+  ]
+}

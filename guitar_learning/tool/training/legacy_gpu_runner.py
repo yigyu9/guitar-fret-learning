@@ -1,4 +1,4 @@
-"""Explicit-budget full GPU song training with a separate measurement contract."""
+"""오른손 song 진단용 GPU 학습. 새 왼손 압현 학습은 V5 기본 진입점에서 실행한다."""
 import copy
 import math
 import os
@@ -19,6 +19,8 @@ from guitar_learning.training.training_log_io import TRANSITION_SCHEMA
 
 
 def run(settings, args):
+    if settings.get('specialist', {}).get('role') != 'right':
+        raise ValueError('구형 왼손 학습은 제거했습니다. V5: python -m guitar_learning.train --out NEW')
     if 'finger_skill' in settings:
         raise ValueError('This runner accepts song settings only')
     import isaacgym

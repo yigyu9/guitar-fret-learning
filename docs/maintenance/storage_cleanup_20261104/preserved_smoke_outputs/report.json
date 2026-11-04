@@ -1,0 +1,133 @@
+{
+  "schema": "tab2body.portability_smoke.v1",
+  "project": "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project",
+  "original_project": "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project",
+  "python": "/home/ajou/miniconda3/envs/rl38/bin/python",
+  "stages": [
+    {
+      "name": "local_runtime",
+      "passed": true,
+      "returncode": 0,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/scripts/tab2body.py",
+        "--cache-root",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/.runtime/cache",
+        "prepare"
+      ],
+      "log": "local_runtime.log",
+      "wall_s": 0.6154213209811132
+    },
+    {
+      "name": "inputs",
+      "passed": true,
+      "returncode": 0,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/scripts/tab2body.py",
+        "--cache-root",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/.runtime/cache",
+        "run",
+        "-m",
+        "guitar_learning.tool.validation.portable_inputs",
+        "--out",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/runs/pushed_only_smoke/inputs.json"
+      ],
+      "log": "inputs.log",
+      "wall_s": 1.367496480990667
+    },
+    {
+      "name": "gpu_probe",
+      "passed": true,
+      "returncode": 0,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/scripts/tab2body.py",
+        "--cache-root",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/.runtime/cache",
+        "probe"
+      ],
+      "log": "gpu_probe.log",
+      "wall_s": 10.75668434999534
+    },
+    {
+      "name": "train",
+      "passed": true,
+      "returncode": 0,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/scripts/tab2body.py",
+        "--cache-root",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/.runtime/cache",
+        "run",
+        "-m",
+        "guitar_learning.train",
+        "--size",
+        "small",
+        "--num-envs",
+        "2",
+        "--horizon",
+        "2",
+        "--updates",
+        "1",
+        "--out",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/runs/pushed_only_smoke/train"
+      ],
+      "log": "train.log",
+      "wall_s": 6.134696280001663
+    },
+    {
+      "name": "resume",
+      "passed": true,
+      "returncode": 0,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/scripts/tab2body.py",
+        "--cache-root",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/.runtime/cache",
+        "run",
+        "-m",
+        "guitar_learning.train",
+        "--size",
+        "small",
+        "--num-envs",
+        "2",
+        "--horizon",
+        "2",
+        "--updates",
+        "1",
+        "--resume",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/runs/pushed_only_smoke/train/J/final.pt",
+        "--out",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/runs/pushed_only_smoke/resume"
+      ],
+      "log": "resume.log",
+      "wall_s": 6.232830505003221
+    },
+    {
+      "name": "evaluation",
+      "passed": true,
+      "returncode": 0,
+      "command": [
+        "/home/ajou/miniconda3/envs/rl38/bin/python",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/scripts/tab2body.py",
+        "--cache-root",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/.runtime/cache",
+        "run",
+        "-m",
+        "guitar_learning.tool.evaluation.evaluate_finger_skill",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/runs/pushed_only_smoke/train/J/final.pt",
+        "--num-envs",
+        "2",
+        "--scope",
+        "full_song",
+        "--out",
+        "/home/ajou/yigyu/3/.runtime/pushed_verification_20261101/project/runs/pushed_only_smoke/evaluation"
+      ],
+      "log": "evaluation.log",
+      "wall_s": 254.79381117701996
+    }
+  ],
+  "completed": true,
+  "research_success_claimed": false
+}

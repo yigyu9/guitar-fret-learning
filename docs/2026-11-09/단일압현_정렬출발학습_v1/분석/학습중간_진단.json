@@ -1,0 +1,1888 @@
+{
+  "schema": "aligned_goal4_interim_diagnosis.v1",
+  "snapshot_utc": "2026-11-02T11:04:12.861207+00:00",
+  "is_interim": true,
+  "planned_updates": 100,
+  "snapshot_completed_updates": 43,
+  "training_finished": false,
+  "restriction": "Read-only source/log inspection; no GPU, model update, source edit or new training",
+  "new": {
+    "metrics": {
+      "updates": 43,
+      "transitions": 88064,
+      "actor_lr_first": 3e-05,
+      "actor_lr_last": 7.5e-06,
+      "lr_changes": [
+        {
+          "line": 1,
+          "update": 1,
+          "lr": 3e-05,
+          "kl_retries": 0,
+          "max_attempted_kl": 0.0013730295468121767
+        },
+        {
+          "line": 18,
+          "update": 18,
+          "lr": 7.5e-06,
+          "kl_retries": 1,
+          "max_attempted_kl": 0.021727388724684715
+        }
+      ],
+      "entropy_first": -6.324065685272217,
+      "entropy_last": -6.323966979980469,
+      "entropy_channels": 4,
+      "kl_mean": 0.0020499222591752186,
+      "clip_fraction_mean": 0.02134811046511628,
+      "actor_grad_norm_mean": 7.494286076967106,
+      "advantage_mean_update_rms": {
+        "reward": 0.09246995036624689,
+        "cost_weighted": 0.005176192808762662,
+        "cost_to_reward_ratio": 0.05597702592313774,
+        "mean_of_update_cost_reward_ratios": 0.04685535291080878
+      },
+      "normalized_advantage_std_min": 0.9999999367497682,
+      "normalized_advantage_std_max": 1.0000000753999247,
+      "reward_components_per_tick": {
+        "song_left_approach": -0.011174208474437555,
+        "song_left_contact": 7.097111403370861e-07,
+        "song_clean_hold": 1.261708686882251e-07,
+        "song_left_success": 0.0,
+        "song_wrong_press": 0.0,
+        "song_performance_deficit": -0.0002906771786915088,
+        "song_finger_standby": 0.0002521253328353623,
+        "song_thumb_support": 1.006277339106239e-05,
+        "action_change": 0.0
+      },
+      "inferred_active4_geometric_mean_std_first": 0.049789311100632706,
+      "inferred_active4_geometric_mean_std_last": 0.04979053973291124
+    },
+    "episodes": {
+      "completed_episodes": 256,
+      "reasons": {
+        "timeline_complete": 256
+      },
+      "physical_failures": 0,
+      "episode_cost_sum": 0.0,
+      "episode_reward_sum": -876.3869826793671,
+      "note_positive_episodes": {
+        "near_done": 248,
+        "contact_done": 0,
+        "left": 0,
+        "geometry_time": 186,
+        "loaded_target_time": 4,
+        "body_load_time": 4,
+        "contact_time": 3,
+        "clean": 3
+      },
+      "note_total_seconds": {
+        "geometry_time": 65.15416666666667,
+        "loaded_target_time": 0.041666666666665186,
+        "body_load_time": 0.041666666666665186,
+        "contact_time": 0.01666666666666572,
+        "clean": 0.01666666666666572,
+        "wrong": 0.0,
+        "missing": 383.9604166666667
+      },
+      "max_clean_streak_s": 0.00416666666666643,
+      "goal_motion_actual_range_rad": {
+        "mean_per_joint": [
+          0.08631562418304384,
+          0.025057107210159302,
+          0.04944168636575341,
+          0.05885710031725466
+        ],
+        "median_per_joint": [
+          0.08685624599456787,
+          0.024770841002464294,
+          0.04846847057342529,
+          0.05812324583530426
+        ],
+        "maximum_per_joint": [
+          0.12121233344078064,
+          0.033976346254348755,
+          0.07842302322387695,
+          0.08056852221488953
+        ]
+      },
+      "goal_motion_target_range_rad": {
+        "mean_per_joint": [
+          0.24041056132409722,
+          0.08931520959595218,
+          0.17400436010211706,
+          0.1926739369519055
+        ],
+        "median_per_joint": [
+          0.239137202501297,
+          0.08880768716335297,
+          0.17338287830352783,
+          0.19102849066257477
+        ],
+        "maximum_per_joint": [
+          0.32706302404403687,
+          0.12386856973171234,
+          0.22458100318908691,
+          0.2475770115852356
+        ]
+      },
+      "goal_motion_tracking_error_rms_rad": {
+        "mean_per_joint": [
+          0.038724420126445086,
+          0.01840579313183399,
+          0.0280430732171896,
+          0.033708105837797486
+        ],
+        "median_per_joint": [
+          0.03868211132383695,
+          0.018535910155211006,
+          0.027657266845739013,
+          0.033630677836216774
+        ],
+        "maximum_per_joint": [
+          0.043014785267374386,
+          0.02139031432056846,
+          0.03237363545811312,
+          0.037889070793773905
+        ]
+      },
+      "goal_action_mean_abs_per_joint": [
+        0.050855426181053265,
+        0.04004991269024003,
+        0.04675035179124582,
+        0.04158427693045583
+      ],
+      "goal_action_mean_abs_change_per_joint": [
+        0.05617335534515406,
+        0.056335047582273014,
+        0.05593676428343805,
+        0.05574019509837649
+      ],
+      "goal_action_sign_flip_fraction_per_joint": [
+        0.35656615802675584,
+        0.496773097826087,
+        0.4002926421404682,
+        0.46850177675585286
+      ],
+      "scope": "Completed episodes only; ongoing64 episodes are not counted as failed/completed. Motion arrays are middle4 unless noted.",
+      "max_clean_total_s_snapshot": 0.00833333333333286,
+      "goal_action_signed_mean_per_joint": [
+        0.03399881610068936,
+        -0.002201025944607409,
+        0.02588468711027417,
+        0.014557486365272432
+      ],
+      "goal_actual_global_min_rad": [
+        0.41212865710258484,
+        0.2633017301559448,
+        0.9734623432159424,
+        0.4296245276927948
+      ],
+      "goal_actual_global_max_rad": [
+        0.5718614459037781,
+        0.2999767065048218,
+        1.075929045677185,
+        0.5420737266540527
+      ]
+    },
+    "metrics_prefix": {
+      "path": "/home/ajou/yigyu/3/docs/2026-11-09/단일압현_정렬출발학습_v1/실행/baseline_std005_s7/J/learning_metrics.jsonl",
+      "line_count": 43,
+      "prefix_bytes": 287580,
+      "prefix_sha256": "4497b1352c734d78ab88a1221f60e1097d0e28b1525c45b3f4f2ad5c3fd21ae3",
+      "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+    },
+    "episodes_prefix": {
+      "path": "/home/ajou/yigyu/3/docs/2026-11-09/단일압현_정렬출발학습_v1/실행/baseline_std005_s7/J/episodes.jsonl",
+      "line_count": 256,
+      "prefix_bytes": 8243112,
+      "prefix_sha256": "332ba49ab79cdf323b09d2d22d504cb3aea4e8458c5fa7f3281b2d9d28dfd0d8",
+      "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+    },
+    "representative_trace": {
+      "reference": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/단일압현_정렬출발학습_v1/실행/baseline_std005_s7/J/finger_control_trace.jsonl.gz",
+        "compressed_snapshot_bytes": 1756517,
+        "compressed_snapshot_sha256": "0737bc95feafbbef2fd65fcda3ce965bfd3d97bf6a8c8dbc8d63cf0ca32f527b",
+        "complete_rows": 2400,
+        "scope": "Representative env0, first600 control ticks / actual240Hz samples; not whole training population"
+      },
+      "phases": {
+        "hover": {
+          "samples": 1342,
+          "height_m": {
+            "mean": 0.00824186302188523,
+            "min": 0.0041895052418112755,
+            "max": 0.011198620311915874
+          },
+          "hover_distance_m": {
+            "mean": 0.000874075811506886,
+            "min": 1.0459189070388675e-11,
+            "max": 0.003198619931936264
+          },
+          "pad_distance_m": {
+            "mean": 0.0082752288519731
+          },
+          "potential": {
+            "mean": 0.9695736359910354
+          },
+          "standby_reward_rate_per_s": {
+            "mean": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "standby_reward_weight": {
+            "mean": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "observed_legacy_standby_gate": {
+            "mean": 0.9292101341281669,
+            "min": 0.0,
+            "max": 1.0
+          },
+          "tracking_weight": {
+            "mean": 1.0,
+            "min": 1.0,
+            "max": 1.0
+          },
+          "ready_fraction": 0.43591654247391953,
+          "loaded_fraction": 0.0,
+          "candidate_fraction": 0.0
+        },
+        "descent": {
+          "samples": 96,
+          "height_m": {
+            "mean": 0.00914674005859221,
+            "min": 0.007476587779819965,
+            "max": 0.010034347884356976
+          },
+          "hover_distance_m": {
+            "mean": 0.0011687736141500575,
+            "min": 1.355488166154828e-09,
+            "max": 0.002034347504377365
+          },
+          "pad_distance_m": {
+            "mean": 0.009147617728255378
+          },
+          "potential": {
+            "mean": 0.8496748475978771
+          },
+          "standby_reward_rate_per_s": {
+            "mean": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "standby_reward_weight": {
+            "mean": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "observed_legacy_standby_gate": {
+            "mean": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "tracking_weight": {
+            "mean": 1.0,
+            "min": 1.0,
+            "max": 1.0
+          },
+          "ready_fraction": 0.052083333333333336,
+          "loaded_fraction": 0.0,
+          "candidate_fraction": 0.0
+        },
+        "audible": {
+          "samples": 720,
+          "height_m": {
+            "mean": 0.007436942955892947,
+            "min": 0.003854137845337391,
+            "max": 0.010955766774713993
+          },
+          "hover_distance_m": {
+            "mean": 0.0006316279375305051,
+            "min": 1.2505552149377763e-12,
+            "max": 0.0029557663947343826
+          },
+          "pad_distance_m": {
+            "mean": 0.007471227751294565
+          },
+          "potential": {
+            "mean": 0.7798812678290739
+          },
+          "standby_reward_rate_per_s": {
+            "mean": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "standby_reward_weight": {
+            "mean": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "observed_legacy_standby_gate": {
+            "mean": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "tracking_weight": {
+            "mean": 1.0,
+            "min": 1.0,
+            "max": 1.0
+          },
+          "ready_fraction": 0.5694444444444444,
+          "loaded_fraction": 0.0,
+          "candidate_fraction": 0.0
+        }
+      }
+    }
+  },
+  "old_six_conditions": {
+    "single_middle_s1_f8": {
+      "same_update_budget": {
+        "updates": 43,
+        "transitions": 88064,
+        "actor_lr_first": 3e-05,
+        "actor_lr_last": 7.5e-06,
+        "lr_changes": [
+          {
+            "line": 1,
+            "update": 1,
+            "lr": 3e-05,
+            "kl_retries": 0,
+            "max_attempted_kl": 0.013062207959592342
+          },
+          {
+            "line": 26,
+            "update": 26,
+            "lr": 7.5e-06,
+            "kl_retries": 1,
+            "max_attempted_kl": 0.02109164372086525
+          }
+        ],
+        "entropy_first": -52.17401123046875,
+        "entropy_last": -52.1718635559082,
+        "entropy_channels": 33,
+        "kl_mean": 0.004113171533898039,
+        "clip_fraction_mean": 0.038596929505813955,
+        "actor_grad_norm_mean": 7.204432021739871,
+        "advantage_mean_update_rms": {
+          "reward": 0.02573049147636143,
+          "cost_weighted": 0.7077220784663792,
+          "cost_to_reward_ratio": 27.505190840080246,
+          "mean_of_update_cost_reward_ratios": 30.285985751460277
+        },
+        "normalized_advantage_std_min": 0.9999999458345649,
+        "normalized_advantage_std_max": 1.0000002050667223,
+        "reward_components_per_tick": {
+          "song_left_approach": -0.0016466451893075976,
+          "song_left_contact": 0.0,
+          "song_clean_hold": 0.0,
+          "song_left_success": 0.0,
+          "song_wrong_press": -3.311985468308406e-08,
+          "song_performance_deficit": -0.00029322425310315234,
+          "song_finger_standby": 0.0002525737219993416,
+          "song_thumb_support": 1.2419405288656588e-05,
+          "action_change": -5.683510169576484e-08
+        }
+      },
+      "full100": {
+        "updates": 100,
+        "transitions": 204800,
+        "actor_lr_first": 3e-05,
+        "actor_lr_last": 7.5e-06,
+        "lr_changes": [
+          {
+            "line": 1,
+            "update": 1,
+            "lr": 3e-05,
+            "kl_retries": 0,
+            "max_attempted_kl": 0.013062207959592342
+          },
+          {
+            "line": 26,
+            "update": 26,
+            "lr": 7.5e-06,
+            "kl_retries": 1,
+            "max_attempted_kl": 0.02109164372086525
+          }
+        ],
+        "entropy_first": -52.17401123046875,
+        "entropy_last": -52.17213439941406,
+        "entropy_channels": 33,
+        "kl_mean": 0.0027384336054092273,
+        "clip_fraction_mean": 0.0188916015625,
+        "actor_grad_norm_mean": 7.846499037742615,
+        "advantage_mean_update_rms": {
+          "reward": 0.0275478561205795,
+          "cost_weighted": 0.9277386272603175,
+          "cost_to_reward_ratio": 33.67734400816965,
+          "mean_of_update_cost_reward_ratios": 35.04609040874606
+        },
+        "normalized_advantage_std_min": 0.9999999283046737,
+        "normalized_advantage_std_max": 1.0000002050667223,
+        "reward_components_per_tick": {
+          "song_left_approach": -0.001698535912146326,
+          "song_left_contact": 0.0,
+          "song_clean_hold": 0.0,
+          "song_left_success": 0.0,
+          "song_wrong_press": -1.7293295925924212e-07,
+          "song_performance_deficit": -0.0002982571144269741,
+          "song_finger_standby": 0.00025249580879034285,
+          "song_thumb_support": 1.9132021236361596e-05,
+          "action_change": -5.6704008290903135e-08
+        }
+      },
+      "episodes_full100": {
+        "completed_episodes": 776,
+        "reasons": {
+          "terminal_failure": 214,
+          "timeline_complete": 562
+        },
+        "physical_failures": 214,
+        "episode_cost_sum": 2350.4152851104736,
+        "episode_reward_sum": -342.3182609528303,
+        "note_positive_episodes": {
+          "near_done": 0,
+          "contact_done": 0,
+          "left": 0,
+          "geometry_time": 0,
+          "loaded_target_time": 0,
+          "body_load_time": 3,
+          "contact_time": 0,
+          "clean": 0
+        },
+        "note_total_seconds": {
+          "geometry_time": 0.0,
+          "loaded_target_time": 0.0,
+          "body_load_time": 0.05416666666666625,
+          "contact_time": 0.0,
+          "clean": 0.0,
+          "wrong": 0.35416666666666674,
+          "missing": 898.4958333333333
+        },
+        "max_clean_streak_s": 0.0,
+        "goal_motion_actual_range_rad": {
+          "mean_per_joint": [
+            0.06779417149799387,
+            0.024124402821678475,
+            0.05060550071222266,
+            0.049885287842492465
+          ],
+          "median_per_joint": [
+            0.0695495456457138,
+            0.024181365966796875,
+            0.05077141523361206,
+            0.050354912877082825
+          ],
+          "maximum_per_joint": [
+            0.11092272400856018,
+            0.04080149531364441,
+            0.08484703302383423,
+            0.07753530144691467
+          ]
+        },
+        "goal_motion_target_range_rad": {
+          "mean_per_joint": [
+            0.226454925982608,
+            0.08517396031427629,
+            0.17756293176375715,
+            0.18113011198559986
+          ],
+          "median_per_joint": [
+            0.22754573822021484,
+            0.08480639010667801,
+            0.1789654791355133,
+            0.18233342468738556
+          ],
+          "maximum_per_joint": [
+            0.29184556007385254,
+            0.12811051309108734,
+            0.25337886810302734,
+            0.24648666381835938
+          ]
+        },
+        "goal_motion_tracking_error_rms_rad": {
+          "mean_per_joint": [
+            0.03862485885713476,
+            0.0178495617982765,
+            0.03171102172339445,
+            0.03165022091953288
+          ],
+          "median_per_joint": [
+            0.038666473722547764,
+            0.017891269713069972,
+            0.0316025894506254,
+            0.03168412435443065
+          ],
+          "maximum_per_joint": [
+            0.04717992724526064,
+            0.022678644273308086,
+            0.03890776486218431,
+            0.03808336636088825
+          ]
+        },
+        "goal_action_mean_abs_per_joint": [
+          0.039779461590583015,
+          0.03966890039276417,
+          0.04011874818232784,
+          0.039793743589180634
+        ],
+        "goal_action_mean_abs_change_per_joint": [
+          0.05589707543199214,
+          0.05602092858587634,
+          0.05602696122962054,
+          0.05605729840366672
+        ],
+        "goal_action_sign_flip_fraction_per_joint": [
+          0.49587561173296124,
+          0.5008772019821687,
+          0.49253095856118356,
+          0.49828150488873385
+        ],
+        "scope": "Completed episodes only; ongoing64 episodes are not counted as failed/completed. Motion arrays are middle4 unless noted."
+      },
+      "metrics_ref": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/single_middle_s1_f8_train/attempt01/J/learning_metrics.jsonl",
+        "line_count": 100,
+        "prefix_bytes": 673992,
+        "prefix_sha256": "25098dd17666f277ec985b3dd8ed29069cb0f3e933abcfc967b3a350743737ef",
+        "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+      },
+      "episodes_ref": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/single_middle_s1_f8_train/attempt01/J/episodes.jsonl",
+        "line_count": 776,
+        "prefix_bytes": 23513086,
+        "prefix_sha256": "f46b1560c9caf71da40f08b6490eaf8b454d33faa8e443d0866d73c16bd7e5e7",
+        "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+      }
+    },
+    "single_middle_s3_f6": {
+      "same_update_budget": {
+        "updates": 43,
+        "transitions": 88064,
+        "actor_lr_first": 3e-05,
+        "actor_lr_last": 7.5e-06,
+        "lr_changes": [
+          {
+            "line": 1,
+            "update": 1,
+            "lr": 3e-05,
+            "kl_retries": 0,
+            "max_attempted_kl": 0.012274859473109245
+          },
+          {
+            "line": 33,
+            "update": 33,
+            "lr": 7.5e-06,
+            "kl_retries": 1,
+            "max_attempted_kl": 0.020652130246162415
+          }
+        ],
+        "entropy_first": -52.175540924072266,
+        "entropy_last": -52.17412567138672,
+        "entropy_channels": 33,
+        "kl_mean": 0.0033950614871533025,
+        "clip_fraction_mean": 0.026980377906976744,
+        "actor_grad_norm_mean": 7.1297436758529305,
+        "advantage_mean_update_rms": {
+          "reward": 0.04255990663824052,
+          "cost_weighted": 0.6531090426123276,
+          "cost_to_reward_ratio": 15.345640867207692,
+          "mean_of_update_cost_reward_ratios": 13.346234454213395
+        },
+        "normalized_advantage_std_min": 0.9999998711256803,
+        "normalized_advantage_std_max": 1.000000070560407,
+        "reward_components_per_tick": {
+          "song_left_approach": -0.0024638792101752695,
+          "song_left_contact": 0.0,
+          "song_clean_hold": 0.0,
+          "song_left_success": 0.0,
+          "song_wrong_press": -7.925108213297853e-07,
+          "song_performance_deficit": -0.00029147994084684247,
+          "song_finger_standby": 0.0002525490847039749,
+          "song_thumb_support": 9.439433468882726e-05,
+          "action_change": -5.6845418285427e-08
+        }
+      },
+      "full100": {
+        "updates": 100,
+        "transitions": 204800,
+        "actor_lr_first": 3e-05,
+        "actor_lr_last": 7.5e-06,
+        "lr_changes": [
+          {
+            "line": 1,
+            "update": 1,
+            "lr": 3e-05,
+            "kl_retries": 0,
+            "max_attempted_kl": 0.012274859473109245
+          },
+          {
+            "line": 33,
+            "update": 33,
+            "lr": 7.5e-06,
+            "kl_retries": 1,
+            "max_attempted_kl": 0.020652130246162415
+          }
+        ],
+        "entropy_first": -52.175540924072266,
+        "entropy_last": -52.174034118652344,
+        "entropy_channels": 33,
+        "kl_mean": 0.0020474296243628487,
+        "clip_fraction_mean": 0.0131005859375,
+        "actor_grad_norm_mean": 7.460704278945923,
+        "advantage_mean_update_rms": {
+          "reward": 0.05425084774929217,
+          "cost_weighted": 0.978952622949897,
+          "cost_to_reward_ratio": 18.044927656686614,
+          "mean_of_update_cost_reward_ratios": 18.350523225533593
+        },
+        "normalized_advantage_std_min": 0.9999998711256803,
+        "normalized_advantage_std_max": 1.0000000920127898,
+        "reward_components_per_tick": {
+          "song_left_approach": -0.002581165741758014,
+          "song_left_contact": 7.120768259483157e-07,
+          "song_clean_hold": 9.494358096162613e-08,
+          "song_left_success": 0.0,
+          "song_wrong_press": -1.2196859820079453e-06,
+          "song_performance_deficit": -0.0002901794503816291,
+          "song_finger_standby": 0.0002520282653458139,
+          "song_thumb_support": 0.00010870486611399111,
+          "action_change": -5.674736399391723e-08
+        }
+      },
+      "episodes_full100": {
+        "completed_episodes": 828,
+        "reasons": {
+          "terminal_failure": 294,
+          "timeline_complete": 534
+        },
+        "physical_failures": 294,
+        "episode_cost_sum": 3273.3927779197693,
+        "episode_reward_sum": -499.5337735712528,
+        "note_positive_episodes": {
+          "near_done": 139,
+          "contact_done": 0,
+          "left": 0,
+          "geometry_time": 9,
+          "loaded_target_time": 3,
+          "body_load_time": 12,
+          "contact_time": 3,
+          "clean": 3
+        },
+        "note_total_seconds": {
+          "geometry_time": 0.5625000000000022,
+          "loaded_target_time": 0.050000000000000266,
+          "body_load_time": 1.3375000000000035,
+          "contact_time": 0.03333333333333277,
+          "clean": 0.03333333333333277,
+          "wrong": 2.4979166666666686,
+          "missing": 875.6875
+        },
+        "max_clean_streak_s": 0.02499999999999991,
+        "goal_motion_actual_range_rad": {
+          "mean_per_joint": [
+            0.06592580085791251,
+            0.025025863254415817,
+            0.04684363427945381,
+            0.0508334208369831
+          ],
+          "median_per_joint": [
+            0.06791594624519348,
+            0.0251762717962265,
+            0.04807138442993164,
+            0.051964595913887024
+          ],
+          "maximum_per_joint": [
+            0.10746508836746216,
+            0.03914186358451843,
+            0.0769495964050293,
+            0.07766574621200562
+          ]
+        },
+        "goal_motion_target_range_rad": {
+          "mean_per_joint": [
+            0.22322335018627887,
+            0.08584647944224054,
+            0.17283547946796324,
+            0.18176535092258223
+          ],
+          "median_per_joint": [
+            0.22591693699359894,
+            0.085259810090065,
+            0.17532849311828613,
+            0.18425942957401276
+          ],
+          "maximum_per_joint": [
+            0.31789112091064453,
+            0.13282760977745056,
+            0.25126707553863525,
+            0.24645084142684937
+          ]
+        },
+        "goal_motion_tracking_error_rms_rad": {
+          "mean_per_joint": [
+            0.038622439980910424,
+            0.018401699010665174,
+            0.030933378911647113,
+            0.032555124373083645
+          ],
+          "median_per_joint": [
+            0.03870247462913684,
+            0.018405089048263355,
+            0.030899097114920785,
+            0.03246528493022211
+          ],
+          "maximum_per_joint": [
+            0.04703156846233114,
+            0.025846868133830355,
+            0.03942740462832374,
+            0.04282564984989299
+          ]
+        },
+        "goal_action_mean_abs_per_joint": [
+          0.03956390750328372,
+          0.039755161558200705,
+          0.03975396850674966,
+          0.03994832958241074
+        ],
+        "goal_action_mean_abs_change_per_joint": [
+          0.0559320644120014,
+          0.05597230259078045,
+          0.056012843507213195,
+          0.05610929852291972
+        ],
+        "goal_action_sign_flip_fraction_per_joint": [
+          0.4995826740607606,
+          0.49791337030380306,
+          0.49735010829992166,
+          0.4962594282378604
+        ],
+        "scope": "Completed episodes only; ongoing64 episodes are not counted as failed/completed. Motion arrays are middle4 unless noted."
+      },
+      "metrics_ref": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/single_middle_s3_f6_train/attempt01/J/learning_metrics.jsonl",
+        "line_count": 100,
+        "prefix_bytes": 673968,
+        "prefix_sha256": "5d00aaa8a53f07b677f39da1a1775c722b824a641f3fcdcfdeabf26bba272021",
+        "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+      },
+      "episodes_ref": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/single_middle_s3_f6_train/attempt01/J/episodes.jsonl",
+        "line_count": 828,
+        "prefix_bytes": 25047622,
+        "prefix_sha256": "7e09f9be35f4dcff312761255f9f25de3aa811b768523090050fda9e83d59211",
+        "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+      }
+    },
+    "single_ring_s2_f7": {
+      "same_update_budget": {
+        "updates": 43,
+        "transitions": 88064,
+        "actor_lr_first": 3e-05,
+        "actor_lr_last": 7.5e-06,
+        "lr_changes": [
+          {
+            "line": 1,
+            "update": 1,
+            "lr": 3e-05,
+            "kl_retries": 0,
+            "max_attempted_kl": 0.01395377703011036
+          },
+          {
+            "line": 24,
+            "update": 24,
+            "lr": 7.5e-06,
+            "kl_retries": 1,
+            "max_attempted_kl": 0.026534907519817352
+          }
+        ],
+        "entropy_first": -52.17534637451172,
+        "entropy_last": -52.172054290771484,
+        "entropy_channels": 33,
+        "kl_mean": 0.0035469309707053093,
+        "clip_fraction_mean": 0.036155523255813955,
+        "actor_grad_norm_mean": 7.02073533035988,
+        "advantage_mean_update_rms": {
+          "reward": 0.05489355882223355,
+          "cost_weighted": 0.7658125044106318,
+          "cost_to_reward_ratio": 13.95086273948146,
+          "mean_of_update_cost_reward_ratios": 17.030603377221855
+        },
+        "normalized_advantage_std_min": 0.9999999198212921,
+        "normalized_advantage_std_max": 1.0000000954017207,
+        "reward_components_per_tick": {
+          "song_left_approach": -0.0026543669599388606,
+          "song_left_contact": 3.785126060646753e-06,
+          "song_clean_hold": 1.0724523838499133e-06,
+          "song_left_success": 0.0,
+          "song_wrong_press": -6.955169615641649e-07,
+          "song_performance_deficit": -0.0002913206501204968,
+          "song_finger_standby": 0.0002525905460557428,
+          "song_thumb_support": 0.00011152082771930456,
+          "action_change": -5.682775280597583e-08
+        }
+      },
+      "full100": {
+        "updates": 100,
+        "transitions": 204800,
+        "actor_lr_first": 3e-05,
+        "actor_lr_last": 7.5e-06,
+        "lr_changes": [
+          {
+            "line": 1,
+            "update": 1,
+            "lr": 3e-05,
+            "kl_retries": 0,
+            "max_attempted_kl": 0.01395377703011036
+          },
+          {
+            "line": 24,
+            "update": 24,
+            "lr": 7.5e-06,
+            "kl_retries": 1,
+            "max_attempted_kl": 0.026534907519817352
+          }
+        ],
+        "entropy_first": -52.17534637451172,
+        "entropy_last": -52.17184829711914,
+        "entropy_channels": 33,
+        "kl_mean": 0.0021357840500422754,
+        "clip_fraction_mean": 0.0158251953125,
+        "actor_grad_norm_mean": 7.4111658954620365,
+        "advantage_mean_update_rms": {
+          "reward": 0.05428943694570675,
+          "cost_weighted": 0.970381261109692,
+          "cost_to_reward_ratio": 17.87421855342028,
+          "mean_of_update_cost_reward_ratios": 19.747363418068527
+        },
+        "normalized_advantage_std_min": 0.9999998731206956,
+        "normalized_advantage_std_max": 1.0000000954017207,
+        "reward_components_per_tick": {
+          "song_left_approach": -0.0025660468899877742,
+          "song_left_contact": 2.746582104009576e-06,
+          "song_clean_hold": 6.103515772792889e-07,
+          "song_left_success": 0.0,
+          "song_wrong_press": -1.6479493727672434e-06,
+          "song_performance_deficit": -0.00029789632882682327,
+          "song_finger_standby": 0.000252287331556289,
+          "song_thumb_support": 0.00013092557845546527,
+          "action_change": -5.672807453362214e-08
+        }
+      },
+      "episodes_full100": {
+        "completed_episodes": 776,
+        "reasons": {
+          "terminal_failure": 222,
+          "timeline_complete": 554
+        },
+        "physical_failures": 222,
+        "episode_cost_sum": 2422.3493156433105,
+        "episode_reward_sum": -488.830296009779,
+        "note_positive_episodes": {
+          "near_done": 112,
+          "contact_done": 1,
+          "left": 0,
+          "geometry_time": 16,
+          "loaded_target_time": 8,
+          "body_load_time": 9,
+          "contact_time": 7,
+          "clean": 7
+        },
+        "note_total_seconds": {
+          "geometry_time": 1.0291666666666663,
+          "loaded_target_time": 0.34583333333333277,
+          "body_load_time": 0.40416666666666634,
+          "contact_time": 0.1958333333333333,
+          "clean": 0.1958333333333333,
+          "wrong": 3.3750000000000018,
+          "missing": 891.28125
+        },
+        "max_clean_streak_s": 0.09583333333333321,
+        "goal_motion_actual_range_rad": {
+          "mean_per_joint": [
+            0.06790735714675225,
+            0.025365815833979045,
+            0.04935290165168723,
+            0.04884314959503941
+          ],
+          "median_per_joint": [
+            0.06919020414352417,
+            0.025529861450195312,
+            0.05031287670135498,
+            0.049412667751312256
+          ],
+          "maximum_per_joint": [
+            0.11332044005393982,
+            0.04476073384284973,
+            0.08543574810028076,
+            0.07996818423271179
+          ]
+        },
+        "goal_motion_target_range_rad": {
+          "mean_per_joint": [
+            0.22881458642095634,
+            0.08382429113400351,
+            0.17398287732269346,
+            0.17829546109609998
+          ],
+          "median_per_joint": [
+            0.23132820427417755,
+            0.08385700732469559,
+            0.17620304226875305,
+            0.17970658838748932
+          ],
+          "maximum_per_joint": [
+            0.3092736005783081,
+            0.13273316621780396,
+            0.24557232856750488,
+            0.25196972489356995
+          ]
+        },
+        "goal_motion_tracking_error_rms_rad": {
+          "mean_per_joint": [
+            0.03894400015059892,
+            0.018130216458981507,
+            0.03125986436922617,
+            0.031239361008671994
+          ],
+          "median_per_joint": [
+            0.03895111522220043,
+            0.018113198396856878,
+            0.03126134978090822,
+            0.031327161102010816
+          ],
+          "maximum_per_joint": [
+            0.04901264929302462,
+            0.02497998728275876,
+            0.04233479759092042,
+            0.03756382427672834
+          ]
+        },
+        "goal_action_mean_abs_per_joint": [
+          0.04007914033724196,
+          0.039662926879812814,
+          0.03988961519526468,
+          0.039781549455224184
+        ],
+        "goal_action_mean_abs_change_per_joint": [
+          0.056047768457648334,
+          0.05604178232024574,
+          0.05613791291013907,
+          0.05601546132932471
+        ],
+        "goal_action_sign_flip_fraction_per_joint": [
+          0.49268833277492846,
+          0.5001262854050154,
+          0.4963531867735368,
+          0.49816757300069586
+        ],
+        "scope": "Completed episodes only; ongoing64 episodes are not counted as failed/completed. Motion arrays are middle4 unless noted."
+      },
+      "metrics_ref": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/single_ring_s2_f7_train/attempt01/J/learning_metrics.jsonl",
+        "line_count": 100,
+        "prefix_bytes": 673865,
+        "prefix_sha256": "e02eed05b1b163b28798a0b20a3e6d17243c96c3b5fffa11fb65b555004d85dc",
+        "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+      },
+      "episodes_ref": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/single_ring_s2_f7_train/attempt01/J/episodes.jsonl",
+        "line_count": 776,
+        "prefix_bytes": 23559643,
+        "prefix_sha256": "7c323af63f7ceb65ce2d1c5dd98747b5dfef06aa1a2fb52a11446e9ddb9f6e8d",
+        "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+      }
+    },
+    "transition_middle_s3_f6_to_ring_s2_f7": {
+      "same_update_budget": {
+        "updates": 43,
+        "transitions": 88064,
+        "actor_lr_first": 3e-05,
+        "actor_lr_last": 7.5e-06,
+        "lr_changes": [
+          {
+            "line": 1,
+            "update": 1,
+            "lr": 3e-05,
+            "kl_retries": 0,
+            "max_attempted_kl": 0.01181890070438385
+          },
+          {
+            "line": 21,
+            "update": 21,
+            "lr": 7.5e-06,
+            "kl_retries": 1,
+            "max_attempted_kl": 0.024702250957489014
+          }
+        ],
+        "entropy_first": -52.175331115722656,
+        "entropy_last": -52.175071716308594,
+        "entropy_channels": 33,
+        "kl_mean": 0.0035606954824775024,
+        "clip_fraction_mean": 0.035769440406976744,
+        "actor_grad_norm_mean": 7.362524653590003,
+        "advantage_mean_update_rms": {
+          "reward": 0.05667625544429216,
+          "cost_weighted": 0.8339882228453624,
+          "cost_to_reward_ratio": 14.714949255338515,
+          "mean_of_update_cost_reward_ratios": 15.890965373172818
+        },
+        "normalized_advantage_std_min": 0.9999998941121307,
+        "normalized_advantage_std_max": 1.0000001065410058,
+        "reward_components_per_tick": {
+          "song_left_approach": -0.0025145961073238057,
+          "song_left_contact": 9.462814992984085e-07,
+          "song_clean_hold": 1.2617087133210506e-07,
+          "song_left_success": 0.0,
+          "song_wrong_press": -1.0858581125114333e-06,
+          "song_performance_deficit": -0.0004126544431303871,
+          "song_finger_standby": 0.0002390942465497965,
+          "song_thumb_support": 0.00010670675113710892,
+          "action_change": -5.687171995953088e-08
+        }
+      },
+      "full100": {
+        "updates": 100,
+        "transitions": 204800,
+        "actor_lr_first": 3e-05,
+        "actor_lr_last": 7.5e-06,
+        "lr_changes": [
+          {
+            "line": 1,
+            "update": 1,
+            "lr": 3e-05,
+            "kl_retries": 0,
+            "max_attempted_kl": 0.01181890070438385
+          },
+          {
+            "line": 21,
+            "update": 21,
+            "lr": 7.5e-06,
+            "kl_retries": 1,
+            "max_attempted_kl": 0.024702250957489014
+          }
+        ],
+        "entropy_first": -52.175331115722656,
+        "entropy_last": -52.17664337158203,
+        "entropy_channels": 33,
+        "kl_mean": 0.0019572493215673603,
+        "clip_fraction_mean": 0.0155810546875,
+        "actor_grad_norm_mean": 7.76897735118866,
+        "advantage_mean_update_rms": {
+          "reward": 0.0624038465842466,
+          "cost_weighted": 1.02897510967742,
+          "cost_to_reward_ratio": 16.48896928634488,
+          "mean_of_update_cost_reward_ratios": 17.930052732931117
+        },
+        "normalized_advantage_std_min": 0.9999998880329408,
+        "normalized_advantage_std_max": 1.0000001065410058,
+        "reward_components_per_tick": {
+          "song_left_approach": -0.0024174904517349203,
+          "song_left_contact": 3.051757876164629e-06,
+          "song_clean_hold": 5.018446336180205e-07,
+          "song_left_success": 0.0,
+          "song_wrong_press": -1.6438803602625285e-06,
+          "song_performance_deficit": -0.00040162964839936423,
+          "song_finger_standby": 0.00023831289586617288,
+          "song_thumb_support": 0.0001246469665815597,
+          "action_change": -5.678995626252021e-08
+        }
+      },
+      "episodes_full100": {
+        "completed_episodes": 526,
+        "reasons": {
+          "terminal_failure": 205,
+          "timeline_complete": 321
+        },
+        "physical_failures": 205,
+        "episode_cost_sum": 2580.7562551498413,
+        "episode_reward_sum": -478.1899673938751,
+        "note_positive_episodes": {
+          "near_done": 131,
+          "contact_done": 1,
+          "left": 0,
+          "geometry_time": 21,
+          "loaded_target_time": 6,
+          "body_load_time": 18,
+          "contact_time": 6,
+          "clean": 6
+        },
+        "note_total_seconds": {
+          "geometry_time": 1.6208333333333345,
+          "loaded_target_time": 0.2541666666666673,
+          "body_load_time": 0.6500000000000008,
+          "contact_time": 0.17083333333333517,
+          "clean": 0.17083333333333517,
+          "wrong": 3.358333333333335,
+          "missing": 1182.98125
+        },
+        "max_clean_streak_s": 0.0791666666666675,
+        "goal_motion_actual_range_rad": {
+          "mean_per_joint": [
+            0.07297752106371035,
+            0.026402813910078187,
+            0.05091358024357843,
+            0.054785349466501536,
+            0.07220941385388828,
+            0.02692392230487142,
+            0.05269292098941005,
+            0.053815765752538526
+          ],
+          "median_per_joint": [
+            0.07489839196205139,
+            0.026371583342552185,
+            0.05192446708679199,
+            0.056324198842048645,
+            0.0735556036233902,
+            0.026891499757766724,
+            0.05366027355194092,
+            0.054491639137268066
+          ],
+          "maximum_per_joint": [
+            0.10734245181083679,
+            0.04016941785812378,
+            0.08134430646896362,
+            0.08257332444190979,
+            0.11353376507759094,
+            0.04569539427757263,
+            0.08454227447509766,
+            0.0808519721031189
+          ]
+        },
+        "goal_motion_target_range_rad": {
+          "mean_per_joint": [
+            0.23585266118493822,
+            0.08968380158731692,
+            0.18151491415817927,
+            0.18988780824630433,
+            0.23715435410407107,
+            0.08767651180124102,
+            0.1804656466830366,
+            0.18779577008898268
+          ],
+          "median_per_joint": [
+            0.23796182870864868,
+            0.08945484459400177,
+            0.18482151627540588,
+            0.19207924604415894,
+            0.23965752124786377,
+            0.08772271871566772,
+            0.18303817510604858,
+            0.1889980435371399
+          ],
+          "maximum_per_joint": [
+            0.31471124291419983,
+            0.12961846590042114,
+            0.25005292892456055,
+            0.24543797969818115,
+            0.3086790144443512,
+            0.1330558806657791,
+            0.24919378757476807,
+            0.2545093297958374
+          ]
+        },
+        "goal_motion_tracking_error_rms_rad": {
+          "mean_per_joint": [
+            0.03869614684504966,
+            0.018363765524557377,
+            0.031067683610298255,
+            0.03235480136260708,
+            0.03890360037900366,
+            0.018383674857632117,
+            0.03125218030750676,
+            0.032045120512591875
+          ],
+          "median_per_joint": [
+            0.03881730887309506,
+            0.018346609057756504,
+            0.031067840683277767,
+            0.03228926171730617,
+            0.038963959396017586,
+            0.01838830497786268,
+            0.031267785387810276,
+            0.03200974904072847
+          ],
+          "maximum_per_joint": [
+            0.04426014859297256,
+            0.023013877542936597,
+            0.04008383266150109,
+            0.04053576041815963,
+            0.04938491833557776,
+            0.025232607700430086,
+            0.038822620365468866,
+            0.040927620976166625
+          ]
+        },
+        "goal_action_mean_abs_per_joint": [
+          0.039780759763957764,
+          0.03972221789719139,
+          0.03971108321061621,
+          0.03977753363662512,
+          0.03977560956972053,
+          0.03963719139928683,
+          0.039841889227274316,
+          0.03963352007317767
+        ],
+        "goal_action_mean_abs_change_per_joint": [
+          0.05590711410008277,
+          0.055999136256535874,
+          0.05600027131937967,
+          0.056022426493264645,
+          0.0560120922188843,
+          0.05601697324516752,
+          0.05614324020954348,
+          0.05600718695067082
+        ],
+        "goal_action_sign_flip_fraction_per_joint": [
+          0.4950539004721514,
+          0.4983600050139974,
+          0.497503447123219,
+          0.49805185308987593,
+          0.4979160573267037,
+          0.5002768144403126,
+          0.4976705803702001,
+          0.5002663686123762
+        ],
+        "scope": "Completed episodes only; ongoing64 episodes are not counted as failed/completed. Motion arrays are middle4 unless noted."
+      },
+      "metrics_ref": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/transition_middle_s3_f6_to_ring_s2_f7_train/attempt01/J/learning_metrics.jsonl",
+        "line_count": 100,
+        "prefix_bytes": 672254,
+        "prefix_sha256": "2bcc0b0d8f990ef0f39113011744ec44029d426c6411216ce594908f2046c6cc",
+        "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+      },
+      "episodes_ref": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/transition_middle_s3_f6_to_ring_s2_f7_train/attempt01/J/episodes.jsonl",
+        "line_count": 526,
+        "prefix_bytes": 16711561,
+        "prefix_sha256": "842c3abf0593f43fe0671fef2902a1a32166910dd484547c951572a628659efc",
+        "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+      }
+    },
+    "transition_middle_s3_f6_to_s1_f8": {
+      "same_update_budget": {
+        "updates": 43,
+        "transitions": 88064,
+        "actor_lr_first": 3e-05,
+        "actor_lr_last": 3e-05,
+        "lr_changes": [
+          {
+            "line": 1,
+            "update": 1,
+            "lr": 3e-05,
+            "kl_retries": 0,
+            "max_attempted_kl": 0.012933280318975449
+          }
+        ],
+        "entropy_first": -52.17546081542969,
+        "entropy_last": -52.17530059814453,
+        "entropy_channels": 33,
+        "kl_mean": 0.005248115368209086,
+        "clip_fraction_mean": 0.05691315406976744,
+        "actor_grad_norm_mean": 6.939880903377089,
+        "advantage_mean_update_rms": {
+          "reward": 0.03472243168979756,
+          "cost_weighted": 0.530194443046192,
+          "cost_to_reward_ratio": 15.269507843886933,
+          "mean_of_update_cost_reward_ratios": 16.336007203795656
+        },
+        "normalized_advantage_std_min": 0.9999999134353019,
+        "normalized_advantage_std_max": 1.0000000989969138,
+        "reward_components_per_tick": {
+          "song_left_approach": -0.002052900387731592,
+          "song_left_contact": 0.0,
+          "song_clean_hold": 0.0,
+          "song_left_success": 0.0,
+          "song_wrong_press": -7.073454819908685e-07,
+          "song_performance_deficit": -0.00041664932826154994,
+          "song_finger_standby": 0.00025050175372267973,
+          "song_thumb_support": 7.086533292472145e-05,
+          "action_change": -5.692034768596464e-08
+        }
+      },
+      "full100": {
+        "updates": 100,
+        "transitions": 204800,
+        "actor_lr_first": 3e-05,
+        "actor_lr_last": 3e-05,
+        "lr_changes": [
+          {
+            "line": 1,
+            "update": 1,
+            "lr": 3e-05,
+            "kl_retries": 0,
+            "max_attempted_kl": 0.012933280318975449
+          }
+        ],
+        "entropy_first": -52.17546081542969,
+        "entropy_last": -52.17819595336914,
+        "entropy_channels": 33,
+        "kl_mean": 0.007859562324592844,
+        "clip_fraction_mean": 0.1064501953125,
+        "actor_grad_norm_mean": 6.889073777198791,
+        "advantage_mean_update_rms": {
+          "reward": 0.037247711831304216,
+          "cost_weighted": 0.7975014794577379,
+          "cost_to_reward_ratio": 21.410750895776935,
+          "mean_of_update_cost_reward_ratios": 22.214624719792212
+        },
+        "normalized_advantage_std_min": 0.9999999134353019,
+        "normalized_advantage_std_max": 1.000000109461273,
+        "reward_components_per_tick": {
+          "song_left_approach": -0.0018864905745977012,
+          "song_left_contact": 0.0,
+          "song_clean_hold": 0.0,
+          "song_left_success": 0.0,
+          "song_wrong_press": -3.092448211106102e-07,
+          "song_performance_deficit": -0.00041828885561471905,
+          "song_finger_standby": 0.00025046936665262364,
+          "song_thumb_support": 9.648543996606252e-05,
+          "action_change": -5.680874600433532e-08
+        }
+      },
+      "episodes_full100": {
+        "completed_episodes": 487,
+        "reasons": {
+          "terminal_failure": 122,
+          "timeline_complete": 365
+        },
+        "physical_failures": 122,
+        "episode_cost_sum": 1551.6672291755676,
+        "episode_reward_sum": -381.7015095949173,
+        "note_positive_episodes": {
+          "near_done": 10,
+          "contact_done": 0,
+          "left": 0,
+          "geometry_time": 0,
+          "loaded_target_time": 0,
+          "body_load_time": 8,
+          "contact_time": 0,
+          "clean": 0
+        },
+        "note_total_seconds": {
+          "geometry_time": 0.0,
+          "loaded_target_time": 0.0,
+          "body_load_time": 0.6250000000000018,
+          "contact_time": 0.0,
+          "clean": 0.0,
+          "wrong": 0.6333333333333342,
+          "missing": 1236.8166666666666
+        },
+        "max_clean_streak_s": 0.0,
+        "goal_motion_actual_range_rad": {
+          "mean_per_joint": [
+            0.07549227299876282,
+            0.02747539224321103,
+            0.0517660068535462,
+            0.05516678602788483
+          ],
+          "median_per_joint": [
+            0.07718878984451294,
+            0.0273665189743042,
+            0.0520361065864563,
+            0.056568264961242676
+          ],
+          "maximum_per_joint": [
+            0.108487069606781,
+            0.04090675711631775,
+            0.07878100872039795,
+            0.08847317099571228
+          ]
+        },
+        "goal_motion_target_range_rad": {
+          "mean_per_joint": [
+            0.2393515941053935,
+            0.09127571267024202,
+            0.1833388188536407,
+            0.19060083342528686
+          ],
+          "median_per_joint": [
+            0.24151217937469482,
+            0.0910952091217041,
+            0.18527531623840332,
+            0.19259774684906006
+          ],
+          "maximum_per_joint": [
+            0.32164424657821655,
+            0.1324402093887329,
+            0.2505876421928406,
+            0.24783968925476074
+          ]
+        },
+        "goal_motion_tracking_error_rms_rad": {
+          "mean_per_joint": [
+            0.038920569131579166,
+            0.0185609487246253,
+            0.03092870728930488,
+            0.031895539452923415
+          ],
+          "median_per_joint": [
+            0.038863968864673894,
+            0.018455335792711202,
+            0.030872369293918654,
+            0.03205475384799123
+          ],
+          "maximum_per_joint": [
+            0.05052565800373084,
+            0.025893627678911478,
+            0.03689898137954849,
+            0.04042623527312739
+          ]
+        },
+        "goal_action_mean_abs_per_joint": [
+          0.04110330556160109,
+          0.039897260596639,
+          0.03983086186177179,
+          0.040148900663672195
+        ],
+        "goal_action_mean_abs_change_per_joint": [
+          0.05588568885372819,
+          0.055995256541945475,
+          0.05599178670550674,
+          0.05607340670229868
+        ],
+        "goal_action_sign_flip_fraction_per_joint": [
+          0.4751529770482217,
+          0.49623561598061944,
+          0.4953532568970198,
+          0.49221017897792535
+        ],
+        "scope": "Completed episodes only; ongoing64 episodes are not counted as failed/completed. Motion arrays are middle4 unless noted."
+      },
+      "metrics_ref": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/transition_middle_s3_f6_to_s1_f8_train/attempt01/J/learning_metrics.jsonl",
+        "line_count": 100,
+        "prefix_bytes": 671356,
+        "prefix_sha256": "4393a5743cc0282841d4b476be6871937df7e6a1acd87a02019c217d54aa1930",
+        "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+      },
+      "episodes_ref": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/transition_middle_s3_f6_to_s1_f8_train/attempt01/J/episodes.jsonl",
+        "line_count": 487,
+        "prefix_bytes": 15127772,
+        "prefix_sha256": "d95c25e3fdc60939a9cf89531c96aa0a0dde80f5c87ff621de14ca3346e4e6d1",
+        "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+      }
+    },
+    "transition_middle_s3_f6_to_s3_f8": {
+      "same_update_budget": {
+        "updates": 43,
+        "transitions": 88064,
+        "actor_lr_first": 3e-05,
+        "actor_lr_last": 7.5e-06,
+        "lr_changes": [
+          {
+            "line": 1,
+            "update": 1,
+            "lr": 3e-05,
+            "kl_retries": 0,
+            "max_attempted_kl": 0.013066823594272137
+          },
+          {
+            "line": 37,
+            "update": 37,
+            "lr": 7.5e-06,
+            "kl_retries": 1,
+            "max_attempted_kl": 0.02179606445133686
+          }
+        ],
+        "entropy_first": -52.175472259521484,
+        "entropy_last": -52.17329406738281,
+        "entropy_channels": 33,
+        "kl_mean": 0.0044504051167128045,
+        "clip_fraction_mean": 0.0447288335755814,
+        "actor_grad_norm_mean": 7.198833931324094,
+        "advantage_mean_update_rms": {
+          "reward": 0.037579300037250095,
+          "cost_weighted": 0.5999667370787719,
+          "cost_to_reward_ratio": 15.965351576108683,
+          "mean_of_update_cost_reward_ratios": 15.011725940413113
+        },
+        "normalized_advantage_std_min": 0.9999998907572144,
+        "normalized_advantage_std_max": 1.0000000667524982,
+        "reward_components_per_tick": {
+          "song_left_approach": -0.0020548743014778877,
+          "song_left_contact": 0.0,
+          "song_clean_hold": 0.0,
+          "song_left_success": 0.0,
+          "song_wrong_press": -2.744216587302617e-07,
+          "song_performance_deficit": -0.0004191964026731935,
+          "song_finger_standby": 0.00025046196686070933,
+          "song_thumb_support": 7.666908735153765e-05,
+          "action_change": -5.6896710691208296e-08
+        }
+      },
+      "full100": {
+        "updates": 100,
+        "transitions": 204800,
+        "actor_lr_first": 3e-05,
+        "actor_lr_last": 7.5e-06,
+        "lr_changes": [
+          {
+            "line": 1,
+            "update": 1,
+            "lr": 3e-05,
+            "kl_retries": 0,
+            "max_attempted_kl": 0.013066823594272137
+          },
+          {
+            "line": 37,
+            "update": 37,
+            "lr": 7.5e-06,
+            "kl_retries": 1,
+            "max_attempted_kl": 0.02179606445133686
+          }
+        ],
+        "entropy_first": -52.175472259521484,
+        "entropy_last": -52.17335891723633,
+        "entropy_channels": 33,
+        "kl_mean": 0.0026182744806283152,
+        "clip_fraction_mean": 0.0209228515625,
+        "actor_grad_norm_mean": 7.33245361328125,
+        "advantage_mean_update_rms": {
+          "reward": 0.03406468184687936,
+          "cost_weighted": 0.7589367336279398,
+          "cost_to_reward_ratio": 22.27928436376885,
+          "mean_of_update_cost_reward_ratios": 24.758177237627184
+        },
+        "normalized_advantage_std_min": 0.9999998771452943,
+        "normalized_advantage_std_max": 1.0000000969569711,
+        "reward_components_per_tick": {
+          "song_left_approach": -0.0018808887679551845,
+          "song_left_contact": 0.0,
+          "song_clean_hold": 0.0,
+          "song_left_success": 0.0,
+          "song_wrong_press": -1.9327801261681544e-07,
+          "song_performance_deficit": -0.0004182013718886424,
+          "song_finger_standby": 0.0002502475029777429,
+          "song_thumb_support": 9.868909607963133e-05,
+          "action_change": -5.678704908713402e-08
+        }
+      },
+      "episodes_full100": {
+        "completed_episodes": 481,
+        "reasons": {
+          "terminal_failure": 124,
+          "timeline_complete": 357
+        },
+        "physical_failures": 124,
+        "episode_cost_sum": 1372.714584350586,
+        "episode_reward_sum": -383.069148004055,
+        "note_positive_episodes": {
+          "near_done": 14,
+          "contact_done": 0,
+          "left": 0,
+          "geometry_time": 1,
+          "loaded_target_time": 0,
+          "body_load_time": 10,
+          "contact_time": 0,
+          "clean": 0
+        },
+        "note_total_seconds": {
+          "geometry_time": 0.033333333333333215,
+          "loaded_target_time": 0.0,
+          "body_load_time": 0.3708333333333327,
+          "contact_time": 0.0,
+          "clean": 0.0,
+          "wrong": 0.3958333333333319,
+          "missing": 1257.8708333333334
+        },
+        "max_clean_streak_s": 0.0,
+        "goal_motion_actual_range_rad": {
+          "mean_per_joint": [
+            0.07522172993533081,
+            0.025535543036807846,
+            0.05291297455587407,
+            0.0559920135753814
+          ],
+          "median_per_joint": [
+            0.07561665773391724,
+            0.02559971809387207,
+            0.05331224203109741,
+            0.05687251687049866
+          ],
+          "maximum_per_joint": [
+            0.10764434933662415,
+            0.04175335168838501,
+            0.07921445369720459,
+            0.08005687594413757
+          ]
+        },
+        "goal_motion_target_range_rad": {
+          "mean_per_joint": [
+            0.2405293912872703,
+            0.08947919832693564,
+            0.1843700648097635,
+            0.1926932035017906
+          ],
+          "median_per_joint": [
+            0.24044236540794373,
+            0.08896157145500183,
+            0.18597859144210815,
+            0.19366061687469482
+          ],
+          "maximum_per_joint": [
+            0.3161478042602539,
+            0.12687653303146362,
+            0.24825626611709595,
+            0.24552884697914124
+          ]
+        },
+        "goal_motion_tracking_error_rms_rad": {
+          "mean_per_joint": [
+            0.03879416776793527,
+            0.017723559193760053,
+            0.030777051406579523,
+            0.032226759207018923
+          ],
+          "median_per_joint": [
+            0.03879429785854969,
+            0.017674410159479303,
+            0.03084376782348486,
+            0.032226573152140836
+          ],
+          "maximum_per_joint": [
+            0.047859382407633794,
+            0.023969340194751287,
+            0.036635794898312216,
+            0.04674494046694798
+          ]
+        },
+        "goal_action_mean_abs_per_joint": [
+          0.03984377568392161,
+          0.03987619475953669,
+          0.03981666016659472,
+          0.03977871515585673
+        ],
+        "goal_action_mean_abs_change_per_joint": [
+          0.05596215500706202,
+          0.05605630394836428,
+          0.05602222445077879,
+          0.056085199940454085
+        ],
+        "goal_action_sign_flip_fraction_per_joint": [
+          0.49592922722219934,
+          0.4968144015809626,
+          0.496572522541068,
+          0.4987031166371609
+        ],
+        "scope": "Completed episodes only; ongoing64 episodes are not counted as failed/completed. Motion arrays are middle4 unless noted."
+      },
+      "metrics_ref": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/transition_middle_s3_f6_to_s3_f8_train/attempt01/J/learning_metrics.jsonl",
+        "line_count": 100,
+        "prefix_bytes": 672238,
+        "prefix_sha256": "111312f0f85a06740486884a980e90bafcb349477995bb2b608a3cab99c7f96d",
+        "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+      },
+      "episodes_ref": {
+        "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/transition_middle_s3_f6_to_s3_f8_train/attempt01/J/episodes.jsonl",
+        "line_count": 481,
+        "prefix_bytes": 14970962,
+        "prefix_sha256": "165aabeaea7b8afd5ba811d4c11aec3640f058e7af16e883bfcb85d4eed1d7bd",
+        "scope": "Complete JSONL prefix only; source remains growing and is never modified"
+      }
+    }
+  },
+  "entropy_comparison_warning": "Raw entropy sums use4 active channels here vs33 previously; divide by channel count before comparison",
+  "interpretation_limit": "Aligned reset + active4 + held support +601policy differ jointly from old v9/full33/613. This is a conditional diagnostic, not isolated causal proof or full33 performance.",
+  "old_middle_same_target_representative_trace": {
+    "reference": {
+      "path": "/home/ajou/yigyu/3/docs/2026-11-09/줄프렛_손가락전환실험_v1/실행_v1/로그/single_middle_s3_f6_train/attempt01/J/finger_control_trace.jsonl.gz",
+      "compressed_snapshot_bytes": 2207804,
+      "compressed_snapshot_sha256": "b9b9c40968a165b9a49cfe8958a106ed07e579b67bb41ef7b624cbced3e11843",
+      "complete_rows": 2400,
+      "scope": "Representative env0, first600 control ticks / actual240Hz samples; not whole training population"
+    },
+    "phases": {
+      "hover": {
+        "samples": 1342,
+        "height_m": {
+          "mean": 0.05166561483237587,
+          "min": 0.0458974689245224,
+          "max": 0.05721011757850647
+        },
+        "hover_distance_m": {
+          "mean": 0.043687854012149634,
+          "min": 0.037897467613220215,
+          "max": 0.04938884824514389
+        },
+        "pad_distance_m": {
+          "mean": 0.051763038099611566
+        },
+        "potential": {
+          "mean": 0.23386525729152022
+        },
+        "standby_reward_rate_per_s": {
+          "mean": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "standby_reward_weight": {
+          "mean": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "observed_legacy_standby_gate": {
+          "mean": 0.9292101341281669,
+          "min": 0.0,
+          "max": 1.0
+        },
+        "tracking_weight": {
+          "mean": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "ready_fraction": 0.0,
+        "loaded_fraction": 0.0,
+        "candidate_fraction": 0.0
+      },
+      "descent": {
+        "samples": 96,
+        "height_m": {
+          "mean": 0.053201763425022364,
+          "min": 0.04953588545322418,
+          "max": 0.05745597183704376
+        },
+        "hover_distance_m": {
+          "mean": 0.04532716093429675,
+          "min": 0.0415426567196846,
+          "max": 0.04945597052574158
+        },
+        "pad_distance_m": {
+          "mean": 0.05349517404101789
+        },
+        "potential": {
+          "mean": 0.19638135563582182
+        },
+        "standby_reward_rate_per_s": {
+          "mean": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "standby_reward_weight": {
+          "mean": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "observed_legacy_standby_gate": {
+          "mean": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "tracking_weight": {
+          "mean": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "ready_fraction": 0.0,
+        "loaded_fraction": 0.0,
+        "candidate_fraction": 0.0
+      },
+      "audible": {
+        "samples": 720,
+        "height_m": {
+          "mean": 0.05244935589014656,
+          "min": 0.047929033637046814,
+          "max": 0.05862598866224289
+        },
+        "hover_distance_m": {
+          "mean": 0.04452917250390682,
+          "min": 0.03992903232574463,
+          "max": 0.05120529234409332
+        },
+        "pad_distance_m": {
+          "mean": 0.05268511456540889
+        },
+        "potential": {
+          "mean": 0.17315839264127944
+        },
+        "standby_reward_rate_per_s": {
+          "mean": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "standby_reward_weight": {
+          "mean": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "observed_legacy_standby_gate": {
+          "mean": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "tracking_weight": {
+          "mean": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "ready_fraction": 0.0,
+        "loaded_fraction": 0.0,
+        "candidate_fraction": 0.0
+      }
+    }
+  },
+  "oracle_comparison": {
+    "indices": [
+      60,
+      61,
+      62,
+      63
+    ],
+    "hold_target4_rad": [
+      0.46175631880760193,
+      0.29675763845443726,
+      1.0250518321990967,
+      0.4623015224933624
+    ],
+    "known_target4_rad": [
+      0.5724524456228584,
+      0.2009386267121035,
+      1.0607649223793065,
+      0.48666470977218657
+    ],
+    "delta_q4_rad": [
+      0.11069612681525642,
+      -0.09581901174233376,
+      0.03571309018020985,
+      0.02436318727882414
+    ],
+    "hold_action4": [
+      -0.00010035263209447624,
+      0.0009863653251022285,
+      6.384964899648241e-05,
+      1.1216477059175469e-05
+    ],
+    "known_action4": [
+      0.0997177625779403,
+      -0.14829906865093362,
+      0.06549847884577639,
+      0.021989523992741015
+    ],
+    "delta_latent_in_initial_std": [
+      2.0115789794648746,
+      -3.0206070692647864,
+      1.316175808544264,
+      0.44151731624872714
+    ],
+    "limitation": "One known successful oracle configuration; not proof that this exact joint pose is uniquely required"
+  },
+  "approach_math": {
+    "formula": "exp(-distance/0.03) with unchanged near-direction multiplier; hover plateau height4..8mm then quintic blend2.8..3.0s to surface",
+    "surface_quality_at_distance_mm": {
+      "0": 1.0,
+      "0.5": 0.9834714538216175,
+      "1": 0.9672161004820059,
+      "2": 0.9355069850316178,
+      "3": 0.9048374180359595,
+      "6": 0.8187307530779818,
+      "8": 0.7659283383646487,
+      "10": 0.7165313105737893
+    },
+    "marginal_quality_gain_3mm_to0": 0.09516258196404048,
+    "derivative_abs_per_m_at3mm": 30.161247267865317,
+    "interpretation": "Near quality saturates numerically but geometric distance sensitivity is not zero; before descent the valid hover height band has a true zero-height-error plateau. No body-load term is present in approach potential."
+  }
+}

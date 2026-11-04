@@ -13,7 +13,7 @@ from guitar_learning.core.control import LEFT_ARM_NAMES
 from guitar_learning.native.paths import HUMAN
 from guitar_learning.native.lower_body_release_v1.controller_horizontal_v4 import full_fk
 from guitar_learning.runtime.prepared_reset_v1 import load_prepared_reset_contract
-from guitar_learning.tool.experiments.short_finger_learning.wrist import (
+from guitar_learning.tool.validation.wrist_position import (
     _so3_left_jacobian, _wrist_position_groups, _wrist_position_jacobian, wrist_error_and_jacobian,
     bounded_wrist_target, WRIST_CONTROL)
 

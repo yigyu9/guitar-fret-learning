@@ -1,4 +1,4 @@
-"""기본 J557 설정과 제거된 단계·구형 CLI의 거부를 검사한다."""
+"""기본 V5 압현 설정과 제거된 단계·구형 CLI의 거부를 검사한다."""
 import os
 from pathlib import Path
 import subprocess
@@ -21,10 +21,14 @@ class JointFingerSkillStartTests(unittest.TestCase):
         self.assertEqual(settings['finger_skill'], dict(schema='guitar_learning.finger_skill.v3',
             phase='J', exploration='independent', hold_ticks=1, scope='scheduled',
             planned_transitions=1792, full_song_after=448))
-        self.assertEqual(settings['song_training']['observation_dimension'], 557)
+        self.assertEqual(settings['song_training']['observation_dimension'], 464)
+        self.assertEqual(settings['compact_press']['schema'], 'guitar_learning.compact_press.v5')
         self.assertEqual(settings['ppo']['advantage_normalization'], 'joint')
         self.assertEqual(settings['ppo']['cost_weight'], 1.)
-        self.assertEqual(resume_schema(settings), RESUME_SCHEMA)
+        from guitar_learning.tool.experiments.compact_press_v5 import runtime, RESUME_SCHEMA as V5_RESUME
+        from guitar_learning.training import finger_skill_runner
+        with runtime():
+            self.assertEqual(finger_skill_runner.resume_schema(settings), V5_RESUME)
 
     def test_main_dispatches_to_joint_runner(self):
         from guitar_learning.training import launch, finger_skill_runner
@@ -34,7 +38,7 @@ class JointFingerSkillStartTests(unittest.TestCase):
                 patch.object(finger_skill_runner, 'run', return_value='joint') as run:
             self.assertEqual(launch.run(value, args), 'joint')
             run.assert_called_once_with(value, args)
-        with self.assertRaisesRegex(ValueError, 'train_legacy'):
+        with self.assertRaises(ValueError):
             launch.run(legacy_settings('left'), args)
 
     def test_help_imports_no_native_or_tensor_libraries_and_has_no_stage_options(self):
@@ -52,9 +56,23 @@ runpy.run_module('guitar_learning.train', run_name='__main__')
         result = subprocess.run([sys.executable, '-B', '-c', script], cwd='/tmp',
             env=dict(os.environ, PYTHONPATH=str(root)), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('--learning-family {finger-skill}', result.stdout)
+        self.assertIn('--initial-finger-std', result.stdout)
+        self.assertIn('--improvement-profile', result.stdout)
+        self.assertNotIn('--learning-family', result.stdout)
         self.assertNotIn('--skill-phase', result.stdout)
         self.assertNotIn('finger-skill-v24', result.stdout)
+
+    def test_default_main_uses_v5_and_passes_resume_without_default_overrides(self):
+        from guitar_learning.training import launch
+        from guitar_learning.tool.experiments import compact_press_v5
+        with patch.dict('sys.modules', {'isaacgym': SimpleNamespace()}), \
+                patch('sys.argv', ['train', '--out', '/tmp/new', '--resume', '/tmp/v5.pt']), \
+                patch.object(compact_press_v5, 'train', return_value='v5') as run:
+            self.assertEqual(launch.main(), 'v5')
+        args = run.call_args.args[0]
+        self.assertEqual(args.resume, Path('/tmp/v5.pt'))
+        self.assertIsNone(args.song)
+        self.assertIsNone(args.initial_finger_std)
 
     def test_stage_options_and_legacy_family_are_removed(self):
         for option in (dict(skill_phase='R'), dict(skill_phase='F'), dict(skill_hold_ticks=3),

@@ -76,16 +76,16 @@ from pathlib import Path
 import torch
 from guitar_learning.portability import portable, project_path, HISTORICAL_FIELDS
 from guitar_learning.tests.test_gpu_environment import fixture, BUNDLE, SONG
-from guitar_learning.gpu.finger_skill_environment import FingerSkillEnvironment
-from guitar_learning.training.policy import FingerSkillPolicy
+from guitar_learning.gpu.compact_press_v5 import CompactPressV5Environment
+from guitar_learning.training.compact_press_v5 import CompactPressV5Policy
 from guitar_learning.training.ppo import DecisionPPOTrainer, PPOConfig
 
 torch.set_num_threads(1)
 metadata, snapshot = fixture(1)
-environment = FingerSkillEnvironment(metadata, bundle=BUNDLE, song=SONG, device='cpu',
+environment = CompactPressV5Environment(metadata, bundle=BUNDLE, song=SONG, device='cpu',
     skill=dict(schema='guitar_learning.finger_skill.v3', phase='J', scope='scheduled',
                hold_ticks=1, exploration='independent', planned_transitions=32, full_song_after=8))
-model = FingerSkillPolicy(557, size='small', contract=environment.contract)
+model = CompactPressV5Policy(464, size='small', contract=environment.contract)
 trainer = DecisionPPOTrainer(model, PPOConfig(epochs=1))
 checkpoint = Path(sys.argv[2])
 def verify_runtime_identifiers(value):
@@ -122,7 +122,7 @@ else:
     assert not changes, 'actual environment contract changed on relocation: '+repr(changes[:5])
     environment.sampler.load_state_dict(payload['metadata']['sampler'])
     trainer.load(checkpoint)
-    print('actual environment, catalog, sampler and FingerSkillPolicy strict restore OK')
+    print('actual environment, catalog, sampler and CompactPressV5Policy strict restore OK')
 '''
 
 

@@ -1,0 +1,67 @@
+{
+  "completed": true,
+  "scope": "CPU 검증만 완료; GPU 물리·메모리·실제 전환 성공은 미검증",
+  "test_count": 17,
+  "command": "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 /home/ajou/miniconda3/envs/rl38/bin/python -B /home/ajou/yigyu/3/docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/도구/learning.py --self-test",
+  "source_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/도구/learning.py": "4de8196cb7a680c70c4762ea69ae27c20e71c2630a03eef71195b8f05de02a18",
+    "/home/ajou/yigyu/3/docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/도구/test_learning.py": "eb9c2ae258634a115e50247ab00b9ad965a5670d349fa0444603171f246c7ce0",
+    "/home/ajou/yigyu/3/docs/2026-11-09/중지_3번줄5프렛에서4번줄8프렛_장기학습_v1/도구/inputs.py": "7ad30de386d00c561e8aac40b6bf2f6fe3fecf5a08b981bce5a70d1367e26a7a"
+  },
+  "created_at": "2026-11-03T05:26:43.323033+00:00",
+  "checks": [
+    "AST 문법",
+    "목표 S3F5→S4F8 및 3~4.5초/5.5~7초 원장",
+    "613 관측 및 목표중지+팔16축",
+    "64/256/512/1024 설정·정책 CPU 배치",
+    "strict 모델 저장복원 및 이전 schema/LR모드/std 변경 거부",
+    "부분 reset/RH6잔차0/기타 COM 역변환",
+    "기존 PPO 수치 동일성과 update 진입 LR 복구·KL retry·rollback",
+    "runtime 전역 factory 및 평가 wrapper 예외 복원",
+    "평균/확률 평가 seed를 checkpoint RNG 복원 후 설정",
+    "평가 공식 반환형 및 evaluation_mode.json",
+    "시각별 snapshot 고유 파일·중복 파일 거부·manifest 단1회·읽기전용"
+  ],
+  "copy_origin": {
+    "path": "/home/ajou/yigyu/3/docs/2026-11-09/후속동시압현_개선실험_v1/도구/learning.py",
+    "sha256": "26d28a424b226ab728a905a79ae648038abf22b3bbb97b5ba572ff93303b20f2"
+  },
+  "snapshot_fix": {
+    "root_cause": "과거 재생이 0초와 2.5초에 동일 replay_snapshots.json을 exclusive write하여 FileExistsError",
+    "fix": "시각별 고유 snapshot 파일을 즉시 보존하고 finally에서 manifest를 1회만 기록",
+    "times_s": [
+      0,
+      2.5,
+      3,
+      4.4,
+      4.6,
+      5.3,
+      5.6,
+      6.5,
+      7.2
+    ],
+    "no_overwrite": true
+  },
+  "defaults": {
+    "arm_std": 0.15,
+    "finger_std": 0.35,
+    "lr_mode": "recover_floor",
+    "floor": 1.5e-05,
+    "num_envs": 64,
+    "size": "large",
+    "horizon": 32
+  },
+  "resume": {
+    "updates_argument": "이번 실행에서 추가할 update 수",
+    "cumulative_optimizer_updates": true,
+    "curriculum": "첫 fresh 설정의 planned_transitions/full_song_after를 strict 복원; chunk마다 일정 재설정 없음",
+    "num_envs_size_seed_horizon_changes": "거부"
+  },
+  "evaluation": {
+    "mean": "evaluate --evaluation-seed 17",
+    "stochastic": "evaluate --stochastic --evaluation-seed 17",
+    "mode_file": "evaluation_mode.json",
+    "checkpoint_identity_validation": "기존 strict read와 공식 평가 그대로"
+  },
+  "gpu_run": false
+}

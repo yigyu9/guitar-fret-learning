@@ -9,14 +9,14 @@ from unittest.mock import patch
 import torch
 
 from guitar_learning.training import finger_skill_runner as runner
-from guitar_learning.training.launch import settings_document
+from guitar_learning.training.launch import build_settings
 from guitar_learning.training.ppo import DecisionPPOTrainer, PPOConfig
 from guitar_learning.tests.test_finger_decisions import TinyDecisionPolicy
 from guitar_learning.portability import portable, settings_digest, PATH_SCHEMA
 
 
 def settings():
-    return settings_document(updates=4, num_envs=2, horizon=3, size='small')
+    return build_settings('left', learning_family='finger-skill', updates=4, num_envs=2, horizon=3, size='small')
 
 
 class JointRunnerTests(unittest.TestCase):

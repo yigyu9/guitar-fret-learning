@@ -9,7 +9,8 @@ from unittest.mock import patch
 import numpy as np
 import torch
 from guitar_learning.training.training_log_io import TransitionJournal, TransitionReadError, iter_transitions, publish_final_checkpoint
-from guitar_learning.training.ppo import PPOTrainer, PPOConfig
+from guitar_learning.training.ppo import PPOTrainer, PPOConfig, policy_advantages
+from guitar_learning.training.training_log_io import episode_summary
 from guitar_learning.tests.test_policy import policy
 
 
@@ -173,6 +174,28 @@ class PublicationTests(unittest.TestCase):
         self.assertTrue((self.out/'final.pt').is_file())
         other=self.out/'other';other.mkdir()
         with self.assertRaises(ValueError):publish_final_checkpoint(trainer,other,self.out/'final.pt')
+
+
+class SimplifiedFailureRecordsTests(unittest.TestCase):
+    def test_wrist_failure_does_not_count_as_physical_failure(self):
+        base = dict(reason='terminal_failure', reward=0., cost=10.,
+                    song=dict(stage_success=False, left_success_count=0, right_success_count=0))
+        wrist = dict(base, termination=dict(physical_failure=False, wrist_failure=True))
+        physical = dict(base, termination=dict(physical_failure=True, wrist_failure=False))
+        result = episode_summary([wrist, physical])
+        self.assertEqual(result['count'], 2)
+        self.assertEqual(result['physical_failure'], 1)
+        self.assertEqual(result['wrist_failure'], 1)
+        self.assertNotIn('wrist_failure', episode_summary([base]))
+
+    def test_cost_relative_scale_survives_joint_normalization(self):
+        reward = torch.tensor([.4, .9, -.1, .6])
+        cost = torch.tensor([0., 3., 1., 0.])
+        _, first, _, _ = policy_advantages(reward, cost, 1., 'joint')
+        _, second, _, _ = policy_advantages(reward, cost*2, 1., 'joint')
+        self.assertFalse(np.allclose(first, second))
+        self.assertTrue(torch.isfinite(second).all())
+
 
 
 if __name__=='__main__':unittest.main()

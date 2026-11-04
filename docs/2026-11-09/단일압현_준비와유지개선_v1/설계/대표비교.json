@@ -1,0 +1,88 @@
+{
+  "schema": "guitar_learning.press_preparation_comparison.design.v1",
+  "learning": false,
+  "optimizer_updates": 0,
+  "environments": 1,
+  "seeds": [
+    7,
+    17,
+    27
+  ],
+  "start_denominator": "all native starts, preparation failures included",
+  "conditions": [
+    "baseline",
+    "joint_prepare",
+    "safe_route",
+    "robust_candidate",
+    "pad_feedback"
+  ],
+  "cases": [
+    {
+      "case": "middle_s3_f6",
+      "reason": "기존 성공 대조군",
+      "conditions": [
+        "baseline",
+        "joint_prepare",
+        "safe_route",
+        "robust_candidate",
+        "pad_feedback"
+      ]
+    },
+    {
+      "case": "index_s3_f6",
+      "reason": "검지 준비 시간초과",
+      "conditions": [
+        "baseline",
+        "joint_prepare"
+      ]
+    },
+    {
+      "case": "index_s3_f4",
+      "reason": "검지 준비 중 오압현",
+      "conditions": [
+        "baseline",
+        "safe_route"
+      ]
+    },
+    {
+      "case": "ring_s6_f12",
+      "reason": "정상 높이에서도 준비 실패",
+      "conditions": [
+        "baseline",
+        "joint_prepare"
+      ]
+    },
+    {
+      "case": "pinky_s6_f12",
+      "reason": "간헐 하중과유지 부족",
+      "conditions": [
+        "baseline",
+        "robust_candidate",
+        "pad_feedback"
+      ]
+    },
+    {
+      "case": "ring_s6_f4",
+      "reason": "담당 끝마디 하중0",
+      "conditions": [
+        "baseline",
+        "robust_candidate",
+        "pad_feedback"
+      ]
+    },
+    {
+      "case": "pinky_s1_f1",
+      "reason": "하중은 있으나 패드 위치 부적합",
+      "conditions": [
+        "baseline",
+        "robust_candidate",
+        "pad_feedback"
+      ]
+    }
+  ],
+  "total_native_attempts": 60,
+  "success_definition": "unchanged native 240Hz per-note ledger",
+  "gpu_execution_status": "not_started: another study owns GPU",
+  "rule": "standalone changes first; no combination or production adoption before comparison",
+  "repeat_scope": "same nominal initial pose; seed repetition is not initial-state generalization"
+}

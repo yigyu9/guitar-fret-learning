@@ -1,0 +1,102 @@
+{
+  "completed": true,
+  "date": "2026-11-04",
+  "scope": "구현·진단 재생·실제 GPU 작동 검증; 학습 성능 개선 검증 아님",
+  "cpu": {
+    "tests": 112,
+    "passed": true,
+    "wall_s": 29.674,
+    "log": "검증/CPU_통합검사.log"
+  },
+  "replay": {
+    "completed": true,
+    "report": "검증/과거기록_재생검증.json",
+    "report_sha256": "aa968f149199a43b885ab4212243df5505c9aa7db0257a198786a482a8502190"
+  },
+  "native": {
+    "native_train": {
+      "completed": true,
+      "optimizer_updates": 4,
+      "updates_in_run": 4,
+      "transitions": 1024,
+      "actual_simulated_transitions": null,
+      "episodes": null,
+      "wall_s": 27.14740180701483,
+      "summary": null,
+      "changed_inputs": [],
+      "missing_import_pins": [],
+      "cleanup_errors": [],
+      "lifecycle_verified": true
+    },
+    "native_resume": {
+      "completed": true,
+      "optimizer_updates": 6,
+      "updates_in_run": 2,
+      "transitions": 512,
+      "actual_simulated_transitions": null,
+      "episodes": null,
+      "wall_s": 15.049424072029069,
+      "summary": null,
+      "changed_inputs": [],
+      "missing_import_pins": [],
+      "cleanup_errors": [],
+      "lifecycle_verified": true
+    },
+    "native_eval": {
+      "completed": true,
+      "optimizer_updates": null,
+      "updates_in_run": null,
+      "transitions": null,
+      "actual_simulated_transitions": 7936,
+      "episodes": 4,
+      "wall_s": 316.89864366297843,
+      "summary": {
+        "count": 4,
+        "timeline_complete": 4,
+        "physical_failure": 0,
+        "stage_success": 0,
+        "mean_reward": -17.318649768829346,
+        "mean_cost": 0.0,
+        "mean_left_success_count": 0.0,
+        "mean_right_success_count": 0.0,
+        "wrist_failure": 0
+      },
+      "changed_inputs": [],
+      "missing_import_pins": [],
+      "cleanup_errors": [],
+      "lifecycle_verified": true
+    }
+  },
+  "native_diagnostic_check": {
+    "episodes": 4,
+    "actual_gate_and_payout_consistent": true,
+    "max_episode_component_sum_error": 2.8991780191001126e-06,
+    "rewards_and_v4_diagnostics_finite": true
+  },
+  "source_preservation": {
+    "existing_python_count": 357,
+    "changed": []
+  },
+  "implementation_sha256": {
+    "guitar_learning/gpu/compact_press_v4.py": "cab74badb103435ce4f360c48be497f2cdd3970fc1b05728517369de0593d573",
+    "guitar_learning/tool/experiments/compact_press_v4.py": "e3ab35878da364d4515c7a9d516db94124824a93914101c9f0316c0bc1c2deaf",
+    "guitar_learning/tests/test_compact_press_v4_environment.py": "b8b98a0615003f5667afbe826c3b9e9de88124c7d1a481c11d7a0256f21e893b",
+    "guitar_learning/tests/test_compact_press_v4_entry.py": "c16f81889252b7d1c5c7c3dae5cd476c1ebfbec9d21a3eb59b90644aa38b6d38"
+  },
+  "checkpoint_sha256": {
+    "native_train": "f7dcd90ddd4a7ca0089113aa8442525ea17dbdcc963e9753a22f23a9116af89b",
+    "native_resume": "dbe6a1bb621d10d1ff6af3d16281b08bee1e9b30a3cb734d5634a61966465cb5"
+  },
+  "review": {
+    "reviewer": "/root/compact_review",
+    "unresolved_findings": [],
+    "resolved": "v4 계약 우선순위와 상속된 v3 참조 표시"
+  },
+  "remaining_research": [
+    "단독 보상 조건의 비교 학습",
+    "압현 중 자세 비용 검토",
+    "엄지 후면 도달 물리 대조",
+    "약지 벌림축 추종 원인",
+    "손가락별 출력부 비교"
+  ]
+}

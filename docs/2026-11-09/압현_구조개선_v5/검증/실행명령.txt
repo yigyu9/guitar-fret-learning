@@ -1,0 +1,34 @@
+기존 회귀 검사
+    기존 compact v1/v3/v4, finger skill, PPO, rollout, GPU 제어와 압현 판정 검사
+    결과는 ../기존_CPU_회귀검사.log
+
+신규 검사
+    OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 /home/ajou/miniconda3/envs/rl38/bin/python -m unittest -v guitar_learning.tests.test_compact_press_v5_environment guitar_learning.tests.test_compact_press_v5_entry
+
+GPU 공통 실행 접두사
+    /home/ajou/miniconda3/envs/rl38/bin/python scripts/tab2body.py --cache-root .runtime/cache run -m guitar_learning.tool.experiments.compact_press_v5
+
+corrected 학습
+    train --out docs/2026-11-09/압현_구조개선_v5/검증/corrected_H32 --size large --num-envs 8 --horizon 32 --updates 4 --seed 7 --checkpoint-every 4 --improvement-profile corrected
+
+corrected 재개
+    train --out docs/2026-11-09/압현_구조개선_v5/검증/corrected_H32_resume --resume docs/2026-11-09/압현_구조개선_v5/검증/corrected_H32/J/final.pt --updates 2
+
+combined 학습
+    train --out docs/2026-11-09/압현_구조개선_v5/검증/combined_H128 --size large --num-envs 8 --horizon 128 --updates 2 --seed 7 --checkpoint-every 2 --improvement-profile combined
+
+corrected 전곡 평가
+    evaluate docs/2026-11-09/압현_구조개선_v5/검증/corrected_H32_resume/J/final.pt --out docs/2026-11-09/압현_구조개선_v5/검증/corrected_전곡평가 --num-envs 2 --scope full_song
+
+combined 구간 평가
+    evaluate docs/2026-11-09/압현_구조개선_v5/검증/combined_H128/J/final.pt --out docs/2026-11-09/압현_구조개선_v5/검증/combined_구간평가 --num-envs 2 --scope phrases
+
+산출물 재검사
+    OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 /home/ajou/miniconda3/envs/rl38/bin/python docs/2026-11-09/압현_구조개선_v5/검증/검증.py
+
+해석
+    GPU 검증의 반복 수와 환경 수는 실행 기능 확인용이다.
+    corrected와 combined의 샘플 수 및 수집 길이가 다르므로 학습 성능 비교 실험이 아니다.
+    최초 checkpoint의 SHA를 manifest와 대조한 뒤 정식 reader로 입력과 신경망 계약을 확인한다.
+    initial_std 공통 값은 후처리 이동을 0으로 만드는 exp(-3)이다.
+    실제 초기 탐색은 compact_press.initial_support_std와 initial_finger_std를 쓰며 모델 log_std에서도 별도 확인한다.

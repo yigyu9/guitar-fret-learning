@@ -11,6 +11,23 @@ from pathlib import Path
 from guitar_learning.core.control import ACTIVE_NAMES
 
 
+def mlp(inputs, hidden, outputs):
+    """각 층에 Tanh를 적용하는 고정 크기의 특징 인코더다."""
+    return nn.Sequential(nn.Linear(inputs, hidden), nn.Tanh(),
+                         nn.Linear(hidden, outputs), nn.Tanh())
+
+
+class CompactEncoder(nn.Module):
+    """상태와 마스크된 목표를 결합한다. 각 정책이 자신의 인코더 폭을 정의한다."""
+    def features(self, state, goals, mask):
+        safe = torch.where(mask[..., None], goals, torch.zeros_like(goals))
+        encoded = self.goal(safe)*mask[..., None]
+        return torch.cat((self.state(state), encoded.flatten(1)), -1)
+
+    def forward(self, state, goals, mask):
+        return self.fusion(self.features(state, goals, mask))
+
+
 class Encoder(nn.Module):
     def __init__(self, state_dim, event_dim, fusion, priority_count=2):
         super().__init__()
@@ -40,7 +57,7 @@ class Encoder(nn.Module):
 
 
 class Policy(nn.Module):
-    """공용 39축 정책 기반. 기본 J 학습은 아래 FingerSkillPolicy를 사용한다."""
+    """타현·전신·기존 진단에서 공유하는 확률 정책 기반. 압현은 별도 V5 정책을 쓴다."""
     role_sizes = (33, 6)
 
     def __init__(self, state_dim, event_dim=24, size="medium", contract=None):
@@ -123,7 +140,7 @@ class Policy(nn.Module):
 
 
 class SpecialistPolicy(nn.Module):
-    """기존 song 경로의 left/right/joint 정책. 기본 J 학습은 FingerSkillPolicy를 사용한다."""
+    """공용 song 진단의 left/right/joint 정책. 새 압현 학습은 별도 V5 정책을 쓴다."""
     role_sizes = (33, 6)
     role_slices = {'left': slice(0, 33), 'right': slice(33, 39)}
     schema = 'guitar_specialists39_v1'
@@ -389,182 +406,3 @@ class SpecialistPolicy(nn.Module):
             self.partner_initialized[tuple(self.role_slices).index(role)] = True
         return dict(role=role, source_updates=updates, source_architecture=copy.deepcopy(source),
                     source_config=copy.deepcopy(identity['config']), source_metadata=copy.deepcopy(payload.get('metadata')))
-
-
-FINGERS = ('index', 'middle', 'ring', 'pinky')
-SKILL_FIELDS = ('finger_skill.remaining_s',)
-WRIST_TERMINATION_FIELDS = ('wrist_termination.active', 'wrist_termination.elapsed_s',
-                           'wrist_termination.preparation_remaining_s',
-                           'wrist_termination.severe_elapsed_s')
-
-
-class FingerSkillPolicy(nn.Module):
-    """지지 17축과 네 손가락 16축을 모두 학습하는 J 전용 독립 Gaussian 정책."""
-    schema = 'guitar_learning.finger_skill_policy.v2'
-    phase = 'J'
-    exploration = 'independent'
-
-    def __init__(self, state_dim, event_dim=24, size='medium', contract=None):
-        super().__init__()
-        sizes = dict(small=(256, 256, 256), medium=(512, 512, 256), large=(1024, 1024, 512))
-        if size not in sizes:
-            raise ValueError('explicit small/medium/large size required')
-        if event_dim != 24 or not isinstance(contract, dict) or contract.get('schema') != 'guitar_learning.training.v1':
-            raise ValueError('explicit training contract and 24 event columns required')
-        if any(not isinstance(contract.get(key), dict) for key in
-               ('observation', 'action', 'task', 'reward', 'termination', 'native_backend')):
-            raise ValueError('complete GPU training contract required')
-        observation = contract['observation']
-        fields = observation.get('fields')
-        spec = contract['task'].get('finger_skill', {})
-        tail = SKILL_FIELDS+WRIST_TERMINATION_FIELDS
-        if state_dim != 557:
-            raise ValueError('joint finger skill requires557 states')
-        slots = [finger+'_'+kind for finger in FINGERS for kind in ('tracking', 'next')]
-        if (not isinstance(fields, list) or len(fields) != state_dim or
-                any(not isinstance(field, str) for field in fields) or len(set(fields)) != state_dim or
-                observation.get('dimension') != state_dim or tuple(fields[-len(tail):]) != tail or
-                observation.get('priority_slots') != 8 or
-                observation.get('finger_targets', {}).get('slots') != slots or
-                observation.get('finger_targets', {}).get('schema') != 'guitar_learning.left_finger_targets.v1' or
-                contract['action'].get('names') != list(ACTIVE_NAMES) or
-                contract['native_backend'].get('pipeline') != 'gpu' or
-                not isinstance(spec, dict) or spec.get('schema') != 'guitar_learning.finger_skill.v3' or
-                spec.get('phase') != self.phase or spec.get('exploration') != self.exploration or
-                type(spec.get('hold_ticks')) is not int or spec['hold_ticks'] != 1):
-            raise ValueError('named finger-skill state, exact action order, GPU, phase and exploration contract required')
-        local_fields = {}
-        for finger in FINGERS:
-            joints = ['LH:'+finger+suffix for suffix in ('1_x', '1_z', '2', '3')]
-            local_fields[finger] = [block+'.'+joint for block in ('q_offset', 'q_velocity', 'target_error') for joint in joints]
-            local_fields[finger] += ['finger_posture.'+finger+'.'+joint+'.'+trig
-                                    for joint in ('MCP', 'PIP', 'DIP') for trig in ('sin', 'cos')]
-            local_fields[finger] += ['finger_posture.'+finger+'.'+name for name in ('valid', 'standby_gate')]
-        required = [name for names in local_fields.values() for name in names]
-        required += [block+'.'+joint for block in ('q_offset', 'q_velocity', 'target_error', 'previous_action')
-                     for joint in ACTIVE_NAMES[:17]]
-        if any(name not in fields for name in required):
-            raise ValueError('named support and local finger fields missing')
-
-        # 지지 인코더는 명시된 몸통·팔·엄지·손목 정보만 받는다.
-        # 손가락의 세부 압현 상태는 손가락 인코더와 각 손가락 출력부가 담당한다.
-        support_fields = [block+'.'+joint for block in ('q_offset', 'q_velocity', 'target_error', 'previous_action')
-                          for joint in ACTIVE_NAMES[:17]]
-        support_fields += [field for field in fields if field.startswith((
-            'guitar_in_pelvis.', 'guitar_reset_delta.', 'feet_reset_delta.',
-            'L_Wrist_in_guitar.', 'LH:thumb3_in_guitar.', 'thumb_support.',
-            'contact_loss_s.', 'wrist_region.delta_')) or field in (
-                'contact.chest', 'contact.right_upper_arm', 'contact.right_thigh',
-                'contact.thumb', 'contact.left_foot', 'contact.right_foot')]
-        support_fields += list(WRIST_TERMINATION_FIELDS)
-        self.architecture = dict(schema=self.schema, state_dim=state_dim, event_dim=event_dim,
-            size=size, fusion=sizes[size], priority_slots=tuple(slots), phase=self.phase,
-            exploration=self.exploration, normalization='fixed_observation_scaling_no_running_updates',
-            support_fields=support_fields, support_event_columns=tuple(range(9)),
-            local_fields=local_fields,
-            local_indices={finger: [fields.index(field) for field in names] for finger, names in local_fields.items()},
-            likelihood='joint33_independent_physical_tanh_latent_v1',
-            contract=copy.deepcopy(contract))
-        self.register_buffer('support_indices', torch.tensor([fields.index(field) for field in support_fields]))
-        self.register_buffer('support_event_columns', torch.tensor(list(range(9))))
-        fusion = sizes[size]
-        self.support_encoder = Encoder(len(support_fields), 9, fusion, priority_count=8)
-        self.support_head = nn.Linear(fusion[-1], 17)
-        self.finger_encoder = Encoder(state_dim, event_dim, fusion, priority_count=8)
-        self.finger_heads = nn.ModuleDict({finger: nn.Sequential(
-            nn.Linear(fusion[-1]+256+20, 128), nn.Tanh(), nn.Linear(128, 4)) for finger in FINGERS})
-        for head in (self.support_head, *(head[-1] for head in self.finger_heads.values())):
-            nn.init.zeros_(head.weight)
-            nn.init.zeros_(head.bias)
-        self.support_log_std = nn.Parameter(torch.full((17,), -3.))
-        self.finger_log_std = nn.Parameter(torch.full((16,), -3.))
-        self.value_encoder = Encoder(state_dim, event_dim, fusion, priority_count=8)
-        self.reward_critic = nn.Linear(fusion[-1], 1)
-        self.cost_critic = nn.Linear(fusion[-1], 1)
-
-    _validate = Policy._validate
-
-    def actor_parameters(self):
-        groups = (self.support_encoder, self.support_head, self.finger_encoder, self.finger_heads)
-        return [parameter for group in groups for parameter in group.parameters()] + [
-            self.support_log_std, self.finger_log_std]
-
-    # 공통 가치망의 매개변수 선택을 재사용한다.
-    value_parameters = Policy.value_parameters
-
-    def _active_mask(self):
-        mask = torch.zeros(39, dtype=torch.bool, device=self.support_log_std.device)
-        mask[:33] = True
-        return mask
-
-    def forward(self, state, events, mask, priority_events, priority_mask):
-        self._validate(state, events, mask, priority_events, priority_mask)
-        support = self.support_encoder(state[:, self.support_indices],
-            events[..., self.support_event_columns], mask,
-            priority_events[..., self.support_event_columns], priority_mask)
-        support_mean = self.support_head(support)
-        context = self.finger_encoder(state, events, mask, priority_events, priority_mask)
-        priority_tokens = self.finger_encoder.event(torch.where(
-            priority_mask[..., None], priority_events, torch.zeros_like(priority_events),
-        ))
-        priority_tokens = priority_tokens * priority_mask[..., None]
-        # 손가락마다 공통 문맥 + tracking/next 두 토큰 + 자기 관절·자세 20열을 받아 4축을 출력한다.
-        finger_means = []
-        for finger_index, finger in enumerate(FINGERS):
-            finger_tokens = priority_tokens[:, 2*finger_index:2*finger_index+2].flatten(1)
-            local_state = state[:, self.architecture['local_indices'][finger]]
-            finger_input = torch.cat((context, finger_tokens, local_state), -1)
-            finger_means.append(self.finger_heads[finger](finger_input))
-        finger_mean = torch.cat(finger_means, -1)
-        # 지지 17 + 손가락 16 + 비활성 오른손 6으로 공용 39축 출력 형식을 유지한다.
-        mean = torch.cat((support_mean, finger_mean, state.new_zeros((state.shape[0], 6))), -1)
-        active_log_std = torch.cat((
-            self.support_log_std,
-            self.finger_log_std,
-            self.support_log_std.new_full((6,), -3.),
-        )).clamp(-5, 2)
-        log_std = torch.where(
-            self._active_mask(), active_log_std, active_log_std.new_full((39,), -3.),
-        ).expand_as(mean)
-        value = self.value_encoder(state, events, mask, priority_events, priority_mask)
-        return dict(mean=mean, log_std=log_std, reward_value=self.reward_critic(value).squeeze(-1),
-                    cost_value=self.cost_critic(value).squeeze(-1))
-
-    def log_probability(self, mean, log_std, latent):
-        active = self._active_mask()
-        bm, bz = mean[..., active], latent[..., active]
-        correction = 2*(math.log(2)-latent[..., active]-F.softplus(-2*latent[..., active]))
-        return (Normal(bm, log_std[..., active].exp()).log_prob(bz)-correction).sum(-1)
-
-    def analytic_kl(self, old_mean, old_log_std, mean, log_std):
-        active = self._active_mask()
-        difference = (old_mean-mean)[..., active]
-        previous_log_std, current_log_std = old_log_std[..., active], log_std[..., active]
-        return (
-            current_log_std-previous_log_std
-            +(previous_log_std.mul(2).exp()+difference.square())/(2*current_log_std.mul(2).exp())
-            -.5
-        ).sum(-1)
-
-    def act(self, state, events, mask, priority_events, priority_mask, deterministic=False):
-        result = self(state, events, mask, priority_events, priority_mask)
-        latent = result['mean'].clone()
-        active = self._active_mask()
-        if not deterministic:
-            noise = torch.zeros_like(latent)
-            noise[..., active] = Normal(torch.zeros_like(latent[..., active]),
-                                         result['log_std'][..., active].exp()).sample()
-            latent = latent+noise
-        result.update(action=latent.tanh(), latent=latent,
-                      logp=self.log_probability(result['mean'], result['log_std'], latent))
-        return result
-
-    def evaluate(self, state, events, mask, priority_events, priority_mask, latent):
-        if latent.shape != (state.shape[0], 39) or not torch.isfinite(latent).all():
-            raise ValueError('finite latent[B,39] required')
-        result = self(state, events, mask, priority_events, priority_mask)
-        active = self._active_mask()
-        result.update(logp=self.log_probability(result['mean'], result['log_std'], latent),
-                      entropy=Normal(torch.zeros_like(result['mean'][..., active]),
-                                     result['log_std'][..., active].exp()).entropy().sum(-1))
-        return result

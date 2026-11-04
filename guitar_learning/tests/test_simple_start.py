@@ -90,7 +90,8 @@ runpy.run_module('guitar_learning.tool.training.train_legacy', run_name='__main_
             env=dict(os.environ, PYTHONPATH=str(ROOT), PYTHONDONTWRITEBYTECODE='1'),
             capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('--hand {left,right}', result.stdout)
+        self.assertIn('--hand {right}', result.stdout)
+        self.assertIn('V5', result.stdout)
         self.assertIn('--song', result.stdout)
         self.assertNotIn('--settings', result.stdout)
 

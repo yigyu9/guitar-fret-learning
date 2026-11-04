@@ -1,4 +1,4 @@
-"""현행 J 전용 저장본의 정책·물리 계약을 엄격히 검증하여 독립 평가한다."""
+"""현행 V5 압현 저장본의 정책·물리 계약을 엄격히 검증하여 독립 평가한다."""
 import argparse
 from pathlib import Path
 
@@ -14,8 +14,9 @@ def parser():
 
 def main():
     args = parser().parse_args()
-    from guitar_learning.training.finger_skill_runner import evaluate_checkpoint
-    report, _ = evaluate_checkpoint(args.checkpoint, args.out, num_envs=args.num_envs, scope=args.scope)
+    import isaacgym
+    from guitar_learning.tool.experiments.compact_press_v5 import evaluate
+    report, _ = evaluate(args.checkpoint, args.out, num_envs=args.num_envs, scope=args.scope)
     print('episodes=%d scope=%s completed=%s' % (report['episodes'], report['scope'], report['completed']))
 
 

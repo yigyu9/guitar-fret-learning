@@ -1,0 +1,45 @@
+{
+  "completed": true,
+  "checked_at": "2026-11-03T09:50:23.454530+09:00",
+  "scope": "CPU12검사 통과. GPU/새학습 미실행; 압현 성과 인증 아님",
+  "test_count": 12,
+  "tests_passed": 12,
+  "source_sha256": {
+    "/home/ajou/yigyu/3/docs/2026-11-09/중지6에서8_탐색학습률비교_v1/도구/learning.py": "1d318a3863060ad50ed5cf197b272fe99053a9b3567709060c27c0894a561603",
+    "/home/ajou/yigyu/3/docs/2026-11-09/중지6에서8_탐색학습률비교_v1/도구/test_learning.py": "5e3f040fe18319aa8a78c9a423c1d4ef89aeece4ff4c11a9a2ad7d971ba2a119",
+    "/home/ajou/yigyu/3/docs/2026-11-09/중지6에서8_탐색학습률비교_v1/도구/inputs.py": "21974bfecddbcfc5e8675ed727a5e13603c093a5913a183cabeed0f1f43563aa"
+  },
+  "copy_origin": {
+    "path": "/home/ajou/yigyu/3/docs/2026-11-09/복합압현_야간확장_v1/도구/learning.py",
+    "sha256": "897585c338708855d5ecf3d65d48db891ba391a62abcb87c5f481d35046fbb95"
+  },
+  "command": "/home/ajou/miniconda3/envs/rl38/bin/python -B /home/ajou/yigyu/3/docs/2026-11-09/중지6에서8_탐색학습률비교_v1/도구/learning.py --self-test",
+  "checks": [
+    "새 local A0 입력으로613차원/동일finger 목표 전환/부분reset/RH6zero/COM역변환 유지",
+    "팔std.15/.20 초기 tensor 차이는 활성 팔 log_std12값뿐, 엄지/손가락/나머지 동일",
+    "LR existing/recover_floor 초기 model tensor 전부 동일",
+    "existing PPO는 원본 update 결과·모델·actor/value Adam·RNG까지 수치 동일",
+    "recover_floor는 update 진입에서만 actor LR max(current,1.5e-5), 가치 optimizer LR 미변경",
+    "KL retry는 원본 함수 동일, retry 후 acceptedLR3.75e-6 허용 및 다음 update에서1.5e-5 복구",
+    "KL 예산 소진 시 원본 policy/Adam/RNG/update 카운터 rollback 검사",
+    "PPO class factory는 ppo_module에서 context 치환 후 예외에도 복원",
+    "새 trainer/policy/resume schema 및 LR모드/팔std 다른 checkpoint strict load 거부",
+    "기존 reward/timing/wrong union/활성축 우도/비활성 hold 유지"
+  ],
+  "metrics": {
+    "key": "lr_recovery",
+    "fields": [
+      "mode",
+      "floor",
+      "before_update_lr",
+      "start_lr",
+      "accepted_lr",
+      "recovered",
+      "kl_retries",
+      "actual_arm_latent_std",
+      "actual_middle_latent_std"
+    ],
+    "scope": "std는 tanh 이전 latent Gaussian 값이며 실제 관절 std 아님"
+  },
+  "gpu_executed": false
+}

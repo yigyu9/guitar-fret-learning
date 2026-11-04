@@ -1,0 +1,34 @@
+{
+  "prepared_files": 7293,
+  "prepared_allocated_bytes": 3194998784,
+  "prepared_gib": 2.975574493408203,
+  "application_instances_active": [
+    "chrome",
+    "code"
+  ],
+  "skips_by_reason": {
+    "application active: preserve entire cache instance": 1,
+    "Code active: preserve entire download cache instance": 2,
+    "Code active: preserve entire cache instance": 2,
+    "retained session has recent log (<7 days)": 139,
+    "open or mapped file": 71,
+    "recent cache (<24h)": 13,
+    "symlink file": 3
+  },
+  "helper": "/tmp/pc-home-cleanup-20261104.py",
+  "manifest_sha256": "8d1f7136e415d47c24a1d71d31028db0931814982014a1eb395a2ee3b425f0f0",
+  "no_user_files_deleted": true,
+  "checks": [
+    "Python syntax",
+    "mocked unlink success (same guard logic before policy-only change)",
+    "changed metadata skip",
+    "symlink parent refusal",
+    "Code active blocks both VSIX roots"
+  ],
+  "limitations": [
+    "Host use check is point-in-time and repeated per candidate root before apply.",
+    "8 known system helper processes restrict fd/maps; unexpected unreadable process aborts.",
+    "Protection checks root identities and current symlink targets, not all live application contents.",
+    "No directories removed; symlinks left rather than followed."
+  ]
+}

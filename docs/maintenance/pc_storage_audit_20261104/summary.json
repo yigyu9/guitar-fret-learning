@@ -1,0 +1,50 @@
+{
+  "date": "2026-11-04",
+  "operation": "read-only audit; no deletion, move, package removal or configuration change",
+  "measured_root_disk": {
+    "total_bytes": 490577010688,
+    "used_bytes": 420029767680,
+    "available_bytes": 45552025600
+  },
+  "priority_candidate_upper_bound_bytes": 9697959936,
+  "priority_candidate_GiB": 9.031929016113281,
+  "priority_includes": "ordinary app caches and logs, explicitly obsolete extensions, old standalone binaries, journal archived retention to 1GiB, installed APT download",
+  "additional_service_and_docker_upper_bound_bytes": 2818673611,
+  "combined_candidate_upper_bound_bytes": 12516633547,
+  "combined_candidate_GiB": 11.657023380510509,
+  "conditions": "apps must close normally, install/update use must be rechecked, current session logs retained; admin permission for system cleanup; preserve journal archive budget 1GiB and active journal. XRDP needs service-compatible rotation; Docker images may be needed later. This is not an unconditional free-space promise.",
+  "not_in_totals": {
+    "snap_disabled_payload_upper_bound_bytes": 3530698752,
+    "snap_guaranteed_bytes": 0,
+    "duplicate_personal_videos_bytes": 584687616,
+    "conda_cache_removable_bytes": 0,
+    "development_environments": "conditional upon project retirement; exclusive bytes per environment, no blanket deletion",
+    "LFS": "55.8GiB total, prior dry-run candidate about54GiB; 37 objects remote-missing on same-day check; preserved and not newly remote-verified"
+  },
+  "scope_limits": [
+    "root-only directories could not be fully measured",
+    "external data disk directory access EIO; reported df capacity not usable-space validation",
+    "some helper and root process descriptors unreadable",
+    "running applications can change sizes during audit",
+    "64,190 external data symlink targets returned EIO; verified all paths are symlinks. Regular local file scan excludes links and completed with zero errors."
+  ],
+  "evidence_files": [
+    "system_audit.json",
+    "user_files_audit.json",
+    "environment_audit.json",
+    "environment_references.json",
+    "environment_config_references.json",
+    "environment_processes.json",
+    "user_processes.json",
+    "deleted_open_files.json",
+    "project_audit.json",
+    "root_directory_bytes.txt",
+    "root_access_errors.txt",
+    "project_directory_bytes.txt",
+    "disk_usage.txt",
+    "host_mounts.txt",
+    "external_read_error.json",
+    "home_directory_audit.json.gz",
+    "project_link_access_errors.json.gz"
+  ]
+}

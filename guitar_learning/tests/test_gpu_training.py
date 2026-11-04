@@ -97,12 +97,47 @@ class GpuTrainingTests(unittest.TestCase):
 
     def test_gpu_dispatch_does_not_enter_old_spawn_runner(self):
         from guitar_learning.tool.training import legacy_gpu_runner as gpu_runner
-        settings = start.settings_document('left', device='cuda:0', num_envs=2)
+        settings = start.settings_document('right', device='cuda:0', num_envs=2)
         args = SimpleNamespace(out=Path('/tmp/new-gpu-test'), resume=None)
         with patch.dict('sys.modules', {'isaacgym': SimpleNamespace()}), \
                 patch.object(gpu_runner, 'run', return_value='gpu') as run:
             self.assertEqual(start.run(settings, args), 'gpu')
             run.assert_called_once_with(settings, args)
+
+    def test_retired_left_training_dispatch_rejected_before_native_import(self):
+        import builtins
+        from guitar_learning.tool.training import legacy_gpu_runner
+        original_import = builtins.__import__
+        def guarded(name, *args, **kwargs):
+            if name == 'isaacgym':
+                raise AssertionError('retired left dispatch reached native imports')
+            return original_import(name, *args, **kwargs)
+        for physics, device in (('cpu', 'cpu'), ('gpu', 'cuda:0')):
+            settings = start.settings_document('left', physics=physics, device=device, num_envs=2)
+            with patch('builtins.__import__', side_effect=guarded):
+                for dispatch in (start.run, legacy_gpu_runner.run):
+                    with self.subTest(physics=physics, dispatch=dispatch), self.assertRaisesRegex(ValueError, 'V5'):
+                        dispatch(settings, SimpleNamespace(out=Path('/tmp/unused'), resume=None))
+
+    def test_legacy_cli_rejects_left_and_keeps_own_right_dispatch(self):
+        import contextlib
+        import io
+        from guitar_learning.training import launch
+        with patch.dict('sys.modules', {'isaacgym': SimpleNamespace()}), \
+                patch('sys.argv', ['train_legacy', '--hand', 'left', '--out', '/tmp/unused']), \
+                patch.object(start, 'run') as own, contextlib.redirect_stderr(io.StringIO()), \
+                self.assertRaises(SystemExit) as error:
+            start.main()
+        self.assertEqual(error.exception.code, 2)
+        own.assert_not_called()
+        with patch.dict('sys.modules', {'isaacgym': SimpleNamespace()}), \
+                patch('sys.argv', ['train_legacy', '--hand', 'right', '--out', '/tmp/unused',
+                    '--device', 'cpu', '--physics', 'cpu', '--num-envs', '1']), \
+                patch.object(start, 'run', return_value='right') as own, \
+                patch.object(launch, 'run', side_effect=AssertionError('V5 dispatch used')):
+            self.assertEqual(start.main(), 'right')
+        self.assertEqual(own.call_args.args[0]['specialist']['role'], 'right')
+        self.assertNotIn('compact_press', own.call_args.args[0])
 
     def test_uncertified_support_aborts_before_physics(self):
         pool = GpuPool.__new__(GpuPool)

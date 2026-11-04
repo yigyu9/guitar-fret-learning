@@ -55,6 +55,6 @@ B는 위치 각 축±10mm 모서리8개와 방향 각 축±5도 끝점6개를 �
 
 다음 정식 실행은 A에서 목표별100회마다 평가한다. A 기준 미달이면 B/C 장기 학습을 진행하지 않는다. 최종 채택에는 지원 없는 v9 성과, 새 seed17, 같은 총 전이 예산의 J33 대조군과 자연스러운 관절 사용의 영상 확인이 필요하다.
 
-[손 영상](../video/implementation_smoke_A_index_hand.mp4) · [전신 영상](../video/implementation_smoke_A_index_fullbody.mp4). 모두 검증용 짧은 학습의 고정 정책 영상이며 성공 영상이 아니다.
+구현 검증용 짧은 학습의 손·전신 영상은 2026-11-04 저장 공간 정리에서 제거했다. 성공 영상이 아니며, 위 실행 검증 수치·원본 소스·보고서는 보존했다. [정리 기록](../../../../../maintenance/storage_cleanup_20261104/REPORT.md)과 [보존 대표 영상](../../../../../maintenance/storage_cleanup_20261104/REPRESENTATIVE_VIDEOS.md)을 따른다.
 
 구현 중 초기 선접촉과 격리 사본 경로 연결, 평가 보고서의 중복 생성 오류를 발견해 수정했다. `smoke/A_index*`, `smoke/A_evaluation`, `geometry/cpu_candidates_v1~v4` 및 부적격 v5 중간 후보는 개발 기록이다. 최종 GPU 근거는 `smoke/A_final`, `A_resume`, `B_transfer`, `C50_transfer`, `A_final_evaluation`, `free_v9`, `native_render`이며, 실제 학습은 최종 자산 `runtime/guitar_learning/assets/structured_press_v2/catalog.json`만 사용한다. 최종 사본3,148개 파일의 SHA는 [source seal](../source_seal.json)에 보존했다.

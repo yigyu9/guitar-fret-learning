@@ -1,4 +1,4 @@
-"""기존 song 곡 학습의 CPU·GPU·오른손 실행 진입점."""
+"""기존 오른손 song 학습의 CPU·GPU 실행 진입점. 왼손 압현은 guitar_learning.train(V5)을 사용한다."""
 import argparse
 import copy
 from functools import partial
@@ -19,7 +19,9 @@ def settings_document(hand, *, learning_family='song', **options):
 
 
 def run(settings, args):
-    """Bind the chosen hand to the shared collector/PPO for this process only."""
+    """오른손 진단용 공용 수집기·PPO를 이 실행 동안만 연결한다."""
+    if settings.get('specialist', {}).get('role') != 'right':
+        raise ValueError('구형 왼손 학습은 제거했습니다. V5: python -m guitar_learning.train --out NEW')
     # Isaac Gym must precede imports of torch in the runner and policy.
     import isaacgym
     if 'physics_backend' in settings:
@@ -74,7 +76,8 @@ def run(settings, args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--hand', choices=('left', 'right'), required=True)
+    parser.add_argument('--hand', choices=('right',), required=True,
+                        help='오른손 전용. 왼손 압현은 python -m guitar_learning.train(V5) 사용')
     parser.add_argument('--song', default=DEFAULT_SONG,
                         help='reviewed song identifier under data/song_bundles')
     parser.add_argument('--out', type=Path, required=True)
@@ -90,21 +93,13 @@ def main():
     parser.add_argument('--checkpoint-every', type=int, default=250,
                         help='save an additional checkpoint every N updates (default250)')
     parser.add_argument('--resume', type=Path)
-    parser.add_argument('--finger-standby-rate', type=float, choices=(.02, .04), default=None,
-                        help='GPU left: B preference maximum rate per second (default0.02)')
-    parser.add_argument('--finger-shape', action='store_true',
-                        help='GPU left: enable separate experimental0.004/s DIP-PIP shape preference')
-    parser.add_argument('--finger-action-mode', choices=('position',),
-                        help='GPU left: direct position targets (default)')
     args = parser.parse_args()
     for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
         os.environ[name] = '1'
     import isaacgym
     settings = settings_document(args.hand, song=args.song, updates=args.updates, num_envs=args.num_envs,
         device=args.device, seed=args.seed, horizon=args.horizon, size=args.size, physics=args.physics,
-        checkpoint_every=args.checkpoint_every, finger_standby_rate=args.finger_standby_rate,
-        finger_shape=args.finger_shape, finger_action_mode=args.finger_action_mode,
-        learning_family='song')
+        checkpoint_every=args.checkpoint_every, learning_family='song')
     return run(settings, args)
 
 

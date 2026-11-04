@@ -204,50 +204,61 @@ def build_settings(hand, *, song=DEFAULT_SONG, updates=100, num_envs=None,
 
 
 def settings_document(hand='left', *, learning_family='finger-skill', **options):
-    if learning_family != 'finger-skill':
-        raise ValueError('Legacy families use python -m guitar_learning.tool.training.train_legacy')
-    return build_settings(hand, learning_family=learning_family, **options)
+    """기본 압현은 V5, 오른손·전신 공용 설정은 build_settings를 명시 사용한다."""
+    if hand != 'left' or learning_family != 'finger-skill':
+        raise ValueError('기본 실행은 V5 GPU 왼손 압현 전용입니다.')
+    from guitar_learning.tool.experiments.compact_press_v5 import build_settings as v5_settings
+    return v5_settings(**options)
 
 
 def run(settings, args):
-    if (settings.get('finger_skill', {}).get('schema') != 'guitar_learning.finger_skill.v3' or
-            settings.get('specialist', {}).get('role') != 'left' or
-            settings.get('device') != 'cuda:0' or 'physics_backend' not in settings):
-        raise ValueError('Default training requires GPU left-hand finger-skill v3; use train_legacy for old settings')
-    # 실행기와 정책의 텐서 모듈보다 Isaac Gym을 먼저 불러와야 한다.
+    """V5 계약을 먼저 검사한 뒤 공용 실행기를 V5 환경·정책으로 연결한다."""
+    if settings.get('compact_press', {}).get('schema') != 'guitar_learning.compact_press.v5':
+        raise ValueError('기본 실행에는 V5 압현 설정이 필요합니다.')
     import isaacgym
+    from guitar_learning.tool.experiments.compact_press_v5 import validate_settings, runtime, clock_runtime
     from guitar_learning.training.finger_skill_runner import run as run_finger_skill
-    return run_finger_skill(settings, args)
+    validate_settings(settings)
+    with clock_runtime(settings['song_training']['song_id']), runtime():
+        return run_finger_skill(settings, args)
+
+
+def add_train_arguments(command):
+    """기본 진입점과 직접 V5 CLI가 같은 학습 옵션을 사용한다."""
+    command.add_argument('--out', type=Path, required=True)
+    command.add_argument('--song')
+    command.add_argument('--size', choices=('small', 'medium', 'large'))
+    command.add_argument('--num-envs', type=int)
+    command.add_argument('--updates', type=int, default=100)
+    command.add_argument('--horizon', type=int)
+    command.add_argument('--seed', type=int)
+    command.add_argument('--checkpoint-every', type=int)
+    command.add_argument('--resume', type=Path)
+    command.add_argument('--max-wall-seconds', type=float)
+    pelvis = command.add_mutually_exclusive_group()
+    pelvis.add_argument('--include-pelvis', dest='include_pelvis', action='store_true')
+    pelvis.add_argument('--no-include-pelvis', dest='include_pelvis', action='store_false')
+    command.set_defaults(include_pelvis=None)
+    command.add_argument('--improvement-profile', choices=('corrected', 'preparation', 'full_hold', 'combined'),
+        help='신규 기본corrected; 재개에서 생략하면 저장 조건 유지')
+    command.add_argument('--initial-support-std', type=float, help='팔12·엄지5축 초기 std, 기본0.15')
+    command.add_argument('--initial-finger-std', type=float, help='검지~소지16축 초기 std, 기본0.35')
+    return command
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--hand', choices=('left',), default='left')
-    parser.add_argument('--song', default=DEFAULT_SONG,
-                        help='reviewed song identifier under data/song_bundles')
-    parser.add_argument('--out', type=Path, required=True)
-    parser.add_argument('--updates', type=int, default=100)
-    parser.add_argument('--num-envs', type=int, help='GPU environments (default128)')
-    parser.add_argument('--device', choices=('cuda:0',), default='cuda:0')
-    parser.add_argument('--physics', choices=('auto', 'gpu'), default='auto',
-                        help='CUDA policy and GPU physics; no CPU fallback')
-    parser.add_argument('--seed', type=int, default=7)
-    parser.add_argument('--horizon', type=int,
-                        help='control ticks per update (default32); cuts preserve episode state')
-    parser.add_argument('--size', choices=('small', 'medium', 'large'), default='medium')
-    parser.add_argument('--checkpoint-every', type=int, default=250,
-                        help='save an additional checkpoint every N updates (default250)')
-    parser.add_argument('--resume', type=Path)
-    parser.add_argument('--learning-family', choices=('finger-skill',), default='finger-skill',
-                        help='current joint finger skill (default); old families use train_legacy')
+    parser = add_train_arguments(argparse.ArgumentParser(description='V5 GPU 왼손 압현 학습'))
     args = parser.parse_args()
     for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
         os.environ[name] = '1'
+    if args.updates < 1 or (args.checkpoint_every is not None and args.checkpoint_every < 1):
+        parser.error('반복과 저장 간격은 양수여야 합니다.')
+    if args.max_wall_seconds is not None and (not math.isfinite(args.max_wall_seconds) or args.max_wall_seconds <= 0):
+        parser.error('시간 예산은 유한한 양수여야 합니다.')
+    # 실제 실행에서만 Isaac Gym을 텐서 라이브러리보다 먼저 불러온다.
     import isaacgym
-    options = vars(args).copy()
-    options.pop('out')
-    options.pop('resume')
-    return run(settings_document(**options), args)
+    from guitar_learning.tool.experiments.compact_press_v5 import train
+    return train(args)
 
 
 if __name__ == '__main__':

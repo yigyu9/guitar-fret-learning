@@ -1,0 +1,222 @@
+{
+  "scope": "CPU tensor observation audit; no native reachability or training evidence",
+  "default": {
+    "state_dim": 452,
+    "goals": [
+      2,
+      8,
+      26
+    ],
+    "general_goals": [
+      2,
+      0,
+      26
+    ],
+    "action_dim": 39,
+    "blocks": {
+      "joint_state": [
+        0,
+        315
+      ],
+      "previous_left_action": [
+        315,
+        348
+      ],
+      "guitar_in_pelvis": [
+        348,
+        363
+      ],
+      "left_wrist_in_guitar": [
+        363,
+        378
+      ],
+      "contacts": [
+        378,
+        388
+      ],
+      "reset_delta": [
+        388,
+        400
+      ],
+      "finger_performance": [
+        400,
+        408
+      ],
+      "wrist_guide": [
+        408,
+        415
+      ],
+      "thumb_in_neck": [
+        415,
+        423
+      ],
+      "finger_flexion": [
+        423,
+        439
+      ],
+      "wrist_termination": [
+        439,
+        443
+      ],
+      "v3_state": [
+        443,
+        452
+      ]
+    },
+    "state_finite": true,
+    "right_action_zero": true
+  },
+  "pelvis": {
+    "state_dim": 461,
+    "goals": [
+      2,
+      8,
+      26
+    ],
+    "general_goals": [
+      2,
+      0,
+      26
+    ],
+    "action_dim": 39,
+    "blocks": {
+      "joint_state": [
+        0,
+        315
+      ],
+      "previous_left_action": [
+        315,
+        348
+      ],
+      "guitar_in_pelvis": [
+        348,
+        363
+      ],
+      "left_wrist_in_guitar": [
+        363,
+        378
+      ],
+      "contacts": [
+        378,
+        388
+      ],
+      "reset_delta": [
+        388,
+        400
+      ],
+      "finger_performance": [
+        400,
+        408
+      ],
+      "wrist_guide": [
+        408,
+        415
+      ],
+      "thumb_in_neck": [
+        415,
+        423
+      ],
+      "finger_flexion": [
+        423,
+        439
+      ],
+      "wrist_termination": [
+        439,
+        443
+      ],
+      "pelvis": [
+        443,
+        452
+      ],
+      "v3_state": [
+        452,
+        461
+      ]
+    },
+    "state_finite": true,
+    "right_action_zero": true
+  },
+  "budget_clip": {
+    "target_count": 67,
+    "raw": [
+      16.750000916421413,
+      16.750000916421413
+    ],
+    "normalized_observation": [
+      10.0,
+      10.0
+    ],
+    "scale": 1.0,
+    "clipped": true
+  },
+  "default_goal_ranges": {
+    "fret_min": 4,
+    "fret_max": 12,
+    "max_note_duration_s": 1.6601999999999997,
+    "saturated_valid_goal_values": 0
+  },
+  "goal_velocity_remap": {
+    "max_abs_error": 0.0,
+    "meaning": "negative physical pad point relative velocity in moving guitar frame (error-rate convention)"
+  },
+  "hidden_recovery_boundary_ablation": {
+    "examples": [
+      {
+        "local_time_s": 2.9,
+        "row": 0,
+        "finger": 2,
+        "selected_target_count": 2,
+        "hidden_boundary_count": 4,
+        "tracking_goal_valid": false,
+        "actual_gate_with_boundary": 0.540999999999997,
+        "actual_gate_without_boundary": 1.0,
+        "all_policy_observations_equal": true
+      },
+      {
+        "local_time_s": 2.95,
+        "row": 0,
+        "finger": 2,
+        "selected_target_count": 2,
+        "hidden_boundary_count": 4,
+        "tracking_goal_valid": false,
+        "actual_gate_with_boundary": 0.04099999999998993,
+        "actual_gate_without_boundary": 1.0,
+        "all_policy_observations_equal": true
+      },
+      {
+        "local_time_s": 3.0,
+        "row": 0,
+        "finger": 2,
+        "selected_target_count": 2,
+        "hidden_boundary_count": 4,
+        "tracking_goal_valid": false,
+        "actual_gate_with_boundary": 0.0,
+        "actual_gate_without_boundary": 1.0,
+        "all_policy_observations_equal": true
+      }
+    ],
+    "limitation": "same CPU state with hidden recovery scope ablated; proves missing explicit context, not two native reachable histories or learning causality"
+  },
+  "invalid_goal_mask": {
+    "features_equal": true,
+    "feature_shape": [
+      2,
+      768
+    ]
+  },
+  "fret15_validation": {
+    "accepted": true,
+    "normalized_fret": 1.0714285373687744,
+    "limitation": "default song contains only frets4..12; this is an accepted-input counterexample, not current-run invalid fret evidence"
+  },
+  "reviewed_source_sha256": {
+    "guitar_learning/gpu/compact_press.py": "70fced6d4508abdb8dbf5f2d9271f56f5252e1a3badb310e794f92e7a3477dd1",
+    "guitar_learning/gpu/compact_press_v3.py": "896f024fb72ad74e4d904f1a6843c55aae97bc4f5958f4192672e79dc4b4f80e",
+    "guitar_learning/gpu/compact_press_v4.py": "cab74badb103435ce4f360c48be497f2cdd3970fc1b05728517369de0593d573",
+    "guitar_learning/gpu/environment.py": "cb2fe4e077ffd60f0d404c4a5d27abd024424ed13aafd28221f00f53f29ad0f4",
+    "guitar_learning/gpu/finger_skill_environment.py": "72918148babad6d5abe6bf323895eb78a85a19818ba5f3d41b0a66d96ae86f82",
+    "guitar_learning/gpu/finger_reward.py": "a3f48bb0551372b1e327c47a79a2f119d6a245b99118da621e8361c7d0e888f4",
+    "guitar_learning/training/compact_press.py": "a204f58f88a60eb2f92660335660f9f6b029c756a72c38ae0c9bae4bb4e81558",
+    "guitar_learning/training/compact_press_v3.py": "0c54587ebd4f9ff6d950ec93afef442a055c1cb930daa7fb800bc17702b73ef6"
+  }
+}

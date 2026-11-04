@@ -1,4 +1,4 @@
-"""현행 J 전용 저장본을 엄격 검증하고 환경 0의 손·전신 영상을 기록한다."""
+"""현행 V5 압현 저장본을 엄격 검증하고 환경 0의 손·전신 영상을 기록한다."""
 import argparse
 import copy
 import json
@@ -80,7 +80,7 @@ class _EnvZeroCapture:
             raise RuntimeError('env0 terminated without a completed episode record')
 
 
-def render(checkpoint, out, *, scope='full_song', num_envs=None):
+def _render(checkpoint, out, *, scope='full_song', num_envs=None):
     # Isaac's native extension must load before Torch or NumPy.
     import isaacgym
     from isaacgym import gymapi
@@ -216,6 +216,13 @@ def render(checkpoint, out, *, scope='full_song', num_envs=None):
         if failure is None and not complete:
             raise RuntimeError('Render encoding, source, policy or scene audit failed; see report.json')
     return report
+
+
+def render(checkpoint, out, *, scope='full_song', num_envs=None):
+    """공개 영상 도구는 V5 strict reader와 환경·정책 계약을 사용한다."""
+    import isaacgym
+    from guitar_learning.tool.experiments.compact_press_v5 import render as v5_render
+    return v5_render(checkpoint, out, scope=scope, num_envs=num_envs)
 
 
 def main():

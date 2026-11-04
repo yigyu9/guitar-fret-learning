@@ -8,8 +8,8 @@ import torch
 
 from guitar_learning.gpu.control import BatchedController
 from guitar_learning.gpu.environment import TensorSongEnvironment
-from guitar_learning.training.policy import FingerSkillPolicy
-from guitar_learning.gpu.finger_skill_environment import FingerSkillEnvironment
+from guitar_learning.training.compact_press_v5 import CompactPressV5Policy
+from guitar_learning.gpu.compact_press_v5 import CompactPressV5Environment
 from guitar_learning.training.ppo import PPOConfig, PPOTrainer
 from guitar_learning.tool.training.train_legacy import settings_document
 from guitar_learning.tests.test_gpu_control import fake_scene
@@ -83,7 +83,7 @@ class FingerStructureTests(unittest.TestCase):
         scene, _ = fake_scene()
         metadata, _ = fixtures.fixture()
         metadata['action_contract'] = BatchedController(scene).contract
-        env = FingerSkillEnvironment(metadata, bundle=fixtures.BUNDLE,
+        env = CompactPressV5Environment(metadata, bundle=fixtures.BUNDLE,
             song=dict(fixtures.SONG, finger_action_mode='position'), device='cpu',
             skill=dict(schema='guitar_learning.finger_skill.v3', phase='J', scope='scheduled',
                 hold_ticks=1, exploration='independent', planned_transitions=400, full_song_after=100))
@@ -96,7 +96,7 @@ class FingerStructureTests(unittest.TestCase):
         # 구형 제어를 실행하지 않고 저장본의 이전 행동 의미만 재현한다.
         for name, contract in (('current', current), ('old', old)):
             torch.manual_seed(7)
-            trainers[name] = PPOTrainer(FingerSkillPolicy(557, size='small', contract=contract), PPOConfig())
+            trainers[name] = PPOTrainer(CompactPressV5Policy(464, size='small', contract=contract), PPOConfig())
         initial = {key: value.clone() for key, value in trainers['current'].policy.state_dict().items()}
         with tempfile.TemporaryDirectory() as directory:
             old_checkpoint = Path(directory)/'old_codec.pt'

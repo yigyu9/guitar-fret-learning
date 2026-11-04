@@ -1,0 +1,196 @@
+--- original/tab2body/env/rewards/__init__.py
++++ sharing/tab2body/env/rewards/__init__.py
+@@ -1,14 +1,13 @@
+-"""왼손·오른손 보상 구현의 지연 로딩 공개 인터페이스."""
++"""공유본의 오른손 타현 보상 지연 로딩 공개 인터페이스."""
+ from importlib import import_module
+ 
+ 
+ _EXPORTS = {
+-    "FretReward": (".fret", "FretReward"),
+     "PickGripReference": (".strike", "PickGripReference"),
+     "StrikeReward": (".strike", "StrikeReward"),
+ }
+ 
+-__all__ = ["FretReward", "PickGripReference", "StrikeReward"]
++__all__ = ["PickGripReference", "StrikeReward"]
+ 
+ 
+ def __getattr__(name):
+--- original/tab2body/env/strike_events.py
++++ sharing/tab2body/env/strike_events.py
+@@ -126,7 +126,7 @@
+         "signed_error_s": signed_error,
+         "premature": (
+             accepted_release
+-            & (signed_error < -left_tolerance_s[:, None])).any(dim=1),
++            & (release_time_s < expected - left_tolerance_s[:, None])).any(dim=1),
+     }
+ 
+ 
+@@ -1154,15 +1154,19 @@
+     target_time = target_center_s[:, None] + target_offsets_s
+     error = release_time_s - target_time
+     error = torch.where(required_valid, error, torch.zeros_like(error))
++    # 오차를 다시 허용값과 비교하면 경계의 뺄셈 반올림으로 포함 판정이 달라진다.
++    # 시간창을 넓히지 않고 계산된 양끝 시각과 직접 비교한다.
++    left_boundary = target_time - left_tolerance_s[:, None]
++    right_boundary = target_time + right_tolerance_s[:, None]
+     timing_ok_by_string = (
+-        (error >= -left_tolerance_s[:, None])
+-        & (error <= right_tolerance_s[:, None])
++        (release_time_s >= left_boundary)
++        & (release_time_s <= right_boundary)
+         & required_valid)
+     timing_ok = complete & ((~traversal) | timing_ok_by_string).all(dim=1)
+     early = complete & (
+-        traversal & (error < -left_tolerance_s[:, None])).any(dim=1)
++        traversal & (release_time_s < left_boundary)).any(dim=1)
+     late = complete & (
+-        traversal & (error > right_tolerance_s[:, None])).any(dim=1)
++        traversal & (release_time_s > right_boundary)).any(dim=1)
+     count = traversal.sum(dim=1).clamp_min(1).to(error.dtype)
+     rms = torch.sqrt((error.square() * traversal).sum(dim=1) / count)
+     masked_abs = torch.where(
+--- original/tab2body/env/strike_goal_compiler.py
++++ sharing/tab2body/env/strike_goal_compiler.py
+@@ -884,6 +884,9 @@
+         raise ValueError("strike plan events must be a non-empty array")
+     if not isinstance(timeline, Mapping) or not isinstance(metadata, Mapping):
+         raise ValueError("strike plan metadata and timeline must be objects")
++    fps = metadata.get("fps")
++    if isinstance(fps, bool) or not isinstance(fps, int) or fps < 1:
++        raise ValueError("strike plan metadata.fps must be a positive integer")
+     name_to_direction = {name: value for value, name in DIRECTION_NAMES.items()}
+     events = []
+     previous_time = -math.inf
+@@ -894,7 +897,7 @@
+             raise ValueError(f"strike plan event {index} must be an object")
+         try:
+             time_s = float(item["time"])
+-            frame = int(item["frame"])
++            frame = item["frame"]
+             gesture = str(item["gesture"])
+             direction = name_to_direction[item["direction"]]
+             audible = tuple(int(value) for value in item["strings"])
+@@ -924,11 +927,29 @@
+             raise ValueError(f"invalid strike plan event {index}") from exc
+         if not math.isfinite(time_s) or time_s < previous_time:
+             raise ValueError("strike plan event times must be finite and ordered")
+-        if frame < 0 or gesture not in allowed_gestures:
++        if (isinstance(frame, bool) or not isinstance(frame, int)
++                or frame < 0 or gesture not in allowed_gestures):
+             raise ValueError(f"invalid strike plan event {index}")
++        # frame은 첫 통과 시각이 아니라 compiler의 이벤트 중심 시각을 따른다.
++        frame_time = time_s * fps
++        if (not math.isfinite(frame_time)
++                or frame != int(math.floor(frame_time + 0.5))):
++            raise ValueError(f"time/frame mismatch in strike plan event {index}")
+         if not audible or not traversal or any(
+                 value < 0 or value > 5 for value in audible + traversal + protected):
+             raise ValueError(f"invalid strings in strike plan event {index}")
++        if (len(set(audible)) != len(audible)
++                or not set(audible).issubset(traversal)):
++            raise ValueError(f"invalid audible/traversal strings in event {index}")
++        # 스트럼의 비발음 중간 줄은 traversal에만 있어도 된다.
++        source_count, audible_count = len(source_ids), len(audible)
++        if ((gesture == GESTURE_SINGLE_PICK
++             and (source_count != 1 or audible_count != 1 or len(traversal) != 1))
++                or (gesture == GESTURE_STRUM
++                    and not source_count == audible_count >= 2)
++                or (gesture == GESTURE_ALTERNATE_RESTRIKE
++                    and source_count <= audible_count)):
++            raise ValueError(f"gesture/string count mismatch in event {index}")
+         if protected != tuple(value for value in traversal if value not in audible):
+             raise ValueError(f"inconsistent protected strings in event {index}")
+         expected = (
+--- original/tab2body/env/tasks/__init__.py
++++ sharing/tab2body/env/tasks/__init__.py
+@@ -1,11 +1,8 @@
+-__all__ = ["FretTask", "StrikeTask"]
++__all__ = ["StrikeTask"]
+ 
+ 
+ def __getattr__(name):
+-    """Keep the two Isaac tasks independent until one is explicitly used."""
+-    if name == "FretTask":
+-        from .task_fret import FretTask
+-        return FretTask
++    """Load the Isaac task only when explicitly requested."""
+     if name == "StrikeTask":
+         from .task_strike import StrikeTask
+         return StrikeTask
+--- original/tab2body/learning/__init__.py
++++ sharing/tab2body/learning/__init__.py
+@@ -8,10 +8,6 @@
+         ".models", "configure_finger_flexion_policy"),
+     "PPOConfig": (".ppo", "PPOConfig"),
+     "PPOTrainer": (".ppo", "PPOTrainer"),
+-    "FingertipApproachCurriculum": (
+-        ".curriculum", "FingertipApproachCurriculum"),
+-    "FingertipApproachCurriculumConfig": (
+-        ".curriculum", "FingertipApproachCurriculumConfig"),
+     "StrikeCurriculum": (".strike_curriculum", "StrikeCurriculum"),
+     "StrikeCurriculumConfig": (
+         ".strike_curriculum", "StrikeCurriculumConfig"),
+--- original/tab2body/learning/checkpoint_contract.py
++++ sharing/tab2body/learning/checkpoint_contract.py
+@@ -1,4 +1,4 @@
+-"""Deterministic, fail-closed checkpoint contracts for fret policies.
++"""Deterministic, fail-closed checkpoint contracts for fret and strike policies.
+ 
+ A model state dict is not enough to decide whether a checkpoint is safe to
+ resume or evaluate.  Observation layouts, controlled-DOF ordering, reward
+--- original/tab2body/train.py
++++ sharing/tab2body/train.py
+@@ -1,13 +1,10 @@
+-"""fret/strike 공용 tab2body 학습 진입점.
++"""공유 패키지에 포함된 과거 Strike-v2 학습 진입점.
+ 
+ 태스크 구현을 여기서 import하지 않는다. ``--task``만 먼저 읽은 뒤
+-``train_fret``, ``train_strike`` 또는 G0 assembly runner의 동일한 인터페이스를
+-불러온다. 따라서 왼손 환경이 오른손 학습의 선행 의존성이 되지 않는다.
++``train_strike``를 불러온다. 이 공유본은 오른손 타현 코드만 포함한다.
+ 
+ 예:
+-  python -m tab2body.train --task fret --iterations 5000
+   python -m tab2body.train --task strike --iterations 5000
+-  python -m tab2body.train --task full --fret-checkpoint ... --strike-checkpoint ...
+ """
+ from __future__ import annotations
+ 
+@@ -24,22 +21,20 @@
+ 
+ 
+ TASK_RUNNER_MODULES = {
+-    "fret": "tab2body.train_fret",
+     "strike": "tab2body.train_strike",
+-    "full": "tab2body.train_full",
+ }
+ 
+ 
+ def build_parser():
+     parser = argparse.ArgumentParser(
+-        description="tab2body skill training and G0 full-player assembly",
++        description="Archived Strike-v2 training (sharing edition)",
+         add_help=False,
+     )
+     parser.add_argument(
+         "--task",
+         choices=tuple(TASK_RUNNER_MODULES),
+-        default="fret",
+-        help="학습할 손 태스크 또는 full G0 assembly 선택",
++        default="strike",
++        help="공유본에 포함된 strike 태스크 선택",
+     )
+     return parser
+ 
+@@ -61,7 +56,7 @@
+         if value == "--task":
+             if index + 1 >= len(arguments):
+                 raise SystemExit(
+-                    "--task requires fret, strike, or full")
++                    "--task requires strike")
+             index += 2
+             continue
+         if value.startswith("--task="):

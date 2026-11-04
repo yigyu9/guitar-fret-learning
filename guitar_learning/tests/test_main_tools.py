@@ -53,25 +53,25 @@ class MainToolsTests(unittest.TestCase):
                 self.assertEqual(active_source_paths(root),
                                  {root/'main.py', root/'shared'/'core.py'})
 
-    def test_default_settings_and_worker_import_without_any_tool_package(self):
-        script = '''
+    def test_default_settings_resolve_v5_without_retired_compact_modules(self):
+        script = """
 import importlib.abc, sys, types
 class Guard(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname == 'guitar_learning.tool' or fullname.startswith('guitar_learning.tool.'):
-            raise AssertionError('default learning imported an auxiliary tool: '+fullname)
+        if fullname in ('guitar_learning.tool.experiments.compact_press',
+                        'guitar_learning.tool.experiments.compact_press_v3',
+                        'guitar_learning.tool.experiments.compact_press_v4'):
+            raise AssertionError('default learning imported retired CLI: '+fullname)
 sys.meta_path.insert(0, Guard())
 sys.modules['isaacgym'] = types.ModuleType('isaacgym')
 from guitar_learning.training.launch import settings_document
 from guitar_learning.song.runtime import native_environment
-from guitar_learning.training.policy import SpecialistPolicy
 settings = settings_document()
 assert settings['specialist']['role'] == 'left'
-assert settings['finger_skill']['schema'] == 'guitar_learning.finger_skill.v3'
-from guitar_learning.training import finger_skill_runner
+assert settings['compact_press']['schema'] == 'guitar_learning.compact_press.v5'
+assert settings['song_training']['observation_dimension'] == 464
 assert native_environment.__module__ == 'guitar_learning.song.runtime'
-assert not any(n == 'guitar_learning.tool' or n.startswith('guitar_learning.tool.') for n in sys.modules)
-'''
+"""
         result = subprocess.run([sys.executable, '-B', '-c', script], cwd='/tmp',
             env=dict(os.environ, PYTHONPATH=str(ROOT), PYTHONDONTWRITEBYTECODE='1'),
             capture_output=True, text=True)

@@ -2,9 +2,9 @@
 
 ## 현재 기본 GPU 실행
 
-2026-10-31 문서 대조 기준. 기본 실행은 GPU 왼손 `finger-skill` v3(J 전용), 상태557·J33 공동 학습·매 tick K1 결정이다. 단계 구분3열과 계획 결정 길이1열을 제거해 상태는 기반552+남은시간1+손목종료4다. 실행은 `finger_skill_run.v2`, 정책은 `finger_skill_policy.v2`, 재개는 `finger_skill_resume.v4` 계약을 사용하며 이전 resume.v3 이하 저장본은 받지 않는다. 보상 계약은 `guitar_learning.simplified_finger_reward.v2`, 음별 원장은 `guitar_learning.surface_note_ledger.v8`이다. 실행법은 [README](../README.md), 흐름은 [CODE_STRUCTURE](CODE_STRUCTURE.md)를 따른다. 아래 기본 로그와 뒤의 구형 GPU·CPU·전문 경로 기록을 구분한다.
+현재 기본 실행은 GPU 왼손 압현 V5다. 상태464/473·목표26×8·행동33을 사용하며, 실행과 재개는 V5의 전체 소스·입력·architecture 계약을 검사한다. 아래 저장 경로와 공용 로그의 의미는 V5에서도 유지된다. 실제 schema와 보상 프로필은 해당 실행의 training_contract.json과 episode_metadata.json을 기준으로 읽는다. 실행법은 [README](../README.md), 파일 역할은 [코드 지도](CODE_STRUCTURE.md)를 따른다.
 
-기본 연결33개(구현25개·초기화8개), 활성 Python295개다. 공용 로그·복구 도구와 CPU·오른손 song은 유지한다. 과거8실험·전문 환경·CLI·timing 영상 도구·매뉴얼은 [원문·SHA 보관 안내](../archive/20261028_before_legacy_retirement_v1/ARCHIVE_INDEX.md)로 옮겼으며, 아래 전문 경로 명령은 당시 로그 형식의 기록이다.
+V5의 press_completion은 전체 음 유지, 필요한 해제와 두 조건의 완료를 구분한다. 기존 달성 개수나 timeline_complete를 이 완료 성공과 혼동하지 않는다. compact_press_v3/v4 이름의 일부 로그 필드는 V5에서 유지하는 진단 식별자이며 구버전 정책을 실행한다는 뜻이 아니다.
 
 최상위 `--out/settings.json`과 `--out/report.json`은 전체 실행을 설명한다. 실제 학습 로그·모델·계약은 **`--out/J/`**에 저장되며, 다음 표의 경로는 `J/` 기준이다.
 
@@ -114,7 +114,7 @@ reset준비상태자체는물리표본이아니다. H32에서원장·누적목�
 
 ### 이전 로그 삭제 기록
 
-사용자 요청으로 이전 버전의 큰 원시 로그 일부를 삭제했다. [삭제 목록·크기·SHA](/home/ajou/yigyu/3/docs/2026-10-24/guitar_learning_compact_logging_v1/cleanup_manifest.json)에 정확한 범위를 남겼다. 체크포인트·영상·분석 보고서·계약과 당시 최신이던 v17 실행은 보존했다. 과거 보고서는 당시 검증 결과이며 삭제된 원시 로그를 재검사했다는 뜻이 아니다.
+이전 버전의 큰 원시 로그 일부는 사용자 요청으로 정리됐다. 현재 확인 가능한 삭제·보존 근거는 [정리 기록](/home/ajou/yigyu/3/docs/maintenance/README.md)에서 찾는다. 과거 보고서는 당시 검증 결과이며 삭제된 원시 로그를 다시 검사할 수 있다는 뜻은 아니다.
 
 ## 과거 CPU·전문 음악 품질 로그 기록
 

@@ -144,9 +144,11 @@ def _pins(settings, out, extra=()):
 
 
 def _policy(settings, pool):
-    from guitar_learning.training.policy import FingerSkillPolicy
-    return FingerSkillPolicy(pool.observation['state'].shape[-1], size=settings['size'],
-        contract=pool.contract).to(settings['device'])
+    from guitar_learning.training.compact_press_v5 import CompactPressV5Policy
+    spec = settings['compact_press']
+    return CompactPressV5Policy(pool.observation['state'].shape[-1], size=settings['size'],
+        contract=pool.contract, initial_support_std=spec['initial_support_std'],
+        initial_finger_std=spec['initial_finger_std']).to(settings['device'])
 
 
 def _train_phase(settings, out, curriculum, *, resume=None, updates=None):

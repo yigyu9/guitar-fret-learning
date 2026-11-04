@@ -1,0 +1,33 @@
+{
+  "source": "/home/ajou/yigyu/3/docs/2026-11-09/탐색값_025_030_비교_v1/도구/run_comparison.py",
+  "source_sha256": "a0bf1416ccadcd102b8a3cc18b332d49b17a19ac92646875e41462431e679774",
+  "new": "/home/ajou/yigyu/3/docs/2026-11-09/탐색값_035_040_045_비교_v1/도구/run_comparison.py",
+  "new_sha256": "c9bffba02a7de3498f7e048aec48b5fee6d927865143710ec3ef1e60a7c30e0f",
+  "changes": [
+    {
+      "before": "표준편차 0.25와 0.30",
+      "after": "표준편차 0.35·0.40·0.45"
+    },
+    {
+      "before": "PYTHON = Path('/home/ajou/miniconda3/envs/rl38/bin/python')",
+      "after": "PYTHON = Path('/home/ajou/miniconda3/envs/rl38/bin/python')\nCASES = (('std035', .35), ('std040', .40), ('std045', .45))"
+    },
+    {
+      "before": "for label, value in [('std025', .25), ('std030', .30)]:",
+      "after": "for label, value in CASES:"
+    },
+    {
+      "before": "['std025 학습100/평가50/평가100/영상', 'std030 학습100/평가50/평가100/영상']",
+      "after": "[label + ' 학습100/평가50/평가100/영상' for label, _ in CASES]"
+    },
+    {
+      "before": "std025_std030_sequential.v1",
+      "after": "std035_std040_std045_sequential.v1"
+    },
+    {
+      "before": "for label in ('std025', 'std030'):",
+      "after": "for label, _ in CASES:"
+    }
+  ],
+  "scope": "검증된 드라이버의 조건목록·표시·스키마만 변경,기존소스불변"
+}
